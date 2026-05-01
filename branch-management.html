@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ব্রাঞ্চ ব্যবস্থাপনা | TUKNBD</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase-config.js"></script>
+    <script src="supabase-functions.js"></script>
+</head>
+<body class="bg-gray-100">
+
+<script>
+    // লগইন চেক - শুধু সুপার অ্যাডমিন দেখতে পারবে
+    const adminLoggedIn = sessionStorage.getItem('adminLoggedIn') || localStorage.getItem('adminLoggedIn');
+    const adminData = sessionStorage.getItem('currentAdmin') || localStorage.getItem('currentAdmin');
+    
+    if(!adminLoggedIn || !adminData) {
+        window.location.href = 'admin-login.html';
+    }
+    
+    let currentAdmin = JSON.parse(adminData);
+    if(currentAdmin.role !== 'সুপার অ্যাডমিন') {
+        alert('এই পেজ শুধুমাত্র সুপার অ্যাডমিনদের জন্য!');
+        window.location.href = 'super-admin.html';
+    }
+</script>
+
+<div class="container mx-auto px-4 py-6">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold text-emerald-700"><i class="fas fa-code-branch mr-2"></i>ব্রাঞ্চ ব্যবস্থাপনা</h1>
+        <button onclick="window.location.href='super-admin.html'" class="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600">← ড্যাশবোর্ডে ফিরুন</button>
+    </div>
+    
+    <!-- নতুন ব্রাঞ্চ যোগ ফরম -->
+    <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+        <h2 class="text-xl font-bold text-gray-800 mb-4"><i class="fas fa-plus-circle text-emerald-600 mr-2"></i>নতুন ব্রাঞ্চ যোগ করুন</h2>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <input type="text" id="branchName" placeholder="ব্রাঞ্চের নাম" class="px-3 py-2 border rounded-lg">
+            <input type="text" id="branchDistrict" placeholder="জেলা" class="px-3 py-2 border rounded-lg">
+            <input type="text" id="branchAdminName" placeholder="ব্রাঞ্চ এডমিনের নাম" class="px-3 py-2 border rounded-lg">
+            <input type="text" id="branchAdminMobile" placeholder="মোবাইল নম্বর" class="px-3 py-2 border rounded-lg">
+        </div>
+        <div class="mt-3">
+            <button onclick="addBranch()" class="w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition">ব্রাঞ্চ তৈরি করুন</button>
+        </div>
+    </div>
+    
+    <!-- ব্রাঞ্চ লিস্ট -->
+    <div class="bg-white rounded-xl shadow-md overflow-hidden">
+        <div class="bg-emerald-50 px-5 py-3 border-b">
+            <h3 class="font-bold text-emerald-700"><i class="fas fa-list mr-2"></i>সকল ব্রাঞ্চের তালিকা</h3>
+        </div>
+        <div class="overflow-x-auto p-4">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50">
+                    <tr><th class="p-2">ব্রাঞ্চ আইডি</th><th class="p-2">নাম</th><th class="p-2">জেলা</th><th class="p-2">ব্রাঞ্চ এডমিন</th><th class="p-2">সদস্য</th><th class="p-2">মোট জমা</th><th class="p-2">স্ট্যাটাস</th><th class="p-2">অ্যাকশন</th></tr>
+                </thead>
+                <tbody id="branchesList"></tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- সকল ব্রাঞ্চের সারাংশ -->
+    <div class="mt-6 bg-white rounded-xl shadow-md p-4">
+        <h3 class="font-bold text-emerald-700 mb-3"><i class="fas fa-chart-line mr-2"></i>সকল ব্রাঞ্চের সারাংশ</h3>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4" id="branchSummary"></div>
+    </div>
+</div>
+
+<script>
+    // ব্রাঞ্চ ডাটা লোড/সেভ ফাংশন
+    function getBranches() {
+        return JSON.parse(localStorage.getItem('tukn_branches') || '[]');
+    }
+    
+    function saveBranches(branches) {
+        localStorage.setItem('tukn_branches', JSON.stringify(branches));
+    }
+    
+    function getBranchMembers(branchId) {
+        const allMembers = JSON.parse(localStorage.getItem('tukn_members') || '[]');
+        return allMembers.filter(m => m.branch_id === branchId);
+    }
+    
+    function addBranch() {
+        const name = document.getElementById('branchName').value;
+        const district = document.getElementById('branchDistrict').value;
+        const adminName = document.getElementById('branchAdminName').value;
+        const adminMobile = document.getElementById('branchAdminMobile').value;
+        
+        if(!name || !district) {
+            alert('ব্রাঞ্চের নাম ও জেলা অবশ্যই দিন!');
+            return;
+        }
+        
+        const branches = getBranches();
+        const newBranch = {
+            id: Date.now(),
+            name: name,
+            district: district,
+            admin_name: adminName || 'নির্ধারিত হয়নি',
+            admin_mobile: adminMobile || 'নির্ধারিত হয়নি',
+            status: 'active',
+            created_at: new Date().toISOString()
+        };
+        
+        branches.push(newBranch);
+        saveBranches(branches);
+        
+        // ব্রাঞ্চ এডমিন অ্যাকাউন্ট তৈরি
+        if(adminName && adminMobile) {
+            const admins = JSON.parse(localStorage.getItem('tukn_admins') || '[]');
+            const newAdmin = {
+                id: Date.now(),
+                username: `branch_${newBranch.id}`,
+                name: adminName,
+                password: '12345',
+                role: 'অ্যাডমিন',
+                branch_id: newBranch.id,
+                branch_name: name,
+                mobile: adminMobile,
+                status: 'active',
+                lastLogin: new Date().toISOString()
+            };
+            admins.push(newAdmin);
+            localStorage.setItem('tukn_admins', JSON.stringify(admins));
+        }
+        
+        alert(`"${name}" ব্রাঞ্চ সফলভাবে তৈরি করা হয়েছে!\nব্রাঞ্চ এডমিন লগইন: branch_${newBranch.id} / 12345`);
+        
+        document.getElementById('branchName').value = '';
+        document.getElementById('branchDistrict').value = '';
+        document.getElementById('branchAdminName').value = '';
+        document.getElementById('branchAdminMobile').value = '';
+        
+        renderBranches();
+        renderBranchSummary();
+    }
+    
+    function toggleBranchStatus(branchId) {
+        const branches = getBranches();
+        const branch = branches.find(b => b.id === branchId);
+        if(branch) {
+            branch.status = branch.status === 'active' ? 'inactive' : 'active';
+            saveBranches(branches);
+            renderBranches();
+            renderBranchSummary();
+            alert(`${branch.name} ব্রাঞ্চ ${branch.status === 'active' ? 'সক্রিয়' : 'নিষ্ক্রিয়'} করা হয়েছে!`);
+        }
+    }
+    
+    function deleteBranch(branchId) {
+        if(confirm('ব্রাঞ্চ ডিলিট করবেন? এতে ওই ব্রাঞ্চের সকল তথ্য মুছে যাবে!')) {
+            let branches = getBranches();
+            branches = branches.filter(b => b.id !== branchId);
+            saveBranches(branches);
+            
+            // ওই ব্রাঞ্চের সদস্যদেরও ডিলিট
+            let members = JSON.parse(localStorage.getItem('tukn_members') || '[]');
+            members = members.filter(m => m.branch_id !== branchId);
+            localStorage.setItem('tukn_members', JSON.stringify(members));
+            
+            renderBranches();
+            renderBranchSummary();
+            alert('ব্রাঞ্চ ডিলিট করা হয়েছে!');
+        }
+    }
+    
+    function viewBranchDetails(branchId) {
+        window.location.href = `branch-details.html?branch_id=${branchId}`;
+    }
+    
+    function renderBranches() {
+        const branches = getBranches();
+        const tbody = document.getElementById('branchesList');
+        
+        tbody.innerHTML = branches.map(branch => {
+            const members = getBranchMembers(branch.id);
+            const totalSavings = members.reduce((sum, m) => sum + (m.monthlySavings || 500), 0);
+            
+            return `
+                <tr class="border-b">
+                    <td class="p-2">${branch.id}</td>
+                    <td class="p-2 font-semibold">${branch.name}</td>
+                    <td class="p-2">${branch.district}</td>
+                    <td class="p-2">${branch.admin_name}<br><span class="text-xs text-gray-400">${branch.admin_mobile}</span></td>
+                    <td class="p-2">${members.length} জন</td>
+                    <td class="p-2">${totalSavings.toLocaleString()} টাকা</td>
+                    <td class="p-2"><span class="px-2 py-1 rounded-full text-xs ${branch.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${branch.status === 'active' ? 'সক্রিয়' : 'নিষ্ক্রিয়'}</span></td>
+                    <td class="p-2">
+                        <button onclick="viewBranchDetails(${branch.id})" class="text-blue-500 mr-2"><i class="fas fa-eye"></i></button>
+                        <button onclick="toggleBranchStatus(${branch.id})" class="text-amber-500 mr-2"><i class="fas ${branch.status === 'active' ? 'fa-pause' : 'fa-play'}"></i></button>
+                        <button onclick="deleteBranch(${branch.id})" class="text-red-500"><i class="fas fa-trash"></i></button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+        
+        if(branches.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4 text-gray-500">কোনো ব্রাঞ্চ নেই</td></tr>';
+        }
+    }
+    
+    function renderBranchSummary() {
+        const branches = getBranches();
+        const summaryDiv = document.getElementById('branchSummary');
+        
+        let totalMembers = 0;
+        let totalSavings = 0;
+        
+        branches.forEach(branch => {
+            const members = getBranchMembers(branch.id);
+            totalMembers += members.length;
+            totalSavings += members.reduce((sum, m) => sum + (m.monthlySavings || 500), 0);
+        });
+        
+        summaryDiv.innerHTML = `
+            <div class="text-center p-3 bg-gradient-to-r from-emerald-50 to-white rounded-lg"><p class="text-2xl font-bold text-emerald-700">${branches.length}</p><p class="text-xs text-gray-500">মোট ব্রাঞ্চ</p></div>
+            <div class="text-center p-3 bg-gradient-to-r from-blue-50 to-white rounded-lg"><p class="text-2xl font-bold text-blue-700">${totalMembers}</p><p class="text-xs text-gray-500">মোট সদস্য</p></div>
+            <div class="text-center p-3 bg-gradient-to-r from-amber-50 to-white rounded-lg"><p class="text-2xl font-bold text-amber-700">${totalSavings.toLocaleString()}</p><p class="text-xs text-gray-500">মোট জমা (টাকা)</p></div>
+            <div class="text-center p-3 bg-gradient-to-r from-purple-50 to-white rounded-lg"><p class="text-2xl font-bold text-purple-700">${branches.filter(b => b.status === 'active').length}</p><p class="text-xs text-gray-500">সক্রিয় ব্রাঞ্চ</p></div>
+            <div class="text-center p-3 bg-gradient-to-r from-red-50 to-white rounded-lg"><p class="text-2xl font-bold text-red-700">${branches.filter(b => b.status !== 'active').length}</p><p class="text-xs text-gray-500">নিষ্ক্রিয় ব্রাঞ্চ</p></div>
+        `;
+    }
+    
+    renderBranches();
+    renderBranchSummary();
+</script>
+</body>
+</html>
