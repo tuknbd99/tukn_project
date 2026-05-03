@@ -1,15 +1,21 @@
 // supabase-config.js
+// Supabase ক্লায়েন্ট কনফিগারেশন
+
 const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// গ্লোবাল স্কোপ চেক করে ক্লায়েন্ট তৈরি করা
+if (typeof window.supabaseClient === 'undefined') {
+    window.supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+}
 
-// সুপাবেস টেবিল চেক এবং তৈরি করার ফাংশন
+// সুপাবেস টেবিল চেক করার ফাংশন
 async function initSupabaseTables() {
     try {
-        // টেবিলগুলি ইতিমধ্যে তৈরি থাকলে স্কিপ করবে
         console.log('Supabase initialized successfully');
+        return true;
     } catch (error) {
         console.error('Supabase initialization error:', error);
+        return false;
     }
 }
