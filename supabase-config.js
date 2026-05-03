@@ -9,13 +9,4 @@ if (typeof window.supabaseClient === 'undefined') {
     window.supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 
-// সুপাবেস টেবিল চেক করার ফাংশন
-async function initSupabaseTables() {
-    try {
-        console.log('Supabase initialized successfully');
-        return true;
-    } catch (error) {
-        console.error('Supabase initialization error:', error);
-        return false;
-    }
-}
+console.log('Supabase client initialized');
