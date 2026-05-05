@@ -12,7 +12,6 @@
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase-config.js"></script>
-    <script src="supabase-functions.js"></script>
     
     <style>
         * { font-family: 'Noto Sans Bengali', sans-serif; }
@@ -67,6 +66,21 @@
         .commission-chain-item:hover {
             background-color: #f0fdf4;
             transform: translateX(5px);
+        }
+        
+        /* লোডিং স্পিনার */
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #059669;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -502,777 +516,744 @@
 </div>
 
 <script>
-    // ==================== গ্লোবাল ভেরিয়েবল ====================
-    let currentUser = null;
-    let userBalances = { bonus: 0, profit: 0, capital: 0 };
-    let currentWithdrawType = 'bonus';
-    let durationInterval = null;
-    let clockInterval = null;
+const supabaseClient = window.supabaseClient;
+
+// ==================== গ্লোবাল ভেরিয়েবল ====================
+let currentUser = null;
+let userBalances = { bonus: 0, profit: 0, capital: 0 };
+let currentWithdrawType = 'bonus';
+let durationInterval = null;
+let clockInterval = null;
+
+const banglaMonths = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
+
+// কমিশন রেট কনফিগারেশন
+const COMMISSION_RATES = {
+    level1: 0.15,   // Direct থেকে 15%
+    level2: 0.10,   // Level 2 থেকে 10%
+    level3plus: 0.05 // Level 3-10 থেকে 5%
+};
+
+// ==================== হেল্পার ফাংশন ====================
+function showToast(message, type) {
+    const toast = document.createElement('div');
+    toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${type === 'success' ? 'bg-green-600' : type === 'error' ? 'bg-red-600' : 'bg-blue-600'}`;
+    toast.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'} mr-2"></i>${message}`;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+// ==================== সুপাবেস হেল্পার ফাংশন ====================
+async function getMembersFromSupabase() {
+    try {
+        const { data, error } = await supabaseClient.from('members').select('*');
+        if (error) throw error;
+        return data || [];
+    } catch (error) {
+        console.error('Error fetching members:', error);
+        return [];
+    }
+}
+
+async function getNoticesFromSupabase() {
+    try {
+        const { data, error } = await supabaseClient.from('notices').select('*').eq('status', 'active');
+        if (error) throw error;
+        return data || [];
+    } catch (error) {
+        console.error('Error fetching notices:', error);
+        return [];
+    }
+}
+
+async function getComplaintsFromSupabase() {
+    try {
+        const { data, error } = await supabaseClient.from('complaints').select('*');
+        if (error) throw error;
+        return data || [];
+    } catch (error) {
+        console.error('Error fetching complaints:', error);
+        return [];
+    }
+}
+
+async function updateMemberPassword(memberId, newPassword) {
+    try {
+        const { error } = await supabaseClient.from('members').update({ password: newPassword }).eq('member_id', memberId);
+        if (error) throw error;
+        return true;
+    } catch (error) {
+        console.error('Error updating password:', error);
+        return false;
+    }
+}
+
+// ==================== লগইনকৃত ইউজার লোড (Supabase সংস্করণ) ====================
+async function loadCurrentUser() {
+    // localStorage এবং sessionStorage থেকে ইউজার ডাটা নিন
+    let userData = sessionStorage.getItem('TUKNBD_user') || localStorage.getItem('TUKNBD_user');
     
-    const banglaMonths = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
-    
-    // কমিশন রেট কনফিগারেশন
-    const COMMISSION_RATES = {
-        level1: 0.15,   // Direct থেকে 15%
-        level2: 0.10,   // Level 2 থেকে 10%
-        level3plus: 0.05 // Level 3-10 থেকে 5%
-    };
-    
-    // ==================== হেল্পার ফাংশন ====================
-    function getMembers() { return JSON.parse(localStorage.getItem('tukn_members') || '[]'); }
-    function getLoans() { return JSON.parse(localStorage.getItem('tukn_loans') || '[]'); }
-    function saveLoans(loans) { localStorage.setItem('tukn_loans', JSON.stringify(loans)); }
-    
-    function showToast(message, type) {
-        const toast = document.createElement('div');
-        toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${type === 'success' ? 'bg-green-600' : type === 'error' ? 'bg-red-600' : 'bg-blue-600'}`;
-        toast.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'} mr-2"></i>${message}`;
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
+    if (!userData) {
+        showToast('আপনি লগইন করেননি! লগইন পেজে যাচ্ছেন...', 'error');
+        setTimeout(() => { window.location.href = 'login.html'; }, 1500);
+        return false;
     }
     
-    // ==================== লগইনকৃত ইউজার লোড ====================
-    function loadCurrentUser() {
-        const userData = sessionStorage.getItem('TUKNBD_user') || localStorage.getItem('TUKNBD_user');
+    try {
+        const user = JSON.parse(userData);
         
-        if(!userData) {
-            showToast('আপনি লগইন করেননি! লগইন পেজে যাচ্ছেন...', 'error');
+        // লগইন স্ট্যাটাস চেক
+        if (!user.loggedIn) {
+            showToast('সেশন শেষ! পুনরায় লগইন করুন।', 'error');
             setTimeout(() => { window.location.href = 'login.html'; }, 1500);
             return false;
         }
         
-        try {
-            const user = JSON.parse(userData);
-            const members = getMembers();
-            const fullMemberData = members.find(m => m.id === user.id || m.mobile === user.mobile);
-            
-            if(fullMemberData) {
-                currentUser = {
-                    id: fullMemberData.id || user.id,
-                    name: fullMemberData.fullName || fullMemberData.name || user.name,
-                    mobile: fullMemberData.mobile || user.mobile,
-                    referId: fullMemberData.referralCode || user.referId || `TUKN-REF-${Date.now()}`,
-                    joinDate: fullMemberData.joinDate || user.joinDate || new Date().toISOString(),
-                    memberType: fullMemberData.memberType || 'সাধারণ সদস্য',
-                    memberTerm: fullMemberData.memberTerm || 0,
-                    monthlySavings: fullMemberData.monthlySavings || 500,
-                    presentDistrict: fullMemberData.presentDistrict || '',
-                    presentDetails: fullMemberData.presentDetails || '',
-                    permanentDistrict: fullMemberData.permanentDistrict || '',
-                    permanentDetails: fullMemberData.permanentDetails || '',
-                    profileImage: fullMemberData.profileImage || user.profileImage || 'https://randomuser.me/api/portraits/men/1.jpg',
-                    status: fullMemberData.status || 'active',
-                    commissionHistory: fullMemberData.commissionHistory || []
-                };
-            } else {
-                currentUser = {
-                    id: user.id,
-                    name: user.name,
-                    mobile: user.mobile,
-                    referId: user.referId || `TUKN-REF-${Date.now()}`,
-                    joinDate: user.joinDate || new Date().toISOString(),
-                    memberType: user.memberType || 'সাধারণ সদস্য',
-                    memberTerm: user.memberTerm || 0,
-                    monthlySavings: user.monthlySavings || 500,
-                    presentDistrict: user.presentDistrict || '',
-                    presentDetails: user.presentDetails || '',
-                    permanentDistrict: user.permanentDistrict || '',
-                    permanentDetails: user.permanentDetails || '',
-                    profileImage: user.profileImage || 'https://randomuser.me/api/portraits/men/1.jpg',
-                    status: 'active',
-                    commissionHistory: []
-                };
-            }
-            
-            updateUI();
-            return true;
-            
-        } catch(e) {
-            console.error('Error loading user:', e);
-            showToast('ইউজার তথ্য লোড করতে সমস্যা হয়েছে!', 'error');
-            setTimeout(() => { window.location.href = 'login.html'; }, 1500);
-            return false;
+        // Supabase থেকে সর্বশেষ সদস্য ডাটা নিন
+        const { data: memberData, error } = await supabaseClient
+            .from('members')
+            .select('*')
+            .eq('member_id', user.id)
+            .single();
+        
+        if (error && error.code !== 'PGRST116') {
+            console.error('Supabase fetch error:', error);
         }
+        
+        if (memberData) {
+            // Supabase থেকে পাওয়া ডাটা ব্যবহার করুন
+            currentUser = {
+                id: memberData.member_id,
+                name: memberData.full_name,
+                mobile: memberData.mobile,
+                referId: memberData.referral_code || user.referId,
+                joinDate: memberData.join_date || user.joinDate,
+                memberType: memberData.member_type || 'সাধারণ সদস্য',
+                memberTerm: memberData.member_term || 0,
+                monthlySavings: memberData.monthly_savings || 500,
+                presentDistrict: memberData.present_district || '',
+                presentDetails: memberData.present_details || '',
+                permanentDistrict: memberData.permanent_district || '',
+                permanentDetails: memberData.permanent_details || '',
+                profileImage: user.profileImage || 'https://randomuser.me/api/portraits/men/1.jpg',
+                status: memberData.status || 'active',
+                commissionHistory: []
+            };
+        } else {
+            // লোকাল স্টোরেজের ডাটা ব্যবহার করুন (ব্যাকআপ)
+            currentUser = {
+                id: user.id,
+                name: user.name || user.full_name,
+                mobile: user.mobile,
+                referId: user.referId || `TUKN-REF-${Date.now()}`,
+                joinDate: user.joinDate || new Date().toISOString(),
+                memberType: user.memberType || 'সাধারণ সদস্য',
+                memberTerm: user.memberTerm || 0,
+                monthlySavings: user.monthlySavings || 500,
+                presentDistrict: user.presentDistrict || '',
+                presentDetails: user.presentDetails || '',
+                permanentDistrict: user.permanentDistrict || '',
+                permanentDetails: user.permanentDetails || '',
+                profileImage: user.profileImage || 'https://randomuser.me/api/portraits/men/1.jpg',
+                status: 'active',
+                commissionHistory: []
+            };
+        }
+        
+        // UI আপডেট করুন
+        updateUI();
+        return true;
+        
+    } catch(e) {
+        console.error('Error loading user:', e);
+        showToast('ইউজার তথ্য লোড করতে সমস্যা হয়েছে!', 'error');
+        setTimeout(() => { window.location.href = 'login.html'; }, 1500);
+        return false;
     }
+}
+
+// ==================== চেইন অফ কমিশন সিস্টেম ====================
+async function loadReferralData() {
+    const members = await getMembersFromSupabase();
+    const currentUserId = currentUser.id;
+    const currentUserReferId = currentUser.referId || currentUser.id;
     
-    // ==================== চেইন অফ কমিশন সিস্টেম ====================
+    let levelWiseCommission = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
+    let levelWiseCount = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
+    let totalCommission = 0;
+    let directCount = 0;
+    let totalDownline = 0;
     
-    // একটি চেইনের সম্পূর্ণ কমিশন গণনা (নিচ থেকে উপরের দিকে)
-    function calculateCommissionChain(newMember, members, currentUserId, maxDepth = 10) {
-        let commissionChain = [];
-        let current = newMember;
-        let depth = 1;
-        let visitedIds = new Set();
+    function collectDownline(parentId, currentDepth = 1, visited = new Set()) {
+        if(currentDepth > 10 || visited.has(parentId)) return;
+        visited.add(parentId);
         
-        // নতুন সদস্যের রেফারার থেকে শুরু করে উপরের দিকে যান
-        let referrerId = current.referralCode || current.referId;
+        const directRefs = members.filter(m => 
+            (m.referral_code === parentId || m.referral_code === parentId) && 
+            m.member_id !== parentId &&
+            (m.status === 'approved' || m.status === 'active')
+        );
         
-        while(depth <= maxDepth && referrerId && !visitedIds.has(referrerId)) {
-            visitedIds.add(referrerId);
+        if(currentDepth === 1) {
+            directCount = directRefs.length;
+        }
+        
+        for(let ref of directRefs) {
+            totalDownline++;
             
-            // রেফারার খুঁজুন
-            const referrer = members.find(m => 
-                (m.id === referrerId || m.referralCode === referrerId || m.referId === referrerId) &&
-                m.status === 'active'
-            );
-            
-            if(!referrer) break;
-            
-            // এই লেভেলের জন্য কমিশন রেট নির্ধারণ
+            const monthlySavings = ref.monthly_savings || 500;
             let commissionRate = 0;
-            if(depth === 1) {
-                commissionRate = COMMISSION_RATES.level1;      // 15%
-            } else if(depth === 2) {
-                commissionRate = COMMISSION_RATES.level2;      // 10%
-            } else {
-                commissionRate = COMMISSION_RATES.level3plus;  // 5%
-            }
-            
-            // কমিশন গণনা (নতুন সদস্যের মাসিক সঞ্চয়ের ভিত্তিতে)
-            const monthlySavings = newMember.monthlySavings || 500;
-            const commission = monthlySavings * commissionRate;
-            
-            commissionChain.push({
-                level: depth,
-                memberId: referrer.id,
-                memberName: referrer.fullName || referrer.name || referrer.id,
-                commissionRate: commissionRate * 100,
-                commission: Math.floor(commission),
-                position: depth === 1 ? "Direct রেফারার" : (depth === 2 ? "Level 2 রেফারার" : `Level ${depth} রেফারার`)
-            });
-            
-            // পরবর্তী রেফারারের জন্য উপরে উঠুন
-            referrerId = referrer.referralCode || referrer.referId;
-            depth++;
-            
-            // আপনি নিজে পৌঁছালে থামুন
-            if(referrer.id === currentUserId) {
-                break;
-            }
-        }
-        
-        return {
-            newMember: {
-                id: newMember.id,
-                name: newMember.fullName || newMember.name || newMember.id,
-                monthlySavings: newMember.monthlySavings || 500
-            },
-            commissionChain: commissionChain,
-            totalCommission: commissionChain.reduce((sum, item) => sum + item.commission, 0),
-            chainDepth: commissionChain.length
-        };
-    }
-    
-    // ইউজারের মোট কমিশন এবং লেভেল ভিত্তিক কমিশন গণনা
-    function loadReferralData() {
-        const members = getMembers();
-        const currentUserId = currentUser.id;
-        const currentUserReferId = currentUser.referId || currentUser.id;
-        
-        let levelWiseCommission = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
-        let levelWiseCount = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
-        let totalCommission = 0;
-        let directCount = 0;
-        let totalDownline = 0;
-        
-        // রিকার্সিভ ফাংশন: ডাউনলাইন সংগ্রহ করুন এবং কমিশন গণনা করুন
-        function collectDownline(parentId, currentDepth = 1, visited = new Set()) {
-            if(currentDepth > 10 || visited.has(parentId)) return;
-            visited.add(parentId);
-            
-            const directRefs = members.filter(m => 
-                (m.referralCode === parentId || m.referId === parentId) && 
-                m.id !== parentId &&
-                m.status === 'active'
-            );
             
             if(currentDepth === 1) {
-                directCount = directRefs.length;
+                commissionRate = 0.15;
+            } else if(currentDepth === 2) {
+                commissionRate = 0.10;
+            } else {
+                commissionRate = 0.05;
             }
             
-            for(let ref of directRefs) {
-                totalDownline++;
-                
-                // এই সদস্যের মাসিক সঞ্চয় থেকে বর্তমান ইউজারের কমিশন গণনা
-                const monthlySavings = ref.monthlySavings || 500;
-                let commissionRate = 0;
-                
-                if(currentDepth === 1) {
-                    commissionRate = 0.15;      // 15% - Direct
-                } else if(currentDepth === 2) {
-                    commissionRate = 0.10;      // 10% - Level 2
-                } else {
-                    commissionRate = 0.05;      // 5% - Level 3-10
-                }
-                
-                const commission = monthlySavings * commissionRate;
-                const level = Math.min(currentDepth, 10);
-                
-                levelWiseCommission[level] += commission;
-                levelWiseCount[level]++;
-                totalCommission += commission;
-                
-                // পরবর্তী লেভেলের জন্য রিকার্সিভ কল
-                collectDownline(ref.id, currentDepth + 1, visited);
-            }
+            const commission = monthlySavings * commissionRate;
+            const level = Math.min(currentDepth, 10);
+            
+            levelWiseCommission[level] += commission;
+            levelWiseCount[level]++;
+            totalCommission += commission;
+            
+            collectDownline(ref.member_id, currentDepth + 1, visited);
         }
+    }
+    
+    collectDownline(currentUserReferId, 1);
+    
+    for(let i = 1; i <= 10; i++) {
+        levelWiseCommission[i] = Math.floor(levelWiseCommission[i]);
+    }
+    totalCommission = Math.floor(totalCommission);
+    
+    let userLevel = 1;
+    if(directCount >= 100) userLevel = 5;
+    else if(directCount >= 50) userLevel = 4;
+    else if(directCount >= 20) userLevel = 3;
+    else if(directCount >= 5) userLevel = 2;
+    
+    userBalances.bonus = totalCommission;
+    userBalances.profit = Math.floor(totalCommission * 0.1);
+    
+    const joinDate = new Date(currentUser.joinDate);
+    const now = new Date();
+    const monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
+    const paidMonths = Math.min(monthsSinceJoin + 1, 6);
+    userBalances.capital = paidMonths * (currentUser.monthlySavings || 500);
+    
+    document.getElementById('directCount').innerText = directCount;
+    document.getElementById('totalDownline').innerText = totalDownline;
+    document.getElementById('totalBonus').innerText = totalCommission.toLocaleString();
+    document.getElementById('currentLevel').innerText = userLevel;
+    
+    const referralLinkInput = document.getElementById('referralLink');
+    if(referralLinkInput) {
+        referralLinkInput.value = `https://tuknbd.com/join?ref=${currentUser.referId}`;
+    }
+    
+    const container = document.getElementById('levelWiseDownline');
+    if(container) {
+        const levelNames = ['প্রথম', 'দ্বিতীয়', 'তৃতীয়', 'চতুর্থ', 'পঞ্চম', 'ষষ্ঠ', 'সপ্তম', 'অষ্টম', 'নবম', 'দশম'];
+        const commissionRates = [15, 10, 5, 5, 5, 5, 5, 5, 5, 5];
         
-        collectDownline(currentUserReferId, 1);
+        let html = '';
         
-        // রাউন্ড করে ফেলুন
         for(let i = 1; i <= 10; i++) {
-            levelWiseCommission[i] = Math.floor(levelWiseCommission[i]);
-        }
-        totalCommission = Math.floor(totalCommission);
-        
-        // ইউজার লেভেল নির্ধারণ (Direct রেফারেল সংখ্যার ভিত্তিতে)
-        let userLevel = 1;
-        if(directCount >= 100) userLevel = 5;
-        else if(directCount >= 50) userLevel = 4;
-        else if(directCount >= 20) userLevel = 3;
-        else if(directCount >= 5) userLevel = 2;
-        
-        // ব্যালেন্স আপডেট
-        userBalances.bonus = totalCommission;
-        userBalances.profit = Math.floor(totalCommission * 0.1);
-        
-        const joinDate = new Date(currentUser.joinDate);
-        const now = new Date();
-        const monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
-        const paidMonths = Math.min(monthsSinceJoin + 1, 6);
-        userBalances.capital = paidMonths * (currentUser.monthlySavings || 500);
-        
-        // UI আপডেট
-        document.getElementById('directCount').innerText = directCount;
-        document.getElementById('totalDownline').innerText = totalDownline;
-        document.getElementById('totalBonus').innerText = totalCommission.toLocaleString();
-        document.getElementById('currentLevel').innerText = userLevel;
-        
-        // রেফারেল লিংক আপডেট
-        const referralLinkInput = document.getElementById('referralLink');
-        if(referralLinkInput) {
-            referralLinkInput.value = `https://tuknbd.com/join?ref=${currentUser.referId}`;
-        }
-        
-        // লেভেল ভিত্তিক কমিশন দেখানোর জন্য HTML
-        const container = document.getElementById('levelWiseDownline');
-        if(container) {
-            const levelNames = ['প্রথম', 'দ্বিতীয়', 'তৃতীয়', 'চতুর্থ', 'পঞ্চম', 'ষষ্ঠ', 'সপ্তম', 'অষ্টম', 'নবম', 'দশম'];
-            const commissionRates = [15, 10, 5, 5, 5, 5, 5, 5, 5, 5];
+            const commission = levelWiseCommission[i];
+            const count = levelWiseCount[i];
+            const rate = commissionRates[i-1];
             
-            let html = '';
+            let bgColor = '';
+            if(i === 1) bgColor = 'bg-gradient-to-r from-emerald-50 to-emerald-100';
+            else if(i === 2) bgColor = 'bg-gradient-to-r from-blue-50 to-blue-100';
+            else bgColor = 'bg-gray-50';
             
-            for(let i = 1; i <= 10; i++) {
-                const commission = levelWiseCommission[i];
-                const count = levelWiseCount[i];
-                const rate = commissionRates[i-1];
-                
-                let bgColor = '';
-                if(i === 1) bgColor = 'bg-gradient-to-r from-emerald-50 to-emerald-100';
-                else if(i === 2) bgColor = 'bg-gradient-to-r from-blue-50 to-blue-100';
-                else bgColor = 'bg-gray-50';
-                
-                html += `
-                    <div class="${bgColor} p-3 rounded-lg border-l-4 ${i === 1 ? 'border-emerald-500' : (i === 2 ? 'border-blue-500' : 'border-gray-300')}">
-                        <div class="flex justify-between items-center">
-                            <div>
-                                <div class="flex items-center gap-2">
-                                    <span class="font-bold text-gray-800">Level ${i}</span>
-                                    <span class="text-xs px-2 py-0.5 rounded-full ${i === 1 ? 'bg-emerald-100 text-emerald-700' : (i === 2 ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-600')}">
-                                        ${levelNames[i-1]} লেভেল
-                                    </span>
-                                </div>
-                                <p class="text-xs text-gray-500 mt-1">${count} জন সদস্য | কমিশন রেট ${rate}%</p>
-                            </div>
-                            <div class="text-right">
-                                <span class="text-xl font-bold ${i === 1 ? 'text-emerald-600' : (i === 2 ? 'text-blue-600' : 'text-gray-700')}">${commission.toLocaleString()} টাকা</span>
-                            </div>
-                        </div>
-                        ${count > 0 && i !== 1 ? `
-                            <div class="mt-2 w-full bg-gray-200 rounded-full h-1.5">
-                                <div class="${i === 2 ? 'bg-blue-500' : 'bg-emerald-500'} h-1.5 rounded-full" style="width: ${Math.min((count / (levelWiseCount[i-1] * 10)) * 100, 100)}%"></div>
-                            </div>
-                        ` : ''}
-                    </div>
-                `;
-            }
-            
-            // মোট কমিশন সারাংশ
             html += `
-                <div class="mt-4 p-4 bg-gradient-to-r from-amber-50 to-amber-100 rounded-lg">
-                    <div class="flex items-center justify-between">
+                <div class="${bgColor} p-3 rounded-lg border-l-4 ${i === 1 ? 'border-emerald-500' : (i === 2 ? 'border-blue-500' : 'border-gray-300')}">
+                    <div class="flex justify-between items-center">
                         <div>
                             <div class="flex items-center gap-2">
-                                <i class="fas fa-chart-line text-amber-600 text-xl"></i>
-                                <span class="font-semibold text-amber-700">মোট প্রাপ্ত কমিশন</span>
+                                <span class="font-bold text-gray-800">Level ${i}</span>
+                                <span class="text-xs px-2 py-0.5 rounded-full ${i === 1 ? 'bg-emerald-100 text-emerald-700' : (i === 2 ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-600')}">
+                                    ${levelNames[i-1]} লেভেল
+                                </span>
                             </div>
-                            <p class="text-xs text-amber-600 mt-1">${directCount} টি Direct রেফারেল থেকে শুরু</p>
+                            <p class="text-xs text-gray-500 mt-1">${count} জন সদস্য | কমিশন রেট ${rate}%</p>
                         </div>
-                        <p class="text-2xl font-bold text-amber-700">${totalCommission.toLocaleString()} টাকা</p>
+                        <div class="text-right">
+                            <span class="text-xl font-bold ${i === 1 ? 'text-emerald-600' : (i === 2 ? 'text-blue-600' : 'text-gray-700')}">${commission.toLocaleString()} টাকা</span>
+                        </div>
                     </div>
+                    ${count > 0 && i !== 1 ? `
+                        <div class="mt-2 w-full bg-gray-200 rounded-full h-1.5">
+                            <div class="${i === 2 ? 'bg-blue-500' : 'bg-emerald-500'} h-1.5 rounded-full" style="width: ${Math.min((count / (levelWiseCount[i-1] * 10)) * 100, 100)}%"></div>
+                        </div>
+                    ` : ''}
                 </div>
             `;
-            
-            container.innerHTML = html;
         }
         
-        // কনসোল লগ (ডিবাগিং)
-        console.log("===== চেইন কমিশন সারাংশ =====");
-        console.log("Direct রেফারেল:", directCount);
-        console.log("মোট ডাউনলাইন:", totalDownline);
-        console.log("মোট কমিশন:", totalCommission, "টাকা");
-        console.log("লেভেল ভিত্তিক কমিশন:", levelWiseCommission);
-        console.log("লেভেল ভিত্তিক কাউন্ট:", levelWiseCount);
-    }
-    
-    // ==================== UI আপডেট ফাংশন ====================
-    function updateUI() {
-        if(!currentUser) return;
-        
-        const hour = new Date().getHours();
-        const greeting = hour < 12 ? 'সুপ্রভাত' : (hour < 18 ? 'শুভ অপরাহ্ন' : 'শুভ সন্ধ্যা');
-        document.getElementById('greetingMessage').innerHTML = `${greeting}, ${currentUser.name}!`;
-        
-        document.getElementById('memberIdDisplay').innerHTML = currentUser.id;
-        document.getElementById('referIdDisplay').innerHTML = currentUser.referId;
-        document.getElementById('memberMobile').innerHTML = currentUser.mobile;
-        
-        const joinDate = new Date(currentUser.joinDate);
-        document.getElementById('joinDateDisplay').innerHTML = joinDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric' });
-        
-        document.getElementById('cardName').innerHTML = currentUser.name;
-        document.getElementById('cardId').innerHTML = currentUser.id;
-        document.getElementById('cardReferId').innerHTML = currentUser.referId;
-        document.getElementById('qrCode').src = `https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(currentUser.id)}`;
-        
-        if(currentUser.profileImage) {
-            document.getElementById('profileImage').src = currentUser.profileImage;
-            document.getElementById('cardProfileImage').src = currentUser.profileImage;
-        }
-        
-        document.getElementById('membershipTermDisplay').innerHTML = currentUser.memberType;
-        document.getElementById('monthlySavingsDisplay').innerHTML = currentUser.monthlySavings + ' টাকা';
-        document.getElementById('perMonthSavings').innerHTML = currentUser.monthlySavings;
-        
-        const presentAddr = currentUser.presentDistrict ? `${currentUser.presentDistrict}, ${currentUser.presentDetails || ''}` : 'যোগ করা হয়নি';
-        const permanentAddr = currentUser.permanentDistrict ? `${currentUser.permanentDistrict}, ${currentUser.permanentDetails || ''}` : 'যোগ করা হয়নি';
-        document.getElementById('presentAddressDisplay').innerHTML = presentAddr;
-        document.getElementById('permanentAddressDisplay').innerHTML = permanentAddr;
-        
-        loadSavingsData();
-        loadPaymentHistory();
-        loadReferralData();
-        loadNotices();
-        loadComplaintReplies();
-        
-        if(clockInterval) clearInterval(clockInterval);
-        if(durationInterval) clearInterval(durationInterval);
-        updateDigitalClock();
-        clockInterval = setInterval(updateDigitalClock, 1000);
-        calculateMembershipDuration();
-        durationInterval = setInterval(calculateMembershipDuration, 1000);
-    }
-    
-    function loadPaymentHistory() {
-        const joinDate = new Date(currentUser.joinDate);
-        const now = new Date();
-        const monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
-        const paidMonths = Math.min(monthsSinceJoin + 1, 6);
-        
-        const historyBody = document.getElementById('paymentHistoryBody');
-        if(historyBody) {
-            let historyHtml = '';
-            for(let i = 0; i < paidMonths; i++) {
-                const monthDate = new Date(joinDate.getFullYear(), joinDate.getMonth() + i, 1);
-                const monthName = monthDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long' });
-                historyHtml += `<tr class="border-b"><td class="p-2">${monthName}</td><td class="p-2">${currentUser.monthlySavings}</td><td class="p-2 text-green-600">পরিশোধিত</td><td class="p-2"><button onclick="viewPaymentSlip('${monthName}', ${currentUser.monthlySavings})" class="text-blue-500"><i class="fas fa-print"></i></button></td></tr>`;
-            }
-            historyBody.innerHTML = historyHtml || '<tr><td colspan="4" class="text-center p-2">কোনো ইতিহাস নেই</td></tr>';
-        }
-    }
-    
-    function viewPaymentSlip(monthName, amount) {
-        const slipHTML = `
-            <div style="text-align: center; margin-bottom: 15px; border: 3px solid #059669; border-radius: 12px; padding: 12px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);">
-                <i class="fas fa-mosque" style="font-size: 28px; color: #059669;"></i>
-                <h2 style="font-size: 18px; font-weight: bold; color: #059669; margin: 5px 0 0 0;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2>
-                <p style="font-size: 14px; font-weight: bold; color: #047857; margin: 3px 0 0 0;">পেমেন্ট স্লিপ</p>
-            </div>
-            <div style="border: 2px solid #059669; border-radius: 10px; padding: 15px;">
-                <div><strong>সদস্য আইডি:</strong> ${currentUser.id}</div>
-                <div><strong>নাম:</strong> ${currentUser.name}</div>
-                <div><strong>মাস:</strong> ${monthName}</div>
-                <div><strong>পরিমাণ:</strong> ${amount} টাকা</div>
-                <div><strong>স্ট্যাটাস:</strong> <span class="text-green-600">পরিশোধিত</span></div>
-                <div><strong>তারিখ:</strong> ${new Date().toLocaleDateString('bn-BD')}</div>
+        html += `
+            <div class="mt-4 p-4 bg-gradient-to-r from-amber-50 to-amber-100 rounded-lg">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <i class="fas fa-chart-line text-amber-600 text-xl"></i>
+                            <span class="font-semibold text-amber-700">মোট প্রাপ্ত কমিশন</span>
+                        </div>
+                        <p class="text-xs text-amber-600 mt-1">${directCount} টি Direct রেফারেল থেকে শুরু</p>
+                    </div>
+                    <p class="text-2xl font-bold text-amber-700">${totalCommission.toLocaleString()} টাকা</p>
+                </div>
             </div>
         `;
-        document.getElementById('slipPrintArea').innerHTML = slipHTML;
-        document.getElementById('paymentSlipModal').classList.remove('hidden');
-        document.getElementById('paymentSlipModal').classList.add('flex');
+        
+        container.innerHTML = html;
+    }
+}
+
+// ==================== UI আপডেট ফাংশন ====================
+function updateUI() {
+    if(!currentUser) return;
+    
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? 'সুপ্রভাত' : (hour < 18 ? 'শুভ অপরাহ্ন' : 'শুভ সন্ধ্যা');
+    document.getElementById('greetingMessage').innerHTML = `${greeting}, ${currentUser.name}!`;
+    
+    document.getElementById('memberIdDisplay').innerHTML = currentUser.id;
+    document.getElementById('referIdDisplay').innerHTML = currentUser.referId;
+    document.getElementById('memberMobile').innerHTML = currentUser.mobile;
+    
+    const joinDate = new Date(currentUser.joinDate);
+    document.getElementById('joinDateDisplay').innerHTML = joinDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric' });
+    
+    document.getElementById('cardName').innerHTML = currentUser.name;
+    document.getElementById('cardId').innerHTML = currentUser.id;
+    document.getElementById('cardReferId').innerHTML = currentUser.referId;
+    document.getElementById('qrCode').src = `https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(currentUser.id)}`;
+    
+    if(currentUser.profileImage) {
+        document.getElementById('profileImage').src = currentUser.profileImage;
+        document.getElementById('cardProfileImage').src = currentUser.profileImage;
     }
     
-    function loadSavingsData() {
-        const joinDate = new Date(currentUser.joinDate);
-        const now = new Date();
-        const monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
-        const paidMonths = Math.min(monthsSinceJoin + 1, 6);
-        const remainingMonths = Math.max(0, 6 - paidMonths);
-        const totalPaid = paidMonths * currentUser.monthlySavings;
-        document.getElementById('paidMonthsDisplay').innerText = paidMonths + ' মাস';
-        document.getElementById('dueMonthsDisplay').innerText = remainingMonths + ' মাস';
-        document.getElementById('totalPaidDisplay').innerText = totalPaid.toLocaleString() + ' টাকা';
-    }
+    document.getElementById('membershipTermDisplay').innerHTML = currentUser.memberType;
+    document.getElementById('monthlySavingsDisplay').innerHTML = currentUser.monthlySavings + ' টাকা';
+    document.getElementById('perMonthSavings').innerHTML = currentUser.monthlySavings;
     
-    // ==================== পেমেন্ট স্লিপ ফাংশন ====================
-    function populateYearAndMonths() {
-        const yearSelect = document.getElementById('paymentYear');
-        if(yearSelect) {
-            yearSelect.innerHTML = '<option value="">সাল নির্বাচন করুন</option>';
-            for(let year = 2026; year <= 2076; year++) yearSelect.innerHTML += `<option value="${year}">${year}</option>`;
+    const presentAddr = currentUser.presentDistrict ? `${currentUser.presentDistrict}, ${currentUser.presentDetails || ''}` : 'যোগ করা হয়নি';
+    const permanentAddr = currentUser.permanentDistrict ? `${currentUser.permanentDistrict}, ${currentUser.permanentDetails || ''}` : 'যোগ করা হয়নি';
+    document.getElementById('presentAddressDisplay').innerHTML = presentAddr;
+    document.getElementById('permanentAddressDisplay').innerHTML = permanentAddr;
+    
+    loadSavingsData();
+    loadPaymentHistory();
+    loadReferralData();
+    loadNotices();
+    loadComplaintReplies();
+    
+    if(clockInterval) clearInterval(clockInterval);
+    if(durationInterval) clearInterval(durationInterval);
+    updateDigitalClock();
+    clockInterval = setInterval(updateDigitalClock, 1000);
+    calculateMembershipDuration();
+    durationInterval = setInterval(calculateMembershipDuration, 1000);
+}
+
+function loadPaymentHistory() {
+    const joinDate = new Date(currentUser.joinDate);
+    const now = new Date();
+    const monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
+    const paidMonths = Math.min(monthsSinceJoin + 1, 6);
+    
+    const historyBody = document.getElementById('paymentHistoryBody');
+    if(historyBody) {
+        let historyHtml = '';
+        for(let i = 0; i < paidMonths; i++) {
+            const monthDate = new Date(joinDate.getFullYear(), joinDate.getMonth() + i, 1);
+            const monthName = monthDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long' });
+            historyHtml += `<tr class="border-b"><td class="p-2">${monthName}</td><td class="p-2">${currentUser.monthlySavings}</td><td class="p-2 text-green-600">পরিশোধিত</td><td class="p-2"><button onclick="viewPaymentSlip('${monthName}', ${currentUser.monthlySavings})" class="text-blue-500"><i class="fas fa-print"></i></button></td></tr>`;
         }
-        const monthsContainer = document.getElementById('monthsContainer');
-        if(monthsContainer) {
-            monthsContainer.innerHTML = '';
-            banglaMonths.forEach(month => {
-                monthsContainer.innerHTML += `<label class="flex items-center gap-2 p-2 border rounded-lg cursor-pointer hover:bg-gray-50 month-checkbox"><input type="checkbox" value="${month}" class="month-cb w-4 h-4 text-emerald-600 rounded"><span class="text-sm">${month}</span></label>`;
-            });
-            document.querySelectorAll('.month-cb').forEach(cb => cb.addEventListener('change', updateTotalAmount));
-        }
+        historyBody.innerHTML = historyHtml || '<tr><td colspan="4" class="text-center p-2">কোনো ইতিহাস নেই</td></tr>';
     }
-    
-    function updateTotalAmount() {
-        const selected = document.querySelectorAll('.month-cb:checked');
-        const totalAmount = selected.length * currentUser.monthlySavings;
-        document.getElementById('totalAmountDisplay').innerHTML = totalAmount.toLocaleString() + ' টাকা';
+}
+
+function viewPaymentSlip(monthName, amount) {
+    const slipHTML = `
+        <div style="text-align: center; margin-bottom: 15px; border: 3px solid #059669; border-radius: 12px; padding: 12px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);">
+            <i class="fas fa-mosque" style="font-size: 28px; color: #059669;"></i>
+            <h2 style="font-size: 18px; font-weight: bold; color: #059669; margin: 5px 0 0 0;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2>
+            <p style="font-size: 14px; font-weight: bold; color: #047857; margin: 3px 0 0 0;">পেমেন্ট স্লিপ</p>
+        </div>
+        <div style="border: 2px solid #059669; border-radius: 10px; padding: 15px;">
+            <div><strong>সদস্য আইডি:</strong> ${currentUser.id}</div>
+            <div><strong>নাম:</strong> ${currentUser.name}</div>
+            <div><strong>মাস:</strong> ${monthName}</div>
+            <div><strong>পরিমাণ:</strong> ${amount} টাকা</div>
+            <div><strong>স্ট্যাটাস:</strong> <span class="text-green-600">পরিশোধিত</span></div>
+            <div><strong>তারিখ:</strong> ${new Date().toLocaleDateString('bn-BD')}</div>
+        </div>
+    `;
+    document.getElementById('slipPrintArea').innerHTML = slipHTML;
+    document.getElementById('paymentSlipModal').classList.remove('hidden');
+    document.getElementById('paymentSlipModal').classList.add('flex');
+}
+
+function loadSavingsData() {
+    const joinDate = new Date(currentUser.joinDate);
+    const now = new Date();
+    const monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
+    const paidMonths = Math.min(monthsSinceJoin + 1, 6);
+    const remainingMonths = Math.max(0, 6 - paidMonths);
+    const totalPaid = paidMonths * currentUser.monthlySavings;
+    document.getElementById('paidMonthsDisplay').innerText = paidMonths + ' মাস';
+    document.getElementById('dueMonthsDisplay').innerText = remainingMonths + ' মাস';
+    document.getElementById('totalPaidDisplay').innerText = totalPaid.toLocaleString() + ' টাকা';
+}
+
+function populateYearAndMonths() {
+    const yearSelect = document.getElementById('paymentYear');
+    if(yearSelect) {
+        yearSelect.innerHTML = '<option value="">সাল নির্বাচন করুন</option>';
+        for(let year = 2026; year <= 2076; year++) yearSelect.innerHTML += `<option value="${year}">${year}</option>`;
     }
-    
-    function openPaymentSlip() {
-        if(!currentUser) return;
-        populateYearAndMonths();
-        document.getElementById('paymentInfoModal').classList.remove('hidden');
-        document.getElementById('paymentInfoModal').classList.add('flex');
-        document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
-        document.querySelectorAll('.month-cb').forEach(cb => cb.checked = false);
+    const monthsContainer = document.getElementById('monthsContainer');
+    if(monthsContainer) {
+        monthsContainer.innerHTML = '';
+        banglaMonths.forEach(month => {
+            monthsContainer.innerHTML += `<label class="flex items-center gap-2 p-2 border rounded-lg cursor-pointer hover:bg-gray-50 month-checkbox"><input type="checkbox" value="${month}" class="month-cb w-4 h-4 text-emerald-600 rounded"><span class="text-sm">${month}</span></label>`;
+        });
+        document.querySelectorAll('.month-cb').forEach(cb => cb.addEventListener('change', updateTotalAmount));
     }
-    
-    function generateSlipAndPrint() {
-        if(!currentUser) return;
-        const paymentYear = document.getElementById('paymentYear').value;
-        const selectedMonthNames = Array.from(document.querySelectorAll('.month-cb:checked')).map(cb => cb.value);
-        const paymentMethod = document.getElementById('paymentMethod').value;
-        const senderMobile = document.getElementById('senderMobile').value;
-        const transactionId = document.getElementById('transactionId').value;
-        if(!paymentYear || selectedMonthNames.length === 0 || !paymentMethod || !senderMobile || !transactionId) { 
-            alert('সব তথ্য পূরণ করুন।'); 
-            return; 
-        }
-        const totalAmount = selectedMonthNames.length * currentUser.monthlySavings;
-        const amountInWords = numberToBanglaWords(totalAmount) + ' টাকা';
-        const fullMonths = selectedMonthNames.map(m => m + ' ' + paymentYear).join(', ');
-        const trxnNo = Math.floor(100000 + Math.random() * 900000);
-        const dateTime = new Date().toLocaleString('bn-BD', { hour12: false });
-        const slipHTML = `<div id="slipContainer"><div style="text-align:center; margin-bottom:15px; border:3px solid #059669; border-radius:12px; padding:12px; background:linear-gradient(135deg,#f0fdf4 0%,#dcfce7 100%);"><i class="fas fa-mosque" style="font-size:28px; color:#059669;"></i><h2 style="font-size:18px; font-weight:bold; color:#059669;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2><p style="font-size:14px; font-weight:bold; color:#047857;">পেমেন্ট স্লিপ</p></div><div style="border:2px solid #059669; border-radius:10px; padding:15px; background:white; margin-bottom:20px;"><div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:13px; margin-bottom:15px;"><div><strong>Trxn No:</strong> ${trxnNo}</div><div><strong>Date & Time:</strong> ${dateTime}</div><div><strong>মেম্বার আইডি:</strong> <strong>${currentUser.id}</strong></div><div><strong>নাম:</strong> <strong>${currentUser.name}</strong></div><div><strong>মোবাইল:</strong> ${currentUser.mobile}</div><div><strong>পেমেন্ট টাইপ:</strong> মাসিক সঞ্চয়</div><div><strong>পেমেন্ট মাধ্যম:</strong> ${paymentMethod}</div><div><strong>যে মোবাইল থেকে:</strong> ${senderMobile}</div><div><strong>ট্রানজেকশন আইডি:</strong> ${transactionId}</div><div><strong>মাসসমূহ:</strong> ${fullMonths}</div></div><div style="border-top:1px dashed #ccc; padding-top:10px;"><div><strong>পরিমাণ:</strong> <strong>${totalAmount}.00 টাকা</strong> (${amountInWords})</div><div><strong>নোট:</strong> ${selectedMonthNames.length} মাসের সঞ্চয় জমা প্রদান</div></div><div style="margin-top:15px; padding-top:10px; border-top:1px solid #eee; display:flex; justify-content:space-between; font-size:11px;"><div>Received By: TUKNBD Admin</div><div>স্বয়ংক্রিয় জেনারেট স্লিপ</div></div></div></div>`;
-        document.getElementById('slipPrintArea').innerHTML = slipHTML;
-        closePaymentInfoModal();
-        document.getElementById('paymentSlipModal').classList.remove('hidden');
-        document.getElementById('paymentSlipModal').classList.add('flex');
+}
+
+function updateTotalAmount() {
+    const selected = document.querySelectorAll('.month-cb:checked');
+    const totalAmount = selected.length * currentUser.monthlySavings;
+    document.getElementById('totalAmountDisplay').innerHTML = totalAmount.toLocaleString() + ' টাকা';
+}
+
+function openPaymentSlip() {
+    if(!currentUser) return;
+    populateYearAndMonths();
+    document.getElementById('paymentInfoModal').classList.remove('hidden');
+    document.getElementById('paymentInfoModal').classList.add('flex');
+    document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
+    document.querySelectorAll('.month-cb').forEach(cb => cb.checked = false);
+}
+
+function generateSlipAndPrint() {
+    if(!currentUser) return;
+    const paymentYear = document.getElementById('paymentYear').value;
+    const selectedMonthNames = Array.from(document.querySelectorAll('.month-cb:checked')).map(cb => cb.value);
+    const paymentMethod = document.getElementById('paymentMethod').value;
+    const senderMobile = document.getElementById('senderMobile').value;
+    const transactionId = document.getElementById('transactionId').value;
+    if(!paymentYear || selectedMonthNames.length === 0 || !paymentMethod || !senderMobile || !transactionId) { 
+        alert('সব তথ্য পূরণ করুন।'); 
+        return; 
     }
-    
-    function closePaymentInfoModal() { document.getElementById('paymentInfoModal').classList.add('hidden'); }
-    function closePaymentInfoModalOnOverlay(e) { if(e.target.id === 'paymentInfoModal') closePaymentInfoModal(); }
-    function closePaymentSlipModal() { document.getElementById('paymentSlipModal').classList.add('hidden'); }
-    function closeSlipModalOnOverlay(e) { if(e.target.id === 'paymentSlipModal') closePaymentSlipModal(); }
-    function downloadSlipPDF() { const element = document.getElementById('slipPrintArea'); html2pdf().set({ margin: 0.3, filename: `TUKNBD_Slip_${Date.now()}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' } }).from(element).save(); }
-    function printSlip() { window.print(); }
-    
-    // লোন আবেদন ফাংশন
-    function openLoanApplicationModal() {
-        document.getElementById('loanApplicationModal').classList.remove('hidden');
-        document.getElementById('loanApplicationModal').classList.add('flex');
+    const totalAmount = selectedMonthNames.length * currentUser.monthlySavings;
+    const amountInWords = numberToBanglaWords(totalAmount) + ' টাকা';
+    const fullMonths = selectedMonthNames.map(m => m + ' ' + paymentYear).join(', ');
+    const trxnNo = Math.floor(100000 + Math.random() * 900000);
+    const dateTime = new Date().toLocaleString('bn-BD', { hour12: false });
+    const slipHTML = `<div id="slipContainer"><div style="text-align:center; margin-bottom:15px; border:3px solid #059669; border-radius:12px; padding:12px; background:linear-gradient(135deg,#f0fdf4 0%,#dcfce7 100%);"><i class="fas fa-mosque" style="font-size:28px; color:#059669;"></i><h2 style="font-size:18px; font-weight:bold; color:#059669;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2><p style="font-size:14px; font-weight:bold; color:#047857;">পেমেন্ট স্লিপ</p></div><div style="border:2px solid #059669; border-radius:10px; padding:15px; background:white; margin-bottom:20px;"><div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:13px; margin-bottom:15px;"><div><strong>Trxn No:</strong> ${trxnNo}</div><div><strong>Date & Time:</strong> ${dateTime}</div><div><strong>মেম্বার আইডি:</strong> <strong>${currentUser.id}</strong></div><div><strong>নাম:</strong> <strong>${currentUser.name}</strong></div><div><strong>মোবাইল:</strong> ${currentUser.mobile}</div><div><strong>পেমেন্ট টাইপ:</strong> মাসিক সঞ্চয়</div><div><strong>পেমেন্ট মাধ্যম:</strong> ${paymentMethod}</div><div><strong>যে মোবাইল থেকে:</strong> ${senderMobile}</div><div><strong>ট্রানজেকশন আইডি:</strong> ${transactionId}</div><div><strong>মাসসমূহ:</strong> ${fullMonths}</div></div><div style="border-top:1px dashed #ccc; padding-top:10px;"><div><strong>পরিমাণ:</strong> <strong>${totalAmount}.00 টাকা</strong> (${amountInWords})</div><div><strong>নোট:</strong> ${selectedMonthNames.length} মাসের সঞ্চয় জমা প্রদান</div></div><div style="margin-top:15px; padding-top:10px; border-top:1px solid #eee; display:flex; justify-content:space-between; font-size:11px;"><div>Received By: TUKNBD Admin</div><div>স্বয়ংক্রিয় জেনারেট স্লিপ</div></div></div></div>`;
+    document.getElementById('slipPrintArea').innerHTML = slipHTML;
+    closePaymentInfoModal();
+    document.getElementById('paymentSlipModal').classList.remove('hidden');
+    document.getElementById('paymentSlipModal').classList.add('flex');
+}
+
+function closePaymentInfoModal() { document.getElementById('paymentInfoModal').classList.add('hidden'); }
+function closePaymentInfoModalOnOverlay(e) { if(e.target.id === 'paymentInfoModal') closePaymentInfoModal(); }
+function closePaymentSlipModal() { document.getElementById('paymentSlipModal').classList.add('hidden'); }
+function closeSlipModalOnOverlay(e) { if(e.target.id === 'paymentSlipModal') closePaymentSlipModal(); }
+function downloadSlipPDF() { const element = document.getElementById('slipPrintArea'); html2pdf().set({ margin: 0.3, filename: `TUKNBD_Slip_${Date.now()}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' } }).from(element).save(); }
+function printSlip() { window.print(); }
+
+function openLoanApplicationModal() {
+    document.getElementById('loanApplicationModal').classList.remove('hidden');
+    document.getElementById('loanApplicationModal').classList.add('flex');
+}
+function closeLoanApplicationModal() { document.getElementById('loanApplicationModal').classList.add('hidden'); document.getElementById('loanApplicationForm').reset(); }
+function closeLoanModalOnOverlay(e) { if(e.target.id === 'loanApplicationModal') closeLoanApplicationModal(); }
+
+function generateLoanSlip(loanData) {
+    const slipHTML = `<div class="application-slip"><div class="header"><i class="fas fa-mosque" style="font-size: 40px; color: #059669;"></i><h2>ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2><p style="font-size: 12px;">লোন আবেদন স্লিপ</p></div><div class="info-row"><strong>আবেদন নম্বর:</strong> <span>${loanData.applicationNo}</span></div><div class="info-row"><strong>আবেদনের তারিখ:</strong> <span>${loanData.date}</span></div><div class="info-row"><strong>নাম:</strong> <span>${loanData.fullName}</span></div><div class="info-row"><strong>মোবাইল:</strong> <span>${loanData.mobile}</span></div><div class="info-row"><strong>সদস্য আইডি:</strong> <span>${currentUser.id}</span></div><div class="info-row"><strong>লোনের ধরন:</strong> <span>${loanData.loanType}</span></div><div class="info-row"><strong>পরিমাণ:</strong> <span>${loanData.amount.toLocaleString()} টাকা</span></div><div class="info-row"><strong>মেয়াদ:</strong> <span>${loanData.duration}</span></div><div class="info-row"><strong>উদ্দেশ্য:</strong> <span>${loanData.purpose}</span></div><div class="info-row"><strong>স্ট্যাটাস:</strong> <span class="status-pending">বিচারাধীন</span></div><div style="margin-top:15px; text-align:center; font-size:11px;"><p>স্বয়ংক্রিয় জেনারেট স্লিপ | স্বাক্ষর প্রয়োজন নেই</p></div></div>`;
+    document.getElementById('loanSlipPrintArea').innerHTML = slipHTML;
+    document.getElementById('loanSlipModal').classList.remove('hidden');
+    document.getElementById('loanSlipModal').classList.add('flex');
+}
+
+function closeLoanSlipModal() { document.getElementById('loanSlipModal').classList.add('hidden'); }
+function closeLoanSlipModalOnOverlay(e) { if(e.target.id === 'loanSlipModal') closeLoanSlipModal(); }
+function downloadLoanSlipPDF() { const element = document.getElementById('loanSlipPrintArea'); html2pdf().set({ margin: 0.5, filename: `Loan_Application_${Date.now()}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' } }).from(element).save(); }
+function printLoanSlip() { window.print(); }
+
+document.getElementById('loanApplicationForm')?.addEventListener('submit', function(e) {
+    e.preventDefault();
+    const termsCheck = document.getElementById('loanTermsCheck');
+    if(!termsCheck.checked) { alert('শর্তাবলীতে সম্মত হতে হবে।'); return; }
+    const loanData = {
+        id: Date.now(), applicationNo: `LN-${Date.now()}`, fullName: document.getElementById('loanFullName').value,
+        mobile: document.getElementById('loanMobile').value, loanType: document.getElementById('loanType').value,
+        amount: parseFloat(document.getElementById('loanAmount').value), duration: document.getElementById('loanDuration').value,
+        monthlyIncome: parseFloat(document.getElementById('monthlyIncome').value) || 0, purpose: document.getElementById('loanPurpose').value,
+        memberId: currentUser.id, date: new Date().toLocaleString('bn-BD'), status: 'pending'
+    };
+    if(!loanData.fullName || !loanData.mobile || !loanData.loanType || !loanData.amount || !loanData.duration || !loanData.purpose) {
+        alert('সব (*) চিহ্নিত ঘর পূরণ করুন।'); return;
     }
-    function closeLoanApplicationModal() { document.getElementById('loanApplicationModal').classList.add('hidden'); document.getElementById('loanApplicationForm').reset(); }
-    function closeLoanModalOnOverlay(e) { if(e.target.id === 'loanApplicationModal') closeLoanApplicationModal(); }
-    
-    function generateLoanSlip(loanData) {
-        const slipHTML = `<div class="application-slip"><div class="header"><i class="fas fa-mosque" style="font-size: 40px; color: #059669;"></i><h2>ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2><p style="font-size: 12px;">লোন আবেদন স্লিপ</p></div><div class="info-row"><strong>আবেদন নম্বর:</strong> <span>${loanData.applicationNo}</span></div><div class="info-row"><strong>আবেদনের তারিখ:</strong> <span>${loanData.date}</span></div><div class="info-row"><strong>নাম:</strong> <span>${loanData.fullName}</span></div><div class="info-row"><strong>মোবাইল:</strong> <span>${loanData.mobile}</span></div><div class="info-row"><strong>সদস্য আইডি:</strong> <span>${currentUser.id}</span></div><div class="info-row"><strong>লোনের ধরন:</strong> <span>${loanData.loanType}</span></div><div class="info-row"><strong>পরিমাণ:</strong> <span>${loanData.amount.toLocaleString()} টাকা</span></div><div class="info-row"><strong>মেয়াদ:</strong> <span>${loanData.duration}</span></div><div class="info-row"><strong>উদ্দেশ্য:</strong> <span>${loanData.purpose}</span></div><div class="info-row"><strong>স্ট্যাটাস:</strong> <span class="status-pending">বিচারাধীন</span></div><div style="margin-top:15px; text-align:center; font-size:11px;"><p>স্বয়ংক্রিয় জেনারেট স্লিপ | স্বাক্ষর প্রয়োজন নেই</p></div></div>`;
-        document.getElementById('loanSlipPrintArea').innerHTML = slipHTML;
-        document.getElementById('loanSlipModal').classList.remove('hidden');
-        document.getElementById('loanSlipModal').classList.add('flex');
+    generateLoanSlip(loanData);
+    closeLoanApplicationModal();
+});
+
+function openWithdrawModal(type) {
+    currentWithdrawType = type;
+    let title = '', balance = 0;
+    if(type === 'bonus') { title = 'বোনাস উত্তোলন'; balance = userBalances.bonus; }
+    else if(type === 'profit') { title = 'লভ্যাংশ উত্তোলন'; balance = userBalances.profit; }
+    else { title = 'মুলধন উত্তোলন'; balance = userBalances.capital; }
+    document.getElementById('modalTitle').innerHTML = title;
+    document.getElementById('withdrawContent').innerHTML = `<p class="text-gray-600 text-sm mb-3">আপনার বর্তমান ব্যালেন্স: <span class="font-bold text-emerald-600">${balance.toLocaleString()} টাকা</span></p>
+        <select id="withdrawMethod" class="w-full p-2 border rounded-lg mb-3"><option value="">মাধ্যম নির্বাচন করুন</option><option value="bkash">বিকাশ</option><option value="nagad">নগদ</option><option value="bank">ব্যাংক</option>${type === 'bonus' ? '<option value="transfer">মূল ফান্ডে ট্রান্সফার</option>' : ''}</select>
+        <div id="mobileField" class="mt-2 hidden"><input type="tel" id="mobileNumber" placeholder="মোবাইল নম্বর" class="w-full p-2 border rounded-lg"></div>
+        <div id="bankFields" class="mt-2 hidden space-y-2"><input type="text" id="bankName" placeholder="ব্যাংকের নাম" class="w-full p-2 border rounded"><input type="text" id="accountNumber" placeholder="একাউন্ট নম্বর" class="w-full p-2 border rounded"></div>
+        <div class="mt-3"><input type="number" id="withdrawAmount" placeholder="টাকার পরিমাণ" class="w-full p-2 border rounded-lg" max="${balance}"></div>
+        <div class="flex gap-3 mt-4"><button onclick="closeWithdrawModal()" class="flex-1 bg-gray-300 py-2 rounded-lg">বাতিল</button><button onclick="processWithdraw()" class="flex-1 bg-emerald-600 text-white py-2 rounded-lg">উত্তোলন</button></div>`;
+    const methodSelect = document.getElementById('withdrawMethod');
+    if(methodSelect) {
+        methodSelect.addEventListener('change', function() {
+            const method = this.value;
+            const mf = document.getElementById('mobileField'), bf = document.getElementById('bankFields');
+            if(method === 'bkash' || method === 'nagad') { if(mf) mf.classList.remove('hidden'); if(bf) bf.classList.add('hidden'); }
+            else if(method === 'bank') { if(mf) mf.classList.add('hidden'); if(bf) bf.classList.remove('hidden'); }
+            else { if(mf) mf.classList.add('hidden'); if(bf) bf.classList.add('hidden'); }
+        });
     }
-    
-    function closeLoanSlipModal() { document.getElementById('loanSlipModal').classList.add('hidden'); }
-    function closeLoanSlipModalOnOverlay(e) { if(e.target.id === 'loanSlipModal') closeLoanSlipModal(); }
-    function downloadLoanSlipPDF() { const element = document.getElementById('loanSlipPrintArea'); html2pdf().set({ margin: 0.5, filename: `Loan_Application_${Date.now()}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' } }).from(element).save(); }
-    function printLoanSlip() { window.print(); }
-    
-    document.getElementById('loanApplicationForm')?.addEventListener('submit', function(e) {
-        e.preventDefault();
-        const termsCheck = document.getElementById('loanTermsCheck');
-        if(!termsCheck.checked) { alert('শর্তাবলীতে সম্মত হতে হবে।'); return; }
-        const loanData = {
-            id: Date.now(), applicationNo: `LN-${Date.now()}`, fullName: document.getElementById('loanFullName').value,
-            mobile: document.getElementById('loanMobile').value, loanType: document.getElementById('loanType').value,
-            amount: parseFloat(document.getElementById('loanAmount').value), duration: document.getElementById('loanDuration').value,
-            monthlyIncome: parseFloat(document.getElementById('monthlyIncome').value) || 0, purpose: document.getElementById('loanPurpose').value,
-            memberId: currentUser.id, date: new Date().toLocaleString('bn-BD'), status: 'pending'
-        };
-        if(!loanData.fullName || !loanData.mobile || !loanData.loanType || !loanData.amount || !loanData.duration || !loanData.purpose) {
-            alert('সব (*) চিহ্নিত ঘর পূরণ করুন।'); return;
-        }
-        const loans = getLoans(); loans.push(loanData); saveLoans(loans);
-        generateLoanSlip(loanData);
-        closeLoanApplicationModal();
-    });
-    
-    // উত্তোলন ফাংশন
-    function openWithdrawModal(type) {
-        currentWithdrawType = type;
-        let title = '', balance = 0;
-        if(type === 'bonus') { title = 'বোনাস উত্তোলন'; balance = userBalances.bonus; }
-        else if(type === 'profit') { title = 'লভ্যাংশ উত্তোলন'; balance = userBalances.profit; }
-        else { title = 'মুলধন উত্তোলন'; balance = userBalances.capital; }
-        document.getElementById('modalTitle').innerHTML = title;
-        document.getElementById('withdrawContent').innerHTML = `<p class="text-gray-600 text-sm mb-3">আপনার বর্তমান ব্যালেন্স: <span class="font-bold text-emerald-600">${balance.toLocaleString()} টাকা</span></p>
-            <select id="withdrawMethod" class="w-full p-2 border rounded-lg mb-3"><option value="">মাধ্যম নির্বাচন করুন</option><option value="bkash">বিকাশ</option><option value="nagad">নগদ</option><option value="bank">ব্যাংক</option>${type === 'bonus' ? '<option value="transfer">মূল ফান্ডে ট্রান্সফার</option>' : ''}</select>
-            <div id="mobileField" class="mt-2 hidden"><input type="tel" id="mobileNumber" placeholder="মোবাইল নম্বর" class="w-full p-2 border rounded-lg"></div>
-            <div id="bankFields" class="mt-2 hidden space-y-2"><input type="text" id="bankName" placeholder="ব্যাংকের নাম" class="w-full p-2 border rounded"><input type="text" id="accountNumber" placeholder="একাউন্ট নম্বর" class="w-full p-2 border rounded"></div>
-            <div class="mt-3"><input type="number" id="withdrawAmount" placeholder="টাকার পরিমাণ" class="w-full p-2 border rounded-lg" max="${balance}"></div>
-            <div class="flex gap-3 mt-4"><button onclick="closeWithdrawModal()" class="flex-1 bg-gray-300 py-2 rounded-lg">বাতিল</button><button onclick="processWithdraw()" class="flex-1 bg-emerald-600 text-white py-2 rounded-lg">উত্তোলন</button></div>`;
-        const methodSelect = document.getElementById('withdrawMethod');
-        if(methodSelect) {
-            methodSelect.addEventListener('change', function() {
-                const method = this.value;
-                const mf = document.getElementById('mobileField'), bf = document.getElementById('bankFields');
-                if(method === 'bkash' || method === 'nagad') { if(mf) mf.classList.remove('hidden'); if(bf) bf.classList.add('hidden'); }
-                else if(method === 'bank') { if(mf) mf.classList.add('hidden'); if(bf) bf.classList.remove('hidden'); }
-                else { if(mf) mf.classList.add('hidden'); if(bf) bf.classList.add('hidden'); }
-            });
-        }
-        document.getElementById('withdrawModal').classList.remove('hidden');
-        document.getElementById('withdrawModal').classList.add('flex');
+    document.getElementById('withdrawModal').classList.remove('hidden');
+    document.getElementById('withdrawModal').classList.add('flex');
+}
+
+function processWithdraw() {
+    const method = document.getElementById('withdrawMethod')?.value;
+    const amount = parseFloat(document.getElementById('withdrawAmount')?.value || 0);
+    if(!method) { alert('উত্তোলনের মাধ্যম নির্বাচন করুন।'); return; }
+    if(!amount || amount <= 0) { alert('সঠিক টাকার পরিমাণ দিন।'); return; }
+    let balance = currentWithdrawType === 'bonus' ? userBalances.bonus : (currentWithdrawType === 'profit' ? userBalances.profit : userBalances.capital);
+    if(amount > balance) { alert(`আপনার ব্যালেন্স ${balance} টাকা। এর বেশি উত্তোলন করতে পারবেন না।`); return; }
+    if(method === 'transfer' && currentWithdrawType === 'bonus') {
+        userBalances.bonus -= amount; userBalances.capital += amount;
+        alert(`সফলভাবে ${amount} টাকা বোনাস মূল ফান্ডে ট্রান্সফার করা হয়েছে।`);
+        document.getElementById('totalBonus').innerText = userBalances.bonus;
+        closeWithdrawModal(); return;
     }
-    
-    function processWithdraw() {
-        const method = document.getElementById('withdrawMethod')?.value;
-        const amount = parseFloat(document.getElementById('withdrawAmount')?.value || 0);
-        if(!method) { alert('উত্তোলনের মাধ্যম নির্বাচন করুন।'); return; }
-        if(!amount || amount <= 0) { alert('সঠিক টাকার পরিমাণ দিন।'); return; }
-        let balance = currentWithdrawType === 'bonus' ? userBalances.bonus : (currentWithdrawType === 'profit' ? userBalances.profit : userBalances.capital);
-        if(amount > balance) { alert(`আপনার ব্যালেন্স ${balance} টাকা। এর বেশি উত্তোলন করতে পারবেন না।`); return; }
-        if(method === 'transfer' && currentWithdrawType === 'bonus') {
-            userBalances.bonus -= amount; userBalances.capital += amount;
-            alert(`সফলভাবে ${amount} টাকা বোনাস মূল ফান্ডে ট্রান্সফার করা হয়েছে।`);
-            document.getElementById('totalBonus').innerText = userBalances.bonus;
-            closeWithdrawModal(); return;
-        }
-        alert(`উত্তোলনের অনুরোধ গৃহীত হয়েছে!\nপদ্ধতি: ${method}\nপরিমাণ: ${amount} টাকা`);
-        closeWithdrawModal();
+    alert(`উত্তোলনের অনুরোধ গৃহীত হয়েছে!\nপদ্ধতি: ${method}\nপরিমাণ: ${amount} টাকা`);
+    closeWithdrawModal();
+}
+
+function closeWithdrawModal() { document.getElementById('withdrawModal').classList.add('hidden'); }
+function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithdrawModal(); }
+
+function numberToBanglaWords(num) {
+    if(num === 0) return 'শূন্য';
+    const ones = ['', 'এক', 'দুই', 'তিন', 'চার', 'পাঁচ', 'ছয়', 'সাত', 'আট', 'নয়'];
+    const teens = ['দশ', 'এগারো', 'বারো', 'তেরো', 'চৌদ্দ', 'পনেরো', 'ষোলো', 'সতেরো', 'আঠারো', 'উনিশ'];
+    const tens = ['', 'দশ', 'বিশ', 'ত্রিশ', 'চল্লিশ', 'পঞ্চাশ', 'ষাট', 'সত্তর', 'আশি', 'নব্বই'];
+    if(num < 10) return ones[num];
+    if(num < 20) return teens[num - 10];
+    if(num < 100) return tens[Math.floor(num / 10)] + (num % 10 !== 0 ? ' ' + ones[num % 10] : '');
+    if(num < 1000) return ones[Math.floor(num / 100)] + ' শত' + (num % 100 !== 0 ? ' ' + numberToBanglaWords(num % 100) : '');
+    return num.toString();
+}
+
+function updateDigitalClock() {
+    const now = new Date();
+    let hours = now.getHours();
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12;
+    document.getElementById('digitalClock').innerHTML = `${String(hours).padStart(2, '0')}:${minutes}:${seconds} ${ampm}`;
+}
+
+function calculateMembershipDuration() {
+    if(!currentUser) return;
+    const startDate = new Date(currentUser.joinDate);
+    const now = new Date();
+    let years = now.getFullYear() - startDate.getFullYear();
+    let months = now.getMonth() - startDate.getMonth();
+    let days = now.getDate() - startDate.getDate();
+    let hours = now.getHours() - startDate.getHours();
+    let minutes = now.getMinutes() - startDate.getMinutes();
+    if(days < 0) { const prevMonth = new Date(now.getFullYear(), now.getMonth(), 0); days += prevMonth.getDate(); months--; }
+    if(months < 0) { months += 12; years--; }
+    let text = ''; if(years > 0) text += `${years} বছর `; if(months > 0) text += `${months} মাস `; if(days > 0) text += `${days} দিন `; text += `${hours} ঘন্টা ${minutes} মিনিট`;
+    document.getElementById('membershipDuration').innerHTML = text;
+}
+
+async function loadNotices() { 
+    const notices = await getNoticesFromSupabase();
+    const container = document.getElementById('noticeContainer');
+    if(notices.length > 0) {
+        container.innerHTML = notices.map(n => `<div class="bg-gray-50 p-2 rounded text-sm"><a href="${n.pdf_url || '#'}" target="_blank" class="text-emerald-600">📢 ${n.title}</a></div>`).join('');
+    } else {
+        container.innerHTML = `<div class="bg-gray-50 p-2 rounded text-sm">📢 সঞ্চয় জমার শেষ তারিখ ১০ এপ্রিল</div><div class="bg-gray-50 p-2 rounded text-sm">📢 বার্ষিক সাধারণ সভা ১৬ ডিসেম্বর ২০২৬</div>`;
     }
-    
-    function closeWithdrawModal() { document.getElementById('withdrawModal').classList.add('hidden'); }
-    function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithdrawModal(); }
-    
-    // অন্যান্য ফাংশন
-    function numberToBanglaWords(num) {
-        if(num === 0) return 'শূন্য';
-        const ones = ['', 'এক', 'দুই', 'তিন', 'চার', 'পাঁচ', 'ছয়', 'সাত', 'আট', 'নয়'];
-        const teens = ['দশ', 'এগারো', 'বারো', 'তেরো', 'চৌদ্দ', 'পনেরো', 'ষোলো', 'সতেরো', 'আঠারো', 'উনিশ'];
-        const tens = ['', 'দশ', 'বিশ', 'ত্রিশ', 'চল্লিশ', 'পঞ্চাশ', 'ষাট', 'সত্তর', 'আশি', 'নব্বই'];
-        if(num < 10) return ones[num];
-        if(num < 20) return teens[num - 10];
-        if(num < 100) return tens[Math.floor(num / 10)] + (num % 10 !== 0 ? ' ' + ones[num % 10] : '');
-        if(num < 1000) return ones[Math.floor(num / 100)] + ' শত' + (num % 100 !== 0 ? ' ' + numberToBanglaWords(num % 100) : '');
-        return num.toString();
+}
+
+async function loadComplaintReplies() {
+    const userId = currentUser?.id;
+    if(!userId) {
+        document.getElementById('complaintRepliesContainer').innerHTML = '<p class="text-gray-500 text-center py-4">লোড হচ্ছে...</p>';
+        return;
     }
-    
-    function updateDigitalClock() {
-        const now = new Date();
-        let hours = now.getHours();
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const seconds = String(now.getSeconds()).padStart(2, '0');
-        const ampm = hours >= 12 ? 'PM' : 'AM';
-        hours = hours % 12 || 12;
-        document.getElementById('digitalClock').innerHTML = `${String(hours).padStart(2, '0')}:${minutes}:${seconds} ${ampm}`;
+    const complaints = await getComplaintsFromSupabase();
+    const myComplaints = complaints.filter(c => c.member_id === userId && c.replies && c.replies.length > 0);
+    const container = document.getElementById('complaintRepliesContainer');
+    if(myComplaints.length === 0) {
+        container.innerHTML = '<p class="text-gray-500 text-center py-4">কোনো উত্তর পাওয়া যায়নি</p>';
+        return;
     }
-    
-    function calculateMembershipDuration() {
-        if(!currentUser) return;
-        const startDate = new Date(currentUser.joinDate);
-        const now = new Date();
-        let years = now.getFullYear() - startDate.getFullYear();
-        let months = now.getMonth() - startDate.getMonth();
-        let days = now.getDate() - startDate.getDate();
-        let hours = now.getHours() - startDate.getHours();
-        let minutes = now.getMinutes() - startDate.getMinutes();
-        if(days < 0) { const prevMonth = new Date(now.getFullYear(), now.getMonth(), 0); days += prevMonth.getDate(); months--; }
-        if(months < 0) { months += 12; years--; }
-        let text = ''; if(years > 0) text += `${years} বছর `; if(months > 0) text += `${months} মাস `; if(days > 0) text += `${days} দিন `; text += `${hours} ঘন্টা ${minutes} মিনিট`;
-        document.getElementById('membershipDuration').innerHTML = text;
-    }
-    
-    function loadNotices() { 
-        const notices = JSON.parse(localStorage.getItem('tukn_notices') || '[]');
-        const container = document.getElementById('noticeContainer');
-        if(notices.length > 0) {
-            container.innerHTML = notices.map(n => `<div class="bg-gray-50 p-2 rounded text-sm"><a href="${n.pdfUrl || '#'}" target="_blank" class="text-emerald-600">📢 ${n.title}</a></div>`).join('');
-        } else {
-            container.innerHTML = `<div class="bg-gray-50 p-2 rounded text-sm">📢 সঞ্চয় জমার শেষ তারিখ ১০ এপ্রিল</div><div class="bg-gray-50 p-2 rounded text-sm">📢 বার্ষিক সাধারণ সভা ১৬ ডিসেম্বর ২০২৬</div>`;
-        }
-    }
-    
-    function loadComplaintReplies() {
-        const userId = currentUser?.id;
-        if(!userId) {
-            document.getElementById('complaintRepliesContainer').innerHTML = '<p class="text-gray-500 text-center py-4">লোড হচ্ছে...</p>';
-            return;
-        }
-        const complaints = JSON.parse(localStorage.getItem('tukn_complaints') || '[]');
-        const myComplaints = complaints.filter(c => c.memberId === userId && c.replies && c.replies.length > 0);
-        const container = document.getElementById('complaintRepliesContainer');
-        if(myComplaints.length === 0) {
-            container.innerHTML = '<p class="text-gray-500 text-center py-4">কোনো উত্তর পাওয়া যায়নি</p>';
-            return;
-        }
-        container.innerHTML = myComplaints.map(complaint => `
-            <div class="border rounded-lg p-3 mb-3 ${complaint.hasNewReply ? 'bg-blue-50 border-blue-200' : 'bg-gray-50'}">
-                <div class="flex justify-between items-start">
-                    <div class="flex-1">
-                        <div class="flex items-center gap-2 mb-1">
-                            <span class="text-xs text-gray-500">${new Date(complaint.createdAt).toLocaleString('bn-BD')}</span>
-                            ${complaint.hasNewReply ? '<span class="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">নতুন</span>' : ''}
-                        </div>
-                        <p class="font-semibold text-gray-800">${complaint.typeText}</p>
-                        <p class="text-sm text-gray-600 mt-1">${complaint.description.substring(0, 100)}${complaint.description.length > 100 ? '...' : ''}</p>
+    container.innerHTML = myComplaints.map(complaint => `
+        <div class="border rounded-lg p-3 mb-3 ${complaint.hasNewReply ? 'bg-blue-50 border-blue-200' : 'bg-gray-50'}">
+            <div class="flex justify-between items-start">
+                <div class="flex-1">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="text-xs text-gray-500">${new Date(complaint.created_at).toLocaleString('bn-BD')}</span>
+                        ${complaint.hasNewReply ? '<span class="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">নতুন</span>' : ''}
                     </div>
-                    <span class="text-xs px-2 py-1 rounded-full ml-2 ${complaint.status === 'resolved' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">
-                        ${complaint.status === 'resolved' ? 'সমাধানকৃত' : 'বিচারাধীন'}
-                    </span>
+                    <p class="font-semibold text-gray-800">${complaint.type_text}</p>
+                    <p class="text-sm text-gray-600 mt-1">${complaint.description.substring(0, 100)}${complaint.description.length > 100 ? '...' : ''}</p>
                 </div>
-                ${complaint.replies && complaint.replies.length > 0 ? `
-                    <div class="mt-3 pt-2 border-t">
-                        <div class="flex items-center gap-1 mb-1">
-                            <i class="fas fa-reply-all text-emerald-600 text-xs"></i>
-                            <span class="text-xs font-semibold text-emerald-600">উত্তর:</span>
-                        </div>
-                        <div class="bg-emerald-50 p-2 rounded-lg">
-                            <p class="text-sm text-gray-700">${complaint.replies[complaint.replies.length - 1].message}</p>
-                            <p class="text-xs text-gray-400 mt-1">উত্তর দিয়েছেন: ${complaint.replies[complaint.replies.length - 1].repliedBy} | ${new Date(complaint.replies[complaint.replies.length - 1].repliedAt).toLocaleString('bn-BD')}</p>
-                        </div>
-                    </div>
-                ` : ''}
+                <span class="text-xs px-2 py-1 rounded-full ml-2 ${complaint.status === 'resolved' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">
+                    ${complaint.status === 'resolved' ? 'সমাধানকৃত' : 'বিচারাধীন'}
+                </span>
             </div>
-        `).join('');
-        
-        myComplaints.forEach(complaint => { if(complaint.hasNewReply) complaint.hasNewReply = false; });
-        localStorage.setItem('tukn_complaints', JSON.stringify(complaints));
+            ${complaint.replies && complaint.replies.length > 0 ? `
+                <div class="mt-3 pt-2 border-t">
+                    <div class="flex items-center gap-1 mb-1">
+                        <i class="fas fa-reply-all text-emerald-600 text-xs"></i>
+                        <span class="text-xs font-semibold text-emerald-600">উত্তর:</span>
+                    </div>
+                    <div class="bg-emerald-50 p-2 rounded-lg">
+                        <p class="text-sm text-gray-700">${complaint.replies[complaint.replies.length - 1].message}</p>
+                        <p class="text-xs text-gray-400 mt-1">উত্তর দিয়েছেন: ${complaint.replies[complaint.replies.length - 1].repliedBy} | ${new Date(complaint.replies[complaint.replies.length - 1].repliedAt).toLocaleString('bn-BD')}</p>
+                    </div>
+                </div>
+            ` : ''}
+        </div>
+    `).join('');
+}
+
+function uploadProfileImage(e) { 
+    const file = e.target.files[0]; 
+    if(file) { 
+        const reader = new FileReader(); 
+        reader.onload = function(ev) { 
+            document.getElementById('profileImage').src = ev.target.result; 
+            document.getElementById('cardProfileImage').src = ev.target.result; 
+        }; 
+        reader.readAsDataURL(file); 
+    } 
+}
+
+function copyReferId() { 
+    navigator.clipboard.writeText(document.getElementById('referIdDisplay').innerText); 
+    showToast('রেফার আইডি কপি করা হয়েছে!', 'success');
+}
+
+function copyReferralLink() { 
+    const inp = document.getElementById('referralLink'); 
+    inp.select(); 
+    navigator.clipboard.writeText(inp.value); 
+    showToast('রেফারেল লিংক কপি করা হয়েছে!', 'success');
+}
+
+function updateAddress() { 
+    showToast('ঠিকানা আপডেট ফিচার শীঘ্রই আসছে...', 'info');
+}
+
+function downloadIDCard() { 
+    showToast('পিডিএফ ডাউনলোড শুরু হচ্ছে...', 'info');
+}
+
+function shareIDCard() { 
+    showToast('শেয়ার করার অপশন আসছে...', 'info');
+}
+
+function logout() { 
+    if(durationInterval) clearInterval(durationInterval); 
+    if(clockInterval) clearInterval(clockInterval); 
+    sessionStorage.clear(); 
+    localStorage.removeItem('TUKNBD_user'); 
+    window.location.href = 'login.html'; 
+}
+
+function showChangePasswordModal() { 
+    document.getElementById('passwordChangeModal').classList.remove('hidden'); 
+    document.getElementById('passwordChangeModal').classList.add('flex'); 
+}
+
+function closePasswordModal() { 
+    document.getElementById('passwordChangeModal').classList.add('hidden'); 
+}
+
+function closePasswordModalOnOverlay(e) { 
+    if(e.target.id === 'passwordChangeModal') closePasswordModal(); 
+}
+
+async function processChangePassword() {
+    const currentPass = document.getElementById('currentPassword').value;
+    const newPass = document.getElementById('newPassword').value;
+    const confirmPass = document.getElementById('confirmPassword').value;
+    if(!currentPass || !newPass || !confirmPass) { alert('সব ঘর পূরণ করুন।'); return; }
+    if(newPass !== confirmPass) { alert('নতুন পাসওয়ার্ড মিলছে না।'); return; }
+    if(newPass.length < 4) { alert('পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে।'); return; }
+    
+    const success = await updateMemberPassword(currentUser.id, newPass);
+    
+    if(success) {
+        alert('পাসওয়ার্ড পরিবর্তন করা হয়েছে। পুনরায় লগইন করুন।');
+        closePasswordModal();
+        setTimeout(() => logout(), 1500);
+    } else {
+        alert('বর্তমান পাসওয়ার্ড সঠিক নয় অথবা পরিবর্তন করতে ব্যর্থ হয়েছে!');
     }
-    
-    function uploadProfileImage(e) { 
-        const file = e.target.files[0]; 
-        if(file) { 
-            const reader = new FileReader(); 
-            reader.onload = function(ev) { 
-                document.getElementById('profileImage').src = ev.target.result; 
-                document.getElementById('cardProfileImage').src = ev.target.result; 
-            }; 
-            reader.readAsDataURL(file); 
-        } 
+}
+
+function forgotPassword() { 
+    alert('পাসওয়ার্ড রিসেট লিংক আপনার মোবাইলে পাঠানো হয়েছে।');
+}
+
+function showMonogramModal() { 
+    document.getElementById('monogramModal').classList.remove('hidden'); 
+    document.getElementById('monogramModal').classList.add('flex'); 
+    document.body.style.overflow = 'hidden'; 
+}
+
+function closeMonogramModal() { 
+    document.getElementById('monogramModal').classList.add('hidden'); 
+    document.body.style.overflow = 'auto'; 
+}
+
+window.addEventListener('click', function(e) { 
+    const modal = document.getElementById('monogramModal'); 
+    if(e.target === modal) closeMonogramModal(); 
+});
+
+// ==================== পেজ লোড ====================
+document.addEventListener('DOMContentLoaded', async function() {
+    const success = await loadCurrentUser();
+    if(!success) {
+        setTimeout(() => { window.location.href = 'login.html'; }, 1000);
     }
-    
-    function copyReferId() { 
-        navigator.clipboard.writeText(document.getElementById('referIdDisplay').innerText); 
-        showToast('রেফার আইডি কপি করা হয়েছে!', 'success');
-    }
-    
-    function copyReferralLink() { 
-        const inp = document.getElementById('referralLink'); 
-        inp.select(); 
-        navigator.clipboard.writeText(inp.value); 
-        showToast('রেফারেল লিংক কপি করা হয়েছে!', 'success');
-    }
-    
-    function updateAddress() { 
-        showToast('ঠিকানা আপডেট ফিচার শীঘ্রই আসছে...', 'info');
-    }
-    
-    function downloadIDCard() { 
-        showToast('পিডিএফ ডাউনলোড শুরু হচ্ছে...', 'info');
-    }
-    
-    function shareIDCard() { 
-        showToast('শেয়ার করার অপশন আসছে...', 'info');
-    }
-    
-    function logout() { 
-        if(durationInterval) clearInterval(durationInterval); 
-        if(clockInterval) clearInterval(clockInterval); 
-        sessionStorage.clear(); 
-        localStorage.removeItem('TUKNBD_user'); 
-        window.location.href = 'login.html'; 
-    }
-    
-    function showChangePasswordModal() { 
-        document.getElementById('passwordChangeModal').classList.remove('hidden'); 
-        document.getElementById('passwordChangeModal').classList.add('flex'); 
-    }
-    
-    function closePasswordModal() { 
-        document.getElementById('passwordChangeModal').classList.add('hidden'); 
-    }
-    
-    function closePasswordModalOnOverlay(e) { 
-        if(e.target.id === 'passwordChangeModal') closePasswordModal(); 
-    }
-    
-    function processChangePassword() {
-        const currentPass = document.getElementById('currentPassword').value;
-        const newPass = document.getElementById('newPassword').value;
-        const confirmPass = document.getElementById('confirmPassword').value;
-        if(!currentPass || !newPass || !confirmPass) { alert('সব ঘর পূরণ করুন।'); return; }
-        if(newPass !== confirmPass) { alert('নতুন পাসওয়ার্ড মিলছে না।'); return; }
-        if(newPass.length < 4) { alert('পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে।'); return; }
-        
-        const members = getMembers();
-        const memberIndex = members.findIndex(m => m.id === currentUser.id);
-        if(memberIndex !== -1 && members[memberIndex].password === currentPass) {
-            members[memberIndex].password = newPass;
-            localStorage.setItem('tukn_members', JSON.stringify(members));
-            alert('পাসওয়ার্ড পরিবর্তন করা হয়েছে। পুনরায় লগইন করুন।');
-            closePasswordModal();
-            setTimeout(() => logout(), 1500);
-        } else {
-            alert('বর্তমান পাসওয়ার্ড সঠিক নয়!');
-        }
-    }
-    
-    function forgotPassword() { 
-        alert('পাসওয়ার্ড রিসেট লিংক আপনার মোবাইলে পাঠানো হয়েছে।');
-    }
-    
-    function showMonogramModal() { 
-        document.getElementById('monogramModal').classList.remove('hidden'); 
-        document.getElementById('monogramModal').classList.add('flex'); 
-        document.body.style.overflow = 'hidden'; 
-    }
-    
-    function closeMonogramModal() { 
-        document.getElementById('monogramModal').classList.add('hidden'); 
-        document.body.style.overflow = 'auto'; 
-    }
-    
-    window.addEventListener('click', function(e) { 
-        const modal = document.getElementById('monogramModal'); 
-        if(e.target === modal) closeMonogramModal(); 
-    });
-    
-    // ==================== পেজ লোড ====================
-    document.addEventListener('DOMContentLoaded', function() {
-        const success = loadCurrentUser();
-        if(!success) {
-            setTimeout(() => { window.location.href = 'login.html'; }, 1000);
-        }
-    });
+});
 </script>
 </body>
 </html>
