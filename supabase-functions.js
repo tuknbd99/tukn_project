@@ -1572,7 +1572,7 @@ async function initSupabaseFunctions() {
         
         const connected = await testSupabaseConnection();
         if (connected) {
-            await addTestMemberIfNotExists();
+            await addTestMemberIfNotExists();Complete Supabase functions with all features and enhanced error handling
             console.log('✅ Supabase Functions Ready!');
         }
     } catch (err) {
