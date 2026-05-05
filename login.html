@@ -9,7 +9,6 @@
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase-config.js"></script>
-    <script src="supabase-functions.js"></script>
     
     <style>
         * {
@@ -112,7 +111,7 @@
             color: #9be564;
         }
         
-        /* ইনপুট ফিল্ড - ডান ও বাম পাশ ১/২ ইঞ্চি কম */
+        /* ইনপুট ফিল্ড */
         .input-field {
             margin-bottom: 20px;
             position: relative;
@@ -129,7 +128,7 @@
 
         .input-field input {
             width: 100%;
-            padding: 10px 8px 10px 32px;  /* ← এখানে পরিবর্তন */
+            padding: 10px 8px 10px 32px;
             border: 1.5px solid rgba(255, 255, 255, 0.3);
             border-radius: 50px;
             font-size: 14px;
@@ -251,9 +250,43 @@
             background: #dc2626;
         }
         
+        .toast-notification.warning {
+            background: #d97706;
+        }
+        
         @keyframes slideIn {
             from { transform: translateX(100%); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
+        }
+        
+        /* সেন্টার নোটিফিকেশন মডাল */
+        .center-notification {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 35px -12px rgba(0,0,0,0.3);
+            z-index: 1001;
+            max-width: 400px;
+            width: 90%;
+            animation: fadeInScale 0.3s ease;
+        }
+        
+        @keyframes fadeInScale {
+            from { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
+            to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+        }
+        
+        .notification-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
         }
         
         /* মডাল স্টাইল */
@@ -358,7 +391,7 @@
         <form id="loginForm">
             <div class="input-field">
                 <i class="fas fa-user"></i>
-                <input type="text" id="username" placeholder="ইউজারনেম / আইডি / মোবাইল" autocomplete="off">
+                <input type="text" id="username" placeholder="সদস্য আইডি / মোবাইল নম্বর" autocomplete="off">
             </div>
             
             <div class="input-field">
@@ -391,134 +424,113 @@
             <h3><i class="fas fa-key mr-2"></i>পাসওয়ার্ড রিসেট</h3>
             <button id="closeForgotModal">&times;</button>
         </div>
-        <p class="text-gray-600 text-sm mb-4">আপনার রেজিস্টার্ড মোবাইল নম্বর দিন। নতুন পাসওয়ার্ড: 1234 সেট করা হবে।</p>
+        <p class="text-gray-600 text-sm mb-4">আপনার রেজিস্টার্ড মোবাইল নম্বর দিন। নতুন পাসওয়ার্ড: <strong>1234</strong> সেট করা হবে।</p>
         <form id="forgotForm">
-            <input type="text" id="forgotMobile" placeholder="মোবাইল নম্বর">
+            <input type="text" id="forgotMobile" placeholder="মোবাইল নম্বর (01XXXXXXXXX)">
             <button type="submit" class="modal-btn">রিসেট করুন</button>
         </form>
     </div>
 </div>
 
 <script>
-    // ==================== টোস্ট নোটিফিকেশন ====================
-    function showToast(message, type) {
-        const toast = document.createElement('div');
-        toast.className = `toast-notification ${type === 'error' ? 'error' : ''}`;
-        toast.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i> ${message}`;
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
-    }
+const supabaseClient = window.supabaseClient;
 
-    // ==================== পাসওয়ার্ড টগল ====================
-    const togglePassword = document.getElementById('togglePassword');
-    const passwordInput = document.getElementById('password');
+// ==================== সেন্টার নোটিফিকেশন ====================
+function showCenterNotification(message, type = 'success') {
+    const existingOverlay = document.querySelector('.notification-overlay');
+    if (existingOverlay) existingOverlay.remove();
     
-    if(togglePassword) {
-        togglePassword.addEventListener('click', () => {
-            const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
-            passwordInput.setAttribute('type', type);
-            togglePassword.innerHTML = type === 'password' ? '<i class="fas fa-eye"></i>' : '<i class="fas fa-eye-slash"></i>';
-        });
+    const overlay = document.createElement('div');
+    overlay.className = 'notification-overlay';
+    
+    const notification = document.createElement('div');
+    notification.className = 'center-notification';
+    
+    const bgColor = type === 'success' ? 'bg-emerald-50 border-emerald-500' : type === 'error' ? 'bg-red-50 border-red-500' : 'bg-amber-50 border-amber-500';
+    const iconColor = type === 'success' ? 'text-emerald-600' : type === 'error' ? 'text-red-600' : 'text-amber-600';
+    const icon = type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle';
+    
+    notification.innerHTML = `
+        <div class="p-5 ${bgColor} border-l-4 rounded-2xl">
+            <div class="flex items-start gap-3">
+                <i class="fas ${icon} text-2xl ${iconColor}"></i>
+                <div class="flex-1">
+                    <p class="text-gray-800">${message}</p>
+                </div>
+            </div>
+            <button onclick="this.closest('.notification-overlay').remove()" class="mt-4 w-full bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300 transition">
+                ঠিক আছে
+            </button>
+        </div>
+    `;
+    
+    overlay.appendChild(notification);
+    document.body.appendChild(overlay);
+}
+
+// ==================== টোস্ট নোটিফিকেশন (সাইডে) ====================
+function showToast(message, type) {
+    const toast = document.createElement('div');
+    toast.className = `toast-notification ${type === 'error' ? 'error' : type === 'warning' ? 'warning' : ''}`;
+    toast.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i> ${message}`;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+// ==================== পাসওয়ার্ড টগল ====================
+const togglePassword = document.getElementById('togglePassword');
+const passwordInput = document.getElementById('password');
+
+if(togglePassword) {
+    togglePassword.addEventListener('click', () => {
+        const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+        passwordInput.setAttribute('type', type);
+        togglePassword.innerHTML = type === 'password' ? '<i class="fas fa-eye"></i>' : '<i class="fas fa-eye-slash"></i>';
+    });
+}
+
+// ==================== লগইন হ্যান্ডলার (Supabase সংস্করণ) ====================
+async function handleLogin(event) {
+    event.preventDefault();
+    
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    const rememberMe = document.getElementById('rememberMe').checked;
+    
+    if(!username || !password) {
+        showCenterNotification('সদস্য আইডি/মোবাইল এবং পাসওয়ার্ড দিন!', 'error');
+        return;
     }
     
-    // ==================== ইউজার ডাটা লোড ====================
-    let users = [];
-    
-    function getMembers() {
-        return JSON.parse(localStorage.getItem('tukn_members') || '[]');
-    }
-    
-    function loadUsersFromLocalStorage() {
-        const saved = localStorage.getItem('tukn_users');
-        if(saved) {
-            users = JSON.parse(saved);
+    try {
+        let query = supabaseClient.from('members').select('*');
+        
+        // মোবাইল নম্বর বা সদস্য আইডি দিয়ে সার্চ
+        if(username.match(/^01[3-9]\d{8}$/)) {
+            query = query.eq('mobile', username);
         } else {
-            users = [];
-            saveUsersToLocalStorage();
+            query = query.eq('member_id', username);
         }
-    }
-    
-    function saveUsersToLocalStorage() {
-        localStorage.setItem('tukn_users', JSON.stringify(users));
-    }
-    
-    function syncMemberToUsers(member) {
-        let currentUsers = JSON.parse(localStorage.getItem('tukn_users') || '[]');
-        const existing = currentUsers.find(u => u.mobile === member.mobile || u.id === member.id);
         
-        if (!existing) {
-            const newUser = {
-                id: member.id,
+        const { data, error } = await query;
+        
+        if(error) throw error;
+        
+        const member = data?.[0];
+        
+        if(member && member.password === password && member.status === 'approved') {
+            // লগইন সফল
+            const userData = { 
+                id: member.member_id,
+                member_id: member.member_id,
+                name: member.full_name,
                 mobile: member.mobile,
-                name: member.fullName || member.name,
-                password: member.password || '1234',
-                status: member.status || 'active',
-                joinDate: member.joinDate || new Date().toISOString(),
-                profileImage: 'https://randomuser.me/api/portraits/men/default.jpg',
-                referId: member.referralCode || member.referId || 'TUKN-REF-' + Math.floor(Math.random() * 10000)
-            };
-            currentUsers.push(newUser);
-            localStorage.setItem('tukn_users', JSON.stringify(currentUsers));
-            users = currentUsers;
-            return true;
-        }
-        return false;
-    }
-    
-    function syncAllActiveMembers() {
-        const members = getMembers();
-        const activeMembers = members.filter(m => m.status === 'active');
-        activeMembers.forEach(member => syncMemberToUsers(member));
-    }
-    
-    // ==================== লগইন হ্যান্ডলার ====================
-    function handleLogin(event) {
-        event.preventDefault();
-        const username = document.getElementById('username').value.trim();
-        const password = document.getElementById('password').value;
-        const rememberMe = document.getElementById('rememberMe').checked;
-        
-        if(!username || !password) {
-            showToast('ইউজারনেম এবং পাসওয়ার্ড দিন!', 'error');
-            return;
-        }
-        
-        // প্রথমে tukn_members চেক করুন
-        const members = getMembers();
-        let member = members.find(m => m.mobile === username || m.id === username);
-        let user = null;
-        
-        if(member && member.password === password && member.status === 'active') {
-            syncMemberToUsers(member);
-            user = {
-                id: member.id,
-                name: member.fullName || member.name,
-                mobile: member.mobile,
-                joinDate: member.joinDate || new Date().toISOString(),
-                profileImage: 'https://randomuser.me/api/portraits/men/default.jpg',
-                referId: member.referralCode || member.referId,
+                email: member.email || '',
+                joinDate: member.join_date,
+                profileImage: 'https://placehold.co/100x100/059669/white?text=U',
+                referId: member.referral_code,
                 loggedIn: true,
                 loginTime: new Date().toISOString()
-            };
-        } else if(member && member.password === password && member.status !== 'active') {
-            showToast('আপনার অ্যাকাউন্ট এখনও অনুমোদিত হয়নি।', 'error');
-            return;
-        } else {
-            user = users.find(u => u.mobile === username || u.id === username);
-            if(user && user.password !== password) user = null;
-            if(user && user.status !== 'active') user = null;
-        }
-        
-        if(user) {
-            const userData = { 
-                id: user.id, 
-                name: user.name, 
-                mobile: user.mobile, 
-                joinDate: user.joinDate, 
-                profileImage: user.profileImage, 
-                referId: user.referId, 
-                loggedIn: true, 
-                loginTime: new Date().toISOString() 
             };
             
             if(rememberMe) {
@@ -526,79 +538,104 @@
             }
             sessionStorage.setItem('TUKNBD_user', JSON.stringify(userData));
             
-            showToast(`স্বাগতম ${user.name}!`, 'success');
-            setTimeout(() => { window.location.href = 'member-dashboard.html'; }, 1000);
-        } else {
-            showToast('ভুল ইউজারনেম বা পাসওয়ার্ড!', 'error');
+            showCenterNotification(`স্বাগতম ${member.full_name}!`, 'success');
+            setTimeout(() => { 
+                window.location.href = 'member-dashboard.html'; 
+            }, 1500);
+        } 
+        else if(member && member.status === 'pending') {
+            showCenterNotification('আপনার একাউন্ট এখনও অনুমোদিত হয়নি। অনুগ্রহ করে ৩-১২ ঘণ্টা অপেক্ষা করুন।', 'warning');
+        } 
+        else {
+            showCenterNotification('ভুল সদস্য আইডি/মোবাইল বা পাসওয়ার্ড!', 'error');
         }
-    }
-    
-    // ==================== ফরগট পাসওয়ার্ড ====================
-    const forgotBtn = document.getElementById('forgotPasswordBtn');
-    const forgotModal = document.getElementById('forgotModal');
-    const closeForgotModal = document.getElementById('closeForgotModal');
-    
-    if(forgotBtn) {
-        forgotBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            forgotModal.style.display = 'flex';
-        });
-    }
-    
-    if(closeForgotModal) {
-        closeForgotModal.addEventListener('click', () => {
-            forgotModal.style.display = 'none';
-        });
-    }
-    
-    window.addEventListener('click', (e) => {
-        if(e.target === forgotModal) forgotModal.style.display = 'none';
-    });
-    
-    const forgotForm = document.getElementById('forgotForm');
-    if(forgotForm) {
-        forgotForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            const mobile = document.getElementById('forgotMobile').value.trim();
-            
-            const members = getMembers();
-            let member = members.find(m => m.mobile === mobile);
-            
-            if(member) {
-                member.password = '1234';
-                localStorage.setItem('tukn_members', JSON.stringify(members));
-                showToast('পাসওয়ার্ড রিসেট করা হয়েছে। নতুন পাসওয়ার্ড: 1234', 'success');
-            } else {
-                const user = users.find(u => u.mobile === mobile);
-                if(user) {
-                    user.password = '1234';
-                    saveUsersToLocalStorage();
-                    showToast('পাসওয়ার্ড রিসেট করা হয়েছে। নতুন পাসওয়ার্ড: 1234', 'success');
-                } else {
-                    showToast('এই মোবাইল নম্বরে কোনো অ্যাকাউন্ট নেই।', 'error');
-                }
-            }
-            forgotModal.style.display = 'none';
-            document.getElementById('forgotMobile').value = '';
-        });
-    }
-    
-    const loginForm = document.getElementById('loginForm');
-    if(loginForm) loginForm.addEventListener('submit', handleLogin);
-    
-    // ==================== পেজ লোড ====================
-    window.addEventListener('DOMContentLoaded', function() {
-        loadUsersFromLocalStorage();
-        syncAllActiveMembers();
         
-        const savedUser = sessionStorage.getItem('TUKNBD_user') || localStorage.getItem('TUKNBD_user');
-        if(savedUser) {
-            try {
-                const user = JSON.parse(savedUser);
-                if(user.loggedIn) window.location.href = 'member-dashboard.html';
-            } catch(e) {}
-        }
+    } catch (error) {
+        console.error('Login error:', error);
+        showCenterNotification('লগইন করতে ব্যর্থ হয়েছে! নেটওয়ার্ক চেক করুন।', 'error');
+    }
+}
+
+// ==================== ফরগট পাসওয়ার্ড (Supabase সংস্করণ) ====================
+const forgotBtn = document.getElementById('forgotPasswordBtn');
+const forgotModal = document.getElementById('forgotModal');
+const closeForgotModal = document.getElementById('closeForgotModal');
+
+if(forgotBtn) {
+    forgotBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        forgotModal.style.display = 'flex';
     });
+}
+
+if(closeForgotModal) {
+    closeForgotModal.addEventListener('click', () => {
+        forgotModal.style.display = 'none';
+    });
+}
+
+window.addEventListener('click', (e) => {
+    if(e.target === forgotModal) forgotModal.style.display = 'none';
+});
+
+const forgotForm = document.getElementById('forgotForm');
+if(forgotForm) {
+    forgotForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const mobile = document.getElementById('forgotMobile').value.trim();
+        
+        if(!mobile || !mobile.match(/^01[3-9]\d{8}$/)) {
+            showCenterNotification('সঠিক মোবাইল নম্বর দিন (01XXXXXXXXX)', 'error');
+            return;
+        }
+        
+        try {
+            // চেক করুন এই মোবাইলে সদস্য আছে কিনা
+            const { data, error } = await supabaseClient
+                .from('members')
+                .select('member_id, full_name, mobile, status')
+                .eq('mobile', mobile)
+                .single();
+            
+            if(data) {
+                // পাসওয়ার্ড রিসেট করুন 1234
+                const { error: updateError } = await supabaseClient
+                    .from('members')
+                    .update({ password: '1234' })
+                    .eq('mobile', mobile);
+                
+                if(updateError) throw updateError;
+                
+                showCenterNotification('পাসওয়ার্ড রিসেট করা হয়েছে। নতুন পাসওয়ার্ড: 1234', 'success');
+            } else {
+                showCenterNotification('এই মোবাইল নম্বরে কোনো অ্যাকাউন্ট নেই।', 'error');
+            }
+        } catch (error) {
+            console.error('Reset error:', error);
+            showCenterNotification('পাসওয়ার্ড রিসেট করতে ব্যর্থ হয়েছে!', 'error');
+        }
+        
+        forgotModal.style.display = 'none';
+        document.getElementById('forgotMobile').value = '';
+    });
+}
+
+// ==================== ফর্ম ইভেন্ট লিসেনার ====================
+const loginForm = document.getElementById('loginForm');
+if(loginForm) loginForm.addEventListener('submit', handleLogin);
+
+// ==================== ইতিমধ্যে লগইন করা থাকলে redirect ====================
+window.addEventListener('DOMContentLoaded', function() {
+    const savedUser = sessionStorage.getItem('TUKNBD_user') || localStorage.getItem('TUKNBD_user');
+    if(savedUser) {
+        try {
+            const user = JSON.parse(savedUser);
+            if(user.loggedIn) {
+                window.location.href = 'member-dashboard.html';
+            }
+        } catch(e) {}
+    }
+});
 </script>
 
 </body>
