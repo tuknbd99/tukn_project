@@ -1,796 +1,1527 @@
 // supabase-functions.js
-// TUKNBD - All Database Functions
+// TUKNBD - সম্পূর্ণ Supabase ডাটাবেস ফাংশন (সব ফিচার সহ)
 
-// ==================== Supabase কানেকশন টেস্ট ====================
+// ==================== Supabase ক্লায়েন্ট ইনিশিয়ালাইজেশন ====================
+
+let supabase = null;
+
+async function initSupabaseClient() {
+    try {
+        if (!window.supabase) {
+            console.error('❌ Supabase library not loaded');
+            return false;
+        }
+        
+        const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
+        
+        window.supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        supabase = window.supabase;
+        
+        console.log('✅ Supabase Client Initialized');
+        return true;
+    } catch (err) {
+        console.error('❌ Supabase Init Error:', err);
+        return false;
+    }
+}
+
+// ==================== Supabase সংযোগ পরীক্ষা ====================
 
 async function testSupabaseConnection() {
+    if (!supabase) {
+        const initialized = await initSupabaseClient();
+        if (!initialized) return false;
+    }
+    
     try {
         const { data, error } = await supabase
             .from('members')
             .select('count', { count: 'exact', head: true });
         
         if (error) {
-            console.error('❌ Supabase connection error:', error.message);
+            console.error('❌ Connection Error:', error.message);
             return false;
         }
         
-        console.log('✅ Supabase connected successfully!');
+        console.log('✅ Supabase Connection Successful');
         return true;
     } catch (err) {
-        console.error('❌ Connection failed:', err);
+        console.error('❌ Connection Test Failed:', err);
         return false;
     }
 }
 
-// ==================== সদস্য (members) ফাংশন ====================
+// ==================== সদস্য (MEMBERS) ফাংশন ====================
 
 async function getAllMembers() {
-    const { data, error } = await supabase
-        .from('members')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('members')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        console.log('✅ Fetched all members:', data?.length);
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllMembers Error:', err);
+        showToast('সদস্য তালিকা লোড করতে ত্রুটি', 'error');
+        return [];
+    }
 }
 
 async function getActiveMembers() {
-    const { data, error } = await supabase
-        .from('members')
-        .select('*')
-        .eq('status', 'active')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('members')
+            .select('*')
+            .eq('status', 'active')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getActiveMembers Error:', err);
+        return [];
+    }
 }
 
 async function getPendingMembersList() {
-    const { data, error } = await supabase
-        .from('members')
-        .select('*')
-        .eq('status', 'pending')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('members')
+            .select('*')
+            .eq('status', 'pending')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getPendingMembersList Error:', err);
+        return [];
+    }
 }
 
 async function getMemberByMobile(mobile) {
-    const { data, error } = await supabase
-        .from('members')
-        .select('*')
-        .eq('mobile', mobile)
-        .maybeSingle();
-    if (error && error.code !== 'PGRST116') throw error;
-    return data;
+    try {
+        if (!mobile || mobile.length < 10) {
+            console.warn('⚠️ Invalid mobile number');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('members')
+            .select('*')
+            .eq('mobile', mobile)
+            .maybeSingle();
+        
+        if (error && error.code !== 'PGRST116') throw error;
+        return data;
+    } catch (err) {
+        console.error('❌ getMemberByMobile Error:', err);
+        return null;
+    }
 }
 
 async function getMemberByMemberId(memberId) {
-    const { data, error } = await supabase
-        .from('members')
-        .select('*')
-        .eq('member_id', memberId)
-        .maybeSingle();
-    if (error && error.code !== 'PGRST116') throw error;
-    return data;
+    try {
+        if (!memberId) {
+            console.warn('⚠️ Invalid member ID');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('members')
+            .select('*')
+            .eq('member_id', memberId)
+            .maybeSingle();
+        
+        if (error && error.code !== 'PGRST116') throw error;
+        return data;
+    } catch (err) {
+        console.error('❌ getMemberByMemberId Error:', err);
+        return null;
+    }
 }
 
 async function addNewMember(memberData) {
-    const { data, error } = await supabase
-        .from('members')
-        .insert([memberData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        // Validation
+        if (!memberData.full_name || !memberData.mobile) {
+            showToast('❌ নাম এবং মোবাইল বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        // Duplicate Check
+        const existing = await getMemberByMobile(memberData.mobile);
+        if (existing) {
+            showToast('❌ এই মোবাইলে ইতিমধ্যে সদস্য আছে', 'error');
+            return null;
+        }
+
+        // Generate Member ID if not provided
+        if (!memberData.member_id) {
+            const today = new Date();
+            const dateCode = 'TUKN-' +
+                today.getFullYear().toString().slice(-2) +
+                String(today.getMonth() + 1).padStart(2, '0') +
+                String(today.getDate()).padStart(2, '0') + '-' +
+                String(Math.floor(Math.random() * 9000) + 1000);
+            memberData.member_id = dateCode;
+        }
+
+        const { data, error } = await supabase
+            .from('members')
+            .insert([memberData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast(`✅ ${memberData.full_name} সফলভাবে নিবন্ধিত হয়েছেন!`, 'success');
+        console.log('✅ New Member Added:', data);
+        return data;
+    } catch (err) {
+        console.error('❌ addNewMember Error:', err);
+        showToast('❌ সদস্য যোগ করতে ত্রুটি', 'error');
+        return null;
+    }
 }
 
 async function updateMemberStatus(memberId, status) {
-    const { data, error } = await supabase
-        .from('members')
-        .update({ status: status })
-        .eq('member_id', memberId)
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!memberId || !status) {
+            showToast('❌ সদস্য ID এবং স্ট্যাটাস বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('members')
+            .update({ status: status })
+            .eq('member_id', memberId)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast(`✅ স্ট্যাটাস ${status} এ আপডেট হয়েছে`, 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ updateMemberStatus Error:', err);
+        showToast('❌ স্ট্যাটাস আপডেট ব্যর্থ', 'error');
+        return null;
+    }
 }
 
 async function deleteMemberById(memberId) {
-    const { error } = await supabase
-        .from('members')
-        .delete()
-        .eq('member_id', memberId);
-    if (error) throw error;
-    return true;
+    try {
+        if (!memberId) {
+            showToast('❌ সদস্য ID প্রয়োজন', 'error');
+            return false;
+        }
+
+        const confirmed = confirm('সদস্য মুছতে চান? এটি পরিবর্তনযোগ্য নয়।');
+        if (!confirmed) return false;
+
+        const { error } = await supabase
+            .from('members')
+            .delete()
+            .eq('member_id', memberId);
+        
+        if (error) throw error;
+        
+        showToast('✅ সদস্য মুছে দেওয়া হয়েছে', 'success');
+        return true;
+    } catch (err) {
+        console.error('❌ deleteMemberById Error:', err);
+        showToast('❌ সদস্য মুছতে ত্রুটি', 'error');
+        return false;
+    }
 }
 
 async function updateMemberInfo(memberId, updates) {
-    const { data, error } = await supabase
-        .from('members')
-        .update(updates)
-        .eq('member_id', memberId)
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!memberId || !updates) {
+            showToast('❌ ডাটা অপূর্ণ', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('members')
+            .update(updates)
+            .eq('member_id', memberId)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ তথ���য আপডেট হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ updateMemberInfo Error:', err);
+        showToast('❌ তথ্য আপডেট ব্যর্থ', 'error');
+        return null;
+    }
 }
 
-// ==================== অ্যাডমিন (admins) ফাংশন ====================
+// ==================== অ্যাডমিন (ADMINS) ফাংশন ====================
 
 async function getAllAdmins() {
-    const { data, error } = await supabase
-        .from('admins')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('admins')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllAdmins Error:', err);
+        return [];
+    }
 }
 
 async function verifyAdminLogin(username, password) {
-    const { data, error } = await supabase
-        .from('admins')
-        .select('*')
-        .eq('username', username)
-        .eq('password', password)
-        .maybeSingle();
-    if (error) return null;
-    return data;
+    try {
+        if (!username || !password) {
+            showToast('❌ ইউজারনেম এবং পাসওয়ার্ড দিন', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('admins')
+            .select('*')
+            .eq('username', username)
+            .eq('password', password)
+            .maybeSingle();
+        
+        if (error && error.code !== 'PGRST116') throw error;
+        
+        if (!data) {
+            showToast('❌ ভুল ক্রেডেনশিয়াল', 'error');
+            return null;
+        }
+
+        console.log('✅ Admin Login Successful:', data.name);
+        return data;
+    } catch (err) {
+        console.error('❌ verifyAdminLogin Error:', err);
+        return null;
+    }
 }
 
 async function addNewAdmin(adminData) {
-    const { data, error } = await supabase
-        .from('admins')
-        .insert([adminData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!adminData.username || !adminData.password || !adminData.name) {
+            showToast('❌ ইউজারনেম, পাসওয়ার্ড এবং নাম বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('admins')
+            .insert([adminData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ অ্যাডমিন যোগ হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addNewAdmin Error:', err);
+        showToast('❌ অ্যাডমিন যোগ করতে ত্রুটি', 'error');
+        return null;
+    }
 }
 
 async function deleteAdminById(adminId) {
-    const { error } = await supabase
-        .from('admins')
-        .delete()
-        .eq('id', adminId);
-    if (error) throw error;
-    return true;
+    try {
+        const confirmed = confirm('অ্যাডমিন মুছতে চান?');
+        if (!confirmed) return false;
+
+        const { error } = await supabase
+            .from('admins')
+            .delete()
+            .eq('id', adminId);
+        
+        if (error) throw error;
+        
+        showToast('✅ অ্যাডমিন মুছে দেওয়া হয়েছে', 'success');
+        return true;
+    } catch (err) {
+        console.error('❌ deleteAdminById Error:', err);
+        return false;
+    }
 }
 
 async function updateAdminLastLogin(id) {
-    const { error } = await supabase
-        .from('admins')
-        .update({ last_login: new Date() })
-        .eq('id', id);
-    if (error) throw error;
-    return true;
+    try {
+        const { error } = await supabase
+            .from('admins')
+            .update({ last_login: new Date().toISOString() })
+            .eq('id', id);
+        
+        if (error) throw error;
+        console.log('✅ Last login updated');
+        return true;
+    } catch (err) {
+        console.error('❌ updateAdminLastLogin Error:', err);
+        return false;
+    }
 }
 
-// ==================== জেলা প্রতিনিধি (representatives) ফাংশন ====================
+// ==================== জেলা প্রতিনিধি (REPRESENTATIVES) ফাংশন ====================
 
 async function getAllRepresentatives() {
-    const { data, error } = await supabase
-        .from('representatives')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('representatives')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllRepresentatives Error:', err);
+        return [];
+    }
 }
 
 async function addNewRepresentative(repData) {
-    const { data, error } = await supabase
-        .from('representatives')
-        .insert([repData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!repData.name || !repData.district) {
+            showToast('❌ নাম এবং জেলা বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('representatives')
+            .insert([repData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ প্রতিনিধি যোগ হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addNewRepresentative Error:', err);
+        showToast('❌ প্রতিনিধি যোগ করতে ত্রুটি', 'error');
+        return null;
+    }
 }
 
 async function deleteRepresentativeById(id) {
-    const { error } = await supabase
-        .from('representatives')
-        .delete()
-        .eq('id', id);
-    if (error) throw error;
-    return true;
+    try {
+        const confirmed = confirm('প্রতিনিধি মুছতে চান?');
+        if (!confirmed) return false;
+
+        const { error } = await supabase
+            .from('representatives')
+            .delete()
+            .eq('id', id);
+        
+        if (error) throw error;
+        
+        showToast('✅ প্রতিনিধি মুছে দেওয়া হয়েছে', 'success');
+        return true;
+    } catch (err) {
+        console.error('❌ deleteRepresentativeById Error:', err);
+        return false;
+    }
 }
 
-// ==================== প্রতিনিধি আবেদন (rep_applications) ফাংশন ====================
+// ==================== প্রতিনিধি আবেদন (REP_APPLICATIONS) ফাংশন ====================
 
 async function getAllRepApplications() {
-    const { data, error } = await supabase
-        .from('rep_applications')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('rep_applications')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllRepApplications Error:', err);
+        return [];
+    }
 }
 
 async function addRepApplication(appData) {
-    const { data, error } = await supabase
-        .from('rep_applications')
-        .insert([appData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!appData.member_id || !appData.district) {
+            showToast('❌ সদস্য এবং জেলা বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('rep_applications')
+            .insert([appData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ প্রতিনিধি আবেদন জমা হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addRepApplication Error:', err);
+        showToast('❌ আবেদন ��মা করতে ত্রুটি', 'error');
+        return null;
+    }
 }
 
 async function approveRepApplicationById(id, approvedBy) {
-    const { data, error } = await supabase
-        .from('rep_applications')
-        .update({ status: 'approved' })
-        .eq('id', id)
-        .select();
-    if (error) throw error;
-    
-    if (data && data[0]) {
-        const app = data[0];
-        await addNewRepresentative({
-            name: app.name,
-            district: app.district,
-            mobile: app.mobile,
-            madrasa: app.madrasa,
-            experience: app.experience,
-            join_date: new Date(),
-            approved_by: approvedBy,
-            approved_at: new Date()
-        });
+    try {
+        const { data, error } = await supabase
+            .from('rep_applications')
+            .update({ status: 'approved' })
+            .eq('id', id)
+            .select();
+        
+        if (error) throw error;
+        
+        // অনুমোদিত আবেদনকে প্রতিনিধি হিসেবে যোগ করুন
+        if (data && data[0]) {
+            const app = data[0];
+            await addNewRepresentative({
+                member_id: app.member_id,
+                name: app.name,
+                district: app.district,
+                mobile: app.mobile,
+                madrasa: app.madrasa,
+                experience: app.experience,
+                join_date: new Date().toISOString(),
+                approved_by: approvedBy,
+                status: 'active'
+            });
+        }
+        
+        showToast('✅ আবেদন অনুমোদন হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ approveRepApplicationById Error:', err);
+        showToast('❌ অনুমোদন ব্যর্থ', 'error');
+        return null;
     }
-    return data;
 }
 
 async function rejectRepApplicationById(id) {
-    const { data, error } = await supabase
-        .from('rep_applications')
-        .update({ status: 'rejected' })
-        .eq('id', id)
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('rep_applications')
+            .update({ status: 'rejected' })
+            .eq('id', id)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ আবেদন বাতিল হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ rejectRepApplicationById Error:', err);
+        return null;
+    }
 }
 
-// ==================== লোন আবেদন (loan_applications) ফাংশন ====================
+// ==================== লোন আবেদন (LOAN_APPLICATIONS) ফাংশন ====================
 
 async function getAllLoanApplications() {
-    const { data, error } = await supabase
-        .from('loan_applications')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('loan_applications')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllLoanApplications Error:', err);
+        return [];
+    }
 }
 
 async function getLoanApplicationsByMemberId(memberId) {
-    const { data, error } = await supabase
-        .from('loan_applications')
-        .select('*')
-        .eq('member_id', memberId)
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        if (!memberId) {
+            showToast('❌ সদস্য ID প্রয়োজন', 'error');
+            return [];
+        }
+
+        const { data, error } = await supabase
+            .from('loan_applications')
+            .select('*')
+            .eq('member_id', memberId)
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getLoanApplicationsByMemberId Error:', err);
+        return [];
+    }
 }
 
 async function addLoanApplication(loanData) {
-    const { data, error } = await supabase
-        .from('loan_applications')
-        .insert([loanData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!loanData.member_id || !loanData.loan_amount) {
+            showToast('❌ সদস্য এবং লোন পরিমাণ বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('loan_applications')
+            .insert([loanData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ লোন আবেদন জমা হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addLoanApplication Error:', err);
+        showToast('❌ লোন আবেদন জমা ব্যর্থ', 'error');
+        return null;
+    }
 }
 
 async function updateLoanApplicationStatus(id, status) {
-    const { data, error } = await supabase
-        .from('loan_applications')
-        .update({ status: status })
-        .eq('id', id)
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!id || !status) {
+            showToast('❌ ID এবং স্ট্যাটাস প্রয়োজন', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('loan_applications')
+            .update({ status: status })
+            .eq('id', id)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast(`✅ লোন স্ট্যাটাস ${status} হয়েছে`, 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ updateLoanApplicationStatus Error:', err);
+        return null;
+    }
 }
 
 async function deleteLoanApplicationById(id) {
-    const { error } = await supabase
-        .from('loan_applications')
-        .delete()
-        .eq('id', id);
-    if (error) throw error;
-    return true;
+    try {
+        const confirmed = confirm('লোন আবেদন মুছতে চান?');
+        if (!confirmed) return false;
+
+        const { error } = await supabase
+            .from('loan_applications')
+            .delete()
+            .eq('id', id);
+        
+        if (error) throw error;
+        
+        showToast('✅ লোন আবেদন মুছে দেওয়া হয়েছে', 'success');
+        return true;
+    } catch (err) {
+        console.error('❌ deleteLoanApplicationById Error:', err);
+        return false;
+    }
 }
 
-// ==================== লেনদেন (transactions) ফাংশন ====================
+// ==================== লেনদেন (TRANSACTIONS) ফাংশন ====================
 
 async function getAllTransactions() {
-    const { data, error } = await supabase
-        .from('transactions')
-        .select('*')
-        .order('date', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('transactions')
+            .select('*')
+            .order('date', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllTransactions Error:', err);
+        return [];
+    }
 }
 
 async function addTransaction(transactionData) {
-    const { data, error } = await supabase
-        .from('transactions')
-        .insert([transactionData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!transactionData.member_id || !transactionData.amount) {
+            showToast('❌ সদস্য এবং পরিমাণ বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        transactionData.date = transactionData.date || new Date().toISOString();
+
+        const { data, error } = await supabase
+            .from('transactions')
+            .insert([transactionData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ লেনদেন যোগ হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addTransaction Error:', err);
+        showToast('❌ লেনদেন যোগ ব্যর্থ', 'error');
+        return null;
+    }
 }
 
 async function deleteTransactionById(id) {
-    const { error } = await supabase
-        .from('transactions')
-        .delete()
-        .eq('id', id);
-    if (error) throw error;
-    return true;
+    try {
+        const confirmed = confirm('লেনদেন মুছতে চান?');
+        if (!confirmed) return false;
+
+        const { error } = await supabase
+            .from('transactions')
+            .delete()
+            .eq('id', id);
+        
+        if (error) throw error;
+        
+        showToast('✅ লেনদেন মুছে দেওয়া হয়েছে', 'success');
+        return true;
+    } catch (err) {
+        console.error('❌ deleteTransactionById Error:', err);
+        return false;
+    }
 }
 
-// ==================== নোটিশ (notices) ফাংশন ====================
+// ==================== নোটিশ (NOTICES) ফাংশন ====================
 
 async function getAllNotices() {
-    const { data, error } = await supabase
-        .from('notices')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('notices')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllNotices Error:', err);
+        return [];
+    }
 }
 
 async function addNewNotice(noticeData) {
-    const { data, error } = await supabase
-        .from('notices')
-        .insert([noticeData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!noticeData.title || !noticeData.content) {
+            showToast('❌ শিরোনাম এবং বিষয়বস্তু বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('notices')
+            .insert([noticeData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ নোটিশ যোগ হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addNewNotice Error:', err);
+        showToast('❌ নোটিশ যোগ ব্যর্থ', 'error');
+        return null;
+    }
 }
 
 async function deleteNoticeById(id) {
-    const { error } = await supabase
-        .from('notices')
-        .delete()
-        .eq('id', id);
-    if (error) throw error;
-    return true;
+    try {
+        const confirmed = confirm('নোটিশ মুছতে চান?');
+        if (!confirmed) return false;
+
+        const { error } = await supabase
+            .from('notices')
+            .delete()
+            .eq('id', id);
+        
+        if (error) throw error;
+        
+        showToast('✅ নোটিশ মুছে দেওয়া হয়েছে', 'success');
+        return true;
+    } catch (err) {
+        console.error('❌ deleteNoticeById Error:', err);
+        return false;
+    }
 }
 
-// ==================== অভিযোগ (complaints) ফাংশন ====================
+// ==================== অভিযোগ (COMPLAINTS) ফাংশন ====================
 
 async function getAllComplaints() {
-    const { data, error } = await supabase
-        .from('complaints')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('complaints')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllComplaints Error:', err);
+        return [];
+    }
 }
 
 async function getUnreadComplaints() {
-    const { data, error } = await supabase
-        .from('complaints')
-        .select('*')
-        .eq('read', false)
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('complaints')
+            .select('*')
+            .eq('read', false)
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getUnreadComplaints Error:', err);
+        return [];
+    }
 }
 
 async function addNewComplaint(complaintData) {
-    const { data, error } = await supabase
-        .from('complaints')
-        .insert([complaintData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!complaintData.title || !complaintData.description) {
+            showToast('❌ শিরোনাম এবং বর্ণনা বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('complaints')
+            .insert([complaintData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ অভিযোগ জমা হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addNewComplaint Error:', err);
+        showToast('❌ অভিযোগ জমা ব্যর্থ', 'error');
+        return null;
+    }
 }
 
 async function markComplaintAsReadById(id) {
-    const { data, error } = await supabase
-        .from('complaints')
-        .update({ read: true })
-        .eq('id', id)
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('complaints')
+            .update({ read: true })
+            .eq('id', id)
+            .select();
+        
+        if (error) throw error;
+        return data;
+    } catch (err) {
+        console.error('❌ markComplaintAsReadById Error:', err);
+        return null;
+    }
 }
 
 async function updateComplaintStatusById(id, status) {
-    const { data, error } = await supabase
-        .from('complaints')
-        .update({ 
+    try {
+        const updateData = { 
             status: status,
-            resolved_at: status === 'resolved' ? new Date() : null
-        })
-        .eq('id', id)
-        .select();
-    if (error) throw error;
-    return data;
+            resolved_at: status === 'resolved' ? new Date().toISOString() : null
+        };
+
+        const { data, error } = await supabase
+            .from('complaints')
+            .update(updateData)
+            .eq('id', id)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast(`✅ অভিযোগ স্ট্যাটাস ${status} হয়েছে`, 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ updateComplaintStatusById Error:', err);
+        return null;
+    }
 }
 
-// ==================== অভিযোগের রিপ্লাই (complaint_replies) ফাংশন ====================
+// ==================== অভিযোগ রিপ্লাই (COMPLAINT_REPLIES) ফাংশন ====================
 
 async function getComplaintRepliesById(complaintId) {
-    const { data, error } = await supabase
-        .from('complaint_replies')
-        .select('*')
-        .eq('complaint_id', complaintId)
-        .order('id', { ascending: true });
-    if (error) throw error;
-    return data;
+    try {
+        if (!complaintId) {
+            console.warn('⚠️ Complaint ID required');
+            return [];
+        }
+
+        const { data, error } = await supabase
+            .from('complaint_replies')
+            .select('*')
+            .eq('complaint_id', complaintId)
+            .order('created_at', { ascending: true });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getComplaintRepliesById Error:', err);
+        return [];
+    }
 }
 
 async function addComplaintReply(replyData) {
-    const { data, error } = await supabase
-        .from('complaint_replies')
-        .insert([replyData])
-        .select();
-    if (error) throw error;
-    
-    await supabase
-        .from('complaints')
-        .update({ has_new_reply: true })
-        .eq('id', replyData.complaint_id);
-    
-    return data;
+    try {
+        if (!replyData.complaint_id || !replyData.reply_text) {
+            showToast('❌ অভিযোগ এবং রিপ্লাই টেক্সট বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('complaint_replies')
+            .insert([replyData])
+            .select();
+        
+        if (error) throw error;
+
+        // অভিযোগে নতুন রিপ্লাই চিহ্ন যোগ করুন
+        await supabase
+            .from('complaints')
+            .update({ has_new_reply: true })
+            .eq('id', replyData.complaint_id);
+        
+        showToast('✅ রিপ্লাই যোগ হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addComplaintReply Error:', err);
+        showToast('❌ রিপ্লাই যোগ ব্যর্থ', 'error');
+        return null;
+    }
 }
 
-// ==================== ব্রাঞ্চ (branches) ফাংশন ====================
+// ==================== ব্রাঞ্চ (BRANCHES) ফাংশন ====================
 
 async function getAllBranches() {
-    const { data, error } = await supabase
-        .from('branches')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('branches')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllBranches Error:', err);
+        return [];
+    }
 }
 
 async function addNewBranch(branchData) {
-    const { data, error } = await supabase
-        .from('branches')
-        .insert([branchData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!branchData.name || !branchData.district) {
+            showToast('❌ ব্রাঞ্চ নাম এবং জেলা বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('branches')
+            .insert([branchData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ ব্রাঞ্চ যোগ হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addNewBranch Error:', err);
+        showToast('❌ ব্রাঞ্চ যোগ ব্যর্থ', 'error');
+        return null;
+    }
 }
 
 async function updateBranchStatusById(id, status) {
-    const { data, error } = await supabase
-        .from('branches')
-        .update({ status: status })
-        .eq('id', id)
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('branches')
+            .update({ status: status })
+            .eq('id', id)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast(`✅ ব্রাঞ্চ স্ট্যাটাস ${status} হয়েছে`, 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ updateBranchStatusById Error:', err);
+        return null;
+    }
 }
 
 async function deleteBranchById(id) {
-    const { error } = await supabase
-        .from('branches')
-        .delete()
-        .eq('id', id);
-    if (error) throw error;
-    return true;
+    try {
+        const confirmed = confirm('ব্রাঞ্চ মুছতে চান?');
+        if (!confirmed) return false;
+
+        const { error } = await supabase
+            .from('branches')
+            .delete()
+            .eq('id', id);
+        
+        if (error) throw error;
+        
+        showToast('✅ ব্রাঞ্চ মুছে দেওয়া হয়েছে', 'success');
+        return true;
+    } catch (err) {
+        console.error('❌ deleteBranchById Error:', err);
+        return false;
+    }
 }
 
-// ==================== স্লাইডার (sliders) ফাংশন ====================
+// ==================== স্লাইডার (SLIDERS) ফাংশন ====================
 
 async function getAllSliders() {
-    const { data, error } = await supabase
-        .from('sliders')
-        .select('*')
-        .order('display_order', { ascending: true });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('sliders')
+            .select('*')
+            .order('display_order', { ascending: true });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllSliders Error:', err);
+        return [];
+    }
 }
 
 async function getActiveSliders() {
-    const { data, error } = await supabase
-        .from('sliders')
-        .select('*')
-        .eq('active', true)
-        .order('display_order', { ascending: true });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('sliders')
+            .select('*')
+            .eq('active', true)
+            .order('display_order', { ascending: true });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getActiveSliders Error:', err);
+        return [];
+    }
 }
 
 async function addNewSlider(sliderData) {
-    const { data, error } = await supabase
-        .from('sliders')
-        .insert([sliderData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!sliderData.title || !sliderData.image_url) {
+            showToast('❌ শিরোনাম এবং ছবি বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('sliders')
+            .insert([sliderData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ স্লাইডার যোগ হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addNewSlider Error:', err);
+        showToast('❌ স্লাইডার যোগ ব্যর্থ', 'error');
+        return null;
+    }
 }
 
 async function updateSliderOrder(updates) {
-    for (const update of updates) {
-        const { error } = await supabase
-            .from('sliders')
-            .update({ display_order: update.order })
-            .eq('id', update.id);
-        if (error) throw error;
+    try {
+        for (const update of updates) {
+            const { error } = await supabase
+                .from('sliders')
+                .update({ display_order: update.order })
+                .eq('id', update.id);
+            
+            if (error) throw error;
+        }
+        
+        showToast('✅ ক্রম আপডেট হয়েছে', 'success');
+        return true;
+    } catch (err) {
+        console.error('❌ updateSliderOrder Error:', err);
+        return false;
     }
-    return true;
 }
 
 async function toggleSliderActiveStatus(id, active) {
-    const { data, error } = await supabase
-        .from('sliders')
-        .update({ active: active })
-        .eq('id', id)
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('sliders')
+            .update({ active: active })
+            .eq('id', id)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast(`✅ স্লাইডার ${active ? 'সক্রিয়' : 'নিষ্ক্রিয়'} করা হয়েছে`, 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ toggleSliderActiveStatus Error:', err);
+        return null;
+    }
 }
 
 async function deleteSliderById(id) {
-    const { error } = await supabase
-        .from('sliders')
-        .delete()
-        .eq('id', id);
-    if (error) throw error;
-    return true;
+    try {
+        const confirmed = confirm('স্লাইডার মুছতে চান?');
+        if (!confirmed) return false;
+
+        const { error } = await supabase
+            .from('sliders')
+            .delete()
+            .eq('id', id);
+        
+        if (error) throw error;
+        
+        showToast('✅ স্লাইডার মুছে দেওয়া হয়েছে', 'success');
+        return true;
+    } catch (err) {
+        console.error('❌ deleteSliderById Error:', err);
+        return false;
+    }
 }
 
-// ==================== লভ্যাংশ বন্টন ইতিহাস (distribution_history) ফাংশন ====================
+// ==================== বিতরণ ইতিহাস (DISTRIBUTION_HISTORY) ফাংশন ====================
 
 async function getAllDistributionHistory() {
-    const { data, error } = await supabase
-        .from('distribution_history')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('distribution_history')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllDistributionHistory Error:', err);
+        return [];
+    }
 }
 
 async function addDistributionHistory(historyData) {
-    const { data, error } = await supabase
-        .from('distribution_history')
-        .insert([historyData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!historyData.month || !historyData.year) {
+            showToast('❌ মাস এবং বছর বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('distribution_history')
+            .insert([historyData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ বিতরণ রেকর্ড যোগ হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addDistributionHistory Error:', err);
+        showToast('❌ বিতরণ যোগ ব্যর্থ', 'error');
+        return null;
+    }
 }
 
-// ==================== পেন্ডিং সদস্য (pending_members) ফাংশন ====================
+// ==================== পেন্ডিং সদস্য (PENDING_MEMBERS) ফাংশন ====================
 
 async function getAllPendingMembers() {
-    const { data, error } = await supabase
-        .from('pending_members')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('pending_members')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllPendingMembers Error:', err);
+        return [];
+    }
 }
 
 async function addPendingMember(memberData) {
-    const { data, error } = await supabase
-        .from('pending_members')
-        .insert([memberData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!memberData.full_name || !memberData.mobile) {
+            showToast('❌ নাম এবং মোবাইল বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('pending_members')
+            .insert([memberData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ পেন্ডিং সদস্য যোগ হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addPendingMember Error:', err);
+        showToast('❌ পেন্ডিং সদস্য যোগ ব্যর্থ', 'error');
+        return null;
+    }
 }
 
 async function deletePendingMemberById(id) {
-    const { error } = await supabase
-        .from('pending_members')
-        .delete()
-        .eq('id', id);
-    if (error) throw error;
-    return true;
+    try {
+        const confirmed = confirm('পেন্ডিং সদস্য মুছতে চান?');
+        if (!confirmed) return false;
+
+        const { error } = await supabase
+            .from('pending_members')
+            .delete()
+            .eq('id', id);
+        
+        if (error) throw error;
+        
+        showToast('✅ পেন্ডিং সদস্য মুছে দেওয়া হয়েছে', 'success');
+        return true;
+    } catch (err) {
+        console.error('❌ deletePendingMemberById Error:', err);
+        return false;
+    }
 }
 
-// ==================== ক্যারিয়ার (career) ফাংশন ====================
+// ==================== ক্যারিয়ার (CAREER) ফাংশন ====================
 
 async function getCareerInfo() {
-    const { data, error } = await supabase
-        .from('career')
-        .select('*')
-        .limit(1)
-        .maybeSingle();
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('career')
+            .select('*')
+            .limit(1)
+            .maybeSingle();
+        
+        if (error && error.code !== 'PGRST116') throw error;
+        return data;
+    } catch (err) {
+        console.error('❌ getCareerInfo Error:', err);
+        return null;
+    }
 }
 
 async function updateCareerInfo(careerData) {
-    const existing = await getCareerInfo();
-    
-    if (existing) {
-        const { data, error } = await supabase
-            .from('career')
-            .update({
-                description: careerData.description,
-                pdf_url: careerData.pdf_url,
-                pdf_name: careerData.pdf_name,
-                contact: careerData.contact,
-                updated_at: new Date()
-            })
-            .eq('id', existing.id)
-            .select();
-        if (error) throw error;
-        return data;
-    } else {
-        const { data, error } = await supabase
-            .from('career')
-            .insert([{
-                description: careerData.description,
-                pdf_url: careerData.pdf_url,
-                pdf_name: careerData.pdf_name,
-                contact: careerData.contact,
-                updated_at: new Date()
-            }])
-            .select();
-        if (error) throw error;
-        return data;
+    try {
+        const existing = await getCareerInfo();
+        
+        if (existing) {
+            const { data, error } = await supabase
+                .from('career')
+                .update({
+                    description: careerData.description,
+                    pdf_url: careerData.pdf_url,
+                    pdf_name: careerData.pdf_name,
+                    contact: careerData.contact,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', existing.id)
+                .select();
+            
+            if (error) throw error;
+            showToast('✅ ক্যারিয়ার তথ্য আপডেট হয়েছে', 'success');
+            return data;
+        } else {
+            const { data, error } = await supabase
+                .from('career')
+                .insert([{
+                    description: careerData.description,
+                    pdf_url: careerData.pdf_url,
+                    pdf_name: careerData.pdf_name,
+                    contact: careerData.contact,
+                    updated_at: new Date().toISOString()
+                }])
+                .select();
+            
+            if (error) throw error;
+            showToast('✅ ক্যারিয়ার তথ্য যোগ হয়েছে', 'success');
+            return data;
+        }
+    } catch (err) {
+        console.error('❌ updateCareerInfo Error:', err);
+        showToast('❌ ক্যারিয়ার আপডেট ব্যর্থ', 'error');
+        return null;
     }
 }
 
-// ==================== আমাদের সম্পর্কে (about) ফাংশন ====================
+// ==================== আমাদের সম্পর্কে (ABOUT) ফাংশন ====================
 
 async function getAboutInfo() {
-    const { data, error } = await supabase
-        .from('about')
-        .select('*')
-        .limit(1)
-        .maybeSingle();
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('about')
+            .select('*')
+            .limit(1)
+            .maybeSingle();
+        
+        if (error && error.code !== 'PGRST116') throw error;
+        return data;
+    } catch (err) {
+        console.error('❌ getAboutInfo Error:', err);
+        return null;
+    }
 }
 
 async function updateAboutInfo(aboutData) {
-    const existing = await getAboutInfo();
-    
-    if (existing) {
-        const { data, error } = await supabase
-            .from('about')
-            .update({
-                org_name: aboutData.org_name,
-                org_description: aboutData.org_description,
-                org_mission: aboutData.org_mission,
-                org_vision: aboutData.org_vision,
-                org_values: aboutData.org_values,
-                org_establish_date: aboutData.org_establish_date,
-                updated_at: new Date()
-            })
-            .eq('id', existing.id)
-            .select();
-        if (error) throw error;
-        return data;
-    } else {
-        const { data, error } = await supabase
-            .from('about')
-            .insert([{
-                org_name: aboutData.org_name,
-                org_description: aboutData.org_description,
-                org_mission: aboutData.org_mission,
-                org_vision: aboutData.org_vision,
-                org_values: aboutData.org_values,
-                org_establish_date: aboutData.org_establish_date,
-                updated_at: new Date()
-            }])
-            .select();
-        if (error) throw error;
-        return data;
+    try {
+        const existing = await getAboutInfo();
+        
+        if (existing) {
+            const { data, error } = await supabase
+                .from('about')
+                .update({
+                    org_name: aboutData.org_name,
+                    org_description: aboutData.org_description,
+                    org_mission: aboutData.org_mission,
+                    org_vision: aboutData.org_vision,
+                    org_values: aboutData.org_values,
+                    org_establish_date: aboutData.org_establish_date,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', existing.id)
+                .select();
+            
+            if (error) throw error;
+            showToast('✅ আমাদের সম্পর্কে আপডেট হয়েছে', 'success');
+            return data;
+        } else {
+            const { data, error } = await supabase
+                .from('about')
+                .insert([{
+                    org_name: aboutData.org_name,
+                    org_description: aboutData.org_description,
+                    org_mission: aboutData.org_mission,
+                    org_vision: aboutData.org_vision,
+                    org_values: aboutData.org_values,
+                    org_establish_date: aboutData.org_establish_date,
+                    updated_at: new Date().toISOString()
+                }])
+                .select();
+            
+            if (error) throw error;
+            showToast('✅ আমাদের সম্পর্কে যোগ হয়েছে', 'success');
+            return data;
+        }
+    } catch (err) {
+        console.error('❌ updateAboutInfo Error:', err);
+        showToast('❌ আপডেট ব্য��্থ', 'error');
+        return null;
     }
 }
 
-// ==================== মাদরাসা (madrasas) ফাংশন ====================
+// ==================== মাদরাসা (MADRASAS) ফাংশন ====================
 
 async function getAllMadrasas() {
-    const { data, error } = await supabase
-        .from('madrasas')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('madrasas')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllMadrasas Error:', err);
+        return [];
+    }
 }
 
 async function getMadrasaByIlhak(ilhakNo) {
-    const { data, error } = await supabase
-        .from('madrasas')
-        .select('*')
-        .eq('ilhak_no', ilhakNo)
-        .maybeSingle();
-    if (error && error.code !== 'PGRST116') throw error;
-    return data;
+    try {
+        if (!ilhakNo) {
+            console.warn('⚠️ Ilhak number required');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('madrasas')
+            .select('*')
+            .eq('ilhak_no', ilhakNo)
+            .maybeSingle();
+        
+        if (error && error.code !== 'PGRST116') throw error;
+        return data;
+    } catch (err) {
+        console.error('❌ getMadrasaByIlhak Error:', err);
+        return null;
+    }
 }
 
 async function addMadrasa(madrasaData) {
-    const { data, error } = await supabase
-        .from('madrasas')
-        .insert([madrasaData])
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!madrasaData.name || !madrasaData.ilhak_no) {
+            showToast('❌ মাদরাসা নাম এবং ইলহাক নম্বর বাধ্যতামূলক', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('madrasas')
+            .insert([madrasaData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ মাদরাসা যোগ হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ addMadrasa Error:', err);
+        showToast('❌ মাদরাসা যোগ ব্যর্থ', 'error');
+        return null;
+    }
 }
 
 async function updateMadrasa(ilhakNo, madrasaData) {
-    const { data, error } = await supabase
-        .from('madrasas')
-        .update(madrasaData)
-        .eq('ilhak_no', ilhakNo)
-        .select();
-    if (error) throw error;
-    return data;
+    try {
+        if (!ilhakNo) {
+            showToast('❌ ইলহাক নম্বর প্রয়োজন', 'error');
+            return null;
+        }
+
+        const { data, error } = await supabase
+            .from('madrasas')
+            .update(madrasaData)
+            .eq('ilhak_no', ilhakNo)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ মাদরাসা আপডেট হয়েছে', 'success');
+        return data;
+    } catch (err) {
+        console.error('❌ updateMadrasa Error:', err);
+        showToast('❌ মাদরাসা আপডেট ব্যর্থ', 'error');
+        return null;
+    }
 }
 
 async function generateMadrasaSerialNo() {
-    const { data, error } = await supabase
-        .from('madrasas')
-        .select('serial_no', { count: 'exact' });
-    if (error) throw error;
-    const count = data?.length || 0;
-    return `TUKNBD M-${String(count + 1).padStart(4, '0')}`;
+    try {
+        const { data, error } = await supabase
+            .from('madrasas')
+            .select('serial_no', { count: 'exact' });
+        
+        if (error) throw error;
+        const count = data?.length || 0;
+        return `TUKNBD M-${String(count + 1).padStart(4, '0')}`;
+    } catch (err) {
+        console.error('❌ generateMadrasaSerialNo Error:', err);
+        return null;
+    }
 }
 
-// ==================== জেলা (districts) ফাংশন ====================
+// ==================== জেলা (DISTRICTS) ফাংশন ====================
 
 async function getAllDistricts() {
-    const { data, error } = await supabase
-        .from('districts')
-        .select('*')
-        .order('name', { ascending: true });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('districts')
+            .select('*')
+            .order('name', { ascending: true });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllDistricts Error:', err);
+        return [];
+    }
 }
 
 async function getDistrictCount() {
-    const { count, error } = await supabase
-        .from('districts')
-        .select('*', { count: 'exact', head: true });
-    if (error) throw error;
-    return count || 64;
+    try {
+        const { count, error } = await supabase
+            .from('districts')
+            .select('*', { count: 'exact', head: true });
+        
+        if (error) throw error;
+        return count || 64;
+    } catch (err) {
+        console.error('❌ getDistrictCount Error:', err);
+        return 64;
+    }
 }
 
-// ==================== প্রকল্প (projects) ফাংশন ====================
+// ==================== প্রকল্প (PROJECTS) ফাংশন ====================
 
 async function getAllProjects() {
-    const { data, error } = await supabase
-        .from('projects')
-        .select('*')
-        .order('id', { ascending: false });
-    if (error) throw error;
-    return data;
+    try {
+        const { data, error } = await supabase
+            .from('projects')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllProjects Error:', err);
+        return [];
+    }
 }
 
 async function getProjectCount() {
-    const { count, error } = await supabase
-        .from('projects')
-        .select('*', { count: 'exact', head: true });
-    if (error) throw error;
-    return count || 250;
+    try {
+        const { count, error } = await supabase
+            .from('projects')
+            .select('*', { count: 'exact', head: true });
+        
+        if (error) throw error;
+        return count || 0;
+    } catch (err) {
+        console.error('❌ getProjectCount Error:', err);
+        return 0;
+    }
 }
 
-// ==================== ভিজিটর কাউন্ট (visitor_count) ফাংশন ====================
+// ==================== ভিজিটর কাউন্ট (VISITOR_COUNT) ফাংশন ====================
 
 async function getVisitorCount() {
-    const { data, error } = await supabase
-        .from('visitor_count')
-        .select('count')
-        .eq('id', 1)
-        .single();
-    if (error) throw error;
-    return data?.count || 0;
+    try {
+        const { data, error } = await supabase
+            .from('visitor_count')
+            .select('count')
+            .eq('id', 1)
+            .single();
+        
+        if (error && error.code !== 'PGRST116') throw error;
+        return data?.count || 0;
+    } catch (err) {
+        console.error('❌ getVisitorCount Error:', err);
+        return 0;
+    }
 }
 
 async function incrementVisitorCount() {
-    const currentCount = await getVisitorCount();
-    const newCount = currentCount + 1;
-    
-    const { data, error } = await supabase
-        .from('visitor_count')
-        .update({ count: newCount, last_updated: new Date() })
-        .eq('id', 1)
-        .select();
-    if (error) throw error;
-    return newCount;
+    try {
+        const currentCount = await getVisitorCount();
+        const newCount = currentCount + 1;
+        
+        const { data, error } = await supabase
+            .from('visitor_count')
+            .update({ count: newCount, last_updated: new Date().toISOString() })
+            .eq('id', 1)
+            .select();
+        
+        if (error) throw error;
+        console.log('✅ Visitor count incremented:', newCount);
+        return newCount;
+    } catch (err) {
+        console.error('❌ incrementVisitorCount Error:', err);
+        return 0;
+    }
 }
 
-// ==================== টেস্ট ফাংশন ====================
+// ==================== টেস্ট ডাটা ফাংশন ====================
 
 async function addTestMemberIfNotExists() {
-    const existing = await getMemberByMobile('01734913809');
-    if (!existing) {
+    try {
+        const existing = await getMemberByMobile('01734913809');
+        if (existing) {
+            console.log('✅ Test member already exists');
+            return;
+        }
+
         const testMember = {
-            member_id: 'TUKN-260501-0001',
+            member_id: 'TUKN-TEST-0001',
             full_name: 'পরীক্ষা সদস্য',
             mobile: '01734913809',
             password: '1234',
@@ -798,36 +1529,62 @@ async function addTestMemberIfNotExists() {
             member_type: 'সাধারণ সদস্য',
             monthly_savings: 500
         };
+
         await addNewMember(testMember);
-        console.log('✅ টেস্ট সদস্য যোগ করা হয়েছে');
-    } else {
-        console.log('✅ টেস্ট সদস্য ইতিমধ্যে আছে');
+        console.log('✅ Test member created successfully');
+    } catch (err) {
+        console.error('❌ Test member creation error:', err);
     }
 }
 
 // ==================== ইউটিলিটি ফাংশন ====================
 
-function showToast(message, type) {
-    const toast = document.createElement('div');
-    toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${type === 'success' ? 'bg-green-600' : type === 'error' ? 'bg-red-600' : 'bg-blue-600'}`;
-    toast.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'} mr-2"></i>${message}`;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
+function showToast(message, type = 'info') {
+    try {
+        const toast = document.createElement('div');
+        const bgColor = type === 'success' ? 'bg-green-600' : 
+                       type === 'error' ? 'bg-red-600' : 'bg-blue-600';
+        const icon = type === 'success' ? 'check-circle' : 
+                    type === 'error' ? 'exclamation-circle' : 'info-circle';
+        
+        toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${bgColor} animate-pulse`;
+        toast.innerHTML = `<i class="fas fa-${icon} mr-2"></i>${message}`;
+        
+        document.body.appendChild(toast);
+        
+        setTimeout(() => toast.remove(), 3000);
+    } catch (err) {
+        console.log('[Toast]', message);
+    }
 }
 
-// ==================== ইনিশিয়ালাইজেশন ====================
+// ==================== ইনিশিয়ালাইজেশন ====================
 
 async function initSupabaseFunctions() {
-    const connected = await testSupabaseConnection();
-    if (connected) {
-        await addTestMemberIfNotExists();
+    try {
+        console.log('🚀 Initializing Supabase Functions...');
+        
+        const initialized = await initSupabaseClient();
+        if (!initialized) {
+            console.warn('⚠️ Supabase initialization failed');
+            return;
+        }
+        
+        const connected = await testSupabaseConnection();
+        if (connected) {
+            await addTestMemberIfNotExists();
+            console.log('✅ Supabase Functions Ready!');
+        }
+    } catch (err) {
+        console.error('❌ Initialization Error:', err);
     }
-    console.log('🚀 Supabase Functions Ready!');
 }
 
-// পেজ লোড হলে ইনিশিয়ালাইজ
-document.addEventListener('DOMContentLoaded', () => {
+// পেজ লোড হলে ইনিশিয়ালাইজ করুন
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSupabaseFunctions);
+} else {
     initSupabaseFunctions();
-});
+}
 
 console.log('✅ supabase-functions.js loaded successfully');
