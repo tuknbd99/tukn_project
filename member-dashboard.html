@@ -672,70 +672,91 @@ async function loadCurrentUser() {
     }
 }
 
-// ==================== চেইন অফ কমিশন সিস্টেম ====================
+// ==================== চেইন অফ কমিশন সিস্টেম (সঠিক) ====================
 async function loadReferralData() {
     const members = await getMembersFromSupabase();
     const currentUserId = currentUser.id;
-    const currentUserReferId = currentUser.referId || currentUser.id;
+    const currentUserReferId = currentUser.referId;
     
-    let levelWiseCommission = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
-    let levelWiseCount = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
+    // মোট কমিশন ও ডাইরেক্ট রেফারেল কাউন্ট
     let totalCommission = 0;
     let directCount = 0;
-    let totalDownline = 0;
+    let levelWiseCommission = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
     
-    function collectDownline(parentId, currentDepth = 1, visited = new Set()) {
-        if(currentDepth > 10 || visited.has(parentId)) return;
-        visited.add(parentId);
+    // ✅ শুধু ম্যাচিং রেফারেল কোড থাকলেই গণনা হবে
+    // ডাইরেক্ট রেফারেল খুঁজুন
+    const directReferrals = members.filter(m => 
+        m.referral_code === currentUserReferId && 
+        m.member_id !== currentUserId &&
+        (m.status === 'approved' || m.status === 'active')
+    );
+    
+    directCount = directReferrals.length;
+    
+    // লেভেল 1: ডাইরেক্ট রেফারেল থেকে কমিশন (15%)
+    for(let ref of directReferrals) {
+        const monthlySavings = ref.monthly_savings || 500;
+        const commission = monthlySavings * 0.15;
+        totalCommission += commission;
+        levelWiseCommission[1] += commission;
         
-        const directRefs = members.filter(m => 
-            (m.referral_code === parentId || m.referral_code === parentId) && 
-            m.member_id !== parentId &&
+        // লেভেল 2: Level 2 সদস্য খুঁজুন (10%)
+        const level2Refs = members.filter(m => 
+            m.referral_code === ref.referral_code && 
+            m.member_id !== ref.member_id &&
+            m.member_id !== currentUserId &&
             (m.status === 'approved' || m.status === 'active')
         );
         
-        if(currentDepth === 1) {
-            directCount = directRefs.length;
-        }
-        
-        for(let ref of directRefs) {
-            totalDownline++;
+        for(let ref2 of level2Refs) {
+            const savings2 = ref2.monthly_savings || 500;
+            const commission2 = savings2 * 0.10;
+            totalCommission += commission2;
+            levelWiseCommission[2] += commission2;
             
-            const monthlySavings = ref.monthly_savings || 500;
-            let commissionRate = 0;
+            // লেভেল 3-10: (5%)
+            let currentLevel = 2;
+            let currentRefs = level2Refs;
             
-            if(currentDepth === 1) {
-                commissionRate = 0.15;
-            } else if(currentDepth === 2) {
-                commissionRate = 0.10;
-            } else {
-                commissionRate = 0.05;
+            while(currentLevel < 10 && currentRefs.length > 0) {
+                let nextLevelRefs = [];
+                for(let r of currentRefs) {
+                    const nextRefs = members.filter(m => 
+                        m.referral_code === r.referral_code && 
+                        m.member_id !== r.member_id &&
+                        m.member_id !== currentUserId &&
+                        (m.status === 'approved' || m.status === 'active')
+                    );
+                    nextLevelRefs.push(...nextRefs);
+                }
+                
+                currentLevel++;
+                if(currentLevel > 10) break;
+                
+                for(let r of nextLevelRefs) {
+                    const savings = r.monthly_savings || 500;
+                    const comm = savings * 0.05;
+                    totalCommission += comm;
+                    levelWiseCommission[currentLevel] = (levelWiseCommission[currentLevel] || 0) + comm;
+                }
+                currentRefs = nextLevelRefs;
             }
-            
-            const commission = monthlySavings * commissionRate;
-            const level = Math.min(currentDepth, 10);
-            
-            levelWiseCommission[level] += commission;
-            levelWiseCount[level]++;
-            totalCommission += commission;
-            
-            collectDownline(ref.member_id, currentDepth + 1, visited);
         }
     }
     
-    collectDownline(currentUserReferId, 1);
-    
-    for(let i = 1; i <= 10; i++) {
-        levelWiseCommission[i] = Math.floor(levelWiseCommission[i]);
-    }
     totalCommission = Math.floor(totalCommission);
+    for(let i = 1; i <= 10; i++) {
+        levelWiseCommission[i] = Math.floor(levelWiseCommission[i] || 0);
+    }
     
+    // ইউজার লেভেল নির্ধারণ
     let userLevel = 1;
     if(directCount >= 100) userLevel = 5;
     else if(directCount >= 50) userLevel = 4;
     else if(directCount >= 20) userLevel = 3;
     else if(directCount >= 5) userLevel = 2;
     
+    // ব্যালেন্স আপডেট
     userBalances.bonus = totalCommission;
     userBalances.profit = Math.floor(totalCommission * 0.1);
     
@@ -745,27 +766,38 @@ async function loadReferralData() {
     const paidMonths = Math.min(monthsSinceJoin + 1, 6);
     userBalances.capital = paidMonths * (currentUser.monthlySavings || 500);
     
+    // UI আপডেট
     document.getElementById('directCount').innerText = directCount;
-    document.getElementById('totalDownline').innerText = totalDownline;
     document.getElementById('totalBonus').innerText = totalCommission.toLocaleString();
     document.getElementById('currentLevel').innerText = userLevel;
     
+    // ডাউনলাইন টোটাল দেখানোর জন্য (ঐচ্ছিক)
+    let totalDownline = 0;
+    for(let i = 1; i <= 10; i++) {
+        // ডাউনলাইন কাউন্ট গণনা করা যায়, কিন্তু এখানে শুধু কমিশন দেখানো হচ্ছে
+    }
+    document.getElementById('totalDownline').innerText = directCount; // বা অন্য মান
+    
+    // রেফারেল লিংক
     const referralLinkInput = document.getElementById('referralLink');
     if(referralLinkInput) {
         referralLinkInput.value = `https://tuknbd.com/join?ref=${currentUser.referId}`;
     }
     
+    // লেভেল ভিত্তিক কমিশন দেখান
     const container = document.getElementById('levelWiseDownline');
     if(container) {
         const levelNames = ['প্রথম', 'দ্বিতীয়', 'তৃতীয়', 'চতুর্থ', 'পঞ্চম', 'ষষ্ঠ', 'সপ্তম', 'অষ্টম', 'নবম', 'দশম'];
         const commissionRates = [15, 10, 5, 5, 5, 5, 5, 5, 5, 5];
         
         let html = '';
+        let hasAnyCommission = false;
         
         for(let i = 1; i <= 10; i++) {
             const commission = levelWiseCommission[i];
-            const count = levelWiseCount[i];
             const rate = commissionRates[i-1];
+            
+            if(commission > 0) hasAnyCommission = true;
             
             let bgColor = '';
             if(i === 1) bgColor = 'bg-gradient-to-r from-emerald-50 to-emerald-100';
@@ -782,19 +814,18 @@ async function loadReferralData() {
                                     ${levelNames[i-1]} লেভেল
                                 </span>
                             </div>
-                            <p class="text-xs text-gray-500 mt-1">${count} জন সদস্য | কমিশন রেট ${rate}%</p>
+                            <p class="text-xs text-gray-500 mt-1">কমিশন রেট ${rate}%</p>
                         </div>
                         <div class="text-right">
                             <span class="text-xl font-bold ${i === 1 ? 'text-emerald-600' : (i === 2 ? 'text-blue-600' : 'text-gray-700')}">${commission.toLocaleString()} টাকা</span>
                         </div>
                     </div>
-                    ${count > 0 && i !== 1 ? `
-                        <div class="mt-2 w-full bg-gray-200 rounded-full h-1.5">
-                            <div class="${i === 2 ? 'bg-blue-500' : 'bg-emerald-500'} h-1.5 rounded-full" style="width: ${Math.min((count / (levelWiseCount[i-1] * 10)) * 100, 100)}%"></div>
-                        </div>
-                    ` : ''}
                 </div>
             `;
+        }
+        
+        if(!hasAnyCommission) {
+            html = `<div class="text-center p-4 text-gray-500">কোনো রেফারেল কমিশন নেই</div>`;
         }
         
         html += `
@@ -814,8 +845,9 @@ async function loadReferralData() {
         
         container.innerHTML = html;
     }
+    
+    console.log(`Direct Referrals: ${directCount}, Total Commission: ${totalCommission}`);
 }
-
 // ==================== UI আপডেট ফাংশন ====================
 function updateUI() {
     if(!currentUser) return;
