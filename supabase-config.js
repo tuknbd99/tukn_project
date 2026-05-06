@@ -22,3 +22,70 @@ window.TABLES = {
     CAREER: 'career',
     ABOUT: 'about'
 };
+
+// ==================== প্রোফাইল ইমেজ ফাংশন ====================
+async function uploadProfileImageToSupabase(file, memberId) {
+    try {
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${memberId}_${Date.now()}.${fileExt}`;
+        const filePath = `profile-images/${fileName}`;
+        
+        const { data, error } = await supabaseClient.storage
+            .from('member-profiles')
+            .upload(filePath, file);
+        
+        if(error) throw error;
+        
+        const { data: urlData } = supabaseClient.storage
+            .from('member-profiles')
+            .getPublicUrl(filePath);
+        
+        const imageUrl = urlData.publicUrl;
+        
+        // members টেবিলে profile_image আপডেট করুন
+        const { error: updateError } = await supabaseClient
+            .from('members')
+            .update({ profile_image: imageUrl })
+            .eq('member_id', memberId);
+        
+        if(updateError) throw updateError;
+        
+        return imageUrl;
+    } catch(error) {
+        console.error('Upload error:', error);
+        return null;
+    }
+}
+// ==================== প্রোফাইল ইমেজ ফাংশন ====================
+async function uploadProfileImageToSupabase(file, memberId) {
+    try {
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${memberId}_${Date.now()}.${fileExt}`;
+        const filePath = `profile-images/${fileName}`;
+        
+        const { data, error } = await supabaseClient.storage
+            .from('member-profiles')
+            .upload(filePath, file);
+        
+        if(error) throw error;
+        
+        const { data: urlData } = supabaseClient.storage
+            .from('member-profiles')
+            .getPublicUrl(filePath);
+        
+        const imageUrl = urlData.publicUrl;
+        
+        // members টেবিলে profile_image আপডেট করুন
+        const { error: updateError } = await supabaseClient
+            .from('members')
+            .update({ profile_image: imageUrl })
+            .eq('member_id', memberId);
+        
+        if(updateError) throw updateError;
+        
+        return imageUrl;
+    } catch(error) {
+        console.error('Upload error:', error);
+        return null;
+    }
+}
