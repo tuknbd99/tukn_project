@@ -1138,43 +1138,70 @@ async function loadStats() {
     }
 }
 
+// ========== ভিজিটর কাউন্টার (সঠিক ফাংশন) ==========
 async function updateVisitorCount() {
     try {
-        if (!supabaseClient) return;
+        if (!supabaseClient) {
+            console.error('Supabase client not initialized');
+            return;
+        }
         
         const today = new Date().toISOString().split('T')[0];
         
-        // Check if already counted in this session
+        // Check if already counted in this session (প্রতি সেশনে একবার)
         const sessionCounted = sessionStorage.getItem('visitor_counted_today');
         
+        let currentTotal = 0;
+        
         if (!sessionCounted) {
-            // Call the RPC function to increment count
+            // Call the RPC function to increment count (পরিবর্তিত প্যারামিটার নাম)
             const { data, error } = await supabaseClient.rpc('increment_visitor_count', {
-                visit_date: today
+                p_date: today   // <-- এখানে p_date ব্যবহার করুন, visit_date না
             });
             
             if (error) {
                 console.error('RPC error:', error);
+                // Fallback: সরাসরি ডাটা পড়ুন
+                const { data: latest } = await supabaseClient
+                    .from('visitor_stats')
+                    .select('total_count')
+                    .order('visit_date', { ascending: false })
+                    .limit(1)
+                    .single();
+                    
+                if (latest) {
+                    currentTotal = latest.total_count;
+                }
             } else {
+                currentTotal = data;
                 sessionStorage.setItem('visitor_counted_today', 'true');
+            }
+        } else {
+            // Already counted today, just get the total
+            const { data: latest } = await supabaseClient
+                .from('visitor_stats')
+                .select('total_count')
+                .order('visit_date', { ascending: false })
+                .limit(1)
+                .single();
+                
+            if (latest) {
+                currentTotal = latest.total_count;
             }
         }
         
-        // Get today's count
-        const { data, error } = await supabaseClient
-            .from('visitor_stats')
-            .select('total_count')
-            .eq('date', today)
-            .single();
-        
-        if (data && !error) {
-            document.getElementById('visitorCount').innerText = data.total_count.toLocaleString();
-        } else {
-            document.getElementById('visitorCount').innerText = '০';
+        // Display the total count
+        const visitorElement = document.getElementById('visitorCount');
+        if (visitorElement) {
+            visitorElement.innerText = (currentTotal || 0).toLocaleString();
         }
+        
     } catch (error) {
         console.error('Visitor count error:', error);
-        document.getElementById('visitorCount').innerText = '০';
+        const visitorElement = document.getElementById('visitorCount');
+        if (visitorElement) {
+            visitorElement.innerText = '০';
+        }
     }
 }
 
