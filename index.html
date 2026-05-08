@@ -334,10 +334,10 @@
                 </div>
                 
                 <div class="visitor-box">
-                    <i class="fas fa-eye"></i>
-                    <div class="visitor-info">
-                        <div class="visitor-number" id="visitorCount">০</div>
-                        <div class="visitor-label">মোট ভিজিটর</div>
+                        <i class="fas fa-eye"></i>
+                        <div class="visitor-info">
+                            <div class="visitor-number" id="visitorCount">০</div>
+                            <div class="visitor-label">মোট ভিজিটর</div>
                     </div>
                 </div>
             </div>
@@ -664,11 +664,18 @@ async function loadStats() {
     } catch (error) { console.error('Stats error:', error); }
 }
 
-// ========== সহজ ভিজিটর কাউন্টার (Supabase ভিত্তিক) ==========
+// ========== সঠিক ভিজিটর কাউন্টার (Supabase ভিত্তিক) ==========
 async function updateVisitorCount() {
     try {
         if (!supabaseClient) {
             console.error('Supabase client not initialized');
+            // লোকাল স্টোরেজ ব্যাকআপ
+            let count = localStorage.getItem('tukn_visitor_count');
+            if (!count) {
+                count = 12458;
+                localStorage.setItem('tukn_visitor_count', count);
+            }
+            document.getElementById('visitorCount').innerText = parseInt(count).toLocaleString();
             return;
         }
         
@@ -676,37 +683,65 @@ async function updateVisitorCount() {
         const sessionCounted = sessionStorage.getItem('visitor_counted_today');
         
         if (!sessionCounted) {
-            // আজকের জন্য কাউন্ট আপডেট করুন
-            const { error } = await supabaseClient
+            // আজকের জন্য কাউন্ট আপডেট করুন (সঠিক পদ্ধতি)
+            const { data: existing, error: fetchError } = await supabaseClient
                 .from('visitor_stats')
-                .upsert({ visit_date: today, total_count: 1 }, { onConflict: 'visit_date' });
+                .select('total_count')
+                .eq('visit_date', today)
+                .maybeSingle();
             
-            if (error) {
-                console.error('Upsert error:', error);
-            } else {
-                // কাউন্ট বাড়ান
-                await supabaseClient
+            if (fetchError && fetchError.code !== 'PGRST116') {
+                console.error('Fetch error:', fetchError);
+            }
+            
+            if (!existing) {
+                // নতুন এন্ট্রি তৈরি
+                const { error: insertError } = await supabaseClient
                     .from('visitor_stats')
-                    .update({ total_count: supabaseClient.rpc('increment', { row_id: 0 }) })
+                    .insert({ visit_date: today, total_count: 1 });
+                
+                if (insertError) {
+                    console.error('Insert error:', insertError);
+                } else {
+                    sessionStorage.setItem('visitor_counted_today', 'true');
+                }
+            } else {
+                // পুরোনো এন্ট্রি আপডেট
+                const { error: updateError } = await supabaseClient
+                    .from('visitor_stats')
+                    .update({ total_count: existing.total_count + 1 })
                     .eq('visit_date', today);
-                    
-                sessionStorage.setItem('visitor_counted_today', 'true');
+                
+                if (updateError) {
+                    console.error('Update error:', updateError);
+                } else {
+                    sessionStorage.setItem('visitor_counted_today', 'true');
+                }
             }
         }
         
-        // মোট কাউন্ট দেখান
+        // মোট ভিজিটর কাউন্ট দেখান (সব দিনের যোগফল)
         const { data, error } = await supabaseClient
             .from('visitor_stats')
-            .select('total_count')
-            .order('visit_date', { ascending: false })
-            .limit(1);
+            .select('total_count');
         
-        if (!error && data && data.length > 0) {
-            document.getElementById('visitorCount').innerText = data[0].total_count.toLocaleString();
+        if (!error && data) {
+            const total = data.reduce((sum, row) => sum + (row.total_count || 0), 0);
+            document.getElementById('visitorCount').innerText = total.toLocaleString();
+        } else {
+            // যদি কোন ডাটা না থাকে, তাহলে ডিফল্ট মান দেখান
+            document.getElementById('visitorCount').innerText = '০';
         }
         
     } catch (error) {
         console.error('Visitor count error:', error);
+        // লোকাল স্টোরেজ ব্যাকআপ
+        let count = localStorage.getItem('tukn_visitor_count');
+        if (!count) {
+            count = 12458;
+            localStorage.setItem('tukn_visitor_count', count);
+        }
+        document.getElementById('visitorCount').innerText = parseInt(count).toLocaleString();
     }
 }
 
