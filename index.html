@@ -664,20 +664,50 @@ async function loadStats() {
     } catch (error) { console.error('Stats error:', error); }
 }
 
-// ========== ভিজিটর কাউন্টার ==========
+// ========== সহজ ভিজিটর কাউন্টার (Supabase ভিত্তিক) ==========
 async function updateVisitorCount() {
     try {
-        if (!supabaseClient) { console.error('Supabase client not initialized'); return; }
+        if (!supabaseClient) {
+            console.error('Supabase client not initialized');
+            return;
+        }
+        
         const today = new Date().toISOString().split('T')[0];
         const sessionCounted = sessionStorage.getItem('visitor_counted_today');
-        let currentTotal = 0;
+        
         if (!sessionCounted) {
-            const { data, error } = await supabaseClient.rpc('increment_visitor_count', { p_date: today });
-            if (error) { console.error('RPC error:', error); const { data: latest } = await supabaseClient.from('visitor_stats').select('total_count').order('visit_date', { ascending: false }).limit(1).single(); if (latest) currentTotal = latest.total_count; }
-            else { currentTotal = data; sessionStorage.setItem('visitor_counted_today', 'true'); }
-        } else { const { data: latest } = await supabaseClient.from('visitor_stats').select('total_count').order('visit_date', { ascending: false }).limit(1).single(); if (latest) currentTotal = latest.total_count; }
-        const visitorElement = document.getElementById('visitorCount'); if (visitorElement) visitorElement.innerText = (currentTotal || 0).toLocaleString();
-    } catch (error) { console.error('Visitor count error:', error); const visitorElement = document.getElementById('visitorCount'); if (visitorElement) visitorElement.innerText = '০'; }
+            // আজকের জন্য কাউন্ট আপডেট করুন
+            const { error } = await supabaseClient
+                .from('visitor_stats')
+                .upsert({ visit_date: today, total_count: 1 }, { onConflict: 'visit_date' });
+            
+            if (error) {
+                console.error('Upsert error:', error);
+            } else {
+                // কাউন্ট বাড়ান
+                await supabaseClient
+                    .from('visitor_stats')
+                    .update({ total_count: supabaseClient.rpc('increment', { row_id: 0 }) })
+                    .eq('visit_date', today);
+                    
+                sessionStorage.setItem('visitor_counted_today', 'true');
+            }
+        }
+        
+        // মোট কাউন্ট দেখান
+        const { data, error } = await supabaseClient
+            .from('visitor_stats')
+            .select('total_count')
+            .order('visit_date', { ascending: false })
+            .limit(1);
+        
+        if (!error && data && data.length > 0) {
+            document.getElementById('visitorCount').innerText = data[0].total_count.toLocaleString();
+        }
+        
+    } catch (error) {
+        console.error('Visitor count error:', error);
+    }
 }
 
 // ========== সম্পর্কে সেকশন ==========
