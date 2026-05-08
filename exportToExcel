@@ -915,7 +915,9 @@
                         statusHtml = `<span class="px-2 py-1 rounded-full text-xs bg-red-100 text-red-700"><i class="fas fa-times-circle mr-1"></i>নিষ্ক্রিয়</span>`;
                         actionHtml = `<button onclick="toggleMemberStatus('${m.member_id || m.id}')" class="text-green-500 hover:text-green-700 text-sm"><i class="fas fa-check-circle"></i> সক্রিয় করুন</button>`;
                     } else {
-                        statusHtml = `<span class="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-700"><i class="fas fa-question-circle mr-1"></i>অজানা</span>`;
+                        // ✅ পরিবর্তন: "অজানা" এর জায়গায় "পেন্ডিং" দেখাবে
+                        statusHtml = `<span class="px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-700"><i class="fas fa-clock mr-1"></i>পেন্ডিং</span>`;
+                        actionHtml = `<div class="flex gap-1"><button onclick="approveMemberFromList('${m.member_id || m.id}')" class="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600"><i class="fas fa-check"></i> অনুমোদন</button><button onclick="rejectMemberFromList('${m.member_id || m.id}')" class="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600"><i class="fas fa-times"></i> বাতিল</button></div>`;
                     }
                     
                     return `<tr class="border-b hover:bg-gray-50 ${m.status === 'pending' ? 'bg-yellow-50' : ''}">
@@ -1273,7 +1275,16 @@
             function exportToExcel() {
                 if(members.length === 0) { showToast('কোনো সদস্য নেই!', 'error'); return; }
                 let csv = "সদস্য আইডি,নাম,মোবাইল,জেলা,সদস্য ধরন,মাসিক সঞ্চয়,জয়েন তারিখ,স্ট্যাটাস\n";
-                members.forEach(m => { csv += `"${m.member_id || m.id}","${m.full_name || m.fullName || m.name}","${m.mobile}","${m.district || m.present_district || m.presentDistrict}","${m.member_type || m.memberType || 'সাধারণ সদস্য'}","${m.monthly_savings || m.monthlySavings || 500}","${new Date(m.created_at || m.joinDate).toLocaleDateString('bn-BD')}","${(m.status === 'active' || m.status === 'approved') ? 'সক্রিয়' : m.status === 'pending' ? 'পেন্ডিং' : 'নিষ্ক্রিয়'}"\n`; });
+                members.forEach(m => { 
+                    // ✅ স্ট্যাটাস ঠিকমত সেট করা
+                    let excelStatus = 'পেন্ডিং';
+                    if(m.status === 'active' || m.status === 'approved') excelStatus = 'সক্রিয়';
+                    else if(m.status === 'inactive') excelStatus = 'নিষ্ক্রিয়';
+                    else if(m.status === 'pending') excelStatus = 'পেন্ডিং';
+                    else excelStatus = 'পেন্ডিং';  // null বা undefined হলে পেন্ডিং
+                    
+                    csv += `"${m.member_id || m.id}","${m.full_name || m.fullName || m.name}","${m.mobile}","${m.district || m.present_district || m.presentDistrict}","${m.member_type || m.memberType || 'সাধারণ সদস্য'}","${m.monthly_savings || m.monthlySavings || 500}","${new Date(m.created_at || m.joinDate).toLocaleDateString('bn-BD')}","${excelStatus}"\n`; 
+                });
                 const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
                 const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "tukn_members_export.csv"; link.click(); URL.revokeObjectURL(link.href);
                 showToast('এক্সেল রিপোর্ট ডাউনলোড সম্পূর্ণ!', 'success');
@@ -1808,6 +1819,8 @@
                     
                 } catch(error) { console.error('Supabase load error:', error); }
                 
+               
+               // ... সকল ডাটা লোড করার পর
                 updateStats();
                 renderMembers();
                 renderReps();
@@ -1826,6 +1839,13 @@
                 updateComplaintNotificationBadge();
                 loadEconomyData();
                 setupLoanForm();
+                
+                // ✅ ডিবাগ করার জন্য কনসোল লোগ (এই লাইনগুলো যোগ করুন)
+                console.log('📊 Total members loaded:', members.length);
+                console.log('⏳ Pending members:', members.filter(m => m.status === 'pending').length);
+                console.log('✅ Active members:', members.filter(m => m.status === 'active').length);
+                console.log('❌ Inactive members:', members.filter(m => m.status === 'inactive').length);
+                console.log('❓ Null/Unknown status:', members.filter(m => !m.status || (m.status !== 'pending' && m.status !== 'active' && m.status !== 'inactive')).length);
             }
             
             // ==================== ডিভিশন ও জেলা সেটআপ ====================
