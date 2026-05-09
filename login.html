@@ -486,6 +486,12 @@ async function handleLogin(event) {
         return;
     }
     
+    // লোডিং ইন্ডিকেটর
+    const submitBtn = document.querySelector('.login-btn');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> লগইন হচ্ছে...';
+    submitBtn.disabled = true;
+    
     try {
         let query = supabaseClient.from('members').select('*');
         
@@ -501,42 +507,61 @@ async function handleLogin(event) {
         
         const member = data?.[0];
         
-        if(member && member.password === password && member.status === 'approved') {
-            // ✅ লগইন সফল - ইউজার ডাটা তৈরি করুন
-            const userData = { 
-                id: member.member_id,
-                member_id: member.member_id,
-                name: member.full_name,
-                full_name: member.full_name,
-                mobile: member.mobile,
-                email: member.email || '',
-                joinDate: member.join_date,
-                profileImage: member.profile_image || 'https://randomuser.me/api/portraits/men/1.jpg',
-                referId: member.referral_code,
-                loggedIn: true,  // ✅ জরুরী
-                loginTime: new Date().toISOString()
-            };
-            
-            if(rememberMe) {
-                localStorage.setItem('TUKNBD_user', JSON.stringify(userData));
+        console.log('Login attempt - Member found:', member ? 'Yes' : 'No');
+        if(member) {
+            console.log('Member status:', member.status);
+            console.log('Password match:', member.password === password);
+        }
+        
+        // check if member exists and password matches
+        if(member && member.password === password) {
+            // Check status
+            if(member.status === 'approved' || member.status === 'active') {
+                // Login successful
+                const userData = { 
+                    id: member.member_id || member.id,
+                    member_id: member.member_id || member.id,
+                    name: member.full_name || member.name,
+                    full_name: member.full_name || member.name,
+                    mobile: member.mobile,
+                    email: member.email || '',
+                    joinDate: member.join_date || member.created_at,
+                    profileImage: member.profile_image || null,
+                    referId: member.referral_code,
+                    loggedIn: true,
+                    loginTime: new Date().toISOString()
+                };
+                
+                if(rememberMe) {
+                    localStorage.setItem('TUKNBD_user', JSON.stringify(userData));
+                }
+                sessionStorage.setItem('TUKNBD_user', JSON.stringify(userData));
+                
+                showCenterNotification(`স্বাগতম ${member.full_name || member.name}!`, 'success');
+                setTimeout(() => { 
+                    window.location.href = 'member-dashboard.html'; 
+                }, 1500);
+            } 
+            else if(member.status === 'pending') {
+                showCenterNotification('আপনার একাউন্ট এখনও অনুমোদিত হয়নি। অনুগ্রহ করে ৩-১২ ঘণ্টা অপেক্ষা করুন।', 'warning');
+            } 
+            else {
+                showCenterNotification('আপনার একাউন্টটি নিষ্ক্রিয়। প্রশাসকের সাথে যোগাযোগ করুন।', 'error');
             }
-            sessionStorage.setItem('TUKNBD_user', JSON.stringify(userData));
-            
-            showCenterNotification(`স্বাগতম ${member.full_name}!`, 'success');
-            setTimeout(() => { 
-                window.location.href = 'member-dashboard.html'; 
-            }, 1500);
         } 
-        else if(member && member.status === 'pending') {
-            showCenterNotification('আপনার একাউন্ট এখনও অনুমোদিত হয়নি। অনুগ্রহ করে ৩-১২ ঘণ্টা অপেক্ষা করুন।', 'warning');
-        } 
+        else if(member && member.password !== password) {
+            showCenterNotification('পাসওয়ার্ড ভুল!', 'error');
+        }
         else {
-            showCenterNotification('ভুল সদস্য আইডি/মোবাইল বা পাসওয়ার্ড!', 'error');
+            showCenterNotification('সদস্য আইডি/মোবাইল নম্বর সঠিক নয়!', 'error');
         }
         
     } catch (error) {
         console.error('Login error:', error);
         showCenterNotification('লগইন করতে ব্যর্থ হয়েছে! নেটওয়ার্ক চেক করুন।', 'error');
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
     }
 }
 
@@ -573,12 +598,17 @@ if(forgotForm) {
             return;
         }
         
+        const resetBtn = forgotForm.querySelector('button');
+        const originalText = resetBtn.innerHTML;
+        resetBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> প্রক্রিয়াধীন...';
+        resetBtn.disabled = true;
+        
         try {
             const { data, error } = await supabaseClient
                 .from('members')
                 .select('member_id, full_name, mobile, status')
                 .eq('mobile', mobile)
-                .single();
+                .maybeSingle();
             
             if(data) {
                 const { error: updateError } = await supabaseClient
@@ -595,10 +625,12 @@ if(forgotForm) {
         } catch (error) {
             console.error('Reset error:', error);
             showCenterNotification('পাসওয়ার্ড রিসেট করতে ব্যর্থ হয়েছে!', 'error');
+        } finally {
+            resetBtn.innerHTML = originalText;
+            resetBtn.disabled = false;
+            forgotModal.style.display = 'none';
+            document.getElementById('forgotMobile').value = '';
         }
-        
-        forgotModal.style.display = 'none';
-        document.getElementById('forgotMobile').value = '';
     });
 }
 
@@ -609,16 +641,28 @@ if(loginForm) loginForm.addEventListener('submit', handleLogin);
 // ==================== ইতিমধ্যে লগইন করা থাকলে redirect ====================
 window.addEventListener('DOMContentLoaded', function() {
     const savedUser = sessionStorage.getItem('TUKNBD_user') || localStorage.getItem('TUKNBD_user');
+    
     if(savedUser) {
         try {
             const user = JSON.parse(savedUser);
-            if(user.loggedIn) {
+            if(user && user.loggedIn === true) {
+                // ইতিমধ্যে লগইন করা, ড্যাশবোর্ডে পাঠান
                 window.location.href = 'member-dashboard.html';
+                return;
             }
-        } catch(e) {}
+        } catch(e) {
+            console.error('Parse error:', e);
+        }
     }
+    
+    // Session storage cleanup if needed
+    sessionStorage.removeItem('TUKNBD_user');
+});
+
+// পেজ আনলোড হলে কোনো ক্লিনআপ প্রয়োজন হলে
+window.addEventListener('beforeunload', function() {
+    
 });
 </script>
-
 </body>
 </html>
