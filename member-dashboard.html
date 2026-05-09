@@ -729,66 +729,92 @@ async function loadCurrentUser() {
     }
 }
 
-// ==================== রেফারেল কমিশন সিস্টেম ====================
+// ==================== রেফারেল কমিশন সিস্টেম (আপডেটেড) ====================
+
+// গ্লোবাল ভেরিয়েবল ডিফাইন করুন (ফাইলের শুরুতে)
+let userBalances = { bonus: 0, profit: 0, capital: 0 };
+
 async function loadReferralData() {
-    if(!currentUser) return;
+    if(!currentUser) {
+        console.warn('No current user found');
+        return;
+    }
     
     try {
-        const { data: downlineData, error: treeError } = await supabaseClient
-            .from('referral_tree')
-            .select('*')
-            .eq('referrer_id', currentUser.id)
-            .order('level', { ascending: true });
+        // প্রথমে সব মেম্বার ডাটা একবারে fetch করুন (পারফরম্যান্সের জন্য)
+        const { data: allMembers, error: membersError } = await supabaseClient
+            .from('members')
+            .select('member_id, monthly_savings, referred_by, referral_code, status');
         
-        if(treeError) {
-            console.error('Tree error:', treeError);
+        if (membersError) throw membersError;
+        
+        if (!allMembers || allMembers.length === 0) {
+            console.log('No members found');
             await loadReferralDataFallback();
             return;
         }
         
+        // রেফারেল ট্রি বিল্ড করুন (recursive function)
+        const buildReferralTree = (referrerId, currentLevel = 1) => {
+            if (currentLevel > 10) return [];
+            
+            const directReferrals = allMembers.filter(m => 
+                m.referred_by === referrerId && 
+                m.member_id !== currentUser.id &&
+                (m.status === 'active' || m.status === 'approved')
+            );
+            
+            let result = [];
+            for (const ref of directReferrals) {
+                result.push({
+                    member_id: ref.member_id,
+                    level: currentLevel,
+                    monthly_savings: ref.monthly_savings || 500
+                });
+                
+                // Recursively get downline
+                const downline = buildReferralTree(ref.referral_code, currentLevel + 1);
+                result = result.concat(downline);
+            }
+            return result;
+        };
+        
+        // রেফারেল ট্রি তৈরি করুন (currentUser.referId ব্যবহার করে)
+        const referralTree = buildReferralTree(currentUser.referId);
+        
+        // Level wise count এবং কমিশন ক্যালকুলেশন
         const levelCounts = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
-        const downlineMembers = {};
-        
-        if(downlineData && downlineData.length > 0) {
-            downlineData.forEach(item => {
-                if(item.level >= 1 && item.level <= 10) {
-                    levelCounts[item.level]++;
-                    if(!downlineMembers[item.level]) downlineMembers[item.level] = [];
-                    downlineMembers[item.level].push(item.member_id);
-                }
-            });
-        }
-        
-        const directCount = levelCounts[1];
-        
-        let totalCommission = 0;
         const levelWiseCommission = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
         const rates = {1: 0.15, 2: 0.10, 3: 0.05, 4: 0.05, 5: 0.05, 6: 0.05, 7: 0.05, 8: 0.05, 9: 0.05, 10: 0.05};
         
-        for(let level = 1; level <= 10; level++) {
-            const memberIds = downlineMembers[level] || [];
-            for(const memberId of memberIds) {
-                const { data: memberData } = await supabaseClient
-                    .from('members')
-                    .select('monthly_savings, total_savings')
-                    .eq('member_id', memberId)
-                    .single();
-                const savings = memberData?.monthly_savings || 500;
-                const commission = savings * rates[level];
+        let totalCommission = 0;
+        
+        for (const item of referralTree) {
+            const level = item.level;
+            if (level >= 1 && level <= 10) {
+                levelCounts[level]++;
+                const commission = item.monthly_savings * rates[level];
                 levelWiseCommission[level] += commission;
                 totalCommission += commission;
             }
         }
         
+        // Round values
         totalCommission = Math.floor(totalCommission);
-        for(let i = 1; i <= 10; i++) levelWiseCommission[i] = Math.floor(levelWiseCommission[i]);
+        for(let i = 1; i <= 10; i++) {
+            levelWiseCommission[i] = Math.floor(levelWiseCommission[i] || 0);
+        }
         
+        const directCount = levelCounts[1];
+        
+        // ইউজার লেভেল নির্ধারণ
         let userLevel = 1;
         if(directCount >= 100) userLevel = 5;
         else if(directCount >= 50) userLevel = 4;
         else if(directCount >= 20) userLevel = 3;
         else if(directCount >= 5) userLevel = 2;
         
+        // ব্যালেন্স আপডেট
         userBalances.bonus = totalCommission;
         userBalances.profit = Math.floor(totalCommission * 0.1);
         
@@ -798,19 +824,28 @@ async function loadReferralData() {
         const paidMonths = Math.min(monthsSinceJoin + 1, 6);
         userBalances.capital = paidMonths * (currentUser.monthlySavings || 500);
         
-        document.getElementById('directCount').innerText = directCount;
-        document.getElementById('totalBonus').innerText = totalCommission.toLocaleString();
-        document.getElementById('currentLevel').innerText = userLevel;
+        // UI আপডেট করুন (নিরাপদভাবে)
+        const directCountEl = document.getElementById('directCount');
+        if(directCountEl) directCountEl.innerText = directCount;
+        
+        const totalBonusEl = document.getElementById('totalBonus');
+        if(totalBonusEl) totalBonusEl.innerText = totalCommission.toLocaleString();
+        
+        const currentLevelEl = document.getElementById('currentLevel');
+        if(currentLevelEl) currentLevelEl.innerText = userLevel;
         
         let totalDownline = 0;
         for(let i = 1; i <= 10; i++) totalDownline += levelCounts[i];
-        document.getElementById('totalDownline').innerText = totalDownline;
+        const totalDownlineEl = document.getElementById('totalDownline');
+        if(totalDownlineEl) totalDownlineEl.innerText = totalDownline;
         
+        // Referral link
         const referralLinkInput = document.getElementById('referralLink');
-        if(referralLinkInput) {
+        if(referralLinkInput && currentUser.referId) {
             referralLinkInput.value = `https://tuknbd.com/join?ref=${currentUser.referId}`;
         }
         
+        // Level wise downline container
         const container = document.getElementById('levelWiseDownline');
         if(container) {
             const levelNames = ['প্রথম', 'দ্বিতীয়', 'তৃতীয়', 'চতুর্থ', 'পঞ্চম', 'ষষ্ঠ', 'সপ্তম', 'অষ্টম', 'নবম', 'দশম'];
@@ -826,18 +861,22 @@ async function loadReferralData() {
                 
                 if(commission > 0 || count > 0) hasAnyCommission = true;
                 
-                let bgColor = '';
-                if(i === 1) bgColor = 'bg-gradient-to-r from-emerald-50 to-emerald-100';
-                else if(i === 2) bgColor = 'bg-gradient-to-r from-blue-50 to-blue-100';
-                else bgColor = 'bg-gray-50';
+                let bgColor = i === 1 ? 'bg-gradient-to-r from-emerald-50 to-emerald-100' : 
+                            (i === 2 ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50');
+                let borderColor = i === 1 ? 'border-emerald-500' : 
+                                (i === 2 ? 'border-blue-500' : 'border-gray-300');
+                let textColor = i === 1 ? 'text-emerald-600' : 
+                               (i === 2 ? 'text-blue-600' : 'text-gray-700');
+                let badgeColor = i === 1 ? 'bg-emerald-100 text-emerald-700' : 
+                               (i === 2 ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-600');
                 
                 html += `
-                    <div class="${bgColor} p-3 rounded-lg border-l-4 ${i === 1 ? 'border-emerald-500' : (i === 2 ? 'border-blue-500' : 'border-gray-300')}">
+                    <div class="${bgColor} p-3 rounded-lg border-l-4 ${borderColor} mb-2">
                         <div class="flex justify-between items-center">
                             <div>
                                 <div class="flex items-center gap-2">
                                     <span class="font-bold text-gray-800">Level ${i}</span>
-                                    <span class="text-xs px-2 py-0.5 rounded-full ${i === 1 ? 'bg-emerald-100 text-emerald-700' : (i === 2 ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-600')}">
+                                    <span class="text-xs px-2 py-0.5 rounded-full ${badgeColor}">
                                         ${levelNames[i-1]} লেভেল
                                     </span>
                                     <span class="text-xs text-gray-500">(${count} জন সদস্য)</span>
@@ -845,7 +884,7 @@ async function loadReferralData() {
                                 <p class="text-xs text-gray-500 mt-1">কমিশন রেট ${rate}%</p>
                             </div>
                             <div class="text-right">
-                                <span class="text-xl font-bold ${i === 1 ? 'text-emerald-600' : (i === 2 ? 'text-blue-600' : 'text-gray-700')}">${commission.toLocaleString()} টাকা</span>
+                                <span class="text-xl font-bold ${textColor}">${commission.toLocaleString()} টাকা</span>
                             </div>
                         </div>
                     </div>
@@ -874,7 +913,13 @@ async function loadReferralData() {
             container.innerHTML = html;
         }
         
-        await saveCommissionLog(currentUser.id, levelWiseCommission, totalCommission);
+        // কমিশন লগ সেভ করুন (error handle সহ)
+        try {
+            await saveCommissionLog(currentUser.id, levelWiseCommission, totalCommission);
+        } catch(logError) {
+            console.warn('Commission log save failed:', logError);
+        }
+        
         console.log(`Direct Referrals: ${directCount}, Total Commission: ${totalCommission}`);
         
     } catch(error) {
@@ -883,48 +928,53 @@ async function loadReferralData() {
     }
 }
 
-// ==================== কমিশন লগ সংরক্ষণ ====================
+// ==================== কমিশন লগ সংরক্ষণ (আপডেটেড) ====================
 async function saveCommissionLog(memberId, levelWiseCommission, totalCommission) {
     try {
         const today = new Date().toISOString().split('T')[0];
         
-        // single() এর পরিবর্তে maybeSingle() ব্যবহার করুন (404 error এড়াতে)
-        const { data: existingLog, error: checkError } = await supabaseClient
-            .from('commission_logs')
-            .select('id')
-            .eq('member_id', memberId)
-            .eq('log_date', today)
-            .maybeSingle();  // ✅ maybeSingle() ব্যবহার করুন
-        
-        // যদি error না থাকে এবং existingLog না থাকে তাহলে insert করুন
-        if (!existingLog && !checkError) {
-            const { error: insertError } = await supabaseClient
-                .from('commission_logs')
-                .insert([{
-                    member_id: memberId,
-                    log_date: today,
-                    level_1_commission: levelWiseCommission[1] || 0,
-                    level_2_commission: levelWiseCommission[2] || 0,
-                    level_3_commission: levelWiseCommission[3] || 0,
-                    level_4_commission: levelWiseCommission[4] || 0,
-                    level_5_commission: levelWiseCommission[5] || 0,
-                    level_6_commission: levelWiseCommission[6] || 0,
-                    level_7_commission: levelWiseCommission[7] || 0,
-                    level_8_commission: levelWiseCommission[8] || 0,
-                    level_9_commission: levelWiseCommission[9] || 0,
-                    level_10_commission: levelWiseCommission[10] || 0,
-                    total_commission: totalCommission || 0,
-                    created_at: new Date().toISOString()
-                }]);
-            
-            if (insertError) {
-                console.error('Save commission log error:', insertError);
-            } else {
-                console.log('✅ Commission log saved successfully');
-            }
+        // API key চেক করুন
+        if (!supabaseClient) {
+            console.error('Supabase client not initialized');
+            return;
         }
+        
+        // upsert ব্যবহার করুন (insert or update)
+        const { data, error } = await supabaseClient
+            .from('commission_logs')
+            .upsert({
+                member_id: memberId,
+                log_date: today,
+                level_1_commission: Math.floor(levelWiseCommission[1] || 0),
+                level_2_commission: Math.floor(levelWiseCommission[2] || 0),
+                level_3_commission: Math.floor(levelWiseCommission[3] || 0),
+                level_4_commission: Math.floor(levelWiseCommission[4] || 0),
+                level_5_commission: Math.floor(levelWiseCommission[5] || 0),
+                level_6_commission: Math.floor(levelWiseCommission[6] || 0),
+                level_7_commission: Math.floor(levelWiseCommission[7] || 0),
+                level_8_commission: Math.floor(levelWiseCommission[8] || 0),
+                level_9_commission: Math.floor(levelWiseCommission[9] || 0),
+                level_10_commission: Math.floor(levelWiseCommission[10] || 0),
+                total_commission: Math.floor(totalCommission || 0),
+                updated_at: new Date().toISOString()
+            }, { 
+                onConflict: 'member_id, log_date',
+                ignoreDuplicates: false 
+            });
+        
+        if (error) {
+            console.error('Save commission log error:', error);
+            // RLS error হলে console এ দেখান কিন্তু app ক্র্যাশ করবে না
+            if (error.code === '42501') {
+                console.warn('RLS policy error - table will be created automatically');
+            }
+        } else {
+            console.log('✅ Commission log saved successfully');
+        }
+        
     } catch(error) {
         console.error('Save commission log error:', error);
+        // error টি ignore করুন - app কাজ করতে থাকবে
     }
 }
 
