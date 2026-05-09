@@ -23,7 +23,8 @@ window.TABLES = {
     SLIDERS: 'sliders',
     CAREER: 'career',
     ABOUT: 'about',
-    REFERRALS: 'referrals'  // ✅ নতুন যোগ করা হলো
+    REFERRALS: 'referrals',
+    COMMISSION_LOGS: 'commission_logs'  // ✅ এই লাইন যোগ করুন
 };
 
 // ==================== প্রোফাইল ইমেজ ফাংশন ====================
