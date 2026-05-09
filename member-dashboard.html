@@ -68,7 +68,6 @@
             transform: translateX(5px);
         }
         
-        /* লোডিং স্পিনার */
         .loading-spinner {
             display: inline-block;
             width: 20px;
@@ -537,11 +536,10 @@ let clockInterval = null;
 
 const banglaMonths = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
 
-// কমিশন রেট কনফিগারেশন
 const COMMISSION_RATES = {
-    level1: 0.15,   // Direct থেকে 15%
-    level2: 0.10,   // Level 2 থেকে 10%
-    level3plus: 0.05 // Level 3-10 থেকে 5%
+    level1: 0.15,
+    level2: 0.10,
+    level3plus: 0.05
 };
 
 // ==================== হেল্পার ফাংশন ====================
@@ -729,11 +727,7 @@ async function loadCurrentUser() {
     }
 }
 
-// ==================== রেফারেল কমিশন সিস্টেম (আপডেটেড) ====================
-
-// গ্লোবাল ভেরিয়েবল ডিফাইন করুন (ফাইলের শুরুতে)
-let userBalances = { bonus: 0, profit: 0, capital: 0 };
-
+// ==================== রেফারেল কমিশন সিস্টেম (ভিউ ছাড়া) ====================
 async function loadReferralData() {
     if(!currentUser) {
         console.warn('No current user found');
@@ -741,10 +735,9 @@ async function loadReferralData() {
     }
     
     try {
-        // প্রথমে সব মেম্বার ডাটা একবারে fetch করুন (পারফরম্যান্সের জন্য)
         const { data: allMembers, error: membersError } = await supabaseClient
             .from('members')
-            .select('member_id, monthly_savings, referred_by, referral_code, status');
+            .select('member_id, monthly_savings, referred_by, referral_code, status, full_name');
         
         if (membersError) throw membersError;
         
@@ -754,35 +747,33 @@ async function loadReferralData() {
             return;
         }
         
-        // রেফারেল ট্রি বিল্ড করুন (recursive function)
-        const buildReferralTree = (referrerId, currentLevel = 1) => {
+        const getDownline = (referralCode, currentLevel = 1) => {
             if (currentLevel > 10) return [];
             
-            const directReferrals = allMembers.filter(m => 
-                m.referred_by === referrerId && 
+            const downline = [];
+            const directRefs = allMembers.filter(m => 
+                m.referred_by === referralCode && 
                 m.member_id !== currentUser.id &&
                 (m.status === 'active' || m.status === 'approved')
             );
             
-            let result = [];
-            for (const ref of directReferrals) {
-                result.push({
+            for (const ref of directRefs) {
+                downline.push({
                     member_id: ref.member_id,
                     level: currentLevel,
-                    monthly_savings: ref.monthly_savings || 500
+                    monthly_savings: ref.monthly_savings || 500,
+                    full_name: ref.full_name
                 });
                 
-                // Recursively get downline
-                const downline = buildReferralTree(ref.referral_code, currentLevel + 1);
-                result = result.concat(downline);
+                const nextLevel = getDownline(ref.referral_code, currentLevel + 1);
+                downline.push(...nextLevel);
             }
-            return result;
+            
+            return downline;
         };
         
-        // রেফারেল ট্রি তৈরি করুন (currentUser.referId ব্যবহার করে)
-        const referralTree = buildReferralTree(currentUser.referId);
+        const referralTree = getDownline(currentUser.referId);
         
-        // Level wise count এবং কমিশন ক্যালকুলেশন
         const levelCounts = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
         const levelWiseCommission = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
         const rates = {1: 0.15, 2: 0.10, 3: 0.05, 4: 0.05, 5: 0.05, 6: 0.05, 7: 0.05, 8: 0.05, 9: 0.05, 10: 0.05};
@@ -799,7 +790,6 @@ async function loadReferralData() {
             }
         }
         
-        // Round values
         totalCommission = Math.floor(totalCommission);
         for(let i = 1; i <= 10; i++) {
             levelWiseCommission[i] = Math.floor(levelWiseCommission[i] || 0);
@@ -807,14 +797,12 @@ async function loadReferralData() {
         
         const directCount = levelCounts[1];
         
-        // ইউজার লেভেল নির্ধারণ
         let userLevel = 1;
         if(directCount >= 100) userLevel = 5;
         else if(directCount >= 50) userLevel = 4;
         else if(directCount >= 20) userLevel = 3;
         else if(directCount >= 5) userLevel = 2;
         
-        // ব্যালেন্স আপডেট
         userBalances.bonus = totalCommission;
         userBalances.profit = Math.floor(totalCommission * 0.1);
         
@@ -824,7 +812,6 @@ async function loadReferralData() {
         const paidMonths = Math.min(monthsSinceJoin + 1, 6);
         userBalances.capital = paidMonths * (currentUser.monthlySavings || 500);
         
-        // UI আপডেট করুন (নিরাপদভাবে)
         const directCountEl = document.getElementById('directCount');
         if(directCountEl) directCountEl.innerText = directCount;
         
@@ -839,13 +826,11 @@ async function loadReferralData() {
         const totalDownlineEl = document.getElementById('totalDownline');
         if(totalDownlineEl) totalDownlineEl.innerText = totalDownline;
         
-        // Referral link
         const referralLinkInput = document.getElementById('referralLink');
         if(referralLinkInput && currentUser.referId) {
             referralLinkInput.value = `https://tuknbd.com/join?ref=${currentUser.referId}`;
         }
         
-        // Level wise downline container
         const container = document.getElementById('levelWiseDownline');
         if(container) {
             const levelNames = ['প্রথম', 'দ্বিতীয়', 'তৃতীয়', 'চতুর্থ', 'পঞ্চম', 'ষষ্ঠ', 'সপ্তম', 'অষ্টম', 'নবম', 'দশম'];
@@ -913,7 +898,6 @@ async function loadReferralData() {
             container.innerHTML = html;
         }
         
-        // কমিশন লগ সেভ করুন (error handle সহ)
         try {
             await saveCommissionLog(currentUser.id, levelWiseCommission, totalCommission);
         } catch(logError) {
@@ -928,19 +912,12 @@ async function loadReferralData() {
     }
 }
 
-// ==================== কমিশন লগ সংরক্ষণ (আপডেটেড) ====================
+// ==================== কমিশন লগ সংরক্ষণ ====================
 async function saveCommissionLog(memberId, levelWiseCommission, totalCommission) {
     try {
         const today = new Date().toISOString().split('T')[0];
         
-        // API key চেক করুন
-        if (!supabaseClient) {
-            console.error('Supabase client not initialized');
-            return;
-        }
-        
-        // upsert ব্যবহার করুন (insert or update)
-        const { data, error } = await supabaseClient
+        const { error } = await supabaseClient
             .from('commission_logs')
             .upsert({
                 member_id: memberId,
@@ -958,23 +935,17 @@ async function saveCommissionLog(memberId, levelWiseCommission, totalCommission)
                 total_commission: Math.floor(totalCommission || 0),
                 updated_at: new Date().toISOString()
             }, { 
-                onConflict: 'member_id, log_date',
-                ignoreDuplicates: false 
+                onConflict: 'member_id, log_date'
             });
         
         if (error) {
             console.error('Save commission log error:', error);
-            // RLS error হলে console এ দেখান কিন্তু app ক্র্যাশ করবে না
-            if (error.code === '42501') {
-                console.warn('RLS policy error - table will be created automatically');
-            }
         } else {
             console.log('✅ Commission log saved successfully');
         }
         
     } catch(error) {
         console.error('Save commission log error:', error);
-        // error টি ignore করুন - app কাজ করতে থাকবে
     }
 }
 
@@ -994,7 +965,6 @@ async function loadReferralDataFallback() {
         let directCount = 0;
         let levelWiseCommission = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0};
         
-        // Direct referrals গণনা করুন
         const directReferrals = members.filter(m => 
             m.referred_by === currentUserReferId && 
             m.member_id !== currentUserId &&
@@ -1003,14 +973,12 @@ async function loadReferralDataFallback() {
         
         directCount = directReferrals.length;
         
-        // Level 1 কমিশন
         for(let ref of directReferrals) {
             const savings = ref.monthly_savings || 500;
             const commission = savings * 0.15;
             totalCommission += commission;
             levelWiseCommission[1] += commission;
             
-            // Level 2
             const level2Refs = members.filter(m => 
                 m.referred_by === ref.referral_code && 
                 m.member_id !== ref.member_id &&
@@ -1023,7 +991,6 @@ async function loadReferralDataFallback() {
                 totalCommission += commission2;
                 levelWiseCommission[2] = (levelWiseCommission[2] || 0) + commission2;
                 
-                // Level 3-10 (Recursive)
                 let currentLevel = 2;
                 let currentRefs = level2Refs;
                 
@@ -1042,7 +1009,7 @@ async function loadReferralDataFallback() {
                     currentLevel++;
                     if(currentLevel > 10) break;
                     
-                    const commissionRate = currentLevel === 3 ? 0.05 : 0.05; // Level 3-10: 5%
+                    const commissionRate = 0.05;
                     
                     for(let r of nextLevelRefs) {
                         const savingsR = r.monthly_savings || 500;
@@ -1055,32 +1022,26 @@ async function loadReferralDataFallback() {
             }
         }
         
-        // মান rounded করুন
         totalCommission = Math.floor(totalCommission);
         for(let i = 1; i <= 10; i++) {
             levelWiseCommission[i] = Math.floor(levelWiseCommission[i] || 0);
         }
         
-        // ইউজার লেভেল নির্ধারণ
         let userLevel = 1;
         if(directCount >= 100) userLevel = 5;
         else if(directCount >= 50) userLevel = 4;
         else if(directCount >= 20) userLevel = 3;
         else if(directCount >= 5) userLevel = 2;
         
-        // ব্যালেন্স আপডেট
-        if (window.userBalances) {
-            window.userBalances.bonus = totalCommission;
-            window.userBalances.profit = Math.floor(totalCommission * 0.1);
-            
-            const joinDate = new Date(currentUser.joinDate);
-            const now = new Date();
-            const monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
-            const paidMonths = Math.min(monthsSinceJoin + 1, 6);
-            window.userBalances.capital = paidMonths * (currentUser.monthly_savings || 500);
-        }
+        userBalances.bonus = totalCommission;
+        userBalances.profit = Math.floor(totalCommission * 0.1);
         
-        // UI আপডেট করুন (নিরাপদভাবে)
+        const joinDate = new Date(currentUser.joinDate);
+        const now = new Date();
+        const monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
+        const paidMonths = Math.min(monthsSinceJoin + 1, 6);
+        userBalances.capital = paidMonths * (currentUser.monthly_savings || 500);
+        
         const directCountEl = document.getElementById('directCount');
         if(directCountEl) directCountEl.innerText = directCount;
         
@@ -1090,7 +1051,6 @@ async function loadReferralDataFallback() {
         const currentLevelEl = document.getElementById('currentLevel');
         if(currentLevelEl) currentLevelEl.innerText = userLevel;
         
-        // Total downline count
         let totalDownline = 0;
         for(let i = 1; i <= 10; i++) {
             if(levelWiseCommission[i] > 0) totalDownline++;
@@ -1098,13 +1058,11 @@ async function loadReferralDataFallback() {
         const totalDownlineEl = document.getElementById('totalDownline');
         if(totalDownlineEl) totalDownlineEl.innerText = totalDownline;
         
-        // Referral link
         const referralLinkInput = document.getElementById('referralLink');
         if(referralLinkInput && currentUser.referId) {
             referralLinkInput.value = `https://tuknbd.com/join?ref=${currentUser.referId}`;
         }
         
-        // Level wise downline container
         const container = document.getElementById('levelWiseDownline');
         if(container) {
             const levelNames = ['প্রথম', 'দ্বিতীয়', 'তৃতীয়', 'চতুর্থ', 'পঞ্চম', 'ষষ্ঠ', 'সপ্তম', 'অষ্টম', 'নবম', 'দশম'];
@@ -1162,7 +1120,6 @@ async function loadReferralDataFallback() {
             container.innerHTML = html;
         }
         
-        // কমিশন লগ সেভ করুন
         await saveCommissionLog(currentUserId, levelWiseCommission, totalCommission);
         
         console.log(`Fallback - Direct Referrals: ${directCount}, Total Commission: ${totalCommission}`);
@@ -1171,6 +1128,7 @@ async function loadReferralDataFallback() {
         console.error('Load referral data fallback error:', error);
     }
 }
+
 // ==================== UI আপডেট ফাংশন ====================
 function updateUI() {
     if(!currentUser) return;
@@ -1372,7 +1330,6 @@ function openPaymentSlip() {
     document.querySelectorAll('.month-cb').forEach(cb => cb.checked = false);
 }
 
-// ==================== স্লিপ জেনারেট ও পেমেন্ট সেভ ====================
 async function generateSlipAndPrint() {
     if(!currentUser) return;
     const paymentYear = document.getElementById('paymentYear').value;
@@ -1611,7 +1568,6 @@ async function loadComplaintReplies() {
     `).join('');
 }
 
-// ==================== প্রোফাইল ইমেজ আপলোড ====================
 async function uploadProfileImage(event) {
     const file = event.target.files[0];
     if(!file) return;
@@ -1704,7 +1660,6 @@ function logout() {
     window.location.href = 'login.html'; 
 }
 
-// ==================== পাসওয়ার্ড পরিবর্তন ফাংশন (যোগ করুন) ====================
 function showChangePasswordModal() {
     const modal = document.getElementById('passwordChangeModal');
     if(modal) {
@@ -1727,7 +1682,6 @@ function closePasswordModalOnOverlay(event) {
     }
 }
 
-// ==================== পাসওয়ার্ড পরিবর্তন প্রসেস ====================
 async function processChangePassword() {
     const currentPass = document.getElementById('currentPassword').value;
     const newPass = document.getElementById('newPassword').value;
@@ -1784,12 +1738,10 @@ async function processChangePassword() {
     }
 }
 
-// ==================== পাসওয়ার্ড ভুলে গেলে ====================
 function forgotPassword() {
     showToast('পাসওয়ার্ড রিসেট লিংক আপনার রেজিস্টার্ড ইমেইলে পাঠানো হয়েছে।', 'info');
 }
 
-// ==================== মডাল ক্লোজ ফাংশন ====================
 function closeModalOnOverlay(event, modalId) {
     const modal = document.getElementById(modalId);
     if(event.target === modal && modal) {
@@ -1797,8 +1749,6 @@ function closeModalOnOverlay(event, modalId) {
     }
 }
 
-// মডালগুলোর জন্য সঠিক ক্লোজ ফাংশন
-window.closeModalOnOverlay = closeModalOnOverlay;
 function showMonogramModal() { 
     document.getElementById('monogramModal').classList.remove('hidden'); 
     document.getElementById('monogramModal').classList.add('flex'); 
@@ -1815,7 +1765,6 @@ window.addEventListener('click', function(e) {
     if(e.target === modal) closeMonogramModal(); 
 });
 
-// ==================== পেজ লোড ====================
 document.addEventListener('DOMContentLoaded', async function() {
     const success = await loadCurrentUser();
     if(!success) {
