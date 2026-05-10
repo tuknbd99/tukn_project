@@ -24,7 +24,8 @@ window.TABLES = {
     CAREER: 'career',
     ABOUT: 'about',
     REFERRALS: 'referrals',
-    COMMISSION_LOGS: 'commission_logs'  // ✅ এই লাইন যোগ করুন
+    COMMISSION_LOGS: 'commission_logs',
+    LEDGER_TRANSACTIONS: 'ledger_transactions'  // ✅ নতুন টেবিল যোগ করুন
 };
 
 // ==================== প্রোফাইল ইমেজ ফাংশন ====================
@@ -261,6 +262,52 @@ function getReferralShareText(memberName, referralCode) {
     return `আমি ${memberName} TUKNBD তে সদস্য হয়েছি! আমার রেফারেল কোড: ${referralCode}\n\nআপনিও সদস্য হয়ে বোনাস পেতে পারেন।`;
 }
 
+// ==================== লেজারের জন্য ডাটা লোড ফাংশন ====================
+async function loadLedgerData() {
+    try {
+        // members লোড
+        const { data: members, error: membersError } = await window.supabaseClient
+            .from(window.TABLES.MEMBERS)
+            .select('member_id, full_name, mobile, status')
+            .eq('status', 'active');
+        
+        if (membersError) throw membersError;
+        
+        // payments লোড (approved payments)
+        const { data: payments, error: paymentsError } = await window.supabaseClient
+            .from(window.TABLES.PAYMENTS)
+            .select('*')
+            .eq('status', 'approved')
+            .order('submitted_at', { ascending: true });
+        
+        if (paymentsError) throw paymentsError;
+        
+        // loans লোড
+        const { data: loans, error: loansError } = await window.supabaseClient
+            .from(window.TABLES.LOANS)
+            .select('*');
+        
+        if (loansError) throw loansError;
+        
+        return {
+            success: true,
+            members: members || [],
+            payments: payments || [],
+            loans: loans || []
+        };
+        
+    } catch(error) {
+        console.error('Load ledger data error:', error);
+        return {
+            success: false,
+            error: error.message,
+            members: [],
+            payments: [],
+            loans: []
+        };
+    }
+}
+
 // ==================== গ্লোবাল ফাংশন এক্সপোর্ট ====================
 window.uploadProfileImageToSupabase = uploadProfileImageToSupabase;
 window.generateReferralCode = generateReferralCode;
@@ -269,6 +316,7 @@ window.completeReferralOnApproval = completeReferralOnApproval;
 window.calculateAndAddBonus = calculateAndAddBonus;
 window.loadReferralInfo = loadReferralInfo;
 window.getReferralShareText = getReferralShareText;
+window.loadLedgerData = loadLedgerData;  // ✅ নতুন ফাংশন যোগ করুন
 
 // কানেকশন টেস্ট ফাংশন
 async function testSupabaseConnection() {
@@ -279,11 +327,17 @@ async function testSupabaseConnection() {
         
         if (error) throw error;
         console.log('✅ Supabase connection successful');
+        console.log('📊 Members table exists and accessible');
         return true;
     } catch(error) {
         console.error('❌ Supabase connection failed:', error);
+        console.log('💡 Make sure tables exist in Supabase');
         return false;
     }
 }
 
 window.testSupabaseConnection = testSupabaseConnection;
+
+// পেজ লোড হলে সংযোগ টেস্ট
+console.log('🔌 Testing Supabase connection...');
+testSupabaseConnection();
