@@ -258,12 +258,54 @@
             
             async function approvePayment(paymentId) {
                 if (!confirm('পেমেন্টটি অনুমোদন দিতে চান?')) return;
+                
                 try {
-                    await supabaseClient.from('payments').update({ status: 'approved', approved_at: new Date().toISOString(), approved_by: currentAdmin?.name }).eq('id', paymentId);
-                    showToast('পেমেন্ট অনুমোদন করা হয়েছে!', 'success');
+                    // প্রথমে পেমেন্টের তথ্য নিন
+                    const { data: payment, error: fetchError } = await supabaseClient
+                        .from('payments')
+                        .select('*')
+                        .eq('id', paymentId)
+                        .single();
+                    
+                    if (fetchError) throw fetchError;
+                    
+                    // পেমেন্ট অনুমোদন করুন
+                    const { error } = await supabaseClient
+                        .from('payments')
+                        .update({ 
+                            status: 'approved', 
+                            approved_at: new Date().toISOString(), 
+                            approved_by: currentAdmin?.name 
+                        })
+                        .eq('id', paymentId);
+                    
+                    if (error) throw error;
+                    
+                    // সদস্যের মোট সঞ্চয় আপডেট করুন
+                    const { data: member, error: memberError } = await supabaseClient
+                        .from('members')
+                        .select('total_savings, monthly_savings')
+                        .eq('member_id', payment.member_id)
+                        .single();
+                    
+                    if (!memberError && member) {
+                        const newTotalSavings = (member.total_savings || 0) + payment.amount;
+                        await supabaseClient
+                            .from('members')
+                            .update({ total_savings: newTotalSavings })
+                            .eq('member_id', payment.member_id);
+                    }
+                    
+                    showToast('পেমেন্ট অনুমোদন করা হয়েছে! মাসিক সংগ্রহ আপডেট হয়েছে।', 'success');
+                    
+                    // সব ডাটা রিলোড
+                    await loadAllDataFromSupabase();
                     loadPaymentApprovals();
-                    loadAllDataFromSupabase();
-                } catch(e) { showToast('অনুমোদন ব্যর্থ!', 'error'); }
+                    
+                } catch(e) { 
+                    console.error('Approval error:', e);
+                    showToast('অনুমোদন ব্যর্থ!', 'error'); 
+                }
             }
             
             async function rejectPayment(paymentId) {
@@ -279,36 +321,98 @@
             
             async function loadAllDataFromSupabase() {
                 try {
-                    const {data:membersData}=await supabaseClient.from('members').select('*');
-                    if(membersData) members=membersData;
-                    const {data:repsData}=await supabaseClient.from('representatives').select('*');
-                    if(repsData) representatives=repsData;
-                    const {data:appsData}=await supabaseClient.from('rep_applications').select('*');
-                    if(appsData) applications=appsData;
-                    const storedAdmins=localStorage.getItem('tukn_admins');
-                    if(storedAdmins) admins=JSON.parse(storedAdmins);
-                    const {data:complaintsData}=await supabaseClient.from('complaints').select('*');
-                    if(complaintsData) localStorage.setItem('tukn_complaints',JSON.stringify(complaintsData));
-                    const {data:slidersData}=await supabaseClient.from('sliders').select('*');
-                    if(slidersData) localStorage.setItem('tukn_sliders',JSON.stringify(slidersData));
-                    const {data:noticesData}=await supabaseClient.from('notices').select('*');
-                    if(noticesData) localStorage.setItem('tukn_notices',JSON.stringify(noticesData));
-                    const {data:loansData}=await supabaseClient.from('loans').select('*');
-                    if(loansData) localStorage.setItem('tukn_loans',JSON.stringify(loansData));
-                    const {data:economyData}=await supabaseClient.from('economy').select('*').eq('id',1).single();
-                    if(economyData) localStorage.setItem('tukn_economy',JSON.stringify(economyData));
-                } catch(e){ console.error('Supabase load error:',e); }
-                updateStats(); renderMembers(); renderReps(); renderApplications(); renderAdmins(); renderPermissionsTable(); loadDistrictFilter(); filterTabsByPermission(); loadLoanApplications(); loadNoticesList(); renderSliderList(); loadRejectedApplications(); loadAboutData(); loadCareerData(); renderPendingMembers(); updateComplaintNotificationBadge(); loadEconomyData(); setupLoanForm(); loadPaymentApprovals();
+                    const [membersData, repsData, appsData, paymentsData, complaintsData, slidersData, noticesData, loansData, economyData] = await Promise.all([
+                        supabaseClient.from('members').select('*'),
+                        supabaseClient.from('representatives').select('*'),
+                        supabaseClient.from('rep_applications').select('*'),
+                        supabaseClient.from('payments').select('*'),
+                        supabaseClient.from('complaints').select('*'),
+                        supabaseClient.from('sliders').select('*'),
+                        supabaseClient.from('notices').select('*'),
+                        supabaseClient.from('loans').select('*'),
+                        supabaseClient.from('economy').select('*').eq('id', 1).single()
+                    ]);
+                    
+                    if (membersData.data) members = membersData.data;
+                    if (repsData.data) representatives = repsData.data;
+                    if (appsData.data) applications = appsData.data;
+                    if (complaintsData.data) localStorage.setItem('tukn_complaints', JSON.stringify(complaintsData.data));
+                    if (slidersData.data) localStorage.setItem('tukn_sliders', JSON.stringify(slidersData.data));
+                    if (noticesData.data) localStorage.setItem('tukn_notices', JSON.stringify(noticesData.data));
+                    if (loansData.data) localStorage.setItem('tukn_loans', JSON.stringify(loansData.data));
+                    if (economyData.data) localStorage.setItem('tukn_economy', JSON.stringify(economyData.data));
+                    
+                    // পেমেন্ট ডাটা লোকাল স্টোরেজে সংরক্ষণ করুন (লেজার পেজের জন্য)
+                    if (paymentsData.data) localStorage.setItem('tukn_payments', JSON.stringify(paymentsData.data));
+                    
+                } catch(e) { 
+                    console.error('Supabase load error:', e);
+                }
+                
+                updateStats(); 
+                renderMembers(); 
+                renderReps(); 
+                renderApplications(); 
+                renderAdmins(); 
+                renderPermissionsTable(); 
+                loadDistrictFilter(); 
+                filterTabsByPermission(); 
+                loadLoanApplications(); 
+                loadNoticesList(); 
+                renderSliderList(); 
+                loadRejectedApplications(); 
+                loadAboutData(); 
+                loadCareerData(); 
+                renderPendingMembers(); 
+                updateComplaintNotificationBadge(); 
+                loadEconomyData(); 
+                setupLoanForm(); 
+                loadPaymentApprovals();
+                
+                console.log('✅ Total members:', members.length, ' | Pending:', members.filter(m => m.status === 'pending').length, ' | Active:', members.filter(m => m.status === 'active').length);
             }
             
             function updateStats() {
-                document.getElementById('totalMembers').innerText=members.length;
-                const currentMonth=new Date().getMonth();
-                document.getElementById('newMembers').innerText=members.filter(m=>new Date(m.created_at||m.join_date).getMonth()===currentMonth).length;
-                const activeMembers=members.filter(m=>m.status==='active');
-                document.getElementById('totalCollection').innerText=activeMembers.reduce((s,m)=>s+(m.monthly_savings||m.monthlySavings||500),0).toLocaleString();
-                document.getElementById('totalReps').innerText=representatives.length;
-                document.getElementById('pendingApps').innerText=members.filter(m=>m.status==='pending').length+applications.length;
+                document.getElementById('totalMembers').innerText = members.length;
+                
+                const currentMonth = new Date().getMonth();
+                const currentYear = new Date().getFullYear();
+                
+                document.getElementById('newMembers').innerText = members.filter(m => {
+                    const joinDate = new Date(m.created_at || m.join_date);
+                    return joinDate.getMonth() === currentMonth && joinDate.getFullYear() === currentYear;
+                }).length;
+                
+                // মাসিক সংগ্রহ ক্যালকুলেশন (অনুমোদিত পেমেন্ট থেকে)
+                const calculateTotalCollection = async () => {
+                    try {
+                        const { data: approvedPayments, error } = await supabaseClient
+                            .from('payments')
+                            .select('amount')
+                            .eq('status', 'approved');
+                        
+                        if (!error && approvedPayments && approvedPayments.length > 0) {
+                            const total = approvedPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+                            document.getElementById('totalCollection').innerText = total.toLocaleString();
+                        } else {
+                            // Fallback: active সদস্যদের মাসিক সঞ্চয়
+                            const activeMembers = members.filter(m => m.status === 'active');
+                            const total = activeMembers.reduce((s, m) => s + (m.monthly_savings || m.monthlySavings || 500), 0);
+                            document.getElementById('totalCollection').innerText = total.toLocaleString();
+                        }
+                    } catch(e) {
+                        const activeMembers = members.filter(m => m.status === 'active');
+                        const total = activeMembers.reduce((s, m) => s + (m.monthly_savings || m.monthlySavings || 500), 0);
+                        document.getElementById('totalCollection').innerText = total.toLocaleString();
+                    }
+                };
+                
+                calculateTotalCollection();
+                
+                document.getElementById('totalReps').innerText = representatives.length;
+                
+                const pendingMembersCount = members.filter(m => m.status === 'pending').length;
+                document.getElementById('pendingApps').innerText = pendingMembersCount + applications.length;
             }
             
             function showMemberDetails(memberId) {
