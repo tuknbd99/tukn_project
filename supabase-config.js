@@ -1,4 +1,3 @@
-// supabase-config.js
 // TUKNBD - Supabase Master Configuration File (Complete)
 
 // ==================== Supabase কনফিগারেশন ====================
