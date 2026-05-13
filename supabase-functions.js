@@ -1559,7 +1559,6 @@ function showToast(message, type = 'info') {
 }
 
 // ==================== ইনিশিয়ালাইজেশন ====================
-
 async function initSupabaseFunctions() {
     try {
         console.log('🚀 Initializing Supabase Functions...');
