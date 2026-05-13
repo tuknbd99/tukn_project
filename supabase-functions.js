@@ -3,8 +3,6 @@
 
 // ==================== Supabase ক্লায়েন্ট ইনিশিয়ালাইজেশন ====================
 
-let supabase = null;
-
 async function initSupabaseClient() {
     try {
         if (!window.supabase) {
