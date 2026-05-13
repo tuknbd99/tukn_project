@@ -1,14 +1,48 @@
 // supabase-config.js
+// TUKNBD - Supabase Master Configuration File (Complete)
 
-// Supabase কনফিগারেশন
+// ==================== Supabase কনফিগারেশন ====================
+
 const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
 
-// গ্লোবাল ক্লায়েন্ট তৈরি (supabase CDN থেকে আসা supabase অবজেক্ট ব্যবহার করে)
-window.supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-console.log('✅ Supabase client initialized');
+// গ্লোবাল ক্লায়েন্ট ভেরিয়েবল
+let supabaseClient = null;
+let supabase = null;  // For compatibility with both naming conventions
 
-// টেবিলের নাম কনস্ট্যান্ট
+// Supabase ক্লায়েন্ট ইনিশিয়ালাইজেশন - সঠিক উপায়
+async function initSupabase() {
+    try {
+        // Check if Supabase CDN is loaded
+        if (typeof window.supabase === 'undefined' && typeof supabase === 'undefined') {
+            console.error('❌ Supabase library not loaded! Make sure supabase CDN is included.');
+            return false;
+        }
+        
+        // Get the supabase object from window or global
+        const supabaseLib = window.supabase || supabase;
+        
+        if (!supabaseLib || !supabaseLib.createClient) {
+            console.error('❌ Supabase createClient not available!');
+            return false;
+        }
+        
+        // Create client
+        supabaseClient = supabaseLib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        window.supabaseClient = supabaseClient;
+        supabase = supabaseClient;  // Set global for compatibility
+        
+        console.log('✅ Supabase client initialized successfully');
+        return true;
+        
+    } catch (err) {
+        console.error('❌ Supabase initialization error:', err);
+        return false;
+    }
+}
+
+// ==================== টেবিলের নাম কনস্ট্যান্ট ====================
+
 window.TABLES = {
     MEMBERS: 'members',
     MADRASAS: 'madrasas',
@@ -17,18 +51,24 @@ window.TABLES = {
     NOTICES: 'notices',
     VISITOR_STATS: 'visitor_stats',
     ADMINS: 'admins',
-    REPS: 'reps',
+    REPS: 'representatives',
     REP_APPLICATIONS: 'rep_applications',
-    LOANS: 'loans',
+    LOANS: 'loan_applications',
     SLIDERS: 'sliders',
     CAREER: 'career',
     ABOUT: 'about',
     REFERRALS: 'referrals',
     COMMISSION_LOGS: 'commission_logs',
-    LEDGER_TRANSACTIONS: 'ledger_transactions'  // ✅ নতুন টেবিল যোগ করুন
+    LEDGER_TRANSACTIONS: 'transactions',
+    BRANCHES: 'branches',
+    DISTRICTS: 'districts',
+    PROJECTS: 'projects',
+    DISTRIBUTION_HISTORY: 'distribution_history',
+    PENDING_MEMBERS: 'pending_members'
 };
 
 // ==================== প্রোফাইল ইমেজ ফাংশন ====================
+
 async function uploadProfileImageToSupabase(file, memberId) {
     try {
         if (!file || !memberId) {
@@ -36,11 +76,15 @@ async function uploadProfileImageToSupabase(file, memberId) {
             return null;
         }
         
+        if (!supabaseClient) {
+            await initSupabase();
+        }
+        
         const fileExt = file.name.split('.').pop();
         const fileName = `${memberId}_${Date.now()}.${fileExt}`;
         const filePath = `profile-images/${fileName}`;
         
-        const { data, error } = await window.supabaseClient.storage
+        const { data, error } = await supabaseClient.storage
             .from('member-profiles')
             .upload(filePath, file, {
                 cacheControl: '3600',
@@ -49,13 +93,13 @@ async function uploadProfileImageToSupabase(file, memberId) {
         
         if (error) throw error;
         
-        const { data: urlData } = window.supabaseClient.storage
+        const { data: urlData } = supabaseClient.storage
             .from('member-profiles')
             .getPublicUrl(filePath);
         
         const imageUrl = urlData.publicUrl;
         
-        const { error: updateError } = await window.supabaseClient
+        const { error: updateError } = await supabaseClient
             .from(window.TABLES.MEMBERS)
             .update({ profile_image: imageUrl })
             .eq('member_id', memberId);
@@ -86,7 +130,9 @@ async function processReferral(referralCode, newMemberId, newMemberName) {
     if (!referralCode) return { success: false, message: 'কোন রেফারেল কোড নেই' };
     
     try {
-        const { data: referrer, error: referrerError } = await window.supabaseClient
+        if (!supabaseClient) await initSupabase();
+        
+        const { data: referrer, error: referrerError } = await supabaseClient
             .from(window.TABLES.MEMBERS)
             .select('member_id, full_name, referral_code, referral_count, referral_bonus')
             .eq('referral_code', referralCode)
@@ -110,7 +156,7 @@ async function processReferral(referralCode, newMemberId, newMemberName) {
             bonus_amount: 0
         };
         
-        const { error: insertError } = await window.supabaseClient
+        const { error: insertError } = await supabaseClient
             .from(window.TABLES.REFERRALS)
             .insert(referralRecord);
         
@@ -131,7 +177,9 @@ async function processReferral(referralCode, newMemberId, newMemberName) {
 // ৩. সদস্য অনুমোদনের সময় রেফারেল সম্পন্ন করা
 async function completeReferralOnApproval(memberId) {
     try {
-        const { data: referral, error: referralError } = await window.supabaseClient
+        if (!supabaseClient) await initSupabase();
+        
+        const { data: referral, error: referralError } = await supabaseClient
             .from(window.TABLES.REFERRALS)
             .select('*')
             .eq('referred_id', memberId)
@@ -143,7 +191,7 @@ async function completeReferralOnApproval(memberId) {
             return null;
         }
         
-        const { error: updateError } = await window.supabaseClient
+        const { error: updateError } = await supabaseClient
             .from(window.TABLES.REFERRALS)
             .update({ 
                 status: 'completed',
@@ -166,7 +214,9 @@ async function completeReferralOnApproval(memberId) {
 // ৪. বোনাস ক্যালকুলেশন এবং আপডেট
 async function calculateAndAddBonus(memberId) {
     try {
-        const { data: referrals, error: referralsError } = await window.supabaseClient
+        if (!supabaseClient) await initSupabase();
+        
+        const { data: referrals, error: referralsError } = await supabaseClient
             .from(window.TABLES.REFERRALS)
             .select('*')
             .eq('referrer_id', memberId)
@@ -194,7 +244,7 @@ async function calculateAndAddBonus(memberId) {
             level = 3;
         }
         
-        const { error: updateError } = await window.supabaseClient
+        const { error: updateError } = await supabaseClient
             .from(window.TABLES.MEMBERS)
             .update({
                 referral_bonus: bonusAmount,
@@ -219,7 +269,9 @@ async function calculateAndAddBonus(memberId) {
 // ৫. নির্দিষ্ট মেম্বারের রেফারেল তথ্য লোড করা
 async function loadReferralInfo(memberId) {
     try {
-        const { data: member, error: memberError } = await window.supabaseClient
+        if (!supabaseClient) await initSupabase();
+        
+        const { data: member, error: memberError } = await supabaseClient
             .from(window.TABLES.MEMBERS)
             .select('referral_bonus, referral_level, referral_count, referral_code, per_referral_bonus, full_name')
             .eq('member_id', memberId)
@@ -230,13 +282,13 @@ async function loadReferralInfo(memberId) {
         let referralCode = member.referral_code;
         if (!referralCode) {
             referralCode = generateReferralCode(member.full_name);
-            await window.supabaseClient
+            await supabaseClient
                 .from(window.TABLES.MEMBERS)
                 .update({ referral_code: referralCode })
                 .eq('member_id', memberId);
         }
         
-        const { data: myReferrals, error: referralsError } = await window.supabaseClient
+        const { data: myReferrals, error: referralsError } = await supabaseClient
             .from(window.TABLES.REFERRALS)
             .select('referred_name, referred_id, status, created_at, completed_at')
             .eq('referrer_id', memberId)
@@ -263,10 +315,13 @@ function getReferralShareText(memberName, referralCode) {
 }
 
 // ==================== লেজারের জন্য ডাটা লোড ফাংশন ====================
+
 async function loadLedgerData() {
     try {
+        if (!supabaseClient) await initSupabase();
+        
         // members লোড
-        const { data: members, error: membersError } = await window.supabaseClient
+        const { data: members, error: membersError } = await supabaseClient
             .from(window.TABLES.MEMBERS)
             .select('member_id, full_name, mobile, status')
             .eq('status', 'active');
@@ -274,7 +329,7 @@ async function loadLedgerData() {
         if (membersError) throw membersError;
         
         // payments লোড (approved payments)
-        const { data: payments, error: paymentsError } = await window.supabaseClient
+        const { data: payments, error: paymentsError } = await supabaseClient
             .from(window.TABLES.PAYMENTS)
             .select('*')
             .eq('status', 'approved')
@@ -283,7 +338,7 @@ async function loadLedgerData() {
         if (paymentsError) throw paymentsError;
         
         // loans লোড
-        const { data: loans, error: loansError } = await window.supabaseClient
+        const { data: loans, error: loansError } = await supabaseClient
             .from(window.TABLES.LOANS)
             .select('*');
         
@@ -308,27 +363,28 @@ async function loadLedgerData() {
     }
 }
 
-// ==================== গ্লোবাল ফাংশন এক্সপোর্ট ====================
-window.uploadProfileImageToSupabase = uploadProfileImageToSupabase;
-window.generateReferralCode = generateReferralCode;
-window.processReferral = processReferral;
-window.completeReferralOnApproval = completeReferralOnApproval;
-window.calculateAndAddBonus = calculateAndAddBonus;
-window.loadReferralInfo = loadReferralInfo;
-window.getReferralShareText = getReferralShareText;
-window.loadLedgerData = loadLedgerData;  // ✅ নতুন ফাংশন যোগ করুন
+// ==================== কানেকশন টেস্ট ফাংশন ====================
 
-// কানেকশন টেস্ট ফাংশন
 async function testSupabaseConnection() {
     try {
-        const { data, error } = await window.supabaseClient
+        if (!supabaseClient) {
+            const initialized = await initSupabase();
+            if (!initialized) {
+                console.error('❌ Could not initialize Supabase client');
+                return false;
+            }
+        }
+        
+        const { data, error } = await supabaseClient
             .from(window.TABLES.MEMBERS)
             .select('count', { count: 'exact', head: true });
         
         if (error) throw error;
+        
         console.log('✅ Supabase connection successful');
         console.log('📊 Members table exists and accessible');
         return true;
+        
     } catch(error) {
         console.error('❌ Supabase connection failed:', error);
         console.log('💡 Make sure tables exist in Supabase');
@@ -336,8 +392,55 @@ async function testSupabaseConnection() {
     }
 }
 
-window.testSupabaseConnection = testSupabaseConnection;
+// ==================== সহায়ক ফাংশন ====================
 
-// পেজ লোড হলে সংযোগ টেস্ট
-console.log('🔌 Testing Supabase connection...');
-testSupabaseConnection();
+function showToast(message, type = 'info') {
+    try {
+        const toast = document.createElement('div');
+        const bgColor = type === 'success' ? 'bg-green-600' : 
+                       type === 'error' ? 'bg-red-600' : 'bg-blue-600';
+        const icon = type === 'success' ? 'check-circle' : 
+                    type === 'error' ? 'exclamation-circle' : 'info-circle';
+        
+        toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${bgColor} animate-pulse`;
+        toast.innerHTML = `<i class="fas fa-${icon} mr-2"></i>${message}`;
+        
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    } catch (err) {
+        console.log('[Toast]', message);
+    }
+}
+
+// ==================== গ্লোবাল ফাংশন এক্সপোর্ট ====================
+
+// Make all functions available globally
+window.initSupabase = initSupabase;
+window.supabaseClient = supabaseClient;
+window.uploadProfileImageToSupabase = uploadProfileImageToSupabase;
+window.generateReferralCode = generateReferralCode;
+window.processReferral = processReferral;
+window.completeReferralOnApproval = completeReferralOnApproval;
+window.calculateAndAddBonus = calculateAndAddBonus;
+window.loadReferralInfo = loadReferralInfo;
+window.getReferralShareText = getReferralShareText;
+window.loadLedgerData = loadLedgerData;
+window.testSupabaseConnection = testSupabaseConnection;
+window.showToast = showToast;
+
+// ==================== অটো ইনিশিয়ালাইজেশন ====================
+
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', async () => {
+        await initSupabase();
+        await testSupabaseConnection();
+    });
+} else {
+    (async () => {
+        await initSupabase();
+        await testSupabaseConnection();
+    })();
+}
+
+console.log('✅ supabase-config.js loaded successfully');
