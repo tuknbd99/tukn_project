@@ -253,7 +253,7 @@ async function updateMemberInfo(memberId, updates) {
         
         if (error) throw error;
         
-        showToast('✅ তথ���য আপডেট হয়েছে', 'success');
+        showToast('✅ তথ্য আপডেট হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ updateMemberInfo Error:', err);
@@ -462,7 +462,7 @@ async function addRepApplication(appData) {
         return data;
     } catch (err) {
         console.error('❌ addRepApplication Error:', err);
-        showToast('❌ আবেদন ��মা করতে ত্রুটি', 'error');
+        showToast('❌ আবেদন জমা করতে ত্রুটি', 'error');
         return null;
     }
 }
@@ -1305,7 +1305,7 @@ async function updateAboutInfo(aboutData) {
         }
     } catch (err) {
         console.error('❌ updateAboutInfo Error:', err);
-        showToast('❌ আপডেট ব্য��্থ', 'error');
+        showToast('❌ আপডেট ব্যর্থ', 'error');
         return null;
     }
 }
@@ -1572,7 +1572,7 @@ async function initSupabaseFunctions() {
         
         const connected = await testSupabaseConnection();
         if (connected) {
-            await addTestMemberIfNotExists();Complete Supabase functions with all features and enhanced error handling
+            await addTestMemberIfNotExists();
             console.log('✅ Supabase Functions Ready!');
         }
     } catch (err) {
