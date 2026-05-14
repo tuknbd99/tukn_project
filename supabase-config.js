@@ -1,6 +1,3 @@
-// supabase-config.js
-// TUKNBD - Supabase Master Configuration File (Complete)
-
 // ==================== Supabase কনফিগারেশন ====================
 const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
@@ -430,5 +427,3 @@ if (document.readyState === 'loading') {
         await testSupabaseConnection();
     })();
 }
-
-console.log('✅ supabase-config.js loaded successfully');
