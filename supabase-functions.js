@@ -3,8 +3,6 @@ please solve the problem (if) and give me full update file: // supabase-function
 
 // ==================== Supabase ক্লায়েন্ট ইনিশিয়ালাইজেশন ====================
 
-let supabase = null;
-
 async function initSupabaseClient() {
     try {
         if (!window.supabase) {
