@@ -1,4 +1,6 @@
 // supabase-functions.js
+// TUKNBD - সম্পূর্ণ Supabase ডাটাবেস ফাংশন (সব ফিচার সহ)
+
 // ==================== Supabase ক্লায়েন্ট ইনিশিয়ালাইজেশন ====================
 
 let supabase = null;
