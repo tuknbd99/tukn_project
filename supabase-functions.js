@@ -4,8 +4,6 @@
 let supabase = null;
 
 async function initSupabaseClient() {
-}
-async function initSupabaseClient() {
     try {
         if (!window.supabase) {
             console.error('❌ Supabase library not loaded');
@@ -147,20 +145,17 @@ async function getMemberByMemberId(memberId) {
 
 async function addNewMember(memberData) {
     try {
-        // Validation
         if (!memberData.full_name || !memberData.mobile) {
             showToast('❌ নাম এবং মোবাইল বাধ্যতামূলক', 'error');
             return null;
         }
 
-        // Duplicate Check
         const existing = await getMemberByMobile(memberData.mobile);
         if (existing) {
             showToast('❌ এই মোবাইলে ইতিমধ্যে সদস্য আছে', 'error');
             return null;
         }
 
-        // Generate Member ID if not provided
         if (!memberData.member_id) {
             const today = new Date();
             const dateCode = 'TUKN-' +
@@ -253,7 +248,7 @@ async function updateMemberInfo(memberId, updates) {
         
         if (error) throw error;
         
-        showToast('✅ তথ���য আপডেট হয়েছে', 'success');
+        showToast('✅ তথ্য আপডেট হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ updateMemberInfo Error:', err);
@@ -462,7 +457,7 @@ async function addRepApplication(appData) {
         return data;
     } catch (err) {
         console.error('❌ addRepApplication Error:', err);
-        showToast('❌ আবেদন ��মা করতে ত্রুটি', 'error');
+        showToast('❌ আবেদন জমা করতে ত্রুটি', 'error');
         return null;
     }
 }
@@ -477,7 +472,6 @@ async function approveRepApplicationById(id, approvedBy) {
         
         if (error) throw error;
         
-        // অনুমোদিত আবেদনকে প্রতিনিধি হিসেবে যোগ করুন
         if (data && data[0]) {
             const app = data[0];
             await addNewRepresentative({
@@ -878,7 +872,6 @@ async function addComplaintReply(replyData) {
         
         if (error) throw error;
 
-        // অভিযোগে নতুন রিপ্লাই চিহ্ন যোগ করুন
         await supabase
             .from('complaints')
             .update({ has_new_reply: true })
@@ -1305,7 +1298,7 @@ async function updateAboutInfo(aboutData) {
         }
     } catch (err) {
         console.error('❌ updateAboutInfo Error:', err);
-        showToast('❌ আপডেট ব্য��্থ', 'error');
+        showToast('❌ আপডেট ব্যর্থ', 'error');
         return null;
     }
 }
@@ -1572,7 +1565,7 @@ async function initSupabaseFunctions() {
         
         const connected = await testSupabaseConnection();
         if (connected) {
-            await addTestMemberIfNotExists();Complete Supabase functions with all features and enhanced error handling
+            await addTestMemberIfNotExists();
             console.log('✅ Supabase Functions Ready!');
         }
     } catch (err) {
