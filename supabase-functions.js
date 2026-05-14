@@ -1,4 +1,4 @@
-// supabase-functions.js
+please solve the problem (if) and give me full update file: // supabase-functions.js
 // TUKNBD - সম্পূর্ণ Supabase ডাটাবেস ফাংশন (সব ফিচার সহ)
 
 // ==================== Supabase ক্লায়েন্ট ইনিশিয়ালাইজেশন ====================
@@ -253,7 +253,7 @@ async function updateMemberInfo(memberId, updates) {
         
         if (error) throw error;
         
-        showToast('✅ তথ্য আপডেট হয়েছে', 'success');
+        showToast('✅ তথ���য আপডেট হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ updateMemberInfo Error:', err);
@@ -462,7 +462,7 @@ async function addRepApplication(appData) {
         return data;
     } catch (err) {
         console.error('❌ addRepApplication Error:', err);
-        showToast('❌ আবেদন জমা করতে ত্রুটি', 'error');
+        showToast('❌ আবেদন ��মা করতে ত্রুটি', 'error');
         return null;
     }
 }
@@ -1305,7 +1305,7 @@ async function updateAboutInfo(aboutData) {
         }
     } catch (err) {
         console.error('❌ updateAboutInfo Error:', err);
-        showToast('❌ আপডেট ব্যর্থ', 'error');
+        showToast('❌ আপডেট ব্য��্থ', 'error');
         return null;
     }
 }
@@ -1572,7 +1572,7 @@ async function initSupabaseFunctions() {
         
         const connected = await testSupabaseConnection();
         if (connected) {
-            await addTestMemberIfNotExists();
+            await addTestMemberIfNotExists();Complete Supabase functions with all features and enhanced error handling
             console.log('✅ Supabase Functions Ready!');
         }
     } catch (err) {
