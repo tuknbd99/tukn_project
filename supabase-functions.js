@@ -1475,40 +1475,62 @@ async function getProjectCount() {
 // ==================== ভিজিটর কাউন্ট (VISITOR_COUNT) ফাংশন ====================
 
 async function getVisitorCount() {
+// ভিজিটর কাউন্ট আপডেট ফাংশন
+async function updateVisitorCount() {
     try {
-        const { data, error } = await supabase
+        // প্রথমে বর্তমান কাউন্ট দেখুন
+        const { data: existingData, error: fetchError } = await supabase
             .from('visitor_count')
             .select('count')
             .eq('id', 1)
             .single();
         
-        if (error && error.code !== 'PGRST116') throw error;
-        return data?.count || 0;
-    } catch (err) {
-        console.error('❌ getVisitorCount Error:', err);
-        return 0;
+        let newCount = 1;
+        
+        if (existingData && existingData.count !== undefined) {
+            newCount = (existingData.count || 0) + 1;
+        }
+        
+        // আপসার্ট (insert or update)
+        const { data, error } = await supabase
+            .from('visitor_count')
+            .upsert({ 
+                id: 1, 
+                count: newCount,
+                last_updated: new Date().toISOString()
+            })
+            .select();
+            
+        if (error) throw error;
+        
+        // UI তে দেখান
+        const visitorElement = document.querySelector('.visitor-number');
+        if (visitorElement) {
+            visitorElement.innerText = newCount;
+        }
+        
+        console.log('ভিজিটর কাউন্ট আপডেট হয়েছে:', newCount);
+        return newCount;
+        
+    } catch (error) {
+        console.error('কাউন্ট আপডেট করতে সমস্যা:', error);
+        // লোকাল স্টোরেজে ব্যাকআপ রাখুন
+        let localCount = localStorage.getItem('visitorCount') || 0;
+        localCount = parseInt(localCount) + 1;
+        localStorage.setItem('visitorCount', localCount);
+        
+        const visitorElement = document.querySelector('.visitor-number');
+        if (visitorElement) {
+            visitorElement.innerText = localCount;
+        }
+        return localCount;
     }
 }
 
-async function incrementVisitorCount() {
-    try {
-        const currentCount = await getVisitorCount();
-        const newCount = currentCount + 1;
-        
-        const { data, error } = await supabase
-            .from('visitor_count')
-            .update({ count: newCount, last_updated: new Date().toISOString() })
-            .eq('id', 1)
-            .select();
-        
-        if (error) throw error;
-        console.log('✅ Visitor count incremented:', newCount);
-        return newCount;
-    } catch (err) {
-        console.error('❌ incrementVisitorCount Error:', err);
-        return 0;
-    }
-}
+// পেজ লোড হলে কল করুন
+document.addEventListener('DOMContentLoaded', () => {
+    updateVisitorCount();
+});
 
 // ==================== টেস্ট ডাটা ফাংশন ====================
 
