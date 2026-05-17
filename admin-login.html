@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&display=swap" rel="stylesheet">
     
-    <!-- Supabase CDN -->
+    <!-- ✅ Supabase CDN - প্রথমে লোড করুন -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
     <style>
@@ -45,30 +45,45 @@
     </div>
 
     <script>
-        // ========== Supabase ক্লায়েন্ট ভেরিয়েবল ==========
-        let supabaseClient = null;
-        let supabase = null;
+        // ========== সিম্পল Supabase লগইন (কোনো জটিলতা নেই) ==========
         
-        // ========== Supabase রেডি হওয়ার অপেক্ষা ==========
-        async function waitForSupabase() {
-            let attempts = 0;
-            while (attempts < 30) {
-                if (window.supabase && typeof window.supabase.from === 'function') {
-                    supabaseClient = window.supabase;
-                    supabase = window.supabase;
-                    window.supabaseClient = supabaseClient;
-                    console.log('✅ Supabase ready for admin login');
+        // Supabase কনফিগারেশন
+        const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
+        
+        // গ্লোবাল ভেরিয়েবল
+        let supabase = null;
+        let supabaseClient = null;
+        
+        // Supabase ইনিশিয়ালাইজেশন
+        async function initSupabase() {
+            try {
+                // Supabase লাইব্রেরি চেক করুন
+                if (typeof window.supabase !== 'undefined' && window.supabase.createClient) {
+                    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                    supabaseClient = supabase;
+                    window.supabase = supabase;
+                    window.supabaseClient = supabase;
+                    console.log('✅ Supabase initialized for admin login');
+                    return true;
+                } else if (typeof supabase !== 'undefined' && supabase.createClient) {
+                    supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                    supabaseClient = supabase;
+                    window.supabase = supabase;
+                    window.supabaseClient = supabase;
+                    console.log('✅ Supabase initialized (alt)');
                     return true;
                 }
-                await new Promise(resolve => setTimeout(resolve, 500));
-                attempts++;
+                console.error('❌ Supabase library not loaded yet');
+                return false;
+            } catch (err) {
+                console.error('Init error:', err);
+                return false;
             }
-            console.error('❌ Supabase not ready after 15 seconds');
-            return false;
         }
         
-        // ========== লগইন হ্যান্ডলার ==========
-        async function handleAdminLogin(event) {
+        // লগইন ফাংশন
+        async function doLogin(event) {
             event.preventDefault();
             
             const username = document.getElementById('username').value.trim();
@@ -79,18 +94,19 @@
                 return;
             }
             
-            // Supabase রেডি না থাকলে অপেক্ষা করুন
+            // Supabase তৈরি করুন (যদি না থাকে)
             if (!supabaseClient) {
-                const ready = await waitForSupabase();
-                if (!ready) {
-                    alert('সার্ভার সংযোগ ব্যর্থ! পরে আবার চেষ্টা করুন।');
+                const initialized = await initSupabase();
+                if (!initialized) {
+                    alert('সার্ভার সংযোগ ব্যর্থ! পেজ রিফ্রেশ করে আবার চেষ্টা করুন।');
                     return;
                 }
             }
             
             try {
-                console.log('Attempting login for:', username);
+                console.log('Trying login for:', username);
                 
+                // অ্যাডমিন চেক করুন
                 const { data, error } = await supabaseClient
                     .from('admins')
                     .select('*')
@@ -98,8 +114,8 @@
                     .maybeSingle();
                 
                 if (error) {
-                    console.error('Supabase error:', error);
-                    alert('লগইন করতে ব্যর্থ হয়েছে!');
+                    console.error('Query error:', error);
+                    alert('ডাটাবেস সংযোগে সমস্যা!');
                     return;
                 }
                 
@@ -113,23 +129,24 @@
                     return;
                 }
                 
-                // লগইন সফল
-                const adminData = {
+                // লগইন সফল - ডাটা সেভ করুন
+                const adminInfo = {
                     id: data.id,
                     username: data.username,
                     name: data.name,
-                    role: data.role || (data.username === 'arif' ? 'সুপার অ্যাডমিন' : 'অ্যাডমিন'),
+                    role: data.role || (username === 'arif' ? 'সুপার অ্যাডমিন' : 'অ্যাডমিন'),
                     loggedIn: true
                 };
                 
                 localStorage.setItem('adminLoggedIn', 'true');
-                localStorage.setItem('currentAdmin', JSON.stringify(adminData));
+                localStorage.setItem('currentAdmin', JSON.stringify(adminInfo));
                 sessionStorage.setItem('adminLoggedIn', 'true');
-                sessionStorage.setItem('currentAdmin', JSON.stringify(adminData));
+                sessionStorage.setItem('currentAdmin', JSON.stringify(adminInfo));
                 
                 alert(`স্বাগতম ${data.name || data.username}!`);
                 
-                if (adminData.role === 'সুপার অ্যাডমิน' || adminData.role === 'super_admin' || username === 'arif') {
+                // রেডিরেক্ট
+                if (adminInfo.role === 'সুপার অ্যাডমิน' || adminInfo.role === 'super_admin' || username === 'arif') {
                     window.location.href = 'super-admin.html';
                 } else {
                     window.location.href = 'admin-dashboard.html';
@@ -137,17 +154,23 @@
                 
             } catch (err) {
                 console.error('Login error:', err);
-                alert('লগইন করতে ব্যর্থ হয়েছে!');
+                alert('লগইন করতে ব্যর্থ হয়েছে! ' + (err.message || ''));
             }
         }
         
-        // ফর্ম সাবমিট ইভেন্ট
-        document.getElementById('adminLoginForm').addEventListener('submit', handleAdminLogin);
+        // ফর্ম ইভেন্ট লিসেনার
+        const form = document.getElementById('adminLoginForm');
+        if (form) {
+            form.addEventListener('submit', doLogin);
+        }
         
-        // পেজ লোড হলে Supabase প্রস্তুত করুন
-        document.addEventListener('DOMContentLoaded', async function() {
-            await waitForSupabase();
+        // পেজ লোড হলে Supabase ইনিশিয়ালাইজ করুন
+        window.addEventListener('DOMContentLoaded', async function() {
+            console.log('Page loaded, initializing...');
+            await initSupabase();
         });
+        
+        console.log('Admin login page ready');
     </script>
 </body>
 </html>
