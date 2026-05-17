@@ -310,7 +310,34 @@
 </a>
 
 <script>
-const supabaseClient = window.supabaseClient;
+// ==================== Supabase ক্লায়েন্ট চেক এবং ওয়েট ====================
+let supabaseClient = window.supabaseClient || window.supabase || null;
+
+async function waitForSupabase() {
+    let attempts = 0;
+    while (!supabaseClient && attempts < 30) {
+        supabaseClient = window.supabaseClient || window.supabase;
+        if (!supabaseClient) {
+            await new Promise(r => setTimeout(r, 500));
+            attempts++;
+        }
+    }
+    
+    if (!supabaseClient) {
+        console.error('Supabase client not loaded after 15 seconds');
+        showCenterNotification('সংযোগ স্থাপিত হচ্ছে, একটু অপেক্ষা করুন এবং পেজ রিফ্রেশ করুন।', 'error');
+        return false;
+    }
+    return true;
+}
+
+// Supabase ক্লায়েন্ট রেডি হওয়ার জন্য প্রাথমিক ওয়েট
+waitForSupabase().then(ready => {
+    if (ready) {
+        console.log('✅ Supabase client ready for signup page');
+        updateIdPreview();
+    }
+});
 
 const divisions = {
     "ঢাকা": ["ঢাকা", "গাজীপুর", "নারায়ণগঞ্জ", "টাঙ্গাইল", "কিশোরগঞ্জ", "মানিকগঞ্জ", "মুন্সীগঞ্জ", "নরসিংদী", "ফরিদপুর", "গোপালগঞ্জ", "মাদারীপুর", "রাজবাড়ী", "শরীয়তপুর"],
@@ -503,12 +530,34 @@ function generateRandomPassword() {
 }
 
 async function getNextSerial() {
-    const { data, error, count } = await supabaseClient
-        .from('members')
-        .select('*', { count: 'exact', head: true });
+    // Supabase ক্লায়েন্ট চেক করুন
+    let client = supabaseClient || window.supabaseClient || window.supabase;
     
-    const currentCount = count || 0;
-    return String(currentCount + 1).padStart(4, '0');
+    if (!client) {
+        console.log('Waiting for Supabase...');
+        await new Promise(r => setTimeout(r, 1000));
+        client = supabaseClient || window.supabaseClient || window.supabase;
+    }
+    
+    if (!client) {
+        console.error('Supabase client not available');
+        return '0001';
+    }
+    
+    try {
+        const { count, error } = await client
+            .from('members')
+            .select('*', { count: 'exact', head: true });
+        
+        if (error) throw error;
+        
+        const currentCount = count || 0;
+        return String(currentCount + 1).padStart(4, '0');
+        
+    } catch (err) {
+        console.error('Error getting serial:', err);
+        return String(Math.floor(Math.random() * 9000) + 1000);
+    }
 }
 
 function generateReferralCode() {
@@ -556,11 +605,19 @@ async function updateIdPreview() {
 }
 
 document.getElementById('memberTerm').addEventListener('change', updateIdPreview);
-updateIdPreview();
 
 // ফর্ম সাবমিট
 document.getElementById('signupForm').addEventListener('submit', async function(e) {
     e.preventDefault();
+    
+    // Supabase ক্লায়েন্ট চেক করুন
+    if (!supabaseClient) {
+        const ready = await waitForSupabase();
+        if (!ready) {
+            showCenterNotification('সার্ভারের সাথে সংযোগ স্থাপিত হচ্ছে, একটু অপেক্ষা করুন...', 'error');
+            return;
+        }
+    }
     
     const mobile = document.getElementById('mobile').value;
     if(!/^01[3-9]\d{8}$/.test(mobile)) {
@@ -569,15 +626,24 @@ document.getElementById('signupForm').addEventListener('submit', async function(
     }
     
     // চেক করুন মোবাইল নম্বর ইতিমধ্যে আছে কিনা
-    const { data: existingMember, error: checkError } = await supabaseClient
-        .from('members')
-        .select('mobile')
-        .eq('mobile', mobile)
-        .single();
-    
-    if(existingMember) {
-        showCenterNotification('এই মোবাইল নম্বরটি ইতিমধ্যে নিবন্ধিত!', 'error');
-        return;
+    try {
+        const { data: existingMember, error: checkError } = await supabaseClient
+            .from('members')
+            .select('mobile')
+            .eq('mobile', mobile)
+            .maybeSingle();
+        
+        if (checkError && checkError.code !== 'PGRST116') {
+            console.error('Check error:', checkError);
+        }
+        
+        if(existingMember) {
+            showCenterNotification('এই মোবাইল নম্বরটি ইতিমধ্যে নিবন্ধিত!', 'error');
+            return;
+        }
+    } catch (err) {
+        console.error('Error checking existing member:', err);
+        // চেক করতে ব্যর্থ হলেও চলবে
     }
     
     // পদবি চেক
@@ -712,7 +778,7 @@ document.getElementById('signupForm').addEventListener('submit', async function(
         document.getElementById('permanentDistrict').innerHTML = '<option value="">প্রথমে বিভাগ নির্বাচন করুন</option>';
         document.querySelector('input[name="idType"][value="জন্মনিবন্ধন"]').checked = true;
         document.getElementById('memberPosition').value = '';
-        toggleDynamicFields(); // ফিল্ড গুলো হাইড করুন
+        toggleDynamicFields();
         updateIdPreview();
         
     } catch (error) {
