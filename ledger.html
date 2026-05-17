@@ -9,8 +9,13 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     
+    <!-- ✅ Supabase CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="supabase-config.js"></script>
+    
+    <!-- ✅ Supabase Functions (শুধু এই একটি ফাইল) -->
+    <script src="supabase-functions.js"></script>
+    
+    <!-- ❌ supabase-config.js লোড করবেন না - এটি ডিলিট করে দিন -->
     
     <style>
         * { font-family: 'Noto Sans Bengali', sans-serif; }
@@ -188,17 +193,24 @@
 
 <script>
     (function() {
-        // Supabase ক্লায়েন্ট
+        // ✅ সঠিক Supabase ক্লায়েন্ট - window.supabase থেকে নিন
         let supabase = null;
-        try {
-            if(window.supabaseClient) {
-                supabase = window.supabaseClient;
-                console.log('✅ Supabase client connected');
-            } else {
-                console.error('❌ Supabase client not found');
+        
+        // অপেক্ষা করার ফাংশন
+        async function waitForSupabase() {
+            let attempts = 0;
+            while (attempts < 30) {
+                if (window.supabase && typeof window.supabase.from === 'function') {
+                    supabase = window.supabase;
+                    window.supabaseClient = supabase;
+                    console.log('✅ Supabase client ready in ledger');
+                    return true;
+                }
+                await new Promise(r => setTimeout(r, 500));
+                attempts++;
             }
-        } catch(e) {
-            console.error('❌ Supabase error:', e);
+            console.error('❌ Supabase client not found');
+            return false;
         }
 
         // গ্লোবাল ভেরিয়েবল
@@ -239,17 +251,17 @@
         async function loadLoansFromSupabase() {
             if(!supabase) return [];
             try {
-                const { data, error } = await supabase.from('loans').select('*');
+                const { data, error } = await supabase.from('loan_applications').select('*').eq('status', 'approved');
                 if(error) {
                     if(error.code === '42P01') {
-                        console.log('Loans table does not exist yet');
+                        console.log('Loan applications table does not exist yet');
                         return [];
                     }
                     throw error;
                 }
                 return data || [];
             } catch(e) {
-                console.log('Loans table not available:', e.message);
+                console.log('Loan applications table not available:', e.message);
                 return [];
             }
         }
@@ -264,7 +276,6 @@
                 let joinDate = new Date(member.joinDate);
                 if(isNaN(joinDate.getTime())) joinDate = new Date(2026, 4, 1);
                 
-                // জয়েন মাস থেকে বর্তমান মাস পর্যন্ত
                 let currentMonthDate = new Date(joinDate.getFullYear(), joinDate.getMonth(), 1);
                 let endDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
                 
@@ -361,10 +372,10 @@
             tbody.innerHTML = loans.map(l => {
                 const memberId = l.memberId || l.member_id;
                 const memberName = l.memberName || l.member_name;
-                const amount = l.amount || 0;
-                const paid = l.paid || 0;
+                const amount = l.loan_amount || l.amount || 0;
+                const paid = l.paid_amount || l.paid || 0;
                 const due = amount - paid;
-                const loanDate = l.takenDate || l.date || new Date().toISOString().split('T')[0];
+                const loanDate = l.created_at || l.date || new Date().toISOString().split('T')[0];
                 
                 totalAmount += amount;
                 totalPaid += paid;
@@ -468,14 +479,17 @@
 
         // ==================== পেজ লোড ====================
         async function init() {
+            // লগইন চেক
             const adminLoggedIn = sessionStorage.getItem('adminLoggedIn') || localStorage.getItem('adminLoggedIn');
             if(!adminLoggedIn) {
                 window.location.href = 'admin-login.html';
                 return;
             }
             
-            if(!supabase) {
-                document.getElementById('loadingLedgerMsg').innerHTML = '<div class="error-box"><i class="fas fa-link"></i> Supabase সংযোগ নেই! supabase-config.js চেক করুন</div>';
+            // Supabase অপেক্ষা করুন
+            const supabaseReady = await waitForSupabase();
+            if(!supabaseReady || !supabase) {
+                document.getElementById('loadingLedgerMsg').innerHTML = '<div class="error-box"><i class="fas fa-link"></i> Supabase সংযোগ নেই! পেজ রিফ্রেশ করে আবার চেষ্টা করুন।</div>';
                 return;
             }
             
@@ -504,6 +518,7 @@
         window.printPortrait = printPortrait;
         window.exportToExcel = exportToExcel;
         
+        // পেজ লোডে শুরু করুন
         init();
     })();
 </script>
