@@ -8,13 +8,14 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&display=swap" rel="stylesheet">
     
-    <!-- ✅ Supabase CDN - প্রথমে লোড করুন -->
+    <!-- Supabase CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
     <style>
         * { font-family: 'Noto Sans Bengali', sans-serif; }
         body { background: linear-gradient(135deg, #0b1c2c 0%, #1a3a4a 100%); min-height: 100vh; }
         .login-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); }
+        .loading { display: none; text-align: center; margin-top: 15px; color: #059669; }
     </style>
 </head>
 <body class="flex items-center justify-center p-4">
@@ -34,9 +35,12 @@
                 <label class="block text-gray-700 font-semibold mb-1">পাসওয়ার্ড</label>
                 <input type="password" id="password" required class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:border-emerald-500">
             </div>
-            <button type="submit" class="w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition">
+            <button type="submit" id="loginBtn" class="w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition">
                 <i class="fas fa-sign-in-alt mr-2"></i> লগইন করুন
             </button>
+            <div id="loadingMsg" class="loading">
+                <i class="fas fa-spinner fa-spin mr-2"></i> সংযোগ স্থাপন হচ্ছে...
+            </div>
         </form>
         
         <div class="text-center mt-4">
@@ -45,41 +49,30 @@
     </div>
 
     <script>
-        // ========== সিম্পল Supabase লগইন (কোনো জটিলতা নেই) ==========
-        
         // Supabase কনফিগারেশন
         const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
         const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
         
-        // গ্লোবাল ভেরিয়েবল
-        let supabase = null;
         let supabaseClient = null;
         
         // Supabase ইনিশিয়ালাইজেশন
         async function initSupabase() {
-            try {
-                // Supabase লাইব্রেরি চেক করুন
-                if (typeof window.supabase !== 'undefined' && window.supabase.createClient) {
-                    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-                    supabaseClient = supabase;
-                    window.supabase = supabase;
-                    window.supabaseClient = supabase;
-                    console.log('✅ Supabase initialized for admin login');
-                    return true;
-                } else if (typeof supabase !== 'undefined' && supabase.createClient) {
-                    supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-                    supabaseClient = supabase;
-                    window.supabase = supabase;
-                    window.supabaseClient = supabase;
-                    console.log('✅ Supabase initialized (alt)');
+            let attempts = 0;
+            const maxAttempts = 30;
+            
+            while (attempts < maxAttempts) {
+                if (window.supabase && typeof window.supabase.createClient === 'function') {
+                    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                    window.supabaseClient = supabaseClient;
+                    console.log('✅ Supabase initialized');
                     return true;
                 }
-                console.error('❌ Supabase library not loaded yet');
-                return false;
-            } catch (err) {
-                console.error('Init error:', err);
-                return false;
+                await new Promise(resolve => setTimeout(resolve, 300));
+                attempts++;
             }
+            
+            console.error('❌ Supabase failed to load');
+            return false;
         }
         
         // লগইন ফাংশন
@@ -88,17 +81,25 @@
             
             const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value;
+            const loginBtn = document.getElementById('loginBtn');
+            const loadingMsg = document.getElementById('loadingMsg');
             
             if (!username || !password) {
                 alert('ইউজারনেম এবং পাসওয়ার্ড দিন!');
                 return;
             }
             
-            // Supabase তৈরি করুন (যদি না থাকে)
+            // লোডিং দেখান
+            loginBtn.disabled = true;
+            loadingMsg.style.display = 'block';
+            
+            // Supabase তৈরি করুন
             if (!supabaseClient) {
                 const initialized = await initSupabase();
                 if (!initialized) {
-                    alert('সার্ভার সংযোগ ব্যর্থ! পেজ রিফ্রেশ করে আবার চেষ্টা করুন।');
+                    alert('সার্ভার সংযোগ ব্যর্থ! পেজ রিফ্রেশ করুন।');
+                    loginBtn.disabled = false;
+                    loadingMsg.style.display = 'none';
                     return;
                 }
             }
@@ -106,7 +107,6 @@
             try {
                 console.log('Trying login for:', username);
                 
-                // অ্যাডমিন চেক করুন
                 const { data, error } = await supabaseClient
                     .from('admins')
                     .select('*')
@@ -116,20 +116,19 @@
                 if (error) {
                     console.error('Query error:', error);
                     alert('ডাটাবেস সংযোগে সমস্যা!');
+                    loginBtn.disabled = false;
+                    loadingMsg.style.display = 'none';
                     return;
                 }
                 
-                if (!data) {
+                if (!data || data.password !== password) {
                     alert('ইউজারনেম বা পাসওয়ার্ড ভুল!');
+                    loginBtn.disabled = false;
+                    loadingMsg.style.display = 'none';
                     return;
                 }
                 
-                if (data.password !== password) {
-                    alert('ইউজারনেম বা পাসওয়ার্ড ভুল!');
-                    return;
-                }
-                
-                // লগইন সফল - ডাটা সেভ করুন
+                // লগইন সফল
                 const adminInfo = {
                     id: data.id,
                     username: data.username,
@@ -143,10 +142,10 @@
                 sessionStorage.setItem('adminLoggedIn', 'true');
                 sessionStorage.setItem('currentAdmin', JSON.stringify(adminInfo));
                 
-                alert(`স্বাগতম ${data.name || data.username}!`);
+                alert('স্বাগতম ' + (data.name || data.username) + '!');
                 
-                // রেডিরেক্ট
-                if (adminInfo.role === 'সুপার অ্যাডমิน' || adminInfo.role === 'super_admin' || username === 'arif') {
+                // রিডাইরেক্ট
+                if (adminInfo.role === 'সুপার অ্যাডমিন' || username === 'arif') {
                     window.location.href = 'super-admin.html';
                 } else {
                     window.location.href = 'admin-dashboard.html';
@@ -154,36 +153,22 @@
                 
             } catch (err) {
                 console.error('Login error:', err);
-                alert('লগইন করতে ব্যর্থ হয়েছে! ' + (err.message || ''));
+                alert('লগইন করতে ব্যর্থ হয়েছে!');
+                loginBtn.disabled = false;
+                loadingMsg.style.display = 'none';
             }
         }
         
-        // ফর্ম ইভেন্ট লিসেনার
+        // ফর্ম ইভেন্ট
         const form = document.getElementById('adminLoginForm');
         if (form) {
             form.addEventListener('submit', doLogin);
         }
         
-        // পেজ লোড হলে Supabase ইনিশিয়ালাইজ করুন
-        window.addEventListener('DOMContentLoaded', async function() {
-            console.log('Page loaded, initializing...');
-            await initSupabase();
+        // পেজ লোডে Supabase প্রস্তুত করুন
+        window.addEventListener('DOMContentLoaded', function() {
+            initSupabase();
         });
-        <script>
-    // এরর হ্যান্ডলিং - কনসোল ছাড়াই দেখার জন্য
-    window.onerror = function(msg, url, line, col, error) {
-        alert("Error: " + msg + "\nLine: " + line);
-        return false;
-    };
-    
-    console.log = function(msg) {
-        // কনসোল না থাকলেও লগ দেখানোর জন্য (ঐচ্ছিক)
-        document.getElementById('consoleLog')?.appendChild(
-            document.createElement('div')
-        ).innerText = msg;
-    };
-</script>
-        console.log('Admin login page ready');
     </script>
 </body>
 </html>
