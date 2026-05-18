@@ -332,6 +332,8 @@ let clockInterval = null;
 let isLoadingReferral = false;
 
 // ========== Supabase ক্লায়েন্ট ==========
+// supabase-functions.js থেকে আসা ক্লায়েন্ট ব্যবহার করছি, নতুন করে ডিক্লেয়ার করছি না
+// সরাসরি window.supabaseClient ব্যবহার করুন
 
 const banglaMonths = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
 
@@ -539,34 +541,47 @@ function calculateMembershipDuration() {
     if(durationEl) durationEl.innerHTML = text;
 }
 
-function loadSavingsData() {
+// শুধুমাত্র APPROVED পেমেন্ট গণনা করার জন্য আপডেটেড ফাংশন
+async function loadSavingsData() {
     if(!currentUser || currentUser.status !== 'active') return;
-    const joinDate = new Date(currentUser.joinDate);
-    const now = new Date();
-    let monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
-    const paidMonths = Math.min(monthsSinceJoin + 1, 6);
-    const remainingMonths = Math.max(0, 6 - paidMonths);
-    const totalPaid = paidMonths * currentUser.monthlySavings;
     
-    const paidEl = document.getElementById('paidMonthsDisplay');
-    if(paidEl) paidEl.innerText = paidMonths + ' মাস';
-    
-    const dueEl = document.getElementById('dueMonthsDisplay');
-    if(dueEl) dueEl.innerText = remainingMonths + ' মাস';
-    
-    const totalEl = document.getElementById('totalPaidDisplay');
-    if(totalEl) totalEl.innerText = totalPaid.toLocaleString() + ' টাকা';
+    try {
+        // শুধুমাত্র APPROVED পেমেন্ট গণনা করুন
+        const { data: approvedPayments, error } = await window.supabaseClient
+            .from('payments')
+            .select('amount, month, year')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved');
+        
+        if(error) throw error;
+        
+        const paidMonths = approvedPayments?.length || 0;
+        const totalPaid = approvedPayments?.reduce((sum, p) => sum + (p.amount || 0), 0) || 0;
+        
+        // বাকি মাস গণনা (সাধারণত 12 মাস থেকে বাদ)
+        const remainingMonths = Math.max(0, 12 - paidMonths);
+        
+        document.getElementById('paidMonthsDisplay').innerText = paidMonths + ' মাস';
+        document.getElementById('dueMonthsDisplay').innerText = remainingMonths + ' মাস';
+        document.getElementById('totalPaidDisplay').innerText = totalPaid.toLocaleString() + ' টাকা';
+        
+    } catch(error) {
+        console.error('Error loading savings data:', error);
+        document.getElementById('paidMonthsDisplay').innerText = '০ মাস';
+        document.getElementById('dueMonthsDisplay').innerText = '০ মাস';
+        document.getElementById('totalPaidDisplay').innerText = '০ টাকা';
+    }
 }
 
 async function loadPaymentHistory() {
     if(!currentUser || currentUser.status !== 'active') return;
-    if(!supabaseClient) {
+    if(!window.supabaseClient) {
         console.log('Supabase client not ready');
         return;
     }
     
     try {
-        const { data: payments, error } = await supabaseClient.from('payments').select('*').eq('member_id', currentUser.id).order('submitted_at', { ascending: false });
+        const { data: payments, error } = await window.supabaseClient.from('payments').select('*').eq('member_id', currentUser.id).order('submitted_at', { ascending: false });
         const historyBody = document.getElementById('paymentHistoryBody');
         if(historyBody) {
             if(payments && payments.length > 0) {
@@ -642,38 +657,90 @@ function openPaymentSlip() {
     if(checkboxes) checkboxes.forEach(cb => cb.checked = false);
 }
 
+// পেমেন্ট স্লিপ জেনারেট করার ফাংশন
+function generatePaymentSlip(paymentYear, selectedMonths, paymentMethod, senderMobile, transactionId, amount) {
+    const dateTime = new Date().toLocaleString('bn-BD');
+    const slipNumber = 'TUKN-' + Date.now();
+    
+    return `
+        <div style="text-align:center; border:3px solid #059669; border-radius:12px; padding:20px; background:white;">
+            <div style="text-align:center; margin-bottom:15px;">
+                <i class="fas fa-mosque" style="font-size:40px; color:#059669;"></i>
+                <h2 style="font-size:20px; font-weight:bold; color:#059669;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2>
+                <p style="font-size:14px; font-weight:bold; color:#047857;">পেমেন্ট স্লিপ</p>
+            </div>
+            <div style="border-top:2px solid #059669; padding-top:15px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:14px;">
+                    <div><strong>স্লিপ নং:</strong> ${slipNumber}</div>
+                    <div><strong>তারিখ:</strong> ${dateTime}</div>
+                    <div><strong>সদস্য আইডি:</strong> ${currentUser.id}</div>
+                    <div><strong>নাম:</strong> ${currentUser.name}</div>
+                    <div><strong>মোবাইল:</strong> ${currentUser.mobile}</div>
+                    <div><strong>পদ্ধতি:</strong> ${paymentMethod}</div>
+                    <div><strong>মাস:</strong> ${selectedMonths.join(', ')} ${paymentYear}</div>
+                    <div><strong>সেন্ডার মোবাইল:</strong> ${senderMobile}</div>
+                    <div><strong>ট্রানজেকশন আইডি:</strong> ${transactionId}</div>
+                </div>
+                <div style="border-top:1px dashed #ccc; margin-top:15px; padding-top:15px; text-align:center;">
+                    <div><strong>পরিমাণ:</strong> <span style="font-size:18px; color:#059669;">${amount.toLocaleString()} টাকা</span></div>
+                    <div><strong>স্ট্যাটাস:</strong> <span style="color:#eab308;">⏳ অনুমোদনের অপেক্ষায়</span></div>
+                </div>
+                <div style="margin-top:20px; text-align:center; font-size:11px; color:#999;">
+                    <p>স্বয়ংক্রিয়ভাবে জেনারেটেড স্লিপ</p>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 async function generateSlipAndPrint() {
-    if(!currentUser || !supabaseClient) return;
+    if(!currentUser) return;
+    
     const paymentYear = document.getElementById('paymentYear').value;
     const selectedMonthNames = Array.from(document.querySelectorAll('.month-cb:checked')).map(cb => cb.value);
     const paymentMethod = document.getElementById('paymentMethod').value;
     const senderMobile = document.getElementById('senderMobile').value;
     const transactionId = document.getElementById('transactionId').value;
-    if(!paymentYear || selectedMonthNames.length === 0 || !paymentMethod || !senderMobile || !transactionId) { alert('সব তথ্য পূরণ করুন।'); return; }
-    const totalAmount = selectedMonthNames.length * currentUser.monthlySavings;
-    const perMonthAmount = currentUser.monthlySavings;
-    showToast('পেমেন্ট তথ্য জমা হচ্ছে...', 'success');
+    const paymentAmount = parseFloat(document.getElementById('paymentAmount')?.value) || currentUser.monthlySavings;
+    
+    if(!paymentYear || selectedMonthNames.length === 0 || !paymentMethod || !senderMobile || !transactionId) { 
+        alert('সব তথ্য পূরণ করুন।'); 
+        return; 
+    }
+    
+    showToast('পেমেন্ট তথ্য জমা হচ্ছে...', 'info');
+    
     try {
         for(const month of selectedMonthNames) {
-            await supabaseClient.from('payments').insert([{
-                member_id: currentUser.id, member_name: currentUser.name, year: paymentYear,
-                month: month, amount: perMonthAmount, payment_method: paymentMethod,
-                sender_mobile: senderMobile, transaction_id: transactionId,
-                status: 'pending', submitted_at: new Date().toISOString()
+            const { error } = await window.supabaseClient.from('payments').insert([{
+                member_id: currentUser.id,
+                member_name: currentUser.name,
+                year: paymentYear,
+                month: month,
+                amount: paymentAmount,
+                payment_method: paymentMethod,
+                sender_mobile: senderMobile,
+                transaction_id: transactionId,
+                status: 'pending',
+                submitted_at: new Date().toISOString()
             }]);
+            
+            if(error) throw error;
         }
+        
         showToast('পেমেন্ট তথ্য জমা হয়েছে! অনুমোদনের অপেক্ষায়...', 'success');
-        const slipHTML = `<div id="slipContainer"><div style="text-align:center; margin-bottom:15px; border:3px solid #059669; border-radius:12px; padding:12px; background:linear-gradient(135deg,#f0fdf4 0%,#dcfce7 100%);"><i class="fas fa-mosque" style="font-size:28px; color:#059669;"></i><h2 style="font-size:18px; font-weight:bold; color:#059669;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2><p style="font-size:14px; font-weight:bold; color:#047857;">পেমেন্ট স্লিপ</p></div><div style="border:2px solid #059669; border-radius:10px; padding:15px; background:white;"><div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:13px;"><div><strong>মেম্বার আইডি:</strong> ${currentUser.id}</div><div><strong>নাম:</strong> ${currentUser.name}</div><div><strong>মোবাইল:</strong> ${currentUser.mobile}</div><div><strong>পেমেন্ট মাধ্যম:</strong> ${paymentMethod}</div><div><strong>মাসসমূহ:</strong> ${selectedMonthNames.join(', ')}</div></div><div style="border-top:1px dashed #ccc; padding-top:10px;"><div><strong>পরিমাণ:</strong> ${totalAmount}.00 টাকা</div><div><strong>স্ট্যাটাস:</strong> <span class="text-yellow-600">⏳ অনুমোদনের অপেক্ষায়</span></div></div></div></div>`;
-        const slipArea = document.getElementById('slipPrintArea');
-        if(slipArea) slipArea.innerHTML = slipHTML;
+        
+        const slipHTML = generatePaymentSlip(paymentYear, selectedMonthNames, paymentMethod, senderMobile, transactionId, paymentAmount);
+        document.getElementById('slipPrintArea').innerHTML = slipHTML;
+        
         closePaymentInfoModal();
-        const slipModal = document.getElementById('paymentSlipModal');
-        if(slipModal) {
-            slipModal.classList.remove('hidden');
-            slipModal.classList.add('flex');
-        }
-        await loadPaymentHistory();
-    } catch(error) { alert('পেমেন্ট জমা দিতে ব্যর্থ হয়েছে!'); }
+        document.getElementById('paymentSlipModal').classList.remove('hidden');
+        document.getElementById('paymentSlipModal').classList.add('flex');
+        
+    } catch(error) { 
+        console.error('Error:', error);
+        alert('পেমেন্ট জমা দিতে ব্যর্থ হয়েছে!'); 
+    }
 }
 
 // Modal close functions
@@ -882,9 +949,9 @@ function processWithdraw() {
 }
 
 async function loadNotices() { 
-    if(!supabaseClient) return;
+    if(!window.supabaseClient) return;
     try {
-        const { data: notices, error } = await supabaseClient.from('notices').select('*').eq('status', 'active');
+        const { data: notices, error } = await window.supabaseClient.from('notices').select('*').eq('status', 'active');
         const container = document.getElementById('noticeContainer');
         if(container) {
             if(notices && notices.length > 0) {
@@ -905,16 +972,16 @@ async function uploadProfileImage(event) {
     const file = event.target.files[0];
     if(!file) return;
     if(file.size > 2*1024*1024) { showToast('ফাইল 2MB এর ছোট হতে হবে!','error'); return; }
-    if(!supabaseClient) { showToast('Supabase ক্লায়েন্ট পাওয়া যায়নি!','error'); return; }
+    if(!window.supabaseClient) { showToast('Supabase ক্লায়েন্ট পাওয়া যায়নি!','error'); return; }
     showToast('ছবি আপলোড হচ্ছে...','info');
     try {
         const fileExt = file.name.split('.').pop();
         const fileName = `${currentUser.id}_${Date.now()}.${fileExt}`;
         const filePath = `profile-images/${fileName}`;
-        await supabaseClient.storage.from('member-profiles').upload(filePath, file);
-        const { data: urlData } = supabaseClient.storage.from('member-profiles').getPublicUrl(filePath);
+        await window.supabaseClient.storage.from('member-profiles').upload(filePath, file);
+        const { data: urlData } = window.supabaseClient.storage.from('member-profiles').getPublicUrl(filePath);
         const imageUrl = urlData.publicUrl;
-        await supabaseClient.from('members').update({ profile_image: imageUrl }).eq('member_id', currentUser.id);
+        await window.supabaseClient.from('members').update({ profile_image: imageUrl }).eq('member_id', currentUser.id);
         currentUser.profileImage = imageUrl;
         const profileImg = document.getElementById('profileImage');
         if(profileImg) profileImg.src = imageUrl;
@@ -977,11 +1044,11 @@ function forgotPassword() { showToast('পাসওয়ার্ড রিস�
 
 async function loadReferralData() {
     if(!currentUser || currentUser.status !== 'active' || isLoadingReferral) return;
-    if(!supabaseClient) return;
+    if(!window.supabaseClient) return;
     
     isLoadingReferral = true;
     try {
-        const { data: allMembers, error } = await supabaseClient.from('members').select('member_id, monthly_savings, referred_by, referral_code, status');
+        const { data: allMembers, error } = await window.supabaseClient.from('members').select('member_id, monthly_savings, referred_by, referral_code, status');
         if (error) throw error;
         if (!allMembers) { isLoadingReferral = false; return; }
         
