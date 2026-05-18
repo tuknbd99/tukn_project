@@ -1060,6 +1060,150 @@ async function initSupabaseFunctions() {
         console.error('❌ Initialization Error:', err);
     }
 }
+// ==================== সদস্য লগইন ফাংশন (যোগ করুন) ====================
+
+async function verifyMemberLogin(username, password) {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        if (!username || !password) {
+            showToast('সদস্য আইডি/মোবাইল এবং পাসওয়ার্ড দিন', 'error');
+            return null;
+        }
+
+        let query = client.from('members').select('*');
+        
+        // চেক করুন username মোবাইল নম্বর কিনা
+        if(username.match(/^01[3-9]\d{8}$/)) {
+            query = query.eq('mobile', username);
+        } else {
+            query = query.eq('member_id', username);
+        }
+        
+        const { data, error } = await query;
+        
+        if (error && error.code !== 'PGRST116') throw error;
+        
+        const member = data?.[0];
+        
+        if (!member) {
+            showToast('সদস্য আইডি/মোবাইল নম্বর সঠিক নয়!', 'error');
+            return null;
+        }
+        
+        if (member.password !== password) {
+            showToast('পাসওয়ার্ড ভুল!', 'error');
+            return null;
+        }
+        
+        if (member.status !== 'active' && member.status !== 'approved') {
+            showToast('আপনার একাউন্ট এখনও অনুমোদিত হয়নি।', 'warning');
+            return null;
+        }
+        
+        console.log('✅ Member Login Successful:', member.full_name);
+        return member;
+        
+    } catch (err) {
+        console.error('verifyMemberLogin Error:', err);
+        showToast('লগইন করতে ব্যর্থ হয়েছে!', 'error');
+        return null;
+    }
+}
+
+function saveMemberSession(member, rememberMe = false) {
+    try {
+        const sessionData = {
+            member_id: member.member_id,
+            full_name: member.full_name,
+            mobile: member.mobile,
+            referral_code: member.referral_code,
+            join_date: member.join_date,
+            member_type: member.member_type || 'সাধারণ সদস্য',
+            monthly_savings: member.monthly_savings || 500,
+            status: member.status,
+            loggedIn: true,
+            loginTime: new Date().toISOString()
+        };
+        
+        // সব সময় sessionStorage এ রাখুন
+        sessionStorage.setItem('tukn_logged_member', JSON.stringify(sessionData));
+        
+        // rememberMe চেক করা থাকলে localStorage এ রাখুন
+        if (rememberMe) {
+            localStorage.setItem('tukn_logged_member', JSON.stringify(sessionData));
+        }
+        
+        console.log('✅ Member session saved');
+        return true;
+        
+    } catch (err) {
+        console.error('saveMemberSession Error:', err);
+        return false;
+    }
+}
+
+function getMemberSession() {
+    try {
+        // প্রথমে localStorage চেক করুন
+        let sessionData = localStorage.getItem('tukn_logged_member');
+        
+        // না পেলে sessionStorage চেক করুন
+        if (!sessionData) {
+            sessionData = sessionStorage.getItem('tukn_logged_member');
+        }
+        
+        if (!sessionData) {
+            return null;
+        }
+        
+        const member = JSON.parse(sessionData);
+        
+        // চেক করুন লগইন বৈধ কিনা
+        if (!member.loggedIn) {
+            return null;
+        }
+        
+        // স্ট্যাটাস চেক
+        if (member.status !== 'active' && member.status !== 'approved') {
+            return null;
+        }
+        
+        return member;
+        
+    } catch (err) {
+        console.error('getMemberSession Error:', err);
+        return null;
+    }
+}
+
+function clearMemberSession() {
+    localStorage.removeItem('tukn_logged_member');
+    sessionStorage.removeItem('tukn_logged_member');
+    console.log('✅ Member session cleared');
+}
+
+function isMemberLoggedIn() {
+    return getMemberSession() !== null;
+}
+
+function memberLogout() {
+    clearMemberSession();
+    showToast('লগআউট সফল!', 'success');
+    setTimeout(() => {
+        window.location.href = 'index.html';
+    }, 1000);
+    return true;
+}
+
+// ==================== গ্লোবাল এক্সপোর্ট (শেষে যোগ করুন) ====================
+
+// নতুন ফাংশনগুলি এক্সপোর্ট করুন
+window.verifyMemberLogin = verifyMemberLogin;
+window.saveMemberSession = saveMemberSession;
+window.getMemberSession = getMemberSession;
+window.clearMemberSession = clearMemberSession;
+window.isMemberLoggedIn = isMemberLoggedIn;
+window.memberLogout = memberLogout;
 
 // পেজ লোড হলে ইনিশিয়ালাইজ করুন (সিঙ্গেল ইভেন্ট)
 if (document.readyState === 'loading') {
