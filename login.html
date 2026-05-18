@@ -473,7 +473,7 @@ if(togglePassword) {
     });
 }
 
-// ==================== লগইন হ্যান্ডলার (আপডেটেড) ====================
+// ==================== লগইন হ্যান্ডলার (আপডেটেড - উভয় ফরম্যাটে সেভ করে) ====================
 async function handleLogin(event) {
     event.preventDefault();
     
@@ -511,31 +511,10 @@ async function handleLogin(event) {
         if(member && member.password === password) {
             // Check status
             if(member.status === 'approved' || member.status === 'active') {
-                // Login successful - উভয় ফরম্যাটে ডাটা সংরক্ষণ করুন
                 
-                // স্ট্যান্ডার্ড ডাটা অবজেক্ট
-                const userData = { 
-                    id: member.member_id,
-                    member_id: member.member_id,
-                    name: member.full_name,
-                    full_name: member.full_name,
-                    mobile: member.mobile,
-                    email: member.email || '',
-                    joinDate: member.join_date,
-                    join_date: member.join_date,
-                    profileImage: member.profile_image,
-                    profile_image: member.profile_image,
-                    referId: member.referral_code,
-                    referral_code: member.referral_code,
-                    member_type: member.member_type || 'সাধারণ সদস্য',
-                    monthly_savings: member.monthly_savings || 500,
-                    monthlySavings: member.monthly_savings || 500,
-                    status: member.status,
-                    loggedIn: true,
-                    loginTime: new Date().toISOString()
-                };
+                // ========== মূল ফিক্স: উভয় ফরম্যাটে ডাটা সংরক্ষণ ==========
                 
-                // TUKNBD_user ফরম্যাট (আগের মতো)
+                // ফরম্যাট 1: TUKNBD_user (আপনার পুরনো ফরম্যাট)
                 const tuknUserData = { 
                     id: member.member_id,
                     name: member.full_name,
@@ -546,43 +525,42 @@ async function handleLogin(event) {
                     monthlySavings: member.monthly_savings || 500,
                     profileImage: member.profile_image,
                     status: member.status,
+                    loggedIn: true,
+                    loginTime: new Date().toISOString()
+                };
+                
+                // ফরম্যাট 2: tukn_logged_member (ড্যাশবোর্ড যেটা খুঁজছে)
+                const dashboardUserData = {
+                    member_id: member.member_id,
+                    full_name: member.full_name,
+                    mobile: member.mobile,
+                    referral_code: member.referral_code,
+                    join_date: member.join_date,
+                    member_type: member.member_type || 'সাধারণ সদস্য',
+                    monthly_savings: member.monthly_savings || 500,
+                    status: member.status,
                     loggedIn: true
                 };
                 
-                // উভয় স্টোরেজ কী-তে ডাটা সংরক্ষণ করুন
-                const storage = rememberMe ? localStorage : sessionStorage;
+                // স্টোরেজ নির্বাচন (rememberMe এর উপর ভিত্তি করে)
+                const permanentStorage = localStorage;
+                const tempStorage = sessionStorage;
                 
-                // TUKNBD_user ফরম্যাট
-                storage.setItem('TUKNBD_user', JSON.stringify(tuknUserData));
+                if(rememberMe) {
+                    // উভয় ফরম্যাট localStorage-এ
+                    permanentStorage.setItem('TUKNBD_user', JSON.stringify(tuknUserData));
+                    permanentStorage.setItem('tukn_logged_member', JSON.stringify(dashboardUserData));
+                }
                 
-                // tukn_logged_member ফরম্যাট (dashboard যেটা খুঁজছে)
-                storage.setItem('tukn_logged_member', JSON.stringify({
-                    member_id: member.member_id,
-                    full_name: member.full_name,
-                    mobile: member.mobile,
-                    referral_code: member.referral_code,
-                    join_date: member.join_date,
-                    member_type: member.member_type,
-                    monthly_savings: member.monthly_savings,
-                    status: member.status,
-                    loggedIn: true
-                }));
+                // সবসময় sessionStorage-এ রাখুন (পেজ রিলোডেও কাজ করবে)
+                tempStorage.setItem('TUKNBD_user', JSON.stringify(tuknUserData));
+                tempStorage.setItem('tukn_logged_member', JSON.stringify(dashboardUserData));
                 
-                // sessionStorage এও রাখুন (পেজ রিলোডে কাজ করবে)
-                sessionStorage.setItem('TUKNBD_user', JSON.stringify(tuknUserData));
-                sessionStorage.setItem('tukn_logged_member', JSON.stringify({
-                    member_id: member.member_id,
-                    full_name: member.full_name,
-                    mobile: member.mobile,
-                    referral_code: member.referral_code,
-                    join_date: member.join_date,
-                    status: member.status,
-                    loggedIn: true
-                }));
+                console.log('✅ লগইন সফল! ডাটা সংরক্ষিত হয়েছে:');
+                console.log('- TUKNBD_user:', tuknUserData);
+                console.log('- tukn_logged_member:', dashboardUserData);
                 
-                console.log('✅ Login successful, data saved in both formats');
                 showCenterNotification(`স্বাগতম ${member.full_name}!`, 'success');
-                
                 setTimeout(() => { 
                     window.location.href = 'member-dashboard.html'; 
                 }, 1500);
@@ -683,13 +661,15 @@ if(forgotForm) {
 const loginForm = document.getElementById('loginForm');
 if(loginForm) loginForm.addEventListener('submit', handleLogin);
 
-// ==================== ইতিমধ্যে লগইন করা থাকলে redirect ====================
+// ==================== ইতিমধ্যে লগইন করা থাকলে redirect (উভয় ফরম্যাট চেক করে) ====================
 window.addEventListener('DOMContentLoaded', function() {
-    const savedUser = sessionStorage.getItem('TUKNBD_user') || localStorage.getItem('TUKNBD_user');
+    // উভয় ফরম্যাট চেক করুন
+    let savedUser = sessionStorage.getItem('TUKNBD_user') || localStorage.getItem('TUKNBD_user');
+    let savedDashboardUser = sessionStorage.getItem('tukn_logged_member') || localStorage.getItem('tukn_logged_member');
     
-    if(savedUser) {
+    if(savedUser || savedDashboardUser) {
         try {
-            const user = JSON.parse(savedUser);
+            const user = savedUser ? JSON.parse(savedUser) : JSON.parse(savedDashboardUser);
             if(user && user.loggedIn === true) {
                 // ইতিমধ্যে লগইন করা, ড্যাশবোর্ডে পাঠান
                 window.location.href = 'member-dashboard.html';
@@ -700,13 +680,8 @@ window.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // Session storage cleanup if needed
-    sessionStorage.removeItem('TUKNBD_user');
-});
-
-// পেজ আনলোড হলে কোনো ক্লিনআপ প্রয়োজন হলে
-window.addEventListener('beforeunload', function() {
-    
+    // ক্লিনআপ - পুরনো সেশন ডাটা রিমুভ করবেন না, শুধু চেক করুন
+    console.log('No active session found. Please login.');
 });
 </script>
 </body>
