@@ -199,15 +199,16 @@ async function getMemberByMemberId(memberId) {
     }
 }
 
-// সিরিয়াল নম্বর জেনারেট করার জন্য ফাংশন
+// ==================== সিরিয়াল নম্বর জেনারেট করার ফাংশন ====================
+
 async function getNextMemberSerial() {
     const client = supabase || window.supabase || window._supabase;
     try {
-        // সব সদস্যকে member_id অনুযায়ী সাজান
+        // সব সদস্যকে created_at অনুযায়ী সাজান (সবচেয়ে নতুন প্রথমে)
         const { data, error } = await client
             .from('members')
             .select('member_id')
-            .order('member_id', { ascending: false })
+            .order('created_at', { ascending: false })
             .limit(1);
         
         if (error) throw error;
@@ -215,17 +216,15 @@ async function getNextMemberSerial() {
         let lastSerial = 0;
         
         if (data && data.length > 0 && data[0].member_id) {
-            // শেষ member_id থেকে সিরিয়াল নম্বর বের করুন
             const lastId = data[0].member_id;
-            const match = lastId.match(/\d{6}-\d{4}$/);
-            if (match) {
-                const lastNumber = parseInt(match[0].split('-')[1]);
-                if (!isNaN(lastNumber)) {
-                    lastSerial = lastNumber;
-                }
+            // ফরম্যাট: YYMMDD-XXXX (যেমন: 260518-0001)
+            const match = lastId.match(/\d{6}-(\d{4})$/);
+            if (match && match[1]) {
+                lastSerial = parseInt(match[1]);
             }
         }
         
+        console.log('📊 Next serial:', lastSerial + 1);
         return lastSerial + 1;
         
     } catch (err) {
@@ -234,7 +233,8 @@ async function getNextMemberSerial() {
     }
 }
 
-// আপডেটেড addNewMember ফাংশন
+// ==================== আপডেটেড addNewMember ফাংশন ====================
+
 async function addNewMember(memberData) {
     const client = supabase || window.supabase || window._supabase;
     try {
@@ -267,8 +267,9 @@ async function addNewMember(memberData) {
         // ডিফল্ট স্ট্যাটাস pending (এডমিন অনুমোদন না করা পর্যন্ত)
         memberData.status = memberData.status || 'pending';
         
-        // মাসিক সঞ্চয় সংরক্ষণ করুন কিন্তু ড্যাশবোর্ডে শুধু অনুমোদিত পেমেন্ট দেখাবে
+        // মাসিক সঞ্চয় সংরক্ষণ করুন
         memberData.monthly_savings = memberData.monthly_savings || 500;
+        memberData.join_date = memberData.join_date || new Date().toISOString();
 
         const { data, error } = await client
             .from('members')
@@ -1108,7 +1109,8 @@ async function initSupabaseFunctions() {
         console.error('❌ Initialization Error:', err);
     }
 }
-// ==================== সদস্য লগইন ফাংশন (যোগ করুন) ====================
+
+// ==================== সদস্য লগইন ফাংশন ====================
 
 async function verifyMemberLogin(username, password) {
     const client = supabase || window.supabase || window._supabase;
@@ -1243,9 +1245,9 @@ function memberLogout() {
     return true;
 }
 
-// ==================== গ্লোবাল এক্সপোর্ট (শেষে যোগ করুন) ====================
+// ==================== গ্লোবাল এক্সপোর্ট ====================
 
-// নতুন ফাংশনগুলি এক্সপোর্ট করুন
+// লগইন ফাংশন এক্সপোর্ট
 window.verifyMemberLogin = verifyMemberLogin;
 window.saveMemberSession = saveMemberSession;
 window.getMemberSession = getMemberSession;
@@ -1253,14 +1255,8 @@ window.clearMemberSession = clearMemberSession;
 window.isMemberLoggedIn = isMemberLoggedIn;
 window.memberLogout = memberLogout;
 
-// পেজ লোড হলে ইনিশিয়ালাইজ করুন (সিঙ্গেল ইভেন্ট)
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initSupabaseFunctions);
-} else {
-    initSupabaseFunctions();
-}
-
-// গ্লোবাল ফাংশন এক্সপোর্ট
+// কোর ফাংশন এক্সপোর্ট
+window.getNextMemberSerial = getNextMemberSerial;
 window.initSupabaseClient = initSupabaseClient;
 window.testSupabaseConnection = testSupabaseConnection;
 window.getAllMembers = getAllMembers;
@@ -1304,5 +1300,12 @@ window.deleteSliderById = deleteSliderById;
 window.getVisitorCount = getVisitorCount;
 window.incrementVisitorCount = incrementVisitorCount;
 window.showToast = showToast;
+
+// পেজ লোড হলে ইনিশিয়ালাইজ করুন
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSupabaseFunctions);
+} else {
+    initSupabaseFunctions();
+}
 
 console.log('✅ supabase-functions.js loaded (final version)');
