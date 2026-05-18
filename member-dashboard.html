@@ -93,7 +93,6 @@
         .overflow-y-auto { overflow-y: auto; }
         .rounded-lg { border-radius: 0.5rem; }
         
-        /* মডাল ক্লোজ বাটন স্টাইল */
         .modal-close-btn { cursor: pointer; transition: all 0.2s; }
         .modal-close-btn:hover { color: #ef4444; transform: scale(1.1); }
     </style>
@@ -376,6 +375,63 @@
 <div id="monogramModal" class="fixed inset-0 bg-black/70 z-50 hidden items-center justify-center p-4"><div class="bg-white rounded-2xl max-w-md w-full p-6 text-center"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-image mr-2"></i>টিইউকেএনবিডি মনোগ্রাম</h3><button onclick="closeMonogramModal()" class="text-gray-500 modal-close-btn text-2xl">&times;</button></div><div class="flex justify-center mb-4"><img src="images/logo.png" alt="TUKNBD Monogram" class="w-40 h-40 object-cover rounded-xl shadow-lg" onerror="this.src='https://placehold.co/160x160/059669/white?text=TUKNBD'"></div><p class="text-gray-600 text-sm">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</p><p class="text-gray-400 text-xs mt-2">সকল প্রকার কল্যাণমূলক কাজে এই লোগো ব্যবহারযোগ্য</p><button onclick="closeMonogramModal()" class="mt-4 bg-emerald-600 text-white px-6 py-2 rounded-lg hover:bg-emerald-700 transition">বন্ধ করুন</button></div></div>
 
 <script>
+    // ========== সঠিক লগইন চেক (রিডাইরেক্ট লুপ ঠিক করা হয়েছে) ==========
+    (function() {
+        // স্টোরেজ থেকে ডাটা নিন
+        let memberData = null;
+        
+        try {
+            memberData = sessionStorage.getItem('tukn_logged_member');
+            if (!memberData) {
+                memberData = localStorage.getItem('tukn_logged_member');
+            }
+            
+            if (!memberData) {
+                console.log('No login data found, redirecting to home');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            const member = JSON.parse(memberData);
+            
+            if (!member.member_id || !member.loggedIn) {
+                console.log('Invalid login data, redirecting to home');
+                sessionStorage.removeItem('tukn_logged_member');
+                localStorage.removeItem('tukn_logged_member');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            // স্ট্যাটাস চেক
+            if (member.status !== 'active' && member.status !== 'approved') {
+                console.log('Member not active');
+                showToast('আপনার একাউন্ট এখনও অনুমোদিত হয়নি।', 'warning');
+                setTimeout(() => {
+                    window.location.href = 'index.html';
+                }, 2000);
+                return;
+            }
+            
+            // সফল লগইন - সদস্যের তথ্য সেট করুন
+            window.currentMember = member;
+            console.log('✅ Login valid for:', member.full_name);
+            
+        } catch(e) {
+            console.error('Dashboard auth error:', e);
+            window.location.href = 'index.html';
+        }
+    })();
+    
+    function showToast(message, type) {
+        const toast = document.createElement('div');
+        toast.className = `fixed bottom-4 right-4 px-4 py-2 rounded-lg text-white z-50 ${type === 'success' ? 'bg-green-600' : 'bg-red-600'}`;
+        toast.innerHTML = message;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+</script>
+
+<script>
 const supabaseClient = window.supabaseClient;
 let currentUser = null;
 let userBalances = { bonus: 0, profit: 0, capital: 0 };
@@ -385,14 +441,6 @@ let clockInterval = null;
 let isLoadingReferral = false;
 
 const banglaMonths = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
-
-function showToast(message, type) {
-    const toast = document.createElement('div');
-    toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${type === 'success' ? 'bg-green-600' : 'bg-red-600'}`;
-    toast.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'} mr-2"></i>${message}`;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
-}
 
 async function getMembersFromSupabase() {
     try {
@@ -420,17 +468,14 @@ async function getComplaintsFromSupabase() {
 
 // ==================== লগইনকৃত ইউজার লোড ====================
 async function loadCurrentUser() {
-    let userData = sessionStorage.getItem('TUKNBD_user') || localStorage.getItem('TUKNBD_user');
-    if (!userData) {
+    if (!window.currentMember) {
         showToast('আপনি লগইন করেননি!', 'error');
-        setTimeout(() => { window.location.href = 'login.html'; }, 1500);
+        setTimeout(() => { window.location.href = 'index.html'; }, 1500);
         return false;
     }
     try {
-        const user = JSON.parse(userData);
-        if (!user.loggedIn) throw new Error("Not logged in");
-        
-        const { data: memberData, error } = await supabaseClient.from('members').select('*').eq('member_id', user.id).single();
+        const member = window.currentMember;
+        const { data: memberData, error } = await supabaseClient.from('members').select('*').eq('member_id', member.member_id).single();
         if (error && error.code !== 'PGRST116') console.error('Supabase error:', error);
         
         if (memberData) {
@@ -438,8 +483,8 @@ async function loadCurrentUser() {
                 id: memberData.member_id,
                 name: memberData.full_name,
                 mobile: memberData.mobile,
-                referId: memberData.referral_code || user.referId,
-                joinDate: memberData.join_date || user.joinDate,
+                referId: memberData.referral_code,
+                joinDate: memberData.join_date || new Date().toISOString(),
                 memberType: memberData.member_type || 'সাধারণ সদস্য',
                 memberTerm: memberData.member_term || 0,
                 monthlySavings: memberData.monthly_savings || 500,
@@ -447,20 +492,20 @@ async function loadCurrentUser() {
                 presentDetails: memberData.present_details || '',
                 permanentDistrict: memberData.permanent_district || '',
                 permanentDetails: memberData.permanent_details || '',
-                profileImage: memberData.profile_image || user.profileImage || 'https://randomuser.me/api/portraits/men/1.jpg',
+                profileImage: memberData.profile_image || 'https://randomuser.me/api/portraits/men/1.jpg',
                 status: memberData.status || 'pending'
             };
         } else {
             currentUser = {
-                id: user.id, name: user.name || user.full_name, mobile: user.mobile,
-                referId: user.referId || `TUKN-REF-${Date.now()}`,
-                joinDate: user.joinDate || new Date().toISOString(),
-                memberType: user.memberType || 'সাধারণ সদস্য', memberTerm: user.memberTerm || 0,
-                monthlySavings: user.monthlySavings || 500,
-                presentDistrict: user.presentDistrict || '', presentDetails: user.presentDetails || '',
-                permanentDistrict: user.permanentDistrict || '', permanentDetails: user.permanentDetails || '',
-                profileImage: user.profileImage || 'https://randomuser.me/api/portraits/men/1.jpg',
-                status: user.status || 'pending'
+                id: member.member_id, name: member.full_name, mobile: member.mobile,
+                referId: member.referral_code,
+                joinDate: member.join_date || new Date().toISOString(),
+                memberType: member.member_type || 'সাধারণ সদস্য', memberTerm: 0,
+                monthlySavings: member.monthly_savings || 500,
+                presentDistrict: '', presentDetails: '',
+                permanentDistrict: '', permanentDetails: '',
+                profileImage: 'https://randomuser.me/api/portraits/men/1.jpg',
+                status: member.status || 'pending'
             };
         }
         
@@ -470,9 +515,6 @@ async function loadCurrentUser() {
             document.getElementById('totalPaidDisplay').innerHTML = '০';
             document.getElementById('paidMonthsDisplay').innerHTML = '০';
             document.getElementById('dueMonthsDisplay').innerHTML = '০';
-            document.getElementById('bonusBalance').innerHTML = '০';
-            document.getElementById('profitBalance').innerHTML = '০';
-            document.getElementById('currentBalanceDisplay').innerHTML = '০';
         } else {
             updateUI();
         }
@@ -482,7 +524,7 @@ async function loadCurrentUser() {
     } catch(e) {
         console.error('Error:', e);
         showToast('ইউজার তথ্য লোড করতে সমস্যা হয়েছে!', 'error');
-        setTimeout(() => { window.location.href = 'login.html'; }, 1500);
+        setTimeout(() => { window.location.href = 'index.html'; }, 1500);
         return false;
     }
 }
@@ -854,8 +896,6 @@ async function uploadProfileImage(event) {
         currentUser.profileImage = imageUrl;
         document.getElementById('profileImage').src = imageUrl;
         document.getElementById('cardProfileImage').src = imageUrl;
-        let userData = sessionStorage.getItem('TUKNBD_user') ? JSON.parse(sessionStorage.getItem('TUKNBD_user')) : null;
-        if(userData) { userData.profileImage = imageUrl; sessionStorage.setItem('TUKNBD_user', JSON.stringify(userData)); localStorage.setItem('TUKNBD_user', JSON.stringify(userData)); }
         showToast('প্রোফাইল ছবি আপলোড সম্পূর্ণ!','success');
     } catch(error) { showToast('আপলোড ব্যর্থ!','error'); }
 }
@@ -869,8 +909,9 @@ function shareIDCard() { showToast('শেয়ার করার অপশন �
 function logout() { 
     if(durationInterval) clearInterval(durationInterval); 
     if(clockInterval) clearInterval(clockInterval); 
-    sessionStorage.clear(); localStorage.removeItem('TUKNBD_user'); 
-    window.location.href = 'login.html'; 
+    sessionStorage.removeItem('tukn_logged_member');
+    localStorage.removeItem('tukn_logged_member');
+    window.location.href = 'index.html'; 
 }
 
 function showChangePasswordModal() { document.getElementById('passwordChangeModal').classList.remove('hidden'); document.getElementById('passwordChangeModal').classList.add('flex'); }
@@ -889,13 +930,13 @@ async function processChangePassword() {
         await supabaseClient.from('members').update({ password: newPass }).eq('member_id', currentUser.id);
         showToast('✅ পাসওয়ার্ড পরিবর্তন করা হয়েছে! আবার লগইন করুন।','success');
         closePasswordModal();
-        setTimeout(() => { sessionStorage.clear(); localStorage.removeItem('TUKNBD_user'); window.location.href = 'login.html'; }, 2000);
+        setTimeout(() => { sessionStorage.removeItem('tukn_logged_member'); localStorage.removeItem('tukn_logged_member'); window.location.href = 'login.html'; }, 2000);
     } catch(error) { showToast('পাসওয়ার্ড পরিবর্তন ব্যর্থ!','error'); }
 }
 
 function forgotPassword() { showToast('পাসওয়ার্ড রিসেট লিংক ইমেইলে পাঠানো হয়েছে।','info'); }
 
-// ==================== রেফারেল ফাংশন (সম্পূর্ণ) ====================
+// ==================== রেফারেল ফাংশন ====================
 async function loadMemberTotalBalance() {
     if(!currentUser || currentUser.status !== 'active') return;
     try {
@@ -905,9 +946,6 @@ async function loadMemberTotalBalance() {
         let totalWithdrawn = withdrawals?.reduce((s,w)=>s+(w.amount||0),0) || 0;
         const currentBalance = totalPaid - totalWithdrawn;
         document.getElementById('totalPaidDisplay').innerHTML = totalPaid.toLocaleString() + ' টাকা';
-        document.getElementById('currentBalanceDisplay').innerHTML = currentBalance.toLocaleString() + ' টাকা';
-        document.getElementById('bonusBalance').innerHTML = userBalances.bonus.toLocaleString() + ' টাকা';
-        document.getElementById('profitBalance').innerHTML = userBalances.profit.toLocaleString() + ' টাকা';
     } catch(e) { console.error('Balance error:', e); }
 }
 
@@ -981,7 +1019,7 @@ async function loadReferralData() {
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('Page loading...');
     const success = await loadCurrentUser();
-    if(!success) setTimeout(() => { window.location.href = 'login.html'; }, 1000);
+    if(!success) setTimeout(() => { window.location.href = 'index.html'; }, 1000);
 });
 </script>
 </body>
