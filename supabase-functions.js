@@ -199,6 +199,42 @@ async function getMemberByMemberId(memberId) {
     }
 }
 
+// সিরিয়াল নম্বর জেনারেট করার জন্য ফাংশন
+async function getNextMemberSerial() {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        // সব সদস্যকে member_id অনুযায়ী সাজান
+        const { data, error } = await client
+            .from('members')
+            .select('member_id')
+            .order('member_id', { ascending: false })
+            .limit(1);
+        
+        if (error) throw error;
+        
+        let lastSerial = 0;
+        
+        if (data && data.length > 0 && data[0].member_id) {
+            // শেষ member_id থেকে সিরিয়াল নম্বর বের করুন
+            const lastId = data[0].member_id;
+            const match = lastId.match(/\d{6}-\d{4}$/);
+            if (match) {
+                const lastNumber = parseInt(match[0].split('-')[1]);
+                if (!isNaN(lastNumber)) {
+                    lastSerial = lastNumber;
+                }
+            }
+        }
+        
+        return lastSerial + 1;
+        
+    } catch (err) {
+        console.error('❌ getNextMemberSerial Error:', err);
+        return 1;
+    }
+}
+
+// আপডেটেড addNewMember ফাংশন
 async function addNewMember(memberData) {
     const client = supabase || window.supabase || window._supabase;
     try {
@@ -207,21 +243,32 @@ async function addNewMember(memberData) {
             return null;
         }
 
+        // মোবাইল নম্বর চেক করুন
         const existing = await getMemberByMobile(memberData.mobile);
         if (existing) {
             showToast('❌ এই মোবাইলে ইতিমধ্যে সদস্য আছে', 'error');
             return null;
         }
 
+        // নতুন member_id জেনারেট করুন (ফরম্যাট: YYMMDD-SERIAL)
         if (!memberData.member_id) {
             const today = new Date();
-            const dateCode = 'TUKN-' +
-                today.getFullYear().toString().slice(-2) +
-                String(today.getMonth() + 1).padStart(2, '0') +
-                String(today.getDate()).padStart(2, '0') + '-' +
-                String(Math.floor(Math.random() * 9000) + 1000);
-            memberData.member_id = dateCode;
+            const year = today.getFullYear().toString().slice(-2);  // 26
+            const month = String(today.getMonth() + 1).padStart(2, '0');  // 05
+            const day = String(today.getDate()).padStart(2, '0');  // 18
+            
+            // পরবর্তী সিরিয়াল নম্বর পান
+            const nextSerial = await getNextMemberSerial();
+            
+            // ফরম্যাট: 260518-0001
+            memberData.member_id = `${year}${month}${day}-${String(nextSerial).padStart(4, '0')}`;
         }
+
+        // ডিফল্ট স্ট্যাটাস pending (এডমিন অনুমোদন না করা পর্যন্ত)
+        memberData.status = memberData.status || 'pending';
+        
+        // মাসিক সঞ্চয় সংরক্ষণ করুন কিন্তু ড্যাশবোর্ডে শুধু অনুমোদিত পেমেন্ট দেখাবে
+        memberData.monthly_savings = memberData.monthly_savings || 500;
 
         const { data, error } = await client
             .from('members')
@@ -231,8 +278,9 @@ async function addNewMember(memberData) {
         if (error) throw error;
         
         showToast(`✅ ${memberData.full_name} সফলভাবে নিবন্ধিত হয়েছেন!`, 'success');
-        console.log('✅ New Member Added:', data);
+        console.log('✅ New Member Added with ID:', memberData.member_id);
         return data;
+        
     } catch (err) {
         console.error('❌ addNewMember Error:', err);
         showToast('❌ সদস্য যোগ করতে ত্রুটি', 'error');
