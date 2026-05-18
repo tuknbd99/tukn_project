@@ -375,15 +375,23 @@
 <div id="monogramModal" class="fixed inset-0 bg-black/70 z-50 hidden items-center justify-center p-4"><div class="bg-white rounded-2xl max-w-md w-full p-6 text-center"><div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-image mr-2"></i>টিইউকেএনবিডি মনোগ্রাম</h3><button onclick="closeMonogramModal()" class="text-gray-500 modal-close-btn text-2xl">&times;</button></div><div class="flex justify-center mb-4"><img src="images/logo.png" alt="TUKNBD Monogram" class="w-40 h-40 object-cover rounded-xl shadow-lg" onerror="this.src='https://placehold.co/160x160/059669/white?text=TUKNBD'"></div><p class="text-gray-600 text-sm">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</p><p class="text-gray-400 text-xs mt-2">সকল প্রকার কল্যাণমূলক কাজে এই লোগো ব্যবহারযোগ্য</p><button onclick="closeMonogramModal()" class="mt-4 bg-emerald-600 text-white px-6 py-2 rounded-lg hover:bg-emerald-700 transition">বন্ধ করুন</button></div></div>
 
 <script>
-    // ========== সঠিক লগইন চেক (রিডাইরেক্ট লুপ ঠিক করা হয়েছে) ==========
+    // ========== সঠিক লগইন চেক (উভয় স্টোরেজ কী সাপোর্ট করে) ==========
     (function() {
-        // স্টোরেজ থেকে ডাটা নিন
         let memberData = null;
         
         try {
+            // প্রথমে tukn_logged_member চেক করুন
             memberData = sessionStorage.getItem('tukn_logged_member');
             if (!memberData) {
                 memberData = localStorage.getItem('tukn_logged_member');
+            }
+            
+            // যদি না পাওয়া যায়, তাহলে TUKNBD_user চেক করুন
+            if (!memberData) {
+                memberData = sessionStorage.getItem('TUKNBD_user');
+                if (!memberData) {
+                    memberData = localStorage.getItem('TUKNBD_user');
+                }
             }
             
             if (!memberData) {
@@ -394,16 +402,34 @@
             
             const member = JSON.parse(memberData);
             
-            if (!member.member_id || !member.loggedIn) {
+            // চেক করুন valid login কিনা (উভয় ফরম্যাট সাপোর্ট করে)
+            const isValidLogin = (member.member_id || member.id) && (member.loggedIn === true || member.loggedIn === 'true');
+            
+            if (!isValidLogin) {
                 console.log('Invalid login data, redirecting to home');
                 sessionStorage.removeItem('tukn_logged_member');
                 localStorage.removeItem('tukn_logged_member');
+                sessionStorage.removeItem('TUKNBD_user');
+                localStorage.removeItem('TUKNBD_user');
                 window.location.href = 'index.html';
                 return;
             }
             
+            // স্ট্যান্ডার্ড ফরম্যাটে কনভার্ট করুন
+            const standardizedMember = {
+                member_id: member.member_id || member.id,
+                full_name: member.full_name || member.name,
+                mobile: member.mobile,
+                referral_code: member.referral_code || member.referId,
+                join_date: member.join_date || member.joinDate,
+                member_type: member.member_type || member.memberType || 'সাধারণ সদস্য',
+                monthly_savings: member.monthly_savings || member.monthlySavings || 500,
+                status: member.status || 'active',
+                loggedIn: true
+            };
+            
             // স্ট্যাটাস চেক
-            if (member.status !== 'active' && member.status !== 'approved') {
+            if (standardizedMember.status !== 'active' && standardizedMember.status !== 'approved') {
                 console.log('Member not active');
                 showToast('আপনার একাউন্ট এখনও অনুমোদিত হয়নি।', 'warning');
                 setTimeout(() => {
@@ -413,8 +439,8 @@
             }
             
             // সফল লগইন - সদস্যের তথ্য সেট করুন
-            window.currentMember = member;
-            console.log('✅ Login valid for:', member.full_name);
+            window.currentMember = standardizedMember;
+            console.log('✅ Login valid for:', standardizedMember.full_name);
             
         } catch(e) {
             console.error('Dashboard auth error:', e);
@@ -476,7 +502,6 @@ async function loadCurrentUser() {
     try {
         const member = window.currentMember;
         const { data: memberData, error } = await supabaseClient.from('members').select('*').eq('member_id', member.member_id).single();
-        if (error && error.code !== 'PGRST116') console.error('Supabase error:', error);
         
         if (memberData) {
             currentUser = {
@@ -496,27 +521,23 @@ async function loadCurrentUser() {
                 status: memberData.status || 'pending'
             };
         } else {
+            // লোকাল স্টোরেজ থেকে ডেটা ব্যবহার করুন যদি Supabase এ না থাকে
             currentUser = {
-                id: member.member_id, name: member.full_name, mobile: member.mobile,
+                id: member.member_id,
+                name: member.full_name,
+                mobile: member.mobile,
                 referId: member.referral_code,
                 joinDate: member.join_date || new Date().toISOString(),
-                memberType: member.member_type || 'সাধারণ সদস্য', memberTerm: 0,
+                memberType: member.member_type || 'সাধারণ সদস্য',
+                memberTerm: 0,
                 monthlySavings: member.monthly_savings || 500,
-                presentDistrict: '', presentDetails: '',
-                permanentDistrict: '', permanentDetails: '',
+                presentDistrict: '',
+                presentDetails: '',
+                permanentDistrict: '',
+                permanentDetails: '',
                 profileImage: 'https://randomuser.me/api/portraits/men/1.jpg',
                 status: member.status || 'pending'
             };
-        }
-        
-        // ✅ স্ট্যাটাস চেক - পেন্ডিং সদস্যের জন্য টাকা দেখাবেন না
-        if(currentUser.status !== 'active') {
-            document.getElementById('monthlySavingsDisplay').innerHTML = '⏳ অনুমোদনের অপেক্ষায়';
-            document.getElementById('totalPaidDisplay').innerHTML = '০';
-            document.getElementById('paidMonthsDisplay').innerHTML = '০';
-            document.getElementById('dueMonthsDisplay').innerHTML = '০';
-        } else {
-            updateUI();
         }
         
         updateUI();
@@ -630,9 +651,6 @@ async function loadPaymentHistory() {
                     historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা</td><td class="p-2 text-yellow-600"><i class="fas fa-hourglass-half mr-1"></i>বিচারাধীন</td><td class="p-2">-</td></tr>`;
                 }
             });
-            if(payments.some(p => p.status === 'pending')) {
-                historyHtml += `<tr class="bg-yellow-50"><td colspan="4" class="p-2 text-center text-yellow-600 text-sm"><i class="fas fa-info-circle mr-1"></i>${payments.filter(p => p.status === 'pending').length} টি পেমেন্ট অনুমোদনের অপেক্ষায়</td></tr>`;
-            }
             historyBody.innerHTML = historyHtml;
         } else {
             loadDefaultPaymentHistory();
@@ -744,7 +762,7 @@ async function generateSlipAndPrint() {
     } catch(error) { alert('পেমেন্ট জমা দিতে ব্যর্থ হয়েছে!'); }
 }
 
-// ==================== ক্লোজ ফাংশন (সব মডালের জন্য) ====================
+// ==================== ক্লোজ ফাংশন ====================
 function closePaymentInfoModal() { document.getElementById('paymentInfoModal').classList.add('hidden'); }
 function closePaymentInfoModalOnOverlay(e) { if(e.target.id === 'paymentInfoModal') closePaymentInfoModal(); }
 function closePaymentSlipModal() { document.getElementById('paymentSlipModal').classList.add('hidden'); }
@@ -911,6 +929,8 @@ function logout() {
     if(clockInterval) clearInterval(clockInterval); 
     sessionStorage.removeItem('tukn_logged_member');
     localStorage.removeItem('tukn_logged_member');
+    sessionStorage.removeItem('TUKNBD_user');
+    localStorage.removeItem('TUKNBD_user');
     window.location.href = 'index.html'; 
 }
 
@@ -926,11 +946,11 @@ async function processChangePassword() {
     if(newPass.length < 4) { showToast('পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে!','error'); return; }
     try {
         const { data: member } = await supabaseClient.from('members').select('password').eq('member_id', currentUser.id).single();
-        if(member.password !== currentPass) { showToast('বর্তমান পাসওয়ার্ড ভুল!','error'); return; }
+        if(member && member.password !== currentPass) { showToast('বর্তমান পাসওয়ার্ড ভুল!','error'); return; }
         await supabaseClient.from('members').update({ password: newPass }).eq('member_id', currentUser.id);
         showToast('✅ পাসওয়ার্ড পরিবর্তন করা হয়েছে! আবার লগইন করুন।','success');
         closePasswordModal();
-        setTimeout(() => { sessionStorage.removeItem('tukn_logged_member'); localStorage.removeItem('tukn_logged_member'); window.location.href = 'login.html'; }, 2000);
+        setTimeout(() => { logout(); }, 2000);
     } catch(error) { showToast('পাসওয়ার্ড পরিবর্তন ব্যর্থ!','error'); }
 }
 
@@ -942,9 +962,6 @@ async function loadMemberTotalBalance() {
     try {
         const { data: approvedPayments } = await supabaseClient.from('payments').select('amount').eq('member_id', currentUser.id).eq('status', 'approved');
         let totalPaid = approvedPayments?.reduce((s,p)=>s+(p.amount||0),0) || 0;
-        const { data: withdrawals } = await supabaseClient.from('withdrawals').select('amount').eq('member_id', currentUser.id).eq('status', 'approved');
-        let totalWithdrawn = withdrawals?.reduce((s,w)=>s+(w.amount||0),0) || 0;
-        const currentBalance = totalPaid - totalWithdrawn;
         document.getElementById('totalPaidDisplay').innerHTML = totalPaid.toLocaleString() + ' টাকা';
     } catch(e) { console.error('Balance error:', e); }
 }
@@ -960,28 +977,26 @@ async function loadReferralData() {
         const directCount = directReferrals.length;
         
         let totalCommission = 0;
-        const levelCommission = {1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0,10:0};
+        const levelCommission = {1:0,2:0,3:0};
         
         for (const ref of directReferrals) {
             const savings = ref.monthly_savings || 500;
             levelCommission[1] += savings * 0.15;
             
             const level2Members = allMembers.filter(m => m.referred_by === ref.referral_code && m.status === 'active');
-            const uniqueLevel2 = level2Members.filter(l2 => !directReferrals.some(d => d.member_id === l2.member_id));
-            for (const l2 of uniqueLevel2) {
+            for (const l2 of level2Members) {
                 const savings2 = l2.monthly_savings || 500;
                 levelCommission[2] += savings2 * 0.10;
                 
                 const level3Members = allMembers.filter(m => m.referred_by === l2.referral_code && m.status === 'active');
-                const uniqueLevel3 = level3Members.filter(l3 => !directReferrals.some(d => d.member_id === l3.member_id) && !uniqueLevel2.some(l2m => l2m.member_id === l3.member_id));
-                for (const l3 of uniqueLevel3) {
+                for (const l3 of level3Members) {
                     const savings3 = l3.monthly_savings || 500;
                     levelCommission[3] += savings3 * 0.05;
                 }
             }
         }
         
-        for(let i=1; i<=10; i++) totalCommission += Math.floor(levelCommission[i]);
+        for(let i=1; i<=3; i++) totalCommission += Math.floor(levelCommission[i]);
         
         document.getElementById('directCount').innerText = directCount;
         document.getElementById('totalBonus').innerText = Math.floor(totalCommission).toLocaleString();
