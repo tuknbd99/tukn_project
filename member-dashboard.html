@@ -626,18 +626,90 @@ function calculateMembershipDuration() {
     document.getElementById('membershipDuration').innerHTML = text;
 }
 
-function loadSavingsData() {
+// সঠিক বকেয়া গণনার ফাংশন (আপডেটেড)
+async function loadSavingsData() {
     if(!currentUser || currentUser.status !== 'active') return;
-    const joinDate = new Date(currentUser.joinDate);
-    const now = new Date();
-    let monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
-    const paidMonths = Math.min(monthsSinceJoin + 1, 6);
-    const remainingMonths = Math.max(0, 6 - paidMonths);
-    const totalPaid = paidMonths * currentUser.monthlySavings;
     
-    document.getElementById('paidMonthsDisplay').innerText = paidMonths + ' মাস';
-    document.getElementById('dueMonthsDisplay').innerText = remainingMonths + ' মাস';
-    document.getElementById('totalPaidDisplay').innerText = totalPaid.toLocaleString() + ' টাকা';
+    try {
+        // সদস্যের join_date থেকে শুরু মাস নির্ধারণ
+        const joinDate = new Date(currentUser.joinDate);
+        const joinYear = joinDate.getFullYear();
+        const joinMonth = joinDate.getMonth(); // 0-11 (জানুয়ারি=0)
+        
+        // বর্তমান তারিখ
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth();
+        
+        // সদস্য হওয়ার পর থেকে কত মাস হয়েছে (বর্তমান মাস সহ)
+        let totalMonthsSinceJoin = (currentYear - joinYear) * 12 + (currentMonth - joinMonth) + 1;
+        
+        if (totalMonthsSinceJoin < 0) totalMonthsSinceJoin = 0;
+        
+        // অনুমোদিত পেমেন্টসমূহ গণনা করুন (শুধু approved)
+        const { data: approvedPayments, error } = await window.supabaseClient
+            .from('payments')
+            .select('amount, month, year')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved');
+        
+        if (error) throw error;
+        
+        // পরিশোধিত মাসের সংখ্যা (আলাদা বছর ও মাস বিবেচনা করে)
+        let paidMonthsCount = 0;
+        let totalPaid = 0;
+        
+        if (approvedPayments && approvedPayments.length > 0) {
+            // প্রতিটি পেমেন্টের জন্য বছর ও মাস চেক করুন
+            for (const payment of approvedPayments) {
+                if (payment.year && payment.month) {
+                    // মাসের নাম থেকে মাস নম্বর বের করুন
+                    const monthNames = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
+                    const monthIndex = monthNames.indexOf(payment.month);
+                    
+                    if (monthIndex !== -1 && payment.year) {
+                        const paymentDate = new Date(parseInt(payment.year), monthIndex, 1);
+                        const joinDateObj = new Date(joinYear, joinMonth, 1);
+                        
+                        // পেমেন্টের মাস join_date এর পরে কিনা চেক করুন
+                        if (paymentDate >= joinDateObj && paymentDate <= now) {
+                            paidMonthsCount++;
+                            totalPaid += payment.amount;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // বকেয়া মাস গণনা (মোট মাস - পরিশোধিত মাস)
+        const dueMonths = Math.max(0, totalMonthsSinceJoin - paidMonthsCount);
+        
+        // ইউজারের মাসিক সঞ্চয় থেকে প্রত্যাশিত মোট টাকা
+        const expectedTotal = totalMonthsSinceJoin * currentUser.monthlySavings;
+        const dueAmount = expectedTotal - totalPaid;
+        
+        // UI আপডেট করুন
+        document.getElementById('paidMonthsDisplay').innerText = paidMonthsCount + ' মাস';
+        document.getElementById('dueMonthsDisplay').innerHTML = `<span class="${dueMonths > 0 ? 'text-red-500' : 'text-green-600'}">${dueMonths} মাস</span>`;
+        document.getElementById('totalPaidDisplay').innerText = totalPaid.toLocaleString() + ' টাকা';
+        
+        // বকেয়া বেশি হলে সতর্কতা দেখান
+        if (dueMonths > 3) {
+            const dueElement = document.getElementById('dueMonthsDisplay');
+            if (dueElement) {
+                dueElement.innerHTML = `<span class="text-red-600 font-bold">${dueMonths} মাস (পেমেন্ট জমা দিন)</span>`;
+            }
+        }
+        
+        console.log(`📊 হিসাব: যোগদান: ${joinYear}-${joinMonth+1}, বর্তমান: ${currentYear}-${currentMonth+1}`);
+        console.log(`📊 মোট মাস: ${totalMonthsSinceJoin}, পরিশোধিত: ${paidMonthsCount}, বকেয়া: ${dueMonths}`);
+        
+    } catch(error) {
+        console.error('Error loading savings data:', error);
+        document.getElementById('paidMonthsDisplay').innerText = '০ মাস';
+        document.getElementById('dueMonthsDisplay').innerText = '০ মাস';
+        document.getElementById('totalPaidDisplay').innerText = '০ টাকা';
+    }
 }
 
 async function loadPaymentHistory() {
