@@ -1254,6 +1254,185 @@ function memberLogout() {
     return true;
 }
 
+// ==================== পেমেন্ট অনুমোদন ফাংশন ====================
+
+async function approvePayment(paymentId, adminId, adminName, adminRole) {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        const { data, error } = await client
+            .from('payments')
+            .update({ 
+                status: 'approved',
+                approved_at: new Date().toISOString(),
+                approved_by_id: adminId,
+                approved_by_name: adminName,
+                approved_by_role: adminRole || 'Admin'
+            })
+            .eq('id', paymentId)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ পেমেন্ট অনুমোদন করা হয়েছে!', 'success');
+        return data;
+        
+    } catch (err) {
+        console.error('❌ approvePayment Error:', err);
+        showToast('❌ অনুমোদন ব্যর্থ!', 'error');
+        return null;
+    }
+}
+
+async function rejectPayment(paymentId, adminId, adminName, reason) {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        const { data, error } = await client
+            .from('payments')
+            .update({ 
+                status: 'rejected',
+                rejected_at: new Date().toISOString(),
+                rejected_by_id: adminId,
+                rejected_by_name: adminName,
+                rejection_reason: reason || 'নির্দিষ্ট কারণ উল্লেখ নেই'
+            })
+            .eq('id', paymentId)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ পেমেন্ট বাতিল করা হয়েছে!', 'warning');
+        return data;
+        
+    } catch (err) {
+        console.error('❌ rejectPayment Error:', err);
+        showToast('❌ বাতিল করতে ব্যর্থ!', 'error');
+        return null;
+    }
+}
+
+async function getAllPendingPayments() {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        const { data, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('status', 'pending')
+            .order('submitted_at', { ascending: true });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllPendingPayments Error:', err);
+        return [];
+    }
+}
+
+async function getAllApprovedPayments() {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        const { data, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('status', 'approved')
+            .order('approved_at', { ascending: false });
+        
+        if (error) throw error;
+        return data || [];
+    } catch (err) {
+        console.error('❌ getAllApprovedPayments Error:', err);
+        return [];
+    }
+}
+
+async function getPaymentById(paymentId) {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        const { data, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('id', paymentId)
+            .single();
+        
+        if (error) throw error;
+        return data;
+    } catch (err) {
+        console.error('❌ getPaymentById Error:', err);
+        return null;
+    }
+}
+
+// ==================== অ্যাডমিন পারমিশন ম্যানেজমেন্ট ====================
+
+// ডিফল্ট পারমিশন সেটিংস
+const DEFAULT_PERMISSIONS = {
+    'super_admin': {
+        can_approve_members: true,
+        can_approve_payments: true,
+        can_manage_admins: true,
+        can_view_all_reports: true,
+        can_delete_members: true,
+        can_edit_settings: true,
+        can_manage_representatives: true
+    },
+    'admin': {
+        can_approve_members: false,
+        can_approve_payments: true,
+        can_manage_admins: false,
+        can_view_all_reports: true,
+        can_delete_members: false,
+        can_edit_settings: false,
+        can_manage_representatives: true
+    }
+};
+
+async function getAdminPermissions(adminId) {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        const { data, error } = await client
+            .from('admins')
+            .select('role, permissions, custom_permissions')
+            .eq('id', adminId)
+            .single();
+        
+        if (error) throw error;
+        
+        if (data.custom_permissions) {
+            return data.custom_permissions;
+        }
+        
+        return DEFAULT_PERMISSIONS[data.role] || DEFAULT_PERMISSIONS.admin;
+        
+    } catch (err) {
+        console.error('❌ getAdminPermissions Error:', err);
+        return DEFAULT_PERMISSIONS.admin;
+    }
+}
+
+async function updateAdminPermissions(adminId, permissions) {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        const { data, error } = await client
+            .from('admins')
+            .update({ custom_permissions: permissions })
+            .eq('id', adminId)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ পারমিশন আপডেট হয়েছে!', 'success');
+        return data;
+        
+    } catch (err) {
+        console.error('❌ updateAdminPermissions Error:', err);
+        showToast('❌ পারমিশন আপডেট ব্যর্থ!', 'error');
+        return null;
+    }
+}
+
+async function checkAdminPermission(adminId, permissionName) {
+    const permissions = await getAdminPermissions(adminId);
+    return permissions[permissionName] === true;
+}
 // ==================== গ্লোবাল এক্সপোর্ট ====================
 
 // লগইন ফাংশন এক্সপোর্ট
@@ -1309,6 +1488,17 @@ window.deleteSliderById = deleteSliderById;
 window.getVisitorCount = getVisitorCount;
 window.incrementVisitorCount = incrementVisitorCount;
 window.showToast = showToast;
+// পেমেন্ট ফাংশন এক্সপোর্ট
+window.approvePayment = approvePayment;
+window.rejectPayment = rejectPayment;
+window.getAllPendingPayments = getAllPendingPayments;
+window.getAllApprovedPayments = getAllApprovedPayments;
+window.getPaymentById = getPaymentById;
+
+// অ্যাডমিন পারমিশন ফাংশন এক্সপোর্ট
+window.getAdminPermissions = getAdminPermissions;
+window.updateAdminPermissions = updateAdminPermissions;
+window.checkAdminPermission = checkAdminPermission;
 
 // পেজ লোড হলে ইনিশিয়ালাইজ করুন
 if (document.readyState === 'loading') {
