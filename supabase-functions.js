@@ -204,32 +204,43 @@ async function getMemberByMemberId(memberId) {
 async function getNextMemberSerial() {
     const client = supabase || window.supabase || window._supabase;
     try {
-        // সব সদস্যকে created_at অনুযায়ী সাজান (সবচেয়ে নতুন প্রথমে)
+        // সব সদস্য থেকে সবচেয়ে বড় সিরিয়াল নম্বর বের করুন
         const { data, error } = await client
             .from('members')
-            .select('member_id')
-            .order('created_at', { ascending: false })
-            .limit(1);
+            .select('member_id');
         
         if (error) throw error;
         
-        let lastSerial = 0;
+        let maxSerial = 0;
         
-        if (data && data.length > 0 && data[0].member_id) {
-            const lastId = data[0].member_id;
-            // ফরম্যাট: YYMMDD-XXXX (যেমন: 260518-0001)
-            const match = lastId.match(/\d{6}-(\d{4})$/);
-            if (match && match[1]) {
-                lastSerial = parseInt(match[1]);
+        if (data && data.length > 0) {
+            for (const member of data) {
+                if (member.member_id) {
+                    // সিরিয়াল নম্বর বের করুন (শেষের 4 ডিজিট)
+                    const match = member.member_id.match(/-(\d{4})$/);
+                    if (match && match[1]) {
+                        const serial = parseInt(match[1]);
+                        if (serial > maxSerial) {
+                            maxSerial = serial;
+                        }
+                    }
+                }
             }
         }
         
-        console.log('📊 Next serial:', lastSerial + 1);
-        return lastSerial + 1;
+        // প্রথম সদস্যের জন্য 0017 থেকে শুরু (আপনার শেষ সিরিয়াল)
+        if (maxSerial === 0) {
+            maxSerial = 17;
+        }
+        
+        const nextSerial = maxSerial + 1;
+        
+        console.log(`📊 সর্বশেষ সিরিয়াল: ${String(maxSerial).padStart(4, '0')} → পরবর্তী সিরিয়াল: ${String(nextSerial).padStart(4, '0')}`);
+        return nextSerial;
         
     } catch (err) {
         console.error('❌ getNextMemberSerial Error:', err);
-        return 1;
+        return 18; // Error হলে 0018 থেকে শুরু
     }
 }
 
@@ -250,24 +261,22 @@ async function addNewMember(memberData) {
             return null;
         }
 
-        // নতুন member_id জেনারেট করুন (ফরম্যাট: YYMMDD-SERIAL)
+        // নতুন member_id জেনারেট করুন
         if (!memberData.member_id) {
             const today = new Date();
             const year = today.getFullYear().toString().slice(-2);  // 26
             const month = String(today.getMonth() + 1).padStart(2, '0');  // 05
-            const day = String(today.getDate()).padStart(2, '0');  // 18
+            const day = String(today.getDate()).padStart(2, '0');  // 19
             
-            // পরবর্তী সিরিয়াল নম্বর পান
+            // পরবর্তী সিরিয়াল নম্বর পান (ধারাবাহিকভাবে বাড়বে)
             const nextSerial = await getNextMemberSerial();
             
-            // ফরম্যাট: 260518-0001
+            // ফরম্যাট: 260519-0018
             memberData.member_id = `${year}${month}${day}-${String(nextSerial).padStart(4, '0')}`;
         }
 
-        // ডিফল্ট স্ট্যাটাস pending (এডমিন অনুমোদন না করা পর্যন্ত)
+        // ডিফল্ট স্ট্যাটাস pending
         memberData.status = memberData.status || 'pending';
-        
-        // মাসিক সঞ্চয় সংরক্ষণ করুন
         memberData.monthly_savings = memberData.monthly_savings || 500;
         memberData.join_date = memberData.join_date || new Date().toISOString();
 
@@ -279,7 +288,7 @@ async function addNewMember(memberData) {
         if (error) throw error;
         
         showToast(`✅ ${memberData.full_name} সফলভাবে নিবন্ধিত হয়েছেন!`, 'success');
-        console.log('✅ New Member Added with ID:', memberData.member_id);
+        console.log('✅ New Member ID:', memberData.member_id);
         return data;
         
     } catch (err) {
