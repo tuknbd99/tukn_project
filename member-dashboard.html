@@ -160,6 +160,12 @@
                 </div>
             </div>
             
+            <!-- মেয়াদি কাউন্টডাউন দেখানোর জায়গা -->
+            <div class="bg-amber-50 rounded-lg p-2 mt-2 text-center">
+                <span class="text-amber-700 text-xs font-semibold">মেয়াদ শেষ হতে বাকি:</span>
+                <span id="membershipExpiry" class="text-amber-800 text-sm font-bold ml-2">গণনা করা হচ্ছে...</span>
+            </div>
+            
             <div class="bg-gradient-to-r from-emerald-600 to-emerald-700 rounded-xl py-2 px-3 shadow-lg mt-3">
                 <div class="flex items-center justify-between">
                     <div>
@@ -451,6 +457,7 @@ let userBalances = { bonus: 0, profit: 0, capital: 0 };
 let currentWithdrawType = 'bonus';
 let durationInterval = null;
 let clockInterval = null;
+let expiryInterval = null;
 let isLoadingReferral = false;
 let selectedReceiver = null;
 
@@ -513,6 +520,7 @@ const banglaMonths = ['জানুয়ারি','ফেব্রুয়া
             referId: parsed.referral_code || parsed.referId,
             joinDate: parsed.join_date || parsed.joinDate || new Date().toISOString(),
             memberType: parsed.member_type || parsed.memberType || 'সাধারণ সদস্য',
+            memberTerm: parsed.member_term || 0,
             monthlySavings: parsed.monthly_savings || parsed.monthlySavings || 500,
             status: status,
             profileImage: parsed.profile_image || parsed.profileImage || 'https://randomuser.me/api/portraits/men/1.jpg'
@@ -530,6 +538,7 @@ const banglaMonths = ['জানুয়ারি','ফেব্রুয়া
 function handleLogout() {
     if(durationInterval) clearInterval(durationInterval);
     if(clockInterval) clearInterval(clockInterval);
+    if(expiryInterval) clearInterval(expiryInterval);
     
     localStorage.removeItem('tukn_logged_member');
     sessionStorage.removeItem('tukn_logged_member');
@@ -588,6 +597,10 @@ function updateUI() {
         loadSavingsData();
         loadPaymentHistory();
         loadReferralData();
+        // মেয়াদ কাউন্টডাউন শুরু করুন
+        calculateMembershipExpiry();
+        if(expiryInterval) clearInterval(expiryInterval);
+        expiryInterval = setInterval(calculateMembershipExpiry, 1000);
     }
     
     loadNotices();
@@ -613,6 +626,13 @@ function updateDigitalClock() {
 
 function calculateMembershipDuration() {
     if(!currentUser) return;
+    
+    // শুধুমাত্র active বা approved সদস্যদের জন্য গণনা শুরু হবে
+    if(currentUser.status !== 'active' && currentUser.status !== 'approved') {
+        document.getElementById('membershipDuration').innerHTML = 'অনুমোদনের অপেক্ষায়';
+        return;
+    }
+    
     const startDate = new Date(currentUser.joinDate);
     const now = new Date();
     let years = now.getFullYear() - startDate.getFullYear();
@@ -620,10 +640,75 @@ function calculateMembershipDuration() {
     let days = now.getDate() - startDate.getDate();
     let hours = now.getHours() - startDate.getHours();
     let minutes = now.getMinutes() - startDate.getMinutes();
-    if(days < 0) { const prevMonth = new Date(now.getFullYear(), now.getMonth(), 0); days += prevMonth.getDate(); months--; }
+    let seconds = now.getSeconds() - startDate.getSeconds();
+    
+    if(seconds < 0) { seconds += 60; minutes--; }
+    if(minutes < 0) { minutes += 60; hours--; }
+    if(hours < 0) { hours += 24; days--; }
+    if(days < 0) { 
+        const prevMonth = new Date(now.getFullYear(), now.getMonth(), 0); 
+        days += prevMonth.getDate(); 
+        months--; 
+    }
     if(months < 0) { months += 12; years--; }
-    let text = ''; if(years > 0) text += `${years} বছর `; if(months > 0) text += `${months} মাস `; if(days > 0) text += `${days} দিন `; text += `${hours} ঘন্টা ${minutes} মিনিট`;
+    
+    let text = '';
+    if(years > 0) text += `${years} বছর `;
+    if(months > 0) text += `${months} মাস `;
+    if(days > 0) text += `${days} দিন `;
+    text += `${hours} ঘন্টা ${minutes} মিনিট ${seconds} সেকেন্ড`;
+    
     document.getElementById('membershipDuration').innerHTML = text;
+}
+
+// মেয়াদি সদস্যদের জন্য কাউন্টডাউন ফাংশন
+function calculateMembershipExpiry() {
+    if(!currentUser) return;
+    
+    // মেয়াদি সদস্য কিনা চেক করুন (memberTerm > 0)
+    const memberTerm = currentUser.memberTerm || 0;
+    
+    if(memberTerm === 0) {
+        // সাধারণ সদস্য (মেয়াদহীন)
+        document.getElementById('membershipExpiry').innerHTML = 'মেয়াদহীন সদস্য';
+        return;
+    }
+    
+    const joinDate = new Date(currentUser.joinDate);
+    const expiryDate = new Date(joinDate);
+    expiryDate.setFullYear(joinDate.getFullYear() + memberTerm);
+    
+    const now = new Date();
+    
+    if(now >= expiryDate) {
+        document.getElementById('membershipExpiry').innerHTML = '<span class="text-red-600 font-bold">মেয়াদ উত্তীর্ণ</span>';
+        return;
+    }
+    
+    let years = expiryDate.getFullYear() - now.getFullYear();
+    let months = expiryDate.getMonth() - now.getMonth();
+    let days = expiryDate.getDate() - now.getDate();
+    let hours = expiryDate.getHours() - now.getHours();
+    let minutes = expiryDate.getMinutes() - now.getMinutes();
+    let seconds = expiryDate.getSeconds() - now.getSeconds();
+    
+    if(seconds < 0) { seconds += 60; minutes--; }
+    if(minutes < 0) { minutes += 60; hours--; }
+    if(hours < 0) { hours += 24; days--; }
+    if(days < 0) { 
+        const prevMonth = new Date(now.getFullYear(), now.getMonth(), 0); 
+        days += prevMonth.getDate(); 
+        months--; 
+    }
+    if(months < 0) { months += 12; years--; }
+    
+    let text = '';
+    if(years > 0) text += `${years} বছর `;
+    if(months > 0) text += `${months} মাস `;
+    if(days > 0) text += `${days} দিন `;
+    text += `${hours} ঘন্টা ${minutes} মিনিট ${seconds} সেকেন্ড`;
+    
+    document.getElementById('membershipExpiry').innerHTML = text;
 }
 
 // সঠিক বকেয়া গণনার ফাংশন (আপডেটেড)
@@ -684,10 +769,6 @@ async function loadSavingsData() {
         // বকেয়া মাস গণনা (মোট মাস - পরিশোধিত মাস)
         const dueMonths = Math.max(0, totalMonthsSinceJoin - paidMonthsCount);
         
-        // ইউজারের মাসিক সঞ্চয় থেকে প্রত্যাশিত মোট টাকা
-        const expectedTotal = totalMonthsSinceJoin * currentUser.monthlySavings;
-        const dueAmount = expectedTotal - totalPaid;
-        
         // UI আপডেট করুন
         document.getElementById('paidMonthsDisplay').innerText = paidMonthsCount + ' মাস';
         document.getElementById('dueMonthsDisplay').innerHTML = `<span class="${dueMonths > 0 ? 'text-red-500' : 'text-green-600'}">${dueMonths} মাস</span>`;
@@ -727,9 +808,11 @@ async function loadPaymentHistory() {
                 let historyHtml = '';
                 payments.forEach(payment => {
                     if(payment.status === 'approved') {
-                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা</td><td class="p-2 text-green-600"><i class="fas fa-check-circle mr-1"></i>অনুমোদিত<\/td><td class="p-2"><button onclick="viewPaymentSlip('${payment.month} ${payment.year}', ${payment.amount})" class="text-blue-500"><i class="fas fa-print"></i></button><\/td><\/tr>`;
+                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}<tr><td class="p-2">${payment.amount.toLocaleString()} টাকা</td><td class="p-2 text-green-600"><i class="fas fa-check-circle mr-1"></i>অনুমোদিত<\/td><td class="p-2"><button onclick="viewPaymentSlip('${payment.month} ${payment.year}', ${payment.amount})" class="text-blue-500"><i class="fas fa-print"></i></button><\/td><\/tr>`;
                     } else if(payment.status === 'pending') {
-                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}<tr><td class="p-2">${payment.amount.toLocaleString()} টাকা</td><td class="p-2 text-yellow-600"><i class="fas fa-hourglass-half mr-1"></i>বিচারাধীন<\/td><td class="p-2">-<\/td><\/tr>`;
+                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা</td><td class="p-2 text-yellow-600"><i class="fas fa-hourglass-half mr-1"></i>বিচারাধীন<\/td><td class="p-2">-<\/td><\/tr>`;
+                    } else if(payment.status === 'rejected') {
+                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা</td><td class="p-2 text-red-600"><i class="fas fa-times-circle mr-1"></i>বাতিল<\/td><td class="p-2">-<\/td><\/tr>`;
                     }
                 });
                 historyBody.innerHTML = historyHtml;
@@ -1024,13 +1107,16 @@ async function generateSlipAndPrint() {
         selectedReceiver = null;
         togglePaymentFields();
         
+        // পেমেন্ট হিস্ট্রি রিলোড করুন
+        loadPaymentHistory();
+        
     } catch(error) { 
         console.error('Error:', error);
         alert('পেমেন্ট জমা দিতে ব্যর্থ হয়েছে!'); 
     }
 }
 
-// সম্পূর্ণ স্লিপ জেনারেট ফাংশন (ব্যাংক সহ)
+// সম্পূর্ণ স্লিপ জেনারেট ফাংশন (ব্যাংক সহ এবং লোগো সহ)
 function generatePaymentSlipFull(paymentYear, selectedMonths, paymentMethod, senderMobile, transactionId, receiverInfo, bankInfo, amount) {
     const dateTime = new Date().toLocaleString('bn-BD');
     const slipNumber = 'TUKN-' + Date.now();
@@ -1067,11 +1153,17 @@ function generatePaymentSlipFull(paymentYear, selectedMonths, paymentMethod, sen
                        paymentMethod === 'bank' ? 'ব্যাংক' : 
                        paymentMethod;
     
+    // লোগো URL - একাধিক লোকেশন চেক করুন
+    const logoUrl = 'images/logo.png';
+    const fallbackLogo = 'https://placehold.co/80x80/059669/white?text=TUKNBD';
+    
     return `
         <div style="text-align:center; border:3px solid #059669; border-radius:12px; padding:20px; background:white;">
             <div style="text-align:center; margin-bottom:15px;">
-                <i class="fas fa-mosque" style="font-size:40px; color:#059669;"></i>
-                <h2 style="font-size:20px; font-weight:bold; color:#059669;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2>
+                <img src="${logoUrl}" alt="TUKNBD Logo" style="width:60px; height:60px; border-radius:50%; margin:0 auto 10px auto; object-fit:cover;" 
+                     onerror="this.src='${fallbackLogo}'; this.onerror=null;">
+                <i class="fas fa-mosque" style="font-size:40px; color:#059669; display:none;"></i>
+                <h2 style="font-size:20px; font-weight:bold; color:#059669; margin-top:5px;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2>
                 <p style="font-size:14px; font-weight:bold; color:#047857;">পেমেন্ট স্লিপ</p>
             </div>
             <div style="border-top:2px solid #059669; padding-top:15px;">
