@@ -1729,40 +1729,96 @@ function closeLoginModal() {
     document.getElementById('loginModal').classList.add('hidden'); 
 }
 
-async function handleLogin() {
-    const username = document.getElementById('loginUsername').value.trim();
-    const password = document.getElementById('loginPassword').value;
-    if (!username || !password) { 
-        showCenterNotification('আইডি/মোবাইল এবং পাসওয়ার্ড দিন', 'error'); 
-        return; 
-    }
-    try {
-        let query = supabaseClient.from('members').select('*');
-        if (username.match(/^01[3-9]\d{8}$/)) { 
-            query = query.eq('mobile', username); 
-        } else { 
-            query = query.eq('member_id', username); 
+    async function handleLogin() {
+        const username = document.getElementById('loginUsername').value.trim();
+        const password = document.getElementById('loginPassword').value;
+        if (!username || !password) { 
+            showCenterNotification('আইডি/মোবাইল এবং পাসওয়ার্ড দিন', 'error'); 
+            return; 
         }
-        const { data, error } = await query;
-        if (error) throw error;
-        const member = data?.[0];
-        if (member && member.password === password && (member.status === 'active' || member.status === 'approved')) {
-            sessionStorage.setItem('tukn_logged_member', JSON.stringify(member));
-            showCenterNotification(`স্বাগতম ${member.full_name}!`, 'success');
-            setTimeout(() => { 
-                closeLoginModal(); 
-                window.location.href = 'member-dashboard.html'; 
-            }, 1500);
-        } else if (member && member.status === 'pending') { 
-            showCenterNotification('আপনার একাউন্ট এখনও অনুমোদিত হয়নি। অনুগ্রহ করে অপেক্ষা করুন।', 'warning'); 
-        } else { 
-            showCenterNotification('আইডি/মোবাইল বা পাসওয়ার্ড ভুল!', 'error'); 
+        
+        const loginBtn = event?.target?.closest('button') || document.querySelector('#loginModal button');
+        const originalText = loginBtn?.innerHTML || 'লগইন করুন';
+        if (loginBtn) {
+            loginBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> লগইন হচ্ছে...';
+            loginBtn.disabled = true;
         }
-    } catch (error) { 
-        console.error('Login error:', error); 
-        showCenterNotification('লগইন করতে ব্যর্থ হয়েছে!', 'error'); 
+        
+        try {
+            // Supabase ক্লায়েন্ট চেক
+            if (!supabaseClient) {
+                await initSupabaseClient();
+                if (!supabaseClient) {
+                    throw new Error('Supabase client not initialized');
+                }
+            }
+            
+            let query = supabaseClient.from('members').select('*');
+            if (username.match(/^01[3-9]\d{8}$/)) { 
+                query = query.eq('mobile', username); 
+            } else { 
+                query = query.eq('member_id', username); 
+            }
+            
+            const { data, error } = await query;
+            if (error) throw error;
+            const member = data?.[0];
+            
+            if (member && member.password === password && (member.status === 'active' || member.status === 'approved')) {
+                // সেশন ডাটা তৈরি করুন (সম্পূর্ণ তথ্য সহ)
+                const sessionData = {
+                    member_id: member.member_id,
+                    full_name: member.full_name,
+                    mobile: member.mobile,
+                    email: member.email || '',
+                    present_district: member.present_district || '',
+                    member_type: member.member_type || 'সাধারণ সদস্য',
+                    monthly_savings: member.monthly_savings || 500,
+                    status: member.status,
+                    join_date: member.join_date || member.created_at,
+                    referral_code: member.referral_code || '',
+                    profile_image: member.profile_image || '',
+                    loggedIn: true,
+                    loginTime: new Date().toISOString()
+                };
+                
+                // localStorage এবং sessionStorage উভয়ে সেভ করুন
+                sessionStorage.setItem('tukn_logged_member', JSON.stringify(sessionData));
+                localStorage.setItem('tukn_logged_member', JSON.stringify(sessionData));
+                
+                // অতিরিক্ত ভ্যারিয়েবল
+                sessionStorage.setItem('TUKNBD_user', JSON.stringify(sessionData));
+                localStorage.setItem('TUKNBD_user', JSON.stringify(sessionData));
+                
+                console.log('✅ Login successful, session saved:', sessionData.member_id);
+                console.log('📦 sessionStorage:', sessionStorage.getItem('tukn_logged_member'));
+                console.log('📦 localStorage:', localStorage.getItem('tukn_logged_member'));
+                
+                showCenterNotification(`স্বাগতম ${member.full_name}!`, 'success');
+                
+                setTimeout(() => { 
+                    closeLoginModal(); 
+                    window.location.href = 'member-dashboard.html'; 
+                }, 1500);
+                
+            } else if (member && member.status === 'pending') { 
+                showCenterNotification('আপনার একাউন্ট এখনও অনুমোদিত হয়নি। অনুগ্রহ করে অপেক্ষা করুন।', 'warning'); 
+            } else if (member && member.password !== password) {
+                showCenterNotification('পাসওয়ার্ড ভুল!', 'error');
+            } else { 
+                showCenterNotification('আইডি/মোবাইল সঠিক নয়!', 'error'); 
+            }
+            
+        } catch (error) { 
+            console.error('Login error:', error); 
+            showCenterNotification('লগইন করতে ব্যর্থ হয়েছে!', 'error'); 
+        } finally {
+            if (loginBtn) {
+                loginBtn.innerHTML = originalText;
+                loginBtn.disabled = false;
+            }
+        }
     }
-}
 
 // ========== স্ট্যাট লোড ==========
 async function loadStats() {
