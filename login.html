@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="supabase-config.js"></script>
     <script src="supabase-functions.js"></script>
     
     <style>
@@ -350,7 +349,7 @@
 <div id="forgotModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3><i class="fas fa-key mr-2"></i>পাসওয়ার্ড রিসেট</h3>
+            <h3><i class="fas fa-key"></i> পাসওয়ার্ড রিসেট</h3>
             <button id="closeForgotModal">&times;</button>
         </div>
         <p style="color: #4b5563; font-size: 14px; margin-bottom: 16px;">আপনার রেজিস্টার্ড মোবাইল নম্বর দিন। নতুন পাসওয়ার্ড: <strong>1234</strong> সেট করা হবে।</p>
@@ -362,6 +361,28 @@
 </div>
 
 <script>
+// ==================== Supabase ক্লায়েন্ট রেডি চেক ====================
+let supabaseReady = false;
+let loginAttempts = 0;
+
+function waitForSupabase() {
+    return new Promise((resolve) => {
+        let attempts = 0;
+        const checkInterval = setInterval(() => {
+            attempts++;
+            if (window.supabaseClient) {
+                clearInterval(checkInterval);
+                console.log('✅ Supabase client ready');
+                resolve(true);
+            } else if (attempts > 30) {
+                clearInterval(checkInterval);
+                console.warn('⚠️ Supabase client not ready after 30 attempts');
+                resolve(false);
+            }
+        }, 300);
+    });
+}
+
 // ==================== সুন্দর নোটিফিকেশন ডায়ালগ ====================
 function showCenterNotification(message, type = 'success') {
     const existingOverlay = document.querySelector('.notification-overlay');
@@ -525,7 +546,7 @@ if(togglePassword) {
     });
 }
 
-// ==================== লগইন হ্যান্ডলার ====================
+// ==================== লগইন হ্যান্ডলার (ফিক্সড) ====================
 async function handleLogin(event) {
     event.preventDefault();
     
@@ -544,97 +565,100 @@ async function handleLogin(event) {
     submitBtn.disabled = true;
     
     try {
-        // window.supabaseClient ব্যবহার করুন (supabase-functions.js থেকে আসে)
+        // Supabase ক্লায়েন্ট রেডি হওয়া পর্যন্ত অপেক্ষা করুন
+        await waitForSupabase();
+        
         const client = window.supabaseClient;
         
         if (!client) {
             throw new Error('Supabase client not initialized');
         }
         
+        console.log('🔍 Searching for member:', username);
+        
         let query = client.from('members').select('*');
         
+        // চেক করুন username মোবাইল নম্বর কিনা
         if(username.match(/^01[3-9]\d{8}$/)) {
             query = query.eq('mobile', username);
+            console.log('📱 Searching by mobile');
         } else {
             query = query.eq('member_id', username);
+            console.log('🆔 Searching by member_id');
         }
         
         const { data, error } = await query;
         
-        if(error) throw error;
+        if(error) {
+            console.error('Query error:', error);
+            throw error;
+        }
         
         const member = data?.[0];
         
-        if(member && member.password === password) {
-            if(member.status === 'approved' || member.status === 'active') {
-                
-                const tuknUserData = { 
-                    id: member.member_id,
-                    name: member.full_name,
-                    mobile: member.mobile,
-                    referId: member.referral_code,
-                    joinDate: member.join_date,
-                    memberType: member.member_type || 'সাধারণ সদস্য',
-                    monthlySavings: member.monthly_savings || 500,
-                    profileImage: member.profile_image,
-                    status: member.status,
-                    loggedIn: true,
-                    loginTime: new Date().toISOString()
-                };
-                
-                const dashboardUserData = {
-                    member_id: member.member_id,
-                    full_name: member.full_name,
-                    mobile: member.mobile,
-                    referral_code: member.referral_code,
-                    join_date: member.join_date,
-                    member_type: member.member_type || 'সাধারণ সদস্য',
-                    monthly_savings: member.monthly_savings || 500,
-                    status: member.status,
-                    loggedIn: true
-                };
-                
-                if(rememberMe) {
-                    localStorage.setItem('TUKNBD_user', JSON.stringify(tuknUserData));
-                    localStorage.setItem('tukn_logged_member', JSON.stringify(dashboardUserData));
-                }
-                
-                sessionStorage.setItem('TUKNBD_user', JSON.stringify(tuknUserData));
-                sessionStorage.setItem('tukn_logged_member', JSON.stringify(dashboardUserData));
-                
-                // সুন্দর সাফল্যের নোটিফিকেশন
-                showCenterNotification(`
-                    <div style="text-align: center;">
-                        <div style="font-size: 18px; font-weight: bold; margin-bottom: 5px;">${member.full_name}</div>
-                        <div style="font-size: 13px; color: #666;">আপনি সফলভাবে লগইন করেছেন!</div>
-                    </div>
-                `, 'success');
-                
-                setTimeout(() => { 
-                    window.location.href = 'member-dashboard.html'; 
-                }, 2000);
-                
-            } else if(member.status === 'pending') {
-                showCenterNotification('আপনার একাউন্ট এখনও অনুমোদিত হয়নি। অনুগ্রহ করে ৩-১২ ঘণ্টা অপেক্ষা করুন।', 'warning');
-                submitBtn.innerHTML = originalText;
-                submitBtn.disabled = false;
-                return;
-            } else {
-                showCenterNotification('আপনার একাউন্টটি নিষ্ক্রিয়। প্রশাসকের সাথে যোগাযোগ করুন।', 'error');
-                submitBtn.innerHTML = originalText;
-                submitBtn.disabled = false;
-                return;
-            }
-        } else if(member && member.password !== password) {
-            showCenterNotification('পাসওয়ার্ড ভুল!', 'error');
-            submitBtn.innerHTML = originalText;
-            submitBtn.disabled = false;
-            return;
-        } else {
+        if(!member) {
+            console.log('❌ Member not found');
             showCenterNotification('সদস্য আইডি/মোবাইল নম্বর সঠিক নয়!', 'error');
             submitBtn.innerHTML = originalText;
             submitBtn.disabled = false;
             return;
+        }
+        
+        console.log('✅ Member found:', member.full_name, 'Status:', member.status);
+        
+        // পাসওয়ার্ড চেক
+        if(member.password !== password) {
+            console.log('❌ Password mismatch');
+            showCenterNotification('পাসওয়ার্ড ভুল!', 'error');
+            submitBtn.innerHTML = originalText;
+            submitBtn.disabled = false;
+            return;
+        }
+        
+        // স্ট্যাটাস চেক
+        if(member.status === 'active' || member.status === 'approved') {
+            
+            const userData = { 
+                member_id: member.member_id,
+                full_name: member.full_name,
+                mobile: member.mobile,
+                referral_code: member.referral_code,
+                join_date: member.join_date,
+                member_type: member.member_type || 'সাধারণ সদস্য',
+                monthly_savings: member.monthly_savings || 500,
+                status: member.status,
+                loggedIn: true,
+                loginTime: new Date().toISOString()
+            };
+            
+            // সেশন সেভ করুন
+            if(rememberMe) {
+                localStorage.setItem('tukn_logged_member', JSON.stringify(userData));
+            }
+            sessionStorage.setItem('tukn_logged_member', JSON.stringify(userData));
+            
+            console.log('✅ Login successful, redirecting...');
+            
+            // সুন্দর সাফল্যের নোটিফিকেশন
+            showCenterNotification(`
+                <div style="text-align: center;">
+                    <div style="font-size: 18px; font-weight: bold; margin-bottom: 5px;">${member.full_name}</div>
+                    <div style="font-size: 13px; color: #666;">আপনি সফলভাবে লগইন করেছেন!</div>
+                </div>
+            `, 'success');
+            
+            setTimeout(() => { 
+                window.location.href = 'member-dashboard.html'; 
+            }, 1500);
+            
+        } else if(member.status === 'pending') {
+            showCenterNotification('আপনার একাউন্ট এখনও অনুমোদিত হয়নি। অনুগ্রহ করে ৩-১২ ঘণ্টা অপেক্ষা করুন।', 'warning');
+            submitBtn.innerHTML = originalText;
+            submitBtn.disabled = false;
+        } else {
+            showCenterNotification('আপনার একাউন্টটি নিষ্ক্রিয়। প্রশাসকের সাথে যোগাযোগ করুন।', 'error');
+            submitBtn.innerHTML = originalText;
+            submitBtn.disabled = false;
         }
         
     } catch (error) {
@@ -684,7 +708,9 @@ if(forgotForm) {
         resetBtn.disabled = true;
         
         try {
+            await waitForSupabase();
             const client = window.supabaseClient;
+            
             const { data, error } = await client
                 .from('members')
                 .select('member_id, full_name, mobile, status')
@@ -720,15 +746,18 @@ const loginForm = document.getElementById('loginForm');
 if(loginForm) loginForm.addEventListener('submit', handleLogin);
 
 // ==================== ইতিমধ্যে লগইন করা থাকলে redirect ====================
-window.addEventListener('DOMContentLoaded', function() {
+window.addEventListener('DOMContentLoaded', async function() {
+    // Supabase রেডি হওয়া পর্যন্ত অপেক্ষা করুন
+    await waitForSupabase();
+    
     setTimeout(function() {
-        let savedUser = sessionStorage.getItem('TUKNBD_user') || localStorage.getItem('TUKNBD_user');
-        let savedDashboardUser = sessionStorage.getItem('tukn_logged_member') || localStorage.getItem('tukn_logged_member');
+        let savedUser = sessionStorage.getItem('tukn_logged_member') || localStorage.getItem('tukn_logged_member');
         
-        if(savedUser || savedDashboardUser) {
+        if(savedUser) {
             try {
-                const user = savedUser ? JSON.parse(savedUser) : JSON.parse(savedDashboardUser);
+                const user = JSON.parse(savedUser);
                 if(user && user.loggedIn === true && (user.status === 'active' || user.status === 'approved')) {
+                    console.log('✅ Active session found, redirecting...');
                     window.location.href = 'member-dashboard.html';
                     return;
                 }
@@ -737,9 +766,11 @@ window.addEventListener('DOMContentLoaded', function() {
             }
         }
         
-        console.log('No active session found. Please login.');
-    }, 500);
+        console.log('ℹ️ No active session found. Please login.');
+    }, 1000);
 });
+
+console.log('✅ Login page ready');
 </script>
 </body>
 </html>
