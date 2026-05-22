@@ -1266,6 +1266,25 @@
         
         @media print { body { margin: 0; padding: 10px; size: A4; } button { display: none; } }
     </style>
+            <script>
+                // Supabase কনফিগারেশন - সব ফাংশনের আগে
+                const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
+                const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
+                
+                let supabaseClient = null;
+                
+                async function initSupabaseClient() {
+                    try {
+                        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                        window.supabaseClient = supabaseClient;
+                        console.log('✅ Supabase client initialized');
+                        return true;
+                    } catch(e) {
+                        console.error('❌ Supabase init error:', e);
+                        return false;
+                    }
+                }
+            </script>
 </head>
 <body>
 
@@ -1660,23 +1679,20 @@
 <script>
     
     // ========== সুপাবেস রেডি হওয়ার অপেক্ষা ==========
-    async function waitForSupabase() {
-        let attempts = 0;
-        while (attempts < 30) {
-            if (window.supabase && typeof window.supabase.from === 'function') {
-                supabaseClient = window.supabase;
-                supabase = window.supabase;
-                window.supabaseClient = supabaseClient;
-                console.log('✅ Supabase ready');
-                return true;
+        async function waitForSupabase() {
+            let attempts = 0;
+            while (attempts < 30) {
+                if (supabaseClient) {
+                    console.log('✅ Supabase ready');
+                    return true;
+                }
+                await new Promise(r => setTimeout(r, 500));
+                attempts++;
             }
-            await new Promise(r => setTimeout(r, 500));
-            attempts++;
+            console.error('❌ Supabase not ready after 30 attempts');
+            return false;
         }
-        console.error('❌ Supabase not ready');
-        return false;
-    }
-    
+            
 
 // ========== ইউটিলিটি ফাংশন ==========
 function copyPhone() { 
@@ -1763,76 +1779,40 @@ async function loadStats() {
 
 // ========== ভিজিটর কাউন্টার ==========
 async function updateVisitorCount() {
+    if (!supabaseClient) {
+        let count = localStorage.getItem('tukn_visitor_count');
+        if (!count) { count = 12458; localStorage.setItem('tukn_visitor_count', count); }
+        const visitorElem = document.getElementById('visitorCount');
+        if (visitorElem) visitorElem.innerText = parseInt(count).toLocaleString();
+        return;
+    }
     try {
-        if (!supabaseClient) {
-            console.error('Supabase client not initialized');
-            let count = localStorage.getItem('tukn_visitor_count');
-            if (!count) {
-                count = 12458;
-                localStorage.setItem('tukn_visitor_count', count);
-            }
-            document.getElementById('visitorCount').innerText = parseInt(count).toLocaleString();
-            return;
-        }
-        
         const today = new Date().toISOString().split('T')[0];
         const sessionCounted = sessionStorage.getItem('visitor_counted_today');
         
         if (!sessionCounted) {
-            const { data: existing, error: fetchError } = await supabaseClient
+            const { data: existing } = await supabaseClient
                 .from('visitor_stats')
                 .select('total_count')
                 .eq('visit_date', today)
                 .maybeSingle();
             
-            if (fetchError && fetchError.code !== 'PGRST116') {
-                console.error('Fetch error:', fetchError);
-            }
-            
             if (!existing) {
-                const { error: insertError } = await supabaseClient
-                    .from('visitor_stats')
-                    .insert({ visit_date: today, total_count: 1 });
-                
-                if (insertError) {
-                    console.error('Insert error:', insertError);
-                } else {
-                    sessionStorage.setItem('visitor_counted_today', 'true');
-                }
+                await supabaseClient.from('visitor_stats').insert({ visit_date: today, total_count: 1 });
+                sessionStorage.setItem('visitor_counted_today', 'true');
             } else {
-                const { error: updateError } = await supabaseClient
-                    .from('visitor_stats')
-                    .update({ total_count: existing.total_count + 1 })
-                    .eq('visit_date', today);
-                
-                if (updateError) {
-                    console.error('Update error:', updateError);
-                } else {
-                    sessionStorage.setItem('visitor_counted_today', 'true');
-                }
+                await supabaseClient.from('visitor_stats').update({ total_count: existing.total_count + 1 }).eq('visit_date', today);
+                sessionStorage.setItem('visitor_counted_today', 'true');
             }
         }
         
-        const { data, error } = await supabaseClient
-            .from('visitor_stats')
-            .select('total_count');
-        
+        const { data, error } = await supabaseClient.from('visitor_stats').select('total_count');
         if (!error && data) {
             const total = data.reduce((sum, row) => sum + (row.total_count || 0), 0);
-            document.getElementById('visitorCount').innerText = total.toLocaleString();
-        } else {
-            document.getElementById('visitorCount').innerText = '০';
+            const visitorElem = document.getElementById('visitorCount');
+            if (visitorElem) visitorElem.innerText = total.toLocaleString();
         }
-        
-    } catch (error) {
-        console.error('Visitor count error:', error);
-        let count = localStorage.getItem('tukn_visitor_count');
-        if (!count) {
-            count = 12458;
-            localStorage.setItem('tukn_visitor_count', count);
-        }
-        document.getElementById('visitorCount').innerText = parseInt(count).toLocaleString();
-    }
+    } catch (error) { console.error('Visitor count error:', error); }
 }
 
 // ========== সম্পর্কে সেকশন ==========
@@ -2230,13 +2210,15 @@ if (mobileDropdownToggle) {
     }); 
 }
 
-// ========== পেজ লোড - সব ফাংশন একবারই কল হবে ==========
-document.addEventListener('DOMContentLoaded', async function() {
-    await waitForSupabase();
-    await updateVisitorCount();
-    await loadStats();
-    await loadTickerNotices();
-});
+    // ========== পেজ লোড - সব ফাংশন একবারই কল হবে ==========
+    document.addEventListener('DOMContentLoaded', async function() {
+        console.log('🟢 Page loading...');
+        await initSupabaseClient();
+        await updateVisitorCount();
+        await loadStats();
+        await loadTickerNotices();
+        console.log('✅ Homepage ready');
+    });
 
 console.log('✅ TUKNBD Homepage loaded successfully');
 </script>
