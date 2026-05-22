@@ -5,16 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     <title>আয়-ব্যয় লেজার | TUKNBD অ্যাডমিন</title>
     <link rel="icon" type="image/png" href="images/logo.png">
-    <!-- Tailwind CSS Production Ready -->
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     
-    <!-- ✅ Supabase CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    
-    <!-- ✅ Supabase Functions (শুধু এই একটি ফাইল) -->
-    <script src="supabase-functions.js"></script>
     
     <style>
         * { font-family: 'Noto Sans Bengali', sans-serif; }
@@ -81,7 +76,6 @@
                 <label class="block text-gray-700 font-semibold mb-1">সদস্য নির্বাচন</label>
                 <select id="filterMember" class="w-full p-2 border rounded-lg">
                     <option value="all">👥 সব সদস্য</option>
-                    <option value="organization">📊 সংগঠনের আয়-ব্যয়</option>
                 </select>
             </div>
             <div>
@@ -178,7 +172,7 @@
                 <tbody id="loanTableBody"></tbody>
                 <tfoot class="bg-gray-100 font-bold">
                     <tr>
-                        <td colspan="3" class="p-2 text-right border">মোট:</td>
+                        <td colspan="3" class="p-2 text-right border">মোট: </td>
                         <td class="p-2 text-right border" id="loanTotalAmountFoot">০/-</td>
                         <td class="p-2 text-right border text-green-600" id="loanTotalPaidFoot">০/-</td>
                         <td class="p-2 text-right border text-red-600" id="loanTotalDueFoot">০/-</td>
@@ -191,394 +185,378 @@
 </div>
 
 <script>
-    (function() {
-        // ✅ Supabase ক্লায়েন্ট - window.supabaseClient থেকে নিন (supabase-functions.js থেকে আসে)
-        let supabaseClient = null;
+// ========== Supabase ক্লায়েন্ট ইনিশিয়ালাইজ ==========
+const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
+
+let supabaseClient = null;
+
+// ক্লায়েন্ট তৈরি করুন
+try {
+    supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    window.supabaseClient = supabaseClient;
+    console.log('✅ Supabase client initialized in ledger');
+} catch(e) {
+    console.error('❌ Supabase init error:', e);
+}
+
+// ========== গ্লোবাল ভেরিয়েবল ==========
+let membersList = [];
+let allLoans = [];
+let allPayments = [];
+
+// বাংলা মাসের নাম
+const banglaMonths = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
+
+function getMonthIndex(monthName) {
+    for(let i = 0; i < banglaMonths.length; i++) {
+        if(banglaMonths[i] === monthName) return i;
+    }
+    return -1;
+}
+
+// ==================== সুপাবেস থেকে ডাটা লোড ====================
+async function loadMembersFromSupabase() {
+    if(!supabaseClient) return [];
+    try {
+        const { data, error } = await supabaseClient
+            .from('members')
+            .select('member_id, full_name, mobile, monthly_savings, join_date, created_at, status');
         
-        // অপেক্ষা করার ফাংশন
-        async function waitForSupabase() {
-            let attempts = 0;
-            while (attempts < 30) {
-                if (window.supabaseClient && typeof window.supabaseClient.from === 'function') {
-                    supabaseClient = window.supabaseClient;
-                    console.log('✅ Supabase client ready in ledger');
-                    return true;
-                }
-                await new Promise(r => setTimeout(r, 500));
-                attempts++;
-            }
-            console.error('❌ Supabase client not found');
-            return false;
+        if(error) throw error;
+        
+        if(data && data.length > 0) {
+            return data.map(m => ({
+                id: m.member_id,
+                name: m.full_name,
+                mobile: m.mobile,
+                monthlySavings: m.monthly_savings || 200,
+                joinDate: m.join_date || m.created_at || new Date().toISOString(),
+                status: m.status
+            }));
         }
+        return [];
+    } catch(e) {
+        console.error('Supabase members error:', e);
+        return [];
+    }
+}
 
-        // গ্লোবাল ভেরিয়েবল
-        let membersList = [];
-        let allLoans = [];
-        let allPayments = [];
-
-        // বাংলা মাসের নাম
-        const banglaMonths = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
-
-        // মাসের নাম থেকে মাস নম্বর বের করার ফাংশন
-        function getMonthIndex(monthName) {
-            for(let i = 0; i < banglaMonths.length; i++) {
-                if(banglaMonths[i] === monthName) return i;
-            }
-            return -1;
-        }
-
-        // ==================== সুপাবেস থেকে ডাটা লোড ====================
-        async function loadMembersFromSupabase() {
-            if(!supabaseClient) return [];
-            try {
-                const { data, error } = await supabaseClient
-                    .from('members')
-                    .select('member_id, full_name, mobile, monthly_savings, join_date, created_at, status');
-                
-                if(error) throw error;
-                
-                if(data && data.length > 0) {
-                    return data.map(m => ({
-                        id: m.member_id,
-                        name: m.full_name,
-                        mobile: m.mobile,
-                        monthlySavings: m.monthly_savings || 200,
-                        joinDate: m.join_date || m.created_at || new Date().toISOString(),
-                        status: m.status
-                    }));
-                }
-                return [];
-            } catch(e) {
-                console.error('Supabase members error:', e);
+async function loadLoansFromSupabase() {
+    if(!supabaseClient) return [];
+    try {
+        const { data, error } = await supabaseClient.from('loan_applications').select('*');
+        if(error) {
+            if(error.code === '42P01') {
+                console.log('Loan applications table does not exist yet');
                 return [];
             }
+            throw error;
         }
+        return data || [];
+    } catch(e) {
+        console.log('Loan applications table not available:', e.message);
+        return [];
+    }
+}
 
-        async function loadLoansFromSupabase() {
-            if(!supabaseClient) return [];
-            try {
-                const { data, error } = await supabaseClient.from('loan_applications').select('*');
-                if(error) {
-                    if(error.code === '42P01') {
-                        console.log('Loan applications table does not exist yet');
-                        return [];
-                    }
-                    throw error;
-                }
-                return data || [];
-            } catch(e) {
-                console.log('Loan applications table not available:', e.message);
-                return [];
-            }
-        }
+async function loadPaymentsFromSupabase() {
+    if(!supabaseClient) return [];
+    try {
+        const { data, error } = await supabaseClient
+            .from('payments')
+            .select('*')
+            .eq('status', 'approved');
+        
+        if(error) throw error;
+        return data || [];
+    } catch(e) {
+        console.error('Payments error:', e);
+        return [];
+    }
+}
 
-        async function loadPaymentsFromSupabase() {
-            if(!supabaseClient) return [];
-            try {
-                const { data, error } = await supabaseClient
-                    .from('payments')
-                    .select('*')
-                    .eq('status', 'approved');
-                
-                if(error) throw error;
-                return data || [];
-            } catch(e) {
-                console.error('Payments error:', e);
-                return [];
-            }
-        }
-
-        // ==================== সঞ্চয় লেজার তৈরি (শুধুমাত্র অনুমোদিত পেমেন্ট থেকে) ====================
-        function generateSavingsLedger() {
-            let transactions = [];
+// ==================== সঞ্চয় লেজার তৈরি ====================
+function generateSavingsLedger() {
+    let transactions = [];
+    
+    if(!allPayments || allPayments.length === 0) return transactions;
+    
+    allPayments.forEach(payment => {
+        const member = membersList.find(m => m.id === payment.member_id);
+        const monthIndex = getMonthIndex(payment.month);
+        
+        if(monthIndex !== -1 && payment.year) {
+            const paymentDate = new Date(parseInt(payment.year), monthIndex, 1);
             
-            if(!allPayments || allPayments.length === 0) return transactions;
-            
-            // অনুমোদিত পেমেন্ট থেকে ট্রানজেকশন তৈরি করুন
-            allPayments.forEach(payment => {
-                const member = membersList.find(m => m.id === payment.member_id);
-                
-                // মাসের নাম থেকে মাস নম্বর বের করুন
-                const monthIndex = getMonthIndex(payment.month);
-                
-                if(monthIndex !== -1 && payment.year) {
-                    const paymentDate = new Date(parseInt(payment.year), monthIndex, 1);
-                    
-                    transactions.push({
-                        id: `${payment.id}`,
-                        date: paymentDate,
-                        memberId: payment.member_id,
-                        memberName: member?.name || payment.member_name || 'অজানা',
-                        amount: payment.amount,
-                        description: `${payment.month} ${payment.year} মাসিক সঞ্চয়`,
-                        paymentMethod: payment.payment_method,
-                        transactionId: payment.transaction_id
-                    });
-                }
-            });
-            
-            // তারিখ অনুযায়ী সাজান
-            transactions.sort((a, b) => a.date - b.date);
-            return transactions;
-        }
-
-        // ==================== লেজার রেন্ডার ====================
-        function renderLedger() {
-            let transactions = generateSavingsLedger();
-            
-            const filterMember = document.getElementById('filterMember').value;
-            const filterYear = document.getElementById('filterYear').value;
-            
-            if(filterMember !== 'all' && filterMember !== 'organization') {
-                transactions = transactions.filter(t => t.memberId === filterMember);
-            }
-            if(filterYear) {
-                transactions = transactions.filter(t => t.date.getFullYear() == filterYear);
-            }
-            
-            let balance = 0;
-            let totalIncome = 0;
-            const tbody = document.getElementById('ledgerTableBody');
-            
-            if(transactions.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4 text-gray-500">কোনো অনুমোদিত পেমেন্ট নেই</td></tr>';
-            } else {
-                tbody.innerHTML = transactions.map((t, index) => {
-                    balance += t.amount;
-                    totalIncome += t.amount;
-                    return `<tr class="border-b hover:bg-gray-50">
-                        <td class="p-2 border text-center">${index + 1}</td>
-                        <td class="p-2 border">${t.date.toLocaleDateString('bn-BD')}</td>
-                        <td class="p-2 border font-medium">${t.memberName}</td>
-                        <td class="p-2 border">${t.memberId}</td>
-                        <td class="p-2 border">${t.amount.toLocaleString()} টাকা</td>
-                        <td class="p-2 border text-right text-emerald-600 font-semibold">${t.amount.toLocaleString()}</td>
-                        <td class="p-2 border text-right font-semibold">${balance.toLocaleString()}</td>
-                    </tr>`;
-                }).join('');
-            }
-            
-            document.getElementById('totalIncomeFoot').innerHTML = totalIncome.toLocaleString() + '/-';
-            document.getElementById('balanceFoot').innerHTML = balance.toLocaleString() + '/-';
-            document.getElementById('totalIncome').innerHTML = totalIncome.toLocaleString();
-            document.getElementById('totalExpense').innerHTML = '০';
-            document.getElementById('currentBalance').innerHTML = balance.toLocaleString();
-            document.getElementById('totalMembersCount').innerHTML = membersList.length;
-        }
-
-        // ==================== লোন টেবিল রেন্ডার ====================
-        function renderLoans() {
-            const filterMember = document.getElementById('filterMember').value;
-            let loans = [...allLoans];
-            
-            if(filterMember !== 'all' && filterMember !== 'organization') {
-                loans = loans.filter(l => (l.memberId || l.member_id) === filterMember);
-            }
-            
-            const loanSection = document.getElementById('loanTableSection');
-            if(loans.length === 0) {
-                if(loanSection) loanSection.style.display = 'none';
-                document.getElementById('totalLoanAmount').innerHTML = '০';
-                document.getElementById('totalLoanPaid').innerHTML = '০';
-                document.getElementById('totalLoanDue').innerHTML = '০';
-                document.getElementById('totalLoanBorrowers').innerHTML = '০';
-                return;
-            }
-            
-            if(loanSection) loanSection.style.display = 'block';
-            
-            let totalAmount = 0, totalPaid = 0, totalDue = 0;
-            const uniqueMembers = new Set();
-            const tbody = document.getElementById('loanTableBody');
-            
-            tbody.innerHTML = loans.map(l => {
-                const memberId = l.memberId || l.member_id;
-                const member = membersList.find(m => m.id === memberId);
-                const memberName = member?.name || l.memberName || l.member_name;
-                const amount = l.loan_amount || l.amount || 0;
-                const paid = l.paid_amount || l.paid || 0;
-                const due = amount - paid;
-                const loanDate = l.created_at || l.date || new Date().toISOString();
-                
-                totalAmount += amount;
-                totalPaid += paid;
-                totalDue += due;
-                if(memberId) uniqueMembers.add(memberId);
-                
-                let statusClass = '', statusText = '';
-                if(due <= 0) { statusClass = 'loan-status-completed'; statusText = 'পরিশোধিত'; }
-                else if(l.status === 'pending') { statusClass = 'loan-status-pending'; statusText = 'বিচারাধীন'; }
-                else { statusClass = 'loan-status-active'; statusText = 'সক্রিয়'; }
-                
-                return `<tr class="border-b">
-                    <td class="p-2 border">${new Date(loanDate).toLocaleDateString('bn-BD')}</td>
-                    <td class="p-2 border">${memberName || '-'}</td>
-                    <td class="p-2 border">${memberId || '-'}</td>
-                    <td class="p-2 border text-right">${amount.toLocaleString()}</td>
-                    <td class="p-2 border text-right text-green-600">${paid.toLocaleString()}</td>
-                    <td class="p-2 border text-right text-red-600">${due.toLocaleString()}</td>
-                    <td class="p-2 border"><span class="px-2 py-0.5 rounded-full text-xs ${statusClass}">${statusText}</span></td>
-                </tr>`;
-            }).join('');
-            
-            document.getElementById('loanTotalAmountFoot').innerHTML = totalAmount.toLocaleString() + '/-';
-            document.getElementById('loanTotalPaidFoot').innerHTML = totalPaid.toLocaleString() + '/-';
-            document.getElementById('loanTotalDueFoot').innerHTML = totalDue.toLocaleString() + '/-';
-            document.getElementById('totalLoanAmount').innerHTML = totalAmount.toLocaleString();
-            document.getElementById('totalLoanPaid').innerHTML = totalPaid.toLocaleString();
-            document.getElementById('totalLoanDue').innerHTML = totalDue.toLocaleString();
-            document.getElementById('totalLoanBorrowers').innerHTML = uniqueMembers.size;
-        }
-
-        // ==================== ফিল্টার অপশন ====================
-        function populateFilters() {
-            const yearSelect = document.getElementById('filterYear');
-            const years = new Set();
-            
-            // পেমেন্ট থেকে বছর সংগ্রহ করুন
-            allPayments.forEach(p => {
-                if(p.year) years.add(parseInt(p.year));
-            });
-            
-            const currentYear = new Date().getFullYear();
-            yearSelect.innerHTML = '<option value="">সব বছর</option>';
-            
-            // সাজানো বছর
-            const sortedYears = Array.from(years).sort((a,b) => b - a);
-            sortedYears.forEach(y => {
-                yearSelect.innerHTML += `<option value="${y}">${y}</option>`;
-            });
-            
-            // বর্তমান বছর যোগ করুন (যদি না থাকে)
-            if(!years.has(currentYear)) {
-                yearSelect.innerHTML += `<option value="${currentYear}">${currentYear}</option>`;
-            }
-            
-            updateMemberDropdowns();
-        }
-
-        function updateMemberDropdowns(searchText = '') {
-            const memberSelect = document.getElementById('filterMember');
-            const searchInput = document.getElementById('memberSearchInput');
-            
-            let filteredMembers = [...membersList];
-            const searchValue = searchText || (searchInput ? searchInput.value : '');
-            if(searchValue) {
-                const search = searchValue.toLowerCase();
-                filteredMembers = membersList.filter(m => 
-                    m.name.toLowerCase().includes(search) || 
-                    m.id.toLowerCase().includes(search) || 
-                    (m.mobile && m.mobile.includes(search))
-                );
-            }
-            
-            memberSelect.innerHTML = '<option value="all">👥 সব সদস্য</option>';
-            filteredMembers.forEach(m => {
-                memberSelect.innerHTML += `<option value="${m.id}">👤 ${m.name} (${m.id}) - ${m.monthlySavings}/মাস</option>`;
+            transactions.push({
+                id: `${payment.id}`,
+                date: paymentDate,
+                memberId: payment.member_id,
+                memberName: member?.name || payment.member_name || 'অজানা',
+                amount: payment.amount,
+                description: `${payment.month} ${payment.year} মাসিক সঞ্চয়`,
+                paymentMethod: payment.payment_method,
+                transactionId: payment.transaction_id
             });
         }
+    });
+    
+    transactions.sort((a, b) => a.date - b.date);
+    return transactions;
+}
 
-        function applyFilter() { 
-            renderLedger(); 
-            renderLoans(); 
-        }
+// ==================== লেজার রেন্ডার ====================
+function renderLedger() {
+    let transactions = generateSavingsLedger();
+    
+    const filterMember = document.getElementById('filterMember')?.value || 'all';
+    const filterYear = document.getElementById('filterYear')?.value;
+    
+    if(filterMember !== 'all' && filterMember !== 'organization') {
+        transactions = transactions.filter(t => t.memberId === filterMember);
+    }
+    if(filterYear) {
+        transactions = transactions.filter(t => t.date.getFullYear() == filterYear);
+    }
+    
+    let balance = 0;
+    let totalIncome = 0;
+    const tbody = document.getElementById('ledgerTableBody');
+    
+    if(transactions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4 text-gray-500">কোনো অনুমোদিত পেমেন্ট নেই</td><\/tr>';
+    } else {
+        tbody.innerHTML = transactions.map((t, index) => {
+            balance += t.amount;
+            totalIncome += t.amount;
+            return `<tr class="border-b hover:bg-gray-50">
+                <td class="p-2 border text-center">${index + 1}</td>
+                <td class="p-2 border">${t.date.toLocaleDateString('bn-BD')}</td>
+                <td class="p-2 border font-medium">${t.memberName}</td>
+                <td class="p-2 border">${t.memberId}</td>
+                <td class="p-2 border">${t.amount.toLocaleString()} টাকা</td>
+                <td class="p-2 border text-right text-emerald-600 font-semibold">${t.amount.toLocaleString()}</td>
+                <td class="p-2 border text-right font-semibold">${balance.toLocaleString()}</td>
+             </tr>`;
+        }).join('');
+    }
+    
+    const totalIncomeFoot = document.getElementById('totalIncomeFoot');
+    const balanceFoot = document.getElementById('balanceFoot');
+    const totalIncomeElem = document.getElementById('totalIncome');
+    const currentBalanceElem = document.getElementById('currentBalance');
+    const totalMembersElem = document.getElementById('totalMembersCount');
+    
+    if(totalIncomeFoot) totalIncomeFoot.innerHTML = totalIncome.toLocaleString() + '/-';
+    if(balanceFoot) balanceFoot.innerHTML = balance.toLocaleString() + '/-';
+    if(totalIncomeElem) totalIncomeElem.innerHTML = totalIncome.toLocaleString();
+    if(currentBalanceElem) currentBalanceElem.innerHTML = balance.toLocaleString();
+    if(totalMembersElem) totalMembersElem.innerHTML = membersList.length;
+    
+    document.getElementById('totalExpense').innerHTML = '০';
+}
 
-        // ==================== প্রিন্ট ফাংশন ====================
-        function printPortrait() {
-            const now = new Date();
-            const printedBy = document.getElementById('printedByInfo');
-            const printDateSpan = document.getElementById('printDate');
-            if(printedBy) printedBy.innerHTML = `প্রিন্ট তারিখ: ${now.toLocaleDateString('bn-BD')} | সময়: ${now.toLocaleTimeString('bn-BD')}`;
-            if(printDateSpan) printDateSpan.innerHTML = now.toLocaleString('bn-BD');
-            
-            let style = document.createElement('style');
-            style.innerHTML = `@media print { @page { size: A4 portrait !important; margin: 0.3in !important; } }`;
-            document.head.appendChild(style);
-            setTimeout(() => { window.print(); setTimeout(() => style.remove(), 100); }, 100);
-        }
+// ==================== লোন টেবিল রেন্ডার ====================
+function renderLoans() {
+    const filterMember = document.getElementById('filterMember')?.value || 'all';
+    let loans = [...allLoans];
+    
+    if(filterMember !== 'all' && filterMember !== 'organization') {
+        loans = loans.filter(l => (l.memberId || l.member_id) === filterMember);
+    }
+    
+    const loanSection = document.getElementById('loanTableSection');
+    if(loans.length === 0) {
+        if(loanSection) loanSection.style.display = 'none';
+        document.getElementById('totalLoanAmount').innerHTML = '০';
+        document.getElementById('totalLoanPaid').innerHTML = '০';
+        document.getElementById('totalLoanDue').innerHTML = '০';
+        document.getElementById('totalLoanBorrowers').innerHTML = '০';
+        return;
+    }
+    
+    if(loanSection) loanSection.style.display = 'block';
+    
+    let totalAmount = 0, totalPaid = 0, totalDue = 0;
+    const uniqueMembers = new Set();
+    const tbody = document.getElementById('loanTableBody');
+    
+    tbody.innerHTML = loans.map(l => {
+        const memberId = l.memberId || l.member_id;
+        const member = membersList.find(m => m.id === memberId);
+        const memberName = member?.name || l.memberName || l.member_name;
+        const amount = l.loan_amount || l.amount || 0;
+        const paid = l.paid_amount || l.paid || 0;
+        const due = amount - paid;
+        const loanDate = l.created_at || l.date || new Date().toISOString();
+        
+        totalAmount += amount;
+        totalPaid += paid;
+        totalDue += due;
+        if(memberId) uniqueMembers.add(memberId);
+        
+        let statusClass = '', statusText = '';
+        if(due <= 0) { statusClass = 'loan-status-completed'; statusText = 'পরিশোধিত'; }
+        else if(l.status === 'pending') { statusClass = 'loan-status-pending'; statusText = 'বিচারাধীন'; }
+        else { statusClass = 'loan-status-active'; statusText = 'সক্রিয়'; }
+        
+        return `<tr class="border-b">
+            <td class="p-2 border">${new Date(loanDate).toLocaleDateString('bn-BD')}</td>
+            <td class="p-2 border">${memberName || '-'}</td>
+            <td class="p-2 border">${memberId || '-'}</td>
+            <td class="p-2 border text-right">${amount.toLocaleString()}</td>
+            <td class="p-2 border text-right text-green-600">${paid.toLocaleString()}</td>
+            <td class="p-2 border text-right text-red-600">${due.toLocaleString()}</td>
+            <td class="p-2 border"><span class="px-2 py-0.5 rounded-full text-xs ${statusClass}">${statusText}</span></td>
+         </tr>`;
+    }).join('');
+    
+    document.getElementById('loanTotalAmountFoot').innerHTML = totalAmount.toLocaleString() + '/-';
+    document.getElementById('loanTotalPaidFoot').innerHTML = totalPaid.toLocaleString() + '/-';
+    document.getElementById('loanTotalDueFoot').innerHTML = totalDue.toLocaleString() + '/-';
+    document.getElementById('totalLoanAmount').innerHTML = totalAmount.toLocaleString();
+    document.getElementById('totalLoanPaid').innerHTML = totalPaid.toLocaleString();
+    document.getElementById('totalLoanDue').innerHTML = totalDue.toLocaleString();
+    document.getElementById('totalLoanBorrowers').innerHTML = uniqueMembers.size;
+}
 
-        function exportToExcel() {
-            let transactions = generateSavingsLedger();
-            let csv = "তারিখ,সদস্য নাম,সদস্য আইডি,পরিমাণ\n";
-            transactions.forEach(t => {
-                csv += `"${t.date.toLocaleDateString('bn-BD')}","${t.memberName}","${t.memberId}","${t.amount}"\n`;
-            });
-            const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `ledger_${new Date().toISOString().split('T')[0]}.csv`;
-            a.click();
-            URL.revokeObjectURL(url);
-            showToast('এক্সপোর্ট সম্পূর্ণ!', 'success');
-        }
+// ==================== ফিল্টার অপশন ====================
+function populateFilters() {
+    const yearSelect = document.getElementById('filterYear');
+    const years = new Set();
+    
+    allPayments.forEach(p => {
+        if(p.year) years.add(parseInt(p.year));
+    });
+    
+    yearSelect.innerHTML = '<option value="">সব বছর</option>';
+    const sortedYears = Array.from(years).sort((a,b) => b - a);
+    sortedYears.forEach(y => {
+        yearSelect.innerHTML += `<option value="${y}">${y}</option>`;
+    });
+    
+    updateMemberDropdowns();
+}
 
-        function showToast(message, type) {
-            const toast = document.createElement('div');
-            toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${type === 'success' ? 'bg-green-600' : 'bg-red-600'}`;
-            toast.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'} mr-2"></i>${message}`;
-            document.body.appendChild(toast);
-            setTimeout(() => toast.remove(), 3000);
-        }
+function updateMemberDropdowns(searchText = '') {
+    const memberSelect = document.getElementById('filterMember');
+    const searchInput = document.getElementById('memberSearchInput');
+    
+    let filteredMembers = [...membersList];
+    const searchValue = searchText || (searchInput ? searchInput.value : '');
+    if(searchValue) {
+        const search = searchValue.toLowerCase();
+        filteredMembers = membersList.filter(m => 
+            m.name.toLowerCase().includes(search) || 
+            m.id.toLowerCase().includes(search) || 
+            (m.mobile && m.mobile.includes(search))
+        );
+    }
+    
+    memberSelect.innerHTML = '<option value="all">👥 সব সদস্য</option>';
+    filteredMembers.forEach(m => {
+        memberSelect.innerHTML += `<option value="${m.id}">👤 ${m.name} (${m.id}) - ${m.monthlySavings}/মাস</option>`;
+    });
+}
 
-        // ==================== ইভেন্ট লিসেনার ====================
-        document.getElementById('memberSearchInput')?.addEventListener('keyup', function() {
-            updateMemberDropdowns(this.value);
-        });
+function applyFilter() { 
+    renderLedger(); 
+    renderLoans(); 
+}
 
-        // ==================== পেজ লোড ====================
-        async function init() {
-            // লগইন চেক
-            const adminLoggedIn = sessionStorage.getItem('adminLoggedIn') || localStorage.getItem('adminLoggedIn');
-            if(!adminLoggedIn) {
-                window.location.href = 'admin-login.html';
-                return;
-            }
-            
-            // Supabase অপেক্ষা করুন
-            const supabaseReady = await waitForSupabase();
-            if(!supabaseReady || !supabaseClient) {
-                document.getElementById('loadingLedgerMsg').innerHTML = '<div class="error-box"><i class="fas fa-link"></i> Supabase সংযোগ নেই! পেজ রিফ্রেশ করে আবার চেষ্টা করুন।</div>';
-                return;
-            }
-            
-            try {
-                // সমান্তরালভাবে ডাটা লোড করুন
-                [membersList, allPayments, allLoans] = await Promise.all([
-                    loadMembersFromSupabase(),
-                    loadPaymentsFromSupabase(),
-                    loadLoansFromSupabase()
-                ]);
-                
-                console.log(`📊 লোড সম্পন্ন: ${membersList.length} সদস্য, ${allPayments.length} পেমেন্ট, ${allLoans.length} লোন`);
-                
-                if(membersList.length === 0 && allPayments.length === 0) {
-                    const msgDiv = document.getElementById('loadingLedgerMsg');
-                    if(msgDiv) msgDiv.innerHTML = '<div class="info-box"><i class="fas fa-info-circle"></i> কোনো সদস্য বা অনুমোদিত পেমেন্ট পাওয়া যায়নি।</div>';
-                } else {
-                    const msgDiv = document.getElementById('loadingLedgerMsg');
-                    if(msgDiv) msgDiv.innerHTML = '';
-                }
-                
-                populateFilters();
-                renderLedger();
-                renderLoans();
-                
-            } catch(e) {
-                console.error('Init error:', e);
-                const msgDiv = document.getElementById('loadingLedgerMsg');
-                if(msgDiv) msgDiv.innerHTML = `<div class="error-box"><i class="fas fa-exclamation-triangle"></i> ${e.message}</div>`;
-            }
+// ==================== প্রিন্ট ফাংশন ====================
+function printPortrait() {
+    const now = new Date();
+    const printedBy = document.getElementById('printedByInfo');
+    const printDateSpan = document.getElementById('printDate');
+    if(printedBy) printedBy.innerHTML = `প্রিন্ট তারিখ: ${now.toLocaleDateString('bn-BD')} | সময়: ${now.toLocaleTimeString('bn-BD')}`;
+    if(printDateSpan) printDateSpan.innerHTML = now.toLocaleString('bn-BD');
+    
+    let style = document.createElement('style');
+    style.innerHTML = `@media print { @page { size: A4 portrait !important; margin: 0.3in !important; } }`;
+    document.head.appendChild(style);
+    setTimeout(() => { window.print(); setTimeout(() => style.remove(), 100); }, 100);
+}
+
+function exportToExcel() {
+    let transactions = generateSavingsLedger();
+    let csv = "তারিখ,সদস্য নাম,সদস্য আইডি,পরিমাণ\n";
+    transactions.forEach(t => {
+        csv += `"${t.date.toLocaleDateString('bn-BD')}","${t.memberName}","${t.memberId}","${t.amount}"\n`;
+    });
+    const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ledger_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('এক্সপোর্ট সম্পূর্ণ!', 'success');
+}
+
+function showToast(message, type) {
+    const toast = document.createElement('div');
+    toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${type === 'success' ? 'bg-green-600' : 'bg-red-600'}`;
+    toast.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'} mr-2"></i>${message}`;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+// ==================== ইভেন্ট লিসেনার ====================
+document.getElementById('memberSearchInput')?.addEventListener('keyup', function() {
+    updateMemberDropdowns(this.value);
+});
+
+// ==================== পেজ লোড ====================
+async function init() {
+    // লগইন চেক
+    const adminLoggedIn = sessionStorage.getItem('adminLoggedIn') || localStorage.getItem('adminLoggedIn');
+    if(!adminLoggedIn) {
+        window.location.href = 'admin-login.html';
+        return;
+    }
+    
+    if(!supabaseClient) {
+        document.getElementById('loadingLedgerMsg').innerHTML = '<div class="error-box"><i class="fas fa-link"></i> Supabase সংযোগ নেই! পেজ রিফ্রেশ করে আবার চেষ্টা করুন।</div>';
+        return;
+    }
+    
+    try {
+        [membersList, allPayments, allLoans] = await Promise.all([
+            loadMembersFromSupabase(),
+            loadPaymentsFromSupabase(),
+            loadLoansFromSupabase()
+        ]);
+        
+        console.log(`📊 লোড সম্পন্ন: ${membersList.length} সদস্য, ${allPayments.length} পেমেন্ট, ${allLoans.length} লোন`);
+        
+        if(membersList.length === 0 && allPayments.length === 0) {
+            const msgDiv = document.getElementById('loadingLedgerMsg');
+            if(msgDiv) msgDiv.innerHTML = '<div class="info-box"><i class="fas fa-info-circle"></i> কোনো সদস্য বা অনুমোদিত পেমেন্ট পাওয়া যায়নি।</div>';
+        } else {
+            const msgDiv = document.getElementById('loadingLedgerMsg');
+            if(msgDiv) msgDiv.innerHTML = '';
         }
         
-        // গ্লোবাল ফাংশন এক্সপোজ
-        window.applyFilter = applyFilter;
-        window.printPortrait = printPortrait;
-        window.exportToExcel = exportToExcel;
+        populateFilters();
+        renderLedger();
+        renderLoans();
         
-        // পেজ লোডে শুরু করুন
-        init();
-    })();
+    } catch(e) {
+        console.error('Init error:', e);
+        const msgDiv = document.getElementById('loadingLedgerMsg');
+        if(msgDiv) msgDiv.innerHTML = `<div class="error-box"><i class="fas fa-exclamation-triangle"></i> ${e.message}</div>`;
+    }
+}
+
+// গ্লোবাল ফাংশন এক্সপোজ
+window.applyFilter = applyFilter;
+window.printPortrait = printPortrait;
+window.exportToExcel = exportToExcel;
+
+// পেজ লোডে শুরু করুন
+init();
 </script>
 </body>
 </html>
