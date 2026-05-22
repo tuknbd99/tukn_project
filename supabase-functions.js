@@ -1,7 +1,11 @@
 // supabase-functions.js
-// TUKNBD - সম্পূর্ণ Supabase ডাটাবেস ফাংশন (ফাইনাল ভার্সন)
+// TUKNBD - সম্পূর্ণ Supabase ডাটাবেস ফাংশন (ফিক্সড ভার্সন)
 
-// ==================== ভেরিয়েবল চেক (ডুপ্লিকেট এড়াতে) ====================
+// ==================== ডুপ্লিকেট প্রটেকশন ====================
+if (typeof window._supabase_functions_loaded === 'undefined') {
+    window._supabase_functions_loaded = true;
+
+// ==================== ভেরিয়েবল চেক ====================
 if (typeof window._supabase === 'undefined') {
     window._supabase = null;
 }
@@ -9,12 +13,35 @@ if (typeof window._supabaseClient === 'undefined') {
     window._supabaseClient = null;
 }
 
-// কম্প্যাটিবিলিটি ভেরিয়েবল (যদি supabase-config.js থেকে না আসে)
+// কম্প্যাটিবিলিটি ভেরিয়েবল
 if (typeof supabase === 'undefined') {
     var supabase = null;
 }
 if (typeof supabaseClient === 'undefined') {
     var supabaseClient = null;
+}
+
+// ==================== শো টোস্ট ফাংশন (HTML এর সাথে কনফ্লিক্ট এড়াতে) ====================
+if (typeof window.showToast === 'undefined') {
+    window.showToast = function(message, type = 'info') {
+        try {
+            const toast = document.createElement('div');
+            const bgColor = type === 'success' ? 'bg-green-600' : 
+                           type === 'error' ? 'bg-red-600' : 
+                           type === 'warning' ? 'bg-yellow-600' : 'bg-blue-600';
+            const icon = type === 'success' ? 'check-circle' : 
+                        type === 'error' ? 'exclamation-circle' : 
+                        type === 'warning' ? 'exclamation-triangle' : 'info-circle';
+            
+            toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${bgColor}`;
+            toast.innerHTML = `<i class="fas fa-${icon} mr-2"></i>${message}`;
+            
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        } catch(err) {
+            console.log('[Toast]', message);
+        }
+    };
 }
 
 // ==================== Supabase ক্লায়েন্ট ইনিশিয়ালাইজেশন ====================
@@ -101,6 +128,48 @@ async function testSupabaseConnection() {
     }
 }
 
+// ==================== সিরিয়াল নম্বর জেনারেট করার ফাংশন ====================
+
+async function getNextMemberSerial() {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        const { data, error } = await client
+            .from('members')
+            .select('member_id');
+        
+        if (error) throw error;
+        
+        let maxSerial = 0;
+        
+        if (data && data.length > 0) {
+            for (const member of data) {
+                if (member.member_id) {
+                    const match = member.member_id.match(/-(\d{4})$/);
+                    if (match && match[1]) {
+                        const serial = parseInt(match[1]);
+                        if (serial > maxSerial) {
+                            maxSerial = serial;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (maxSerial === 0) {
+            maxSerial = 17;
+        }
+        
+        const nextSerial = maxSerial + 1;
+        
+        console.log(`📊 সর্বশেষ সিরিয়াল: ${String(maxSerial).padStart(4, '0')} → পরবর্তী সিরিয়াল: ${String(nextSerial).padStart(4, '0')}`);
+        return nextSerial;
+        
+    } catch (err) {
+        console.error('❌ getNextMemberSerial Error:', err);
+        return 18;
+    }
+}
+
 // ==================== সদস্য (MEMBERS) ফাংশন ====================
 
 async function getAllMembers() {
@@ -116,7 +185,7 @@ async function getAllMembers() {
         return data || [];
     } catch (err) {
         console.error('❌ getAllMembers Error:', err);
-        showToast('সদস্য তালিকা লোড করতে ত্রুটি', 'error');
+        window.showToast('সদস্য তালিকা লোড করতে ত্রুটি', 'error');
         return [];
     }
 }
@@ -199,83 +268,29 @@ async function getMemberByMemberId(memberId) {
     }
 }
 
-// ==================== সিরিয়াল নম্বর জেনারেট করার ফাংশন ====================
-
-async function getNextMemberSerial() {
-    const client = supabase || window.supabase || window._supabase;
-    try {
-        // সব সদস্য থেকে সবচেয়ে বড় সিরিয়াল নম্বর বের করুন
-        const { data, error } = await client
-            .from('members')
-            .select('member_id');
-        
-        if (error) throw error;
-        
-        let maxSerial = 0;
-        
-        if (data && data.length > 0) {
-            for (const member of data) {
-                if (member.member_id) {
-                    // সিরিয়াল নম্বর বের করুন (শেষের 4 ডিজিট)
-                    const match = member.member_id.match(/-(\d{4})$/);
-                    if (match && match[1]) {
-                        const serial = parseInt(match[1]);
-                        if (serial > maxSerial) {
-                            maxSerial = serial;
-                        }
-                    }
-                }
-            }
-        }
-        
-        // প্রথম সদস্যের জন্য 0017 থেকে শুরু (আপনার শেষ সিরিয়াল)
-        if (maxSerial === 0) {
-            maxSerial = 17;
-        }
-        
-        const nextSerial = maxSerial + 1;
-        
-        console.log(`📊 সর্বশেষ সিরিয়াল: ${String(maxSerial).padStart(4, '0')} → পরবর্তী সিরিয়াল: ${String(nextSerial).padStart(4, '0')}`);
-        return nextSerial;
-        
-    } catch (err) {
-        console.error('❌ getNextMemberSerial Error:', err);
-        return 18; // Error হলে 0018 থেকে শুরু
-    }
-}
-
-// ==================== আপডেটেড addNewMember ফাংশন ====================
-
 async function addNewMember(memberData) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!memberData.full_name || !memberData.mobile) {
-            showToast('❌ নাম এবং মোবাইল বাধ্যতামূলক', 'error');
+            window.showToast('❌ নাম এবং মোবাইল বাধ্যতামূলক', 'error');
             return null;
         }
 
-        // মোবাইল নম্বর চেক করুন
         const existing = await getMemberByMobile(memberData.mobile);
         if (existing) {
-            showToast('❌ এই মোবাইলে ইতিমধ্যে সদস্য আছে', 'error');
+            window.showToast('❌ এই মোবাইলে ইতিমধ্যে সদস্য আছে', 'error');
             return null;
         }
 
-        // নতুন member_id জেনারেট করুন
         if (!memberData.member_id) {
             const today = new Date();
-            const year = today.getFullYear().toString().slice(-2);  // 26
-            const month = String(today.getMonth() + 1).padStart(2, '0');  // 05
-            const day = String(today.getDate()).padStart(2, '0');  // 19
-            
-            // পরবর্তী সিরিয়াল নম্বর পান (ধারাবাহিকভাবে বাড়বে)
+            const year = today.getFullYear().toString().slice(-2);
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const day = String(today.getDate()).padStart(2, '0');
             const nextSerial = await getNextMemberSerial();
-            
-            // ফরম্যাট: 260519-0018
             memberData.member_id = `${year}${month}${day}-${String(nextSerial).padStart(4, '0')}`;
         }
 
-        // ডিফল্ট স্ট্যাটাস pending
         memberData.status = memberData.status || 'pending';
         memberData.monthly_savings = memberData.monthly_savings || 500;
         memberData.join_date = memberData.join_date || new Date().toISOString();
@@ -287,13 +302,13 @@ async function addNewMember(memberData) {
         
         if (error) throw error;
         
-        showToast(`✅ ${memberData.full_name} সফলভাবে নিবন্ধিত হয়েছেন!`, 'success');
+        window.showToast(`✅ ${memberData.full_name} সফলভাবে নিবন্ধিত হয়েছেন!`, 'success');
         console.log('✅ New Member ID:', memberData.member_id);
         return data;
         
     } catch (err) {
         console.error('❌ addNewMember Error:', err);
-        showToast('❌ সদস্য যোগ করতে ত্রুটি', 'error');
+        window.showToast('❌ সদস্য যোগ করতে ত্রুটি', 'error');
         return null;
     }
 }
@@ -302,7 +317,7 @@ async function updateMemberStatus(memberId, status) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!memberId || !status) {
-            showToast('❌ সদস্য ID এবং স্ট্যাটাস বাধ্যতামূলক', 'error');
+            window.showToast('❌ সদস্য ID এবং স্ট্যাটাস বাধ্যতামূলক', 'error');
             return null;
         }
 
@@ -314,11 +329,11 @@ async function updateMemberStatus(memberId, status) {
         
         if (error) throw error;
         
-        showToast(`✅ স্ট্যাটাস ${status} এ আপডেট হয়েছে`, 'success');
+        window.showToast(`✅ স্ট্যাটাস ${status} এ আপডেট হয়েছে`, 'success');
         return data;
     } catch (err) {
         console.error('❌ updateMemberStatus Error:', err);
-        showToast('❌ স্ট্যাটাস আপডেট ব্যর্থ', 'error');
+        window.showToast('❌ স্ট্যাটাস আপডেট ব্যর্থ', 'error');
         return null;
     }
 }
@@ -327,7 +342,7 @@ async function deleteMemberById(memberId) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!memberId) {
-            showToast('❌ সদস্য ID প্রয়োজন', 'error');
+            window.showToast('❌ সদস্য ID প্রয়োজন', 'error');
             return false;
         }
 
@@ -341,11 +356,11 @@ async function deleteMemberById(memberId) {
         
         if (error) throw error;
         
-        showToast('✅ সদস্য মুছে দেওয়া হয়েছে', 'success');
+        window.showToast('✅ সদস্য মুছে দেওয়া হয়েছে', 'success');
         return true;
     } catch (err) {
         console.error('❌ deleteMemberById Error:', err);
-        showToast('❌ সদস্য মুছতে ত্রুটি', 'error');
+        window.showToast('❌ সদস্য মুছতে ত্রুটি', 'error');
         return false;
     }
 }
@@ -354,7 +369,7 @@ async function updateMemberInfo(memberId, updates) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!memberId || !updates) {
-            showToast('❌ ডাটা অপূর্ণ', 'error');
+            window.showToast('❌ ডাটা অপূর্ণ', 'error');
             return null;
         }
 
@@ -366,11 +381,11 @@ async function updateMemberInfo(memberId, updates) {
         
         if (error) throw error;
         
-        showToast('✅ তথ্য আপডেট হয়েছে', 'success');
+        window.showToast('✅ তথ্য আপডেট হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ updateMemberInfo Error:', err);
-        showToast('❌ তথ্য আপডেট ব্যর্থ', 'error');
+        window.showToast('❌ তথ্য আপডেট ব্যর্থ', 'error');
         return null;
     }
 }
@@ -397,7 +412,7 @@ async function verifyAdminLogin(username, password) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!username || !password) {
-            showToast('❌ ইউজারনেম এবং পাসওয়ার্ড দিন', 'error');
+            window.showToast('❌ ইউজারনেম এবং পাসওয়ার্ড দিন', 'error');
             return null;
         }
 
@@ -411,7 +426,7 @@ async function verifyAdminLogin(username, password) {
         if (error && error.code !== 'PGRST116') throw error;
         
         if (!data) {
-            showToast('❌ ভুল ক্রেডেনশিয়াল', 'error');
+            window.showToast('❌ ভুল ক্রেডেনশিয়াল', 'error');
             return null;
         }
 
@@ -427,7 +442,7 @@ async function addNewAdmin(adminData) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!adminData.username || !adminData.password || !adminData.name) {
-            showToast('❌ ইউজারনেম, পাসওয়ার্ড এবং নাম বাধ্যতামূলক', 'error');
+            window.showToast('❌ ইউজারনেম, পাসওয়ার্ড এবং নাম বাধ্যতামূলক', 'error');
             return null;
         }
 
@@ -438,11 +453,11 @@ async function addNewAdmin(adminData) {
         
         if (error) throw error;
         
-        showToast('✅ অ্যাডমিন যোগ হয়েছে', 'success');
+        window.showToast('✅ অ্যাডমিন যোগ হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ addNewAdmin Error:', err);
-        showToast('❌ অ্যাডমিন যোগ করতে ত্রুটি', 'error');
+        window.showToast('❌ অ্যাডমিন যোগ করতে ত্রুটি', 'error');
         return null;
     }
 }
@@ -460,7 +475,7 @@ async function deleteAdminById(adminId) {
         
         if (error) throw error;
         
-        showToast('✅ অ্যাডমিন মুছে দেওয়া হয়েছে', 'success');
+        window.showToast('✅ অ্যাডমিন মুছে দেওয়া হয়েছে', 'success');
         return true;
     } catch (err) {
         console.error('❌ deleteAdminById Error:', err);
@@ -490,7 +505,7 @@ async function addNewRepresentative(repData) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!repData.name || !repData.district) {
-            showToast('❌ নাম এবং জেলা বাধ্যতামূলক', 'error');
+            window.showToast('❌ নাম এবং জেলা বাধ্যতামূলক', 'error');
             return null;
         }
 
@@ -501,11 +516,11 @@ async function addNewRepresentative(repData) {
         
         if (error) throw error;
         
-        showToast('✅ প্রতিনিধি যোগ হয়েছে', 'success');
+        window.showToast('✅ প্রতিনিধি যোগ হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ addNewRepresentative Error:', err);
-        showToast('❌ প্রতিনিধি যোগ করতে ত্রুটি', 'error');
+        window.showToast('❌ প্রতিনিধি যোগ করতে ত্রুটি', 'error');
         return null;
     }
 }
@@ -523,7 +538,7 @@ async function deleteRepresentativeById(id) {
         
         if (error) throw error;
         
-        showToast('✅ প্রতিনিধি মুছে দেওয়া হয়েছে', 'success');
+        window.showToast('✅ প্রতিনিধি মুছে দেওয়া হয়েছে', 'success');
         return true;
     } catch (err) {
         console.error('❌ deleteRepresentativeById Error:', err);
@@ -553,7 +568,7 @@ async function addRepApplication(appData) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!appData.member_id || !appData.district) {
-            showToast('❌ সদস্য এবং জেলা বাধ্যতামূলক', 'error');
+            window.showToast('❌ সদস্য এবং জেলা বাধ্যতামূলক', 'error');
             return null;
         }
 
@@ -564,11 +579,11 @@ async function addRepApplication(appData) {
         
         if (error) throw error;
         
-        showToast('✅ প্রতিনিধি আবেদন জমা হয়েছে', 'success');
+        window.showToast('✅ প্রতিনিধি আবেদন জমা হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ addRepApplication Error:', err);
-        showToast('❌ আবেদন জমা করতে ত্রুটি', 'error');
+        window.showToast('❌ আবেদন জমা করতে ত্রুটি', 'error');
         return null;
     }
 }
@@ -599,11 +614,11 @@ async function approveRepApplicationById(id, approvedBy) {
             });
         }
         
-        showToast('✅ আবেদন অনুমোদন হয়েছে', 'success');
+        window.showToast('✅ আবেদন অনুমোদন হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ approveRepApplicationById Error:', err);
-        showToast('❌ অনুমোদন ব্যর্থ', 'error');
+        window.showToast('❌ অনুমোদন ব্যর্থ', 'error');
         return null;
     }
 }
@@ -619,7 +634,7 @@ async function rejectRepApplicationById(id) {
         
         if (error) throw error;
         
-        showToast('✅ আবেদন বাতিল হয়েছে', 'success');
+        window.showToast('✅ আবেদন বাতিল হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ rejectRepApplicationById Error:', err);
@@ -649,7 +664,7 @@ async function getLoanApplicationsByMemberId(memberId) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!memberId) {
-            showToast('❌ সদস্য ID প্রয়োজন', 'error');
+            window.showToast('❌ সদস্য ID প্রয়োজন', 'error');
             return [];
         }
 
@@ -671,7 +686,7 @@ async function addLoanApplication(loanData) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!loanData.member_id || !loanData.loan_amount) {
-            showToast('❌ সদস্য এবং লোন পরিমাণ বাধ্যতামূলক', 'error');
+            window.showToast('❌ সদস্য এবং লোন পরিমাণ বাধ্যতামূলক', 'error');
             return null;
         }
 
@@ -682,11 +697,11 @@ async function addLoanApplication(loanData) {
         
         if (error) throw error;
         
-        showToast('✅ লোন আবেদন জমা হয়েছে', 'success');
+        window.showToast('✅ লোন আবেদন জমা হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ addLoanApplication Error:', err);
-        showToast('❌ লোন আবেদন জমা ব্যর্থ', 'error');
+        window.showToast('❌ লোন আবেদন জমা ব্যর্থ', 'error');
         return null;
     }
 }
@@ -695,7 +710,7 @@ async function updateLoanApplicationStatus(id, status) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!id || !status) {
-            showToast('❌ ID এবং স্ট্যাটাস প্রয়োজন', 'error');
+            window.showToast('❌ ID এবং স্ট্যাটাস প্রয়োজন', 'error');
             return null;
         }
 
@@ -707,7 +722,7 @@ async function updateLoanApplicationStatus(id, status) {
         
         if (error) throw error;
         
-        showToast(`✅ লোন স্ট্যাটাস ${status} হয়েছে`, 'success');
+        window.showToast(`✅ লোন স্ট্যাটাস ${status} হয়েছে`, 'success');
         return data;
     } catch (err) {
         console.error('❌ updateLoanApplicationStatus Error:', err);
@@ -728,7 +743,7 @@ async function deleteLoanApplicationById(id) {
         
         if (error) throw error;
         
-        showToast('✅ লোন আবেদন মুছে দেওয়া হয়েছে', 'success');
+        window.showToast('✅ লোন আবেদন মুছে দেওয়া হয়েছে', 'success');
         return true;
     } catch (err) {
         console.error('❌ deleteLoanApplicationById Error:', err);
@@ -758,7 +773,7 @@ async function addTransaction(transactionData) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!transactionData.member_id || !transactionData.amount) {
-            showToast('❌ সদস্য এবং পরিমাণ বাধ্যতামূলক', 'error');
+            window.showToast('❌ সদস্য এবং পরিমাণ বাধ্যতামূলক', 'error');
             return null;
         }
 
@@ -771,11 +786,11 @@ async function addTransaction(transactionData) {
         
         if (error) throw error;
         
-        showToast('✅ লেনদেন যোগ হয়েছে', 'success');
+        window.showToast('✅ লেনদেন যোগ হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ addTransaction Error:', err);
-        showToast('❌ লেনদেন যোগ ব্যর্থ', 'error');
+        window.showToast('❌ লেনদেন যোগ ব্যর্থ', 'error');
         return null;
     }
 }
@@ -793,7 +808,7 @@ async function deleteTransactionById(id) {
         
         if (error) throw error;
         
-        showToast('✅ লেনদেন মুছে দেওয়া হয়েছে', 'success');
+        window.showToast('✅ লেনদেন মুছে দেওয়া হয়েছে', 'success');
         return true;
     } catch (err) {
         console.error('❌ deleteTransactionById Error:', err);
@@ -823,7 +838,7 @@ async function addNewNotice(noticeData) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!noticeData.title || !noticeData.content) {
-            showToast('❌ শিরোনাম এবং বিষয়বস্তু বাধ্যতামূলক', 'error');
+            window.showToast('❌ শিরোনাম এবং বিষয়বস্তু বাধ্যতামূলক', 'error');
             return null;
         }
 
@@ -834,11 +849,11 @@ async function addNewNotice(noticeData) {
         
         if (error) throw error;
         
-        showToast('✅ নোটিশ যোগ হয়েছে', 'success');
+        window.showToast('✅ নোটিশ যোগ হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ addNewNotice Error:', err);
-        showToast('❌ নোটিশ যোগ ব্যর্থ', 'error');
+        window.showToast('❌ নোটিশ যোগ ব্যর্থ', 'error');
         return null;
     }
 }
@@ -856,7 +871,7 @@ async function deleteNoticeById(id) {
         
         if (error) throw error;
         
-        showToast('✅ নোটিশ মুছে দেওয়া হয়েছে', 'success');
+        window.showToast('✅ নোটিশ মুছে দেওয়া হয়েছে', 'success');
         return true;
     } catch (err) {
         console.error('❌ deleteNoticeById Error:', err);
@@ -903,7 +918,7 @@ async function addNewComplaint(complaintData) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!complaintData.title || !complaintData.description) {
-            showToast('❌ শিরোনাম এবং বর্ণনা বাধ্যতামূলক', 'error');
+            window.showToast('❌ শিরোনাম এবং বর্ণনা বাধ্যতামূলক', 'error');
             return null;
         }
 
@@ -914,11 +929,11 @@ async function addNewComplaint(complaintData) {
         
         if (error) throw error;
         
-        showToast('✅ অভিযোগ জমা হয়েছে', 'success');
+        window.showToast('✅ অভিযোগ জমা হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ addNewComplaint Error:', err);
-        showToast('❌ অভিযোগ জমা ব্যর্থ', 'error');
+        window.showToast('❌ অভিযোগ জমা ব্যর্থ', 'error');
         return null;
     }
 }
@@ -939,7 +954,7 @@ async function updateComplaintStatusById(id, status) {
         
         if (error) throw error;
         
-        showToast(`✅ অভিযোগ স্ট্যাটাস ${status} হয়েছে`, 'success');
+        window.showToast(`✅ অভিযোগ স্ট্যাটাস ${status} হয়েছে`, 'success');
         return data;
     } catch (err) {
         console.error('❌ updateComplaintStatusById Error:', err);
@@ -969,7 +984,7 @@ async function addNewSlider(sliderData) {
     const client = supabase || window.supabase || window._supabase;
     try {
         if (!sliderData.title || !sliderData.image_url) {
-            showToast('❌ শিরোনাম এবং ছবি বাধ্যতামূলক', 'error');
+            window.showToast('❌ শিরোনাম এবং ছবি বাধ্যতামূলক', 'error');
             return null;
         }
 
@@ -980,11 +995,11 @@ async function addNewSlider(sliderData) {
         
         if (error) throw error;
         
-        showToast('✅ স্লাইডার যোগ হয়েছে', 'success');
+        window.showToast('✅ স্লাইডার যোগ হয়েছে', 'success');
         return data;
     } catch (err) {
         console.error('❌ addNewSlider Error:', err);
-        showToast('❌ স্লাইডার যোগ ব্যর্থ', 'error');
+        window.showToast('❌ স্লাইডার যোগ ব্যর্থ', 'error');
         return null;
     }
 }
@@ -1002,7 +1017,7 @@ async function deleteSliderById(id) {
         
         if (error) throw error;
         
-        showToast('✅ স্লাইডার মুছে দেওয়া হয়েছে', 'success');
+        window.showToast('✅ স্লাইডার মুছে দেওয়া হয়েছে', 'success');
         return true;
     } catch (err) {
         console.error('❌ deleteSliderById Error:', err);
@@ -1050,210 +1065,6 @@ async function incrementVisitorCount() {
     }
 }
 
-// ==================== টেস্ট ডাটা ফাংশন ====================
-
-async function addTestMemberIfNotExists() {
-    try {
-        const existing = await getMemberByMobile('01734913809');
-        if (existing) {
-            console.log('✅ Test member already exists');
-            return;
-        }
-
-        const testMember = {
-            member_id: 'TUKN-TEST-0001',
-            full_name: 'পরীক্ষা সদস্য',
-            mobile: '01734913809',
-            password: '1234',
-            status: 'active',
-            member_type: 'সাধারণ সদস্য',
-            monthly_savings: 500
-        };
-
-        await addNewMember(testMember);
-        console.log('✅ Test member created successfully');
-    } catch (err) {
-        console.error('❌ Test member creation error:', err);
-    }
-}
-
-// ==================== ইউটিলিটি ফাংশন ====================
-
-function showToast(message, type = 'info') {
-    try {
-        const toast = document.createElement('div');
-        const bgColor = type === 'success' ? 'bg-green-600' : 
-                       type === 'error' ? 'bg-red-600' : 'bg-blue-600';
-        const icon = type === 'success' ? 'check-circle' : 
-                    type === 'error' ? 'exclamation-circle' : 'info-circle';
-        
-        toast.className = `fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 ${bgColor} animate-pulse`;
-        toast.innerHTML = `<i class="fas fa-${icon} mr-2"></i>${message}`;
-        
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
-    } catch (err) {
-        console.log('[Toast]', message);
-    }
-}
-
-// ==================== ইনিশিয়ালাইজেশন ====================
-
-async function initSupabaseFunctions() {
-    try {
-        console.log('🚀 Initializing Supabase Functions...');
-        
-        const initialized = await initSupabaseClient();
-        if (!initialized) {
-            console.warn('⚠️ Supabase initialization failed');
-            return;
-        }
-        
-        const connected = await testSupabaseConnection();
-        if (connected) {
-            await addTestMemberIfNotExists();
-            console.log('✅ Supabase Functions Ready!');
-        }
-    } catch (err) {
-        console.error('❌ Initialization Error:', err);
-    }
-}
-
-// ==================== সদস্য লগইন ফাংশন ====================
-
-async function verifyMemberLogin(username, password) {
-    const client = supabase || window.supabase || window._supabase;
-    try {
-        if (!username || !password) {
-            showToast('সদস্য আইডি/মোবাইল এবং পাসওয়ার্ড দিন', 'error');
-            return null;
-        }
-
-        let query = client.from('members').select('*');
-        
-        // চেক করুন username মোবাইল নম্বর কিনা
-        if(username.match(/^01[3-9]\d{8}$/)) {
-            query = query.eq('mobile', username);
-        } else {
-            query = query.eq('member_id', username);
-        }
-        
-        const { data, error } = await query;
-        
-        if (error && error.code !== 'PGRST116') throw error;
-        
-        const member = data?.[0];
-        
-        if (!member) {
-            showToast('সদস্য আইডি/মোবাইল নম্বর সঠিক নয়!', 'error');
-            return null;
-        }
-        
-        if (member.password !== password) {
-            showToast('পাসওয়ার্ড ভুল!', 'error');
-            return null;
-        }
-        
-        if (member.status !== 'active' && member.status !== 'approved') {
-            showToast('আপনার একাউন্ট এখনও অনুমোদিত হয়নি।', 'warning');
-            return null;
-        }
-        
-        console.log('✅ Member Login Successful:', member.full_name);
-        return member;
-        
-    } catch (err) {
-        console.error('verifyMemberLogin Error:', err);
-        showToast('লগইন করতে ব্যর্থ হয়েছে!', 'error');
-        return null;
-    }
-}
-
-function saveMemberSession(member, rememberMe = false) {
-    try {
-        const sessionData = {
-            member_id: member.member_id,
-            full_name: member.full_name,
-            mobile: member.mobile,
-            referral_code: member.referral_code,
-            join_date: member.join_date,
-            member_type: member.member_type || 'সাধারণ সদস্য',
-            monthly_savings: member.monthly_savings || 500,
-            status: member.status,
-            loggedIn: true,
-            loginTime: new Date().toISOString()
-        };
-        
-        // সব সময় sessionStorage এ রাখুন
-        sessionStorage.setItem('tukn_logged_member', JSON.stringify(sessionData));
-        
-        // rememberMe চেক করা থাকলে localStorage এ রাখুন
-        if (rememberMe) {
-            localStorage.setItem('tukn_logged_member', JSON.stringify(sessionData));
-        }
-        
-        console.log('✅ Member session saved');
-        return true;
-        
-    } catch (err) {
-        console.error('saveMemberSession Error:', err);
-        return false;
-    }
-}
-
-function getMemberSession() {
-    try {
-        // প্রথমে localStorage চেক করুন
-        let sessionData = localStorage.getItem('tukn_logged_member');
-        
-        // না পেলে sessionStorage চেক করুন
-        if (!sessionData) {
-            sessionData = sessionStorage.getItem('tukn_logged_member');
-        }
-        
-        if (!sessionData) {
-            return null;
-        }
-        
-        const member = JSON.parse(sessionData);
-        
-        // চেক করুন লগইন বৈধ কিনা
-        if (!member.loggedIn) {
-            return null;
-        }
-        
-        // স্ট্যাটাস চেক
-        if (member.status !== 'active' && member.status !== 'approved') {
-            return null;
-        }
-        
-        return member;
-        
-    } catch (err) {
-        console.error('getMemberSession Error:', err);
-        return null;
-    }
-}
-
-function clearMemberSession() {
-    localStorage.removeItem('tukn_logged_member');
-    sessionStorage.removeItem('tukn_logged_member');
-    console.log('✅ Member session cleared');
-}
-
-function isMemberLoggedIn() {
-    return getMemberSession() !== null;
-}
-
-function memberLogout() {
-    clearMemberSession();
-    showToast('লগআউট সফল!', 'success');
-    setTimeout(() => {
-        window.location.href = 'index.html';
-    }, 1000);
-    return true;
-}
-
 // ==================== পেমেন্ট অনুমোদন ফাংশন ====================
 
 async function approvePayment(paymentId, adminId, adminName, adminRole) {
@@ -1273,12 +1084,12 @@ async function approvePayment(paymentId, adminId, adminName, adminRole) {
         
         if (error) throw error;
         
-        showToast('✅ পেমেন্ট অনুমোদন করা হয়েছে!', 'success');
+        window.showToast('✅ পেমেন্ট অনুমোদন করা হয়েছে!', 'success');
         return data;
         
     } catch (err) {
         console.error('❌ approvePayment Error:', err);
-        showToast('❌ অনুমোদন ব্যর্থ!', 'error');
+        window.showToast('❌ অনুমোদন ব্যর্থ!', 'error');
         return null;
     }
 }
@@ -1300,12 +1111,12 @@ async function rejectPayment(paymentId, adminId, adminName, reason) {
         
         if (error) throw error;
         
-        showToast('✅ পেমেন্ট বাতিল করা হয়েছে!', 'warning');
+        window.showToast('✅ পেমেন্ট বাতিল করা হয়েছে!', 'warning');
         return data;
         
     } catch (err) {
         console.error('❌ rejectPayment Error:', err);
-        showToast('❌ বাতিল করতে ব্যর্থ!', 'error');
+        window.showToast('❌ বাতিল করতে ব্যর্থ!', 'error');
         return null;
     }
 }
@@ -1361,9 +1172,136 @@ async function getPaymentById(paymentId) {
     }
 }
 
+// ==================== সদস্য লগইন ফাংশন ====================
+
+async function verifyMemberLogin(username, password) {
+    const client = supabase || window.supabase || window._supabase;
+    try {
+        if (!username || !password) {
+            window.showToast('সদস্য আইডি/মোবাইল এবং পাসওয়ার্ড দিন', 'error');
+            return null;
+        }
+
+        let query = client.from('members').select('*');
+        
+        if(username.match(/^01[3-9]\d{8}$/)) {
+            query = query.eq('mobile', username);
+        } else {
+            query = query.eq('member_id', username);
+        }
+        
+        const { data, error } = await query;
+        
+        if (error && error.code !== 'PGRST116') throw error;
+        
+        const member = data?.[0];
+        
+        if (!member) {
+            window.showToast('সদস্য আইডি/মোবাইল নম্বর সঠিক নয়!', 'error');
+            return null;
+        }
+        
+        if (member.password !== password) {
+            window.showToast('পাসওয়ার্ড ভুল!', 'error');
+            return null;
+        }
+        
+        if (member.status !== 'active' && member.status !== 'approved') {
+            window.showToast('আপনার একাউন্ট এখনও অনুমোদিত হয়নি।', 'warning');
+            return null;
+        }
+        
+        console.log('✅ Member Login Successful:', member.full_name);
+        return member;
+        
+    } catch (err) {
+        console.error('verifyMemberLogin Error:', err);
+        window.showToast('লগইন করতে ব্যর্থ হয়েছে!', 'error');
+        return null;
+    }
+}
+
+function saveMemberSession(member, rememberMe = false) {
+    try {
+        const sessionData = {
+            member_id: member.member_id,
+            full_name: member.full_name,
+            mobile: member.mobile,
+            referral_code: member.referral_code,
+            join_date: member.join_date,
+            member_type: member.member_type || 'সাধারণ সদস্য',
+            monthly_savings: member.monthly_savings || 500,
+            status: member.status,
+            loggedIn: true,
+            loginTime: new Date().toISOString()
+        };
+        
+        sessionStorage.setItem('tukn_logged_member', JSON.stringify(sessionData));
+        
+        if (rememberMe) {
+            localStorage.setItem('tukn_logged_member', JSON.stringify(sessionData));
+        }
+        
+        console.log('✅ Member session saved');
+        return true;
+        
+    } catch (err) {
+        console.error('saveMemberSession Error:', err);
+        return false;
+    }
+}
+
+function getMemberSession() {
+    try {
+        let sessionData = localStorage.getItem('tukn_logged_member');
+        
+        if (!sessionData) {
+            sessionData = sessionStorage.getItem('tukn_logged_member');
+        }
+        
+        if (!sessionData) {
+            return null;
+        }
+        
+        const member = JSON.parse(sessionData);
+        
+        if (!member.loggedIn) {
+            return null;
+        }
+        
+        if (member.status !== 'active' && member.status !== 'approved') {
+            return null;
+        }
+        
+        return member;
+        
+    } catch (err) {
+        console.error('getMemberSession Error:', err);
+        return null;
+    }
+}
+
+function clearMemberSession() {
+    localStorage.removeItem('tukn_logged_member');
+    sessionStorage.removeItem('tukn_logged_member');
+    console.log('✅ Member session cleared');
+}
+
+function isMemberLoggedIn() {
+    return getMemberSession() !== null;
+}
+
+function memberLogout() {
+    clearMemberSession();
+    window.showToast('লগআউট সফল!', 'success');
+    setTimeout(() => {
+        window.location.href = 'index.html';
+    }, 1000);
+    return true;
+}
+
 // ==================== অ্যাডমিন পারমিশন ম্যানেজমেন্ট ====================
 
-// ডিফল্ট পারমিশন সেটিংস
 const DEFAULT_PERMISSIONS = {
     'super_admin': {
         can_approve_members: true,
@@ -1419,12 +1357,12 @@ async function updateAdminPermissions(adminId, permissions) {
         
         if (error) throw error;
         
-        showToast('✅ পারমিশন আপডেট হয়েছে!', 'success');
+        window.showToast('✅ পারমিশন আপডেট হয়েছে!', 'success');
         return data;
         
     } catch (err) {
         console.error('❌ updateAdminPermissions Error:', err);
-        showToast('❌ পারমিশন আপডেট ব্যর্থ!', 'error');
+        window.showToast('❌ পারমিশন আপডেট ব্যর্থ!', 'error');
         return null;
     }
 }
@@ -1433,6 +1371,56 @@ async function checkAdminPermission(adminId, permissionName) {
     const permissions = await getAdminPermissions(adminId);
     return permissions[permissionName] === true;
 }
+
+// ==================== টেস্ট ডাটা ফাংশন ====================
+
+async function addTestMemberIfNotExists() {
+    try {
+        const existing = await getMemberByMobile('01734913809');
+        if (existing) {
+            console.log('✅ Test member already exists');
+            return;
+        }
+
+        const testMember = {
+            member_id: 'TUKN-TEST-0001',
+            full_name: 'পরীক্ষা সদস্য',
+            mobile: '01734913809',
+            password: '1234',
+            status: 'active',
+            member_type: 'সাধারণ সদস্য',
+            monthly_savings: 500
+        };
+
+        await addNewMember(testMember);
+        console.log('✅ Test member created successfully');
+    } catch (err) {
+        console.error('❌ Test member creation error:', err);
+    }
+}
+
+// ==================== ইনিশিয়ালাইজেশন ====================
+
+async function initSupabaseFunctions() {
+    try {
+        console.log('🚀 Initializing Supabase Functions...');
+        
+        const initialized = await initSupabaseClient();
+        if (!initialized) {
+            console.warn('⚠️ Supabase initialization failed');
+            return;
+        }
+        
+        const connected = await testSupabaseConnection();
+        if (connected) {
+            await addTestMemberIfNotExists();
+            console.log('✅ Supabase Functions Ready!');
+        }
+    } catch (err) {
+        console.error('❌ Initialization Error:', err);
+    }
+}
+
 // ==================== গ্লোবাল এক্সপোর্ট ====================
 
 // লগইন ফাংশন এক্সপোর্ট
@@ -1487,7 +1475,7 @@ window.addNewSlider = addNewSlider;
 window.deleteSliderById = deleteSliderById;
 window.getVisitorCount = getVisitorCount;
 window.incrementVisitorCount = incrementVisitorCount;
-window.showToast = showToast;
+
 // পেমেন্ট ফাংশন এক্সপোর্ট
 window.approvePayment = approvePayment;
 window.rejectPayment = rejectPayment;
@@ -1500,11 +1488,9 @@ window.getAdminPermissions = getAdminPermissions;
 window.updateAdminPermissions = updateAdminPermissions;
 window.checkAdminPermission = checkAdminPermission;
 
-// পেজ লোড হলে ইনিশিয়ালাইজ করুন
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initSupabaseFunctions);
-} else {
-    initSupabaseFunctions();
-}
+// initSupabaseFunctions কে window তেও রাখুন
+window.initSupabaseFunctions = initSupabaseFunctions;
 
-console.log('✅ supabase-functions.js loaded (final version)');
+console.log('✅ supabase-functions.js loaded (fixed version)');
+
+} // ডুপ্লিকেট প্রটেকশন শেষ
