@@ -1110,14 +1110,31 @@
         }
         
         async function loadApplicationsData() {
-            const client = window.supabaseClient;
-            if(!client) return;
+            const client = window.supabaseClient || supabaseClient;
+            if(!client) {
+                console.log('Supabase client not ready');
+                return;
+            }
             try {
-                const { data, error } = await client.from('rep_applications').select('*').order('apply_timestamp', { ascending: false });
-                if(error) throw error;
+                // apply_timestamp এর পরিবর্তে created_at বা apply_date ব্যবহার করুন
+                const { data, error } = await client
+                    .from('rep_applications')
+                    .select('*')
+                    .order('created_at', { ascending: false });
+                
+                if (error) throw error;
                 applications = data || [];
                 renderApplications();
-            } catch(e) { console.error('Load applications error:', e); }
+                console.log('✅ Applications loaded:', applications.length);
+            } catch(e) { 
+                console.error('Load applications error:', e); 
+                // যদি টেবিল না থাকে, তাহলে localStorage ব্যবহার করুন
+                const savedApps = localStorage.getItem('tukn_rep_applications');
+                if(savedApps) {
+                    applications = JSON.parse(savedApps);
+                    renderApplications();
+                }
+            }
         }
         
         function loadAboutData() { updateAboutDisplay(); }
@@ -1139,7 +1156,33 @@
             if(orgValuesElem) orgValuesElem.innerHTML = aboutData.orgValues.map(v => `<li>${v}</li>`).join('');
             if(orgDateElem) orgDateElem.innerHTML = `প্রতিষ্ঠাতা:<br><strong> মোহাম্মাদ আরিফ হাসান </strong><br>হিসাবরক্ষক <br>জামিয়া মাযাহিরুল উলূম মানওয়ার খাঁ ও হাজী ইউনুস<br>১-৩ সিদ্দিক বাজার, ঢাকা-১০০০<br><strong>তারিখ: ${new Date(aboutData.orgEstablishDate).toLocaleDateString('bn-BD')}</strong><br>বৃহস্পতিবার<br>(পরিকল্পনা গ্রহণ ও এককভাবে প্রস্তুতিমূলক কাজ শুরু।)`;
         }
+        async function addRepApplication(appData) {
+        const client = window.supabaseClient || supabaseClient;
+        if(!client) {
+            // লোকাল স্টোরেজে ব্যাকআপ
+            const savedApps = localStorage.getItem('tukn_rep_applications') || '[]';
+            const apps = JSON.parse(savedApps);
+            apps.push({...appData, id: Date.now(), created_at: new Date().toISOString()});
+            localStorage.setItem('tukn_rep_applications', JSON.stringify(apps));
+            applications = apps;
+            renderApplications();
+            showToast('আবেদন জমা হয়েছে (অফলাইন মোড)', 'success');
+            return;
+        }
         
+        try {
+            const { error } = await client
+                .from('rep_applications')
+                .insert([{...appData, created_at: new Date().toISOString()}]);
+            
+            if(error) throw error;
+            showToast('আবেদন জমা হয়েছে', 'success');
+            await loadApplicationsData();
+        } catch(e) {
+            console.error('Add application error:', e);
+            showToast('আবেদন জমা ব্যর্থ!', 'error');
+        }
+    }
         // ========== পেজ লোড ==========
         document.addEventListener('DOMContentLoaded', async function() {
             console.log('🟢 পেজ লোড হচ্ছে...');
