@@ -61,6 +61,7 @@
         let representatives = [];
         let applications = [];
         let admins = [];
+        let pendingPaymentsCount = 0;
         let currentPermissions = JSON.parse(localStorage.getItem('admin_permissions') || '{"super_admin":["view_members","add_member","manage_reps","manage_applications","view_economy","manage_admins","manage_permissions","view_profit_distribution","manage_complaints","manage_about","manage_loans","manage_career","manage_branches","view_ledger","manage_slider","manage_notices","manage_payments"],"admin":["view_members","add_member","manage_applications","view_economy","view_profit_distribution","manage_complaints","manage_about","manage_loans","view_ledger","manage_slider","manage_notices"]}');
         let currentRejectAppId = null;
         let currentComplaintFilter = 'all';
@@ -109,27 +110,33 @@
         
         // ========== স্ট্যাটিসটিক্স ফাংশন ==========
         function updateStats() {
-            document.getElementById('totalMembers').innerText = members.length;
-            const pendingMembersCount = members.filter(m => m.status === 'pending').length;
-            document.getElementById('pendingApps').innerText = pendingMembersCount;
-            updatePendingMemberBadge();
+            const totalMembersElem = document.getElementById('totalMembers');
+            const pendingAppsElem = document.getElementById('pendingApps');
+            const totalCollectionElem = document.getElementById('totalCollection');
+            const totalRepsElem = document.getElementById('totalReps');
+            const newMembersElem = document.getElementById('newMembers');
+            const pendingPaymentsElem = document.getElementById('pendingPayments');
+            
+            if(totalMembersElem) totalMembersElem.innerText = members.length;
+            if(pendingAppsElem) pendingAppsElem.innerText = members.filter(m => m.status === 'pending').length;
+            if(totalRepsElem) totalRepsElem.innerText = representatives.length;
             
             const activeMembers = members.filter(m => m.status === 'active');
             const totalCollection = activeMembers.reduce((sum, m) => sum + (m.monthly_savings || 500), 0);
-            document.getElementById('totalCollection').innerText = totalCollection.toLocaleString();
-            
-            document.getElementById('totalReps').innerText = representatives.length;
+            if(totalCollectionElem) totalCollectionElem.innerText = totalCollection.toLocaleString();
             
             const currentMonth = new Date().getMonth();
             const currentYear = new Date().getFullYear();
-            const newMembers = members.filter(m => {
+            const newMembersCount = members.filter(m => {
                 const d = new Date(m.created_at || m.join_date);
                 return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
             }).length;
-            document.getElementById('newMembers').innerText = newMembers;
+            if(newMembersElem) newMembersElem.innerText = newMembersCount;
             
-            // পেন্ডিং পেমেন্ট কাউন্ট আপডেট
-            loadPaymentApprovals();
+            if(pendingPaymentsElem) pendingPaymentsElem.innerText = pendingPaymentsCount;
+            
+            // পেন্ডিং ব্যাজ আপডেট
+            updatePendingMemberBadge();
         }
         
         function updatePendingMemberBadge() {
@@ -138,6 +145,7 @@
                 const count = members.filter(m => m.status === 'pending').length;
                 badge.innerText = count > 0 ? (count > 9 ? '9+' : count) : '';
                 badge.style.display = count > 0 ? 'inline-block' : 'none';
+                console.log('✅ পেন্ডিং ব্যাজ আপডেট:', count);
             }
         }
         
@@ -149,7 +157,7 @@
             const loans = getLoans();
             const tbody = document.getElementById('loanApplicationsList');
             if(!tbody) return;
-            if(loans.length === 0) { tbody.innerHTML = '<td><td colspan="8" class="text-center p-4 text-gray-500">কোনো লোন আবেদন নেই<\/td><\/tr>'; return; }
+            if(loans.length === 0) { tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4 text-gray-500">কোনো লোন আবেদন নেই<\/td><\/tr>'; return; }
             tbody.innerHTML = loans.map(loan => `<tr class="border-b hover:bg-gray-50"><td class="p-3 border">${new Date(loan.date).toLocaleDateString('bn-BD')}</td><td class="p-3 border">${loan.memberName}</td><td class="p-3 border">${loan.memberId}</td><td class="p-3 border">${loan.loanType}</td><td class="p-3 text-right border">${loan.amount.toLocaleString()} টাকা<\/td><td class="p-3 border">${loan.duration}<\/td><td class="p-3 border"><select onchange="updateLoanStatus(${loan.id}, this.value)" class="px-2 py-1 rounded text-sm"><option value="pending" ${loan.status === 'pending' ? 'selected' : ''}>বিচারাধীন</option><option value="approved" ${loan.status === 'approved' ? 'selected' : ''}>অনুমোদিত</option><option value="rejected" ${loan.status === 'rejected' ? 'selected' : ''}>বাতিল</option><option value="completed" ${loan.status === 'completed' ? 'selected' : ''}>পরিশোধিত</option></select><\/td><td class="p-3 border"><button onclick="viewLoanDetails(${loan.id})" class="text-blue-500 mr-2"><i class="fas fa-eye"></i></button><button onclick="deleteLoan(${loan.id})" class="text-red-500"><i class="fas fa-trash"></i></button><\/td><\/tr>`).join('');
         }
         
@@ -193,17 +201,25 @@
         
         async function loadPaymentApprovals() {
             const client = window.supabaseClient;
-            if (!client) return;
+            if (!client) {
+                console.warn('⚠️ Supabase client not ready');
+                return;
+            }
             try {
                 const { data, error } = await client.from('payments').select('*').eq('status', 'pending').order('submitted_at', { ascending: false });
                 if (error) throw error;
+                
+                pendingPaymentsCount = data?.length || 0;
+                
                 const tbody = document.getElementById('paymentApprovalList');
                 if (!tbody) return;
+                
                 if (!data || data.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="10" class="text-center p-4 text-gray-500">কোনো পেন্ডিং পেমেন্ট নেই<\/td><\/tr>';
                     document.getElementById('pendingPayments').innerText = '0';
                     return;
                 }
+                
                 tbody.innerHTML = data.map(p => `
                     <tr class="border-b hover:bg-gray-50">
                         <td class="p-2 border text-xs">${new Date(p.submitted_at).toLocaleDateString('bn-BD')}</td>
@@ -217,7 +233,10 @@
                         <td class="p-2 border"><div class="flex gap-1"><button onclick="approvePayment('${p.id}')" class="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600 transition">অনুমোদন</button><button onclick="rejectPayment('${p.id}')" class="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600 transition">বাতিল</button></div></td>
                     </tr>
                 `).join('');
-                document.getElementById('pendingPayments').innerText = data.length;
+                
+                document.getElementById('pendingPayments').innerText = pendingPaymentsCount;
+                updateStats();
+                
             } catch(e) { console.error('Load payment approvals error:', e); }
         }
         
@@ -227,7 +246,7 @@
             try {
                 await client.from('payments').update({ status: 'approved', approved_at: new Date().toISOString(), approved_by: currentAdmin?.name }).eq('id', paymentId);
                 showToast('✅ পেমেন্ট অনুমোদন করা হয়েছে!', 'success');
-                loadPaymentApprovals();
+                await loadPaymentApprovals();
                 updateStats();
             } catch(e) { showToast('অনুমোদন ব্যর্থ!', 'error'); }
         }
@@ -240,7 +259,7 @@
             try {
                 await client.from('payments').update({ status: 'rejected', reject_reason: reason, rejected_at: new Date().toISOString(), rejected_by: currentAdmin?.name }).eq('id', paymentId);
                 showToast('✅ পেমেন্ট বাতিল করা হয়েছে!', 'info');
-                loadPaymentApprovals();
+                await loadPaymentApprovals();
             } catch(e) { showToast('বাতিল করতে ব্যর্থ!', 'error'); }
         }
         
@@ -322,11 +341,15 @@
         // ========== মেম্বার ফাংশন ==========
         async function loadAllMembers() {
             const client = window.supabaseClient;
-            if(!client) return;
+            if(!client) {
+                console.warn('⚠️ Supabase client not ready');
+                return;
+            }
             try {
                 const { data, error } = await client.from('members').select('*').order('created_at', { ascending: false });
                 if(error) throw error;
                 members = data || [];
+                console.log('✅ সদস্য লোড করা হয়েছে:', members.length);
                 renderMembers();
                 renderPendingMembers();
                 updateStats();
@@ -358,7 +381,7 @@
             const tbody = document.getElementById('pendingMembersList');
             if(!tbody) return;
             if(pendingMembers.length === 0) { 
-                tbody.innerHTML = '<td><td colspan="7" class="text-center p-4">কোনো পেন্ডিং সদস্য নেই<\/td><\/tr>'; 
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4">কোনো পেন্ডিং সদস্য নেই<\/td><\/tr>'; 
                 return; 
             }
             tbody.innerHTML = pendingMembers.map(m => `
@@ -412,6 +435,7 @@
                 await client.from('members').update({ status: newStatus }).eq('member_id', id);
                 member.status = newStatus;
                 renderMembers();
+                updateStats();
                 showToast(`সদস্য ${newStatus === 'active' ? 'সক্রিয়' : 'নিষ্ক্রিয়'} করা হয়েছে`, 'success');
             }
         }
@@ -430,6 +454,7 @@
                 await client.from('representatives').delete().eq('id', id);
                 representatives = representatives.filter(r => r.id !== id);
                 renderReps();
+                updateStats();
                 showToast('প্রতিনিধি রিমুভ করা হয়েছে', 'success');
             }
         }
@@ -487,6 +512,7 @@
                 applications = applications.filter(a => a.id !== id);
                 renderApplications();
                 renderReps();
+                updateStats();
                 showToast(`${app.name} জেলা প্রতিনিধি নিযুক্ত হয়েছেন!`, 'success');
             }
         }
@@ -564,7 +590,7 @@
             const tbody = document.getElementById('rejectedAppsList');
             if(!tbody) return;
             if(rejected.length === 0) {
-                tbody.innerHTML = '</tr><td colspan="7" class="text-center p-4">কোনো বাতিলকৃত আবেদন নেই<\/td><\/tr>';
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4">কোনো বাতিলকৃত আবেদন নেই<\/td><\/tr>';
                 return;
             }
             tbody.innerHTML = rejected.map(a => `
@@ -703,32 +729,6 @@
             document.getElementById('aboutEditModal').classList.add('hidden');
         }
         
-        document.getElementById('aboutEditForm')?.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const aboutData = {
-                orgName: document.getElementById('editOrgName').value,
-                orgDescription: document.getElementById('editOrgDescription').value,
-                orgMission: document.getElementById('editOrgMission').value,
-                orgVision: document.getElementById('editOrgVision').value,
-                orgValues: document.getElementById('editOrgValues').value.split('\n').filter(v => v.trim()),
-                orgEstablishDate: document.getElementById('editOrgEstablishDate').value
-            };
-            localStorage.setItem('tukn_about', JSON.stringify(aboutData));
-            updateAboutDisplay();
-            closeAboutEditModal();
-            showToast('তথ্য আপডেট করা হয়েছে!', 'success');
-        });
-        
-        function updateAboutDisplay() {
-            const aboutData = JSON.parse(localStorage.getItem('tukn_about') || '{"orgName":"ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ","orgDescription":"ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ একটি অরাজনৈতিক ত্বলাবা-উলামা ও সমাজকল্যাণমূলক সংগঠন।","orgMission":"ত্বলাবা ও উলামাদের দক্ষতা উন্নয়ন, আর্থিক স্বচ্ছলতা ও সমাজে ইতিবাচক পরিবর্তন আনা।","orgVision":"একটি সমৃদ্ধ, জ্ঞানভিত্তিক ও কল্যাণমুখী সমাজ গঠন।","orgValues":["ইসলামী মূল্যবোধ ও নীতি","সততা ও স্বচ্ছতা","পারস্পরিক সহযোগিতা","জনকল্যাণ ও মানবসেবা"],"orgEstablishDate":"2022-01-01"}');
-            document.getElementById('orgName').innerText = aboutData.orgName;
-            document.getElementById('orgDescription').innerText = aboutData.orgDescription;
-            document.getElementById('orgMission').innerText = aboutData.orgMission;
-            document.getElementById('orgVision').innerText = aboutData.orgVision;
-            document.getElementById('orgValues').innerHTML = aboutData.orgValues.map(v => `<li>${v}</li>`).join('');
-            document.getElementById('orgEstablishDate').innerHTML = `প্রতিষ্ঠাতা:<br><strong> মোহাম্মাদ আরিফ হাসান </strong><br>হিসাবরক্ষক <br>জামিয়া মাযাহিরুল উলূম মানওয়ার খাঁ ও হাজী ইউনুস<br>১-৩ সিদ্দিক বাজার, ঢাকা-১০০০<br><strong>তারিখ: ${new Date(aboutData.orgEstablishDate).toLocaleDateString('bn-BD')}</strong><br>বৃহস্পতিবার<br>(পরিকল্পনা গ্রহণ ও এককভাবে প্রস্তুতিমূলক কাজ শুরু।)`;
-        }
-        
         // ========== ক্যারিয়ার ফাংশন ==========
         function openCareerEditModal() {
             const careerData = JSON.parse(localStorage.getItem('tukn_career') || '{"description":"<p>ক্যারিয়ারের তথ্য এখানে...</p>","contact":"ইমেইল: career@tuknbd.org"}');
@@ -741,36 +741,6 @@
         function closeCareerEditModal() {
             document.getElementById('careerEditModal').classList.add('hidden');
         }
-        
-        document.getElementById('careerEditForm')?.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const careerData = {
-                description: document.getElementById('editCareerDescription').value,
-                contact: document.getElementById('editCareerContact').value,
-                pdfUrl: null,
-                pdfName: null
-            };
-            const file = document.getElementById('careerPdfFile').files[0];
-            if(file) {
-                if(file.type !== 'application/pdf') { showToast('শুধু PDF ফাইল আপলোড করুন!', 'error'); return; }
-                if(file.size > 5*1024*1024) { showToast('PDF ফাইল 5MB এর ছোট হতে হবে!', 'error'); return; }
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    careerData.pdfUrl = e.target.result;
-                    careerData.pdfName = file.name;
-                    localStorage.setItem('tukn_career', JSON.stringify(careerData));
-                    updateCareerDisplay();
-                    closeCareerEditModal();
-                    showToast('ক্যারিয়ার আপডেট করা হয়েছে!', 'success');
-                };
-                reader.readAsDataURL(file);
-            } else {
-                localStorage.setItem('tukn_career', JSON.stringify(careerData));
-                updateCareerDisplay();
-                closeCareerEditModal();
-                showToast('ক্যারিয়ার আপডেট করা হয়েছে!', 'success');
-            }
-        });
         
         function updateCareerDisplay() {
             const careerData = JSON.parse(localStorage.getItem('tukn_career') || '{"description":"<p>ক্যারিয়ারের তথ্য এখানে...</p>","contact":"ইমেইল: career@tuknbd.org"}');
@@ -838,7 +808,7 @@
                     <\/tr>
                 `).join('');
             }
-            if(currentAdmin && currentAdmin.role !== 'সুপার অ্যাডমイン') {
+            if(currentAdmin && currentAdmin.role !== 'সুপার অ্যাডমিন') {
                 document.querySelectorAll('.permission-checkbox').forEach(cb => cb.disabled = true);
             }
         }
@@ -1093,15 +1063,9 @@
             });
         }
         
-        // ========== পেজ লোড ==========
-        document.addEventListener('DOMContentLoaded', async function() {
-            console.log('🟢 পেজ লোড হচ্ছে...');
-            
-            loadAdmins();
-            loadAboutData();
-            loadCareerData();
-            loadEconomyData();
-            setupEventListeners();
+        // ========== ডাটা লোড ফাংশন ==========
+        async function loadAllData() {
+            console.log('🟢 ডাটা লোড শুরু হচ্ছে...');
             
             let supabaseClient = window.supabaseClient;
             let attempts = 0;
@@ -1114,6 +1078,8 @@
             if(supabaseClient) {
                 console.log('✅ Supabase client ready');
                 await loadAllMembers();
+                await loadRepresentativesData();
+                await loadApplicationsData();
                 await loadPaymentApprovals();
                 await loadMadrasaApplications();
                 await loadMadrasasList();
@@ -1124,14 +1090,68 @@
                 renderPermissionsTable();
                 updateComplaintNotificationBadge();
                 loadRejectedApplications();
+                updateStats();
+                console.log('✅ সব ডাটা লোড সম্পন্ন!');
             } else {
                 console.error('❌ Supabase client not loaded');
                 showToast('সার্ভারের সাথে সংযোগ স্থাপিত হচ্ছে, পেজ রিফ্রেশ করুন।', 'error');
             }
-        });
+        }
+        
+        async function loadRepresentativesData() {
+            const client = window.supabaseClient;
+            if(!client) return;
+            try {
+                const { data, error } = await client.from('representatives').select('*').order('created_at', { ascending: false });
+                if(error) throw error;
+                representatives = data || [];
+                renderReps();
+            } catch(e) { console.error('Load representatives error:', e); }
+        }
+        
+        async function loadApplicationsData() {
+            const client = window.supabaseClient;
+            if(!client) return;
+            try {
+                const { data, error } = await client.from('rep_applications').select('*').order('apply_timestamp', { ascending: false });
+                if(error) throw error;
+                applications = data || [];
+                renderApplications();
+            } catch(e) { console.error('Load applications error:', e); }
+        }
         
         function loadAboutData() { updateAboutDisplay(); }
         function loadCareerData() { updateCareerDisplay(); }
+        
+        function updateAboutDisplay() {
+            const aboutData = JSON.parse(localStorage.getItem('tukn_about') || '{"orgName":"ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ","orgDescription":"ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ একটি অরাজনৈতিক ত্বলাবা-উলামা ও সমাজকল্যাণমূলক সংগঠন।","orgMission":"ত্বলাবা ও উলামাদের দক্ষতা উন্নয়ন, আর্থিক স্বচ্ছলতা ও সমাজে ইতিবাচক পরিবর্তন আনা।","orgVision":"একটি সমৃদ্ধ, জ্ঞানভিত্তিক ও কল্যাণমুখী সমাজ গঠন।","orgValues":["ইসলামী মূল্যবোধ ও নীতি","সততা ও স্বচ্ছতা","পারস্পরিক সহযোগিতা","জনকল্যাণ ও মানবসেবা"],"orgEstablishDate":"2022-01-01"}');
+            const orgNameElem = document.getElementById('orgName');
+            const orgDescElem = document.getElementById('orgDescription');
+            const orgMissionElem = document.getElementById('orgMission');
+            const orgVisionElem = document.getElementById('orgVision');
+            const orgValuesElem = document.getElementById('orgValues');
+            const orgDateElem = document.getElementById('orgEstablishDate');
+            
+            if(orgNameElem) orgNameElem.innerText = aboutData.orgName;
+            if(orgDescElem) orgDescElem.innerText = aboutData.orgDescription;
+            if(orgMissionElem) orgMissionElem.innerText = aboutData.orgMission;
+            if(orgVisionElem) orgVisionElem.innerText = aboutData.orgVision;
+            if(orgValuesElem) orgValuesElem.innerHTML = aboutData.orgValues.map(v => `<li>${v}</li>`).join('');
+            if(orgDateElem) orgDateElem.innerHTML = `প্রতিষ্ঠাতা:<br><strong> মোহাম্মাদ আরিফ হাসান </strong><br>হিসাবরক্ষক <br>জামিয়া মাযাহিরুল উলূম মানওয়ার খাঁ ও হাজী ইউনুস<br>১-৩ সিদ্দিক বাজার, ঢাকা-১০০০<br><strong>তারিখ: ${new Date(aboutData.orgEstablishDate).toLocaleDateString('bn-BD')}</strong><br>বৃহস্পতিবার<br>(পরিকল্পনা গ্রহণ ও এককভাবে প্রস্তুতিমূলক কাজ শুরু।)`;
+        }
+        
+        // ========== পেজ লোড ==========
+        document.addEventListener('DOMContentLoaded', async function() {
+            console.log('🟢 পেজ লোড হচ্ছে...');
+            
+            loadAdmins();
+            loadAboutData();
+            loadCareerData();
+            loadEconomyData();
+            setupEventListeners();
+            
+            await loadAllData();
+        });
         
         // ========== গ্লোবাল ফাংশন এক্সপোর্ট ==========
         window.showTab = showTab;
@@ -1182,9 +1202,11 @@
         window.savePermissions = savePermissions;
         window.loadRejectedApplications = loadRejectedApplications;
         window.updateDistricts = updateDistricts;
+        
+        console.log('✅ সব ফাংশন রেডি!');
     </script>
 
-    <!-- ========== HTML কন্টেন্ট (আপনার বিদ্যমান HTML এখানে থাকবে) ========== -->
+    <!-- ========== HTML কন্টেন্ট ========== -->
     <header class="bg-white shadow-md py-4 px-6 sticky top-0 z-50">
         <div class="container mx-auto flex justify-between items-center flex-wrap gap-3">
             <div class="flex items-center gap-3"><img src="images/logo.png" alt="TUKNBD Logo" class="w-10 h-10 rounded-xl object-cover shadow-md" onerror="this.src='https://placehold.co/40x40/059669/white?text=T'"><div><span class="font-bold text-xl text-gray-800">TUKNBD সুপার অ্যাডমিন</span><p class="text-xs text-gray-500">পূর্ণ নিয়ন্ত্রণ প্যানেল</p></div></div>
@@ -1204,29 +1226,29 @@
         </div>
 
         <!-- ট্যাব বাটন -->
-        <div class="flex flex-wrap gap-2 border-b mb-6">
-            <button onclick="showTab('members')" id="tabMembers" class="tab-active px-4 py-2 font-semibold transition">📋 সদস্য লিস্ট</button>
-            <button onclick="showTab('addMember')" id="tabAddMember" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">➕ নতুন সদস্য যোগ</button>
-            <button onclick="showTab('paymentApproval')" id="tabPaymentApproval" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">💰 সঞ্চয় অনুমোদন</button>
-            <button onclick="showTab('reps')" id="tabReps" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">👥 জেলা প্রতিনিধি</button>
-            <button onclick="showTab('applications')" id="tabApplications" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">📝 প্রতিনিধি আবেদন</button>
-            <button onclick="showTab('rejectedApps')" id="tabRejectedApps" class="px-4 py-2 text-gray-600 hover:text-red-600 transition">🗑️ বাতিলকৃত আবেদন</button>
-            <button onclick="showTab('economy')" id="tabEconomy" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">💰 অর্থনীতি</button>
-            <button onclick="showTab('admins')" id="tabAdmins" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">👨‍💼 অ্যাডমিন ব্যবস্থাপনা</button>
-            <button onclick="showTab('pendingMembers')" id="tabPendingMembers" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition inline-flex items-center gap-1"><i class="fas fa-user-clock"></i><span>পেন্ডিং সদস্য</span><span id="pendingMemberBadge" style="display:none;background:#ef4444;color:white;border-radius:9999px;min-width:18px;height:18px;font-size:10px;font-weight:bold;text-align:center;line-height:18px;padding:0 5px;margin-left:4px;">0</span></button>
-            <button onclick="showTab('adminRules')" id="tabAdminRules" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">🔐 অ্যাডমিন অনুমতি</button>
-            <button onclick="showTab('profitDistribution')" id="tabProfitDistribution" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">💰 লভ্যাংশ বন্টন</button>
-            <button onclick="showTab('branches')" id="tabBranches" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">🏢 ব্রাঞ্চ ব্যবস্থাপনা</button>
-            <button onclick="showTab('ledger')" id="tabLedger" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">📊 আয়-ব্যয় লেজার</button>
-            <button onclick="showTab('loanApplications')" id="tabLoanApplications" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">📝 লোন আবেদন সমূহ</button>
-            <button onclick="showTab('slider')" id="tabSlider" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">🖼️ স্লাইডার ম্যানেজমেন্ট</button>
-            <button onclick="showTab('notices')" id="tabNotices" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">📢 নোটিশ ব্যবস্থাপনা</button>
-            <button onclick="showTab('about')" id="tabAbout" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">ℹ️ আমাদের সম্পর্কে</button>
-            <button onclick="showTab('complaints')" id="tabComplaints" class="px-4 py-2 text-gray-600 hover:text-orange-600 transition relative"><i class="fas fa-comment-dots mr-1"></i>অভিযোগ/পরামর্শ<span id="complaintNotificationBadge" class="hidden notification-badge">0</span></button>
-            <button onclick="showTab('loanForm')" id="tabLoanForm" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">📝 লোন আবেদন ফর্ম</button>
-            <button onclick="showTab('madrasaApplications')" id="tabMadrasaApplications" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">🏫 মাদ্রাসা আবেদন</button>
-            <button onclick="showTab('madrasas')" id="tabMadrasas" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">📚 মাদ্রাসা লিস্ট</button>
-            <button onclick="showTab('career')" id="tabCareer" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition">💼 ক্যারিয়ার অপশন</button>
+        <div class="flex flex-wrap gap-2 border-b mb-6 overflow-x-auto pb-2">
+            <button onclick="showTab('members')" id="tabMembers" class="tab-active px-4 py-2 font-semibold transition whitespace-nowrap">📋 সদস্য লিস্ট</button>
+            <button onclick="showTab('addMember')" id="tabAddMember" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">➕ নতুন সদস্য যোগ</button>
+            <button onclick="showTab('paymentApproval')" id="tabPaymentApproval" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">💰 সঞ্চয় অনুমোদন</button>
+            <button onclick="showTab('reps')" id="tabReps" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">👥 জেলা প্রতিনিধি</button>
+            <button onclick="showTab('applications')" id="tabApplications" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">📝 প্রতিনিধি আবেদন</button>
+            <button onclick="showTab('rejectedApps')" id="tabRejectedApps" class="px-4 py-2 text-gray-600 hover:text-red-600 transition whitespace-nowrap">🗑️ বাতিলকৃত আবেদন</button>
+            <button onclick="showTab('economy')" id="tabEconomy" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">💰 অর্থনীতি</button>
+            <button onclick="showTab('admins')" id="tabAdmins" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">👨‍💼 অ্যাডমিন ব্যবস্থাপনা</button>
+            <button onclick="showTab('pendingMembers')" id="tabPendingMembers" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition inline-flex items-center gap-1 whitespace-nowrap"><i class="fas fa-user-clock"></i><span>পেন্ডিং সদস্য</span><span id="pendingMemberBadge" style="display:none;background:#ef4444;color:white;border-radius:9999px;min-width:18px;height:18px;font-size:10px;font-weight:bold;text-align:center;line-height:18px;padding:0 5px;margin-left:4px;">0</span></button>
+            <button onclick="showTab('adminRules')" id="tabAdminRules" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">🔐 অ্যাডমিন অনুমতি</button>
+            <button onclick="showTab('profitDistribution')" id="tabProfitDistribution" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">💰 লভ্যাংশ বন্টন</button>
+            <button onclick="showTab('branches')" id="tabBranches" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">🏢 ব্রাঞ্চ ব্যবস্থাপনা</button>
+            <button onclick="showTab('ledger')" id="tabLedger" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">📊 আয়-ব্যয় লেজার</button>
+            <button onclick="showTab('loanApplications')" id="tabLoanApplications" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">📝 লোন আবেদন সমূহ</button>
+            <button onclick="showTab('slider')" id="tabSlider" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">🖼️ স্লাইডার ম্যানেজমেন্ট</button>
+            <button onclick="showTab('notices')" id="tabNotices" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">📢 নোটিশ ব্যবস্থাপনা</button>
+            <button onclick="showTab('about')" id="tabAbout" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">ℹ️ আমাদের সম্পর্কে</button>
+            <button onclick="showTab('complaints')" id="tabComplaints" class="px-4 py-2 text-gray-600 hover:text-orange-600 transition relative whitespace-nowrap"><i class="fas fa-comment-dots mr-1"></i>অভিযোগ/পরামর্শ<span id="complaintNotificationBadge" class="hidden notification-badge">0</span></button>
+            <button onclick="showTab('loanForm')" id="tabLoanForm" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">📝 লোন আবেদন ফর্ম</button>
+            <button onclick="showTab('madrasaApplications')" id="tabMadrasaApplications" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">🏫 মাদ্রাসা আবেদন</button>
+            <button onclick="showTab('madrasas')" id="tabMadrasas" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">📚 মাদ্রাসা লিস্ট</button>
+            <button onclick="showTab('career')" id="tabCareer" class="px-4 py-2 text-gray-600 hover:text-emerald-600 transition whitespace-nowrap">💼 ক্যারিয়ার অপশন</button>
         </div>
 
         <!-- ========== সকল ট্যাবের কন্টেন্ট ========== -->
@@ -1262,7 +1284,7 @@
                 <h3 class="text-xl font-bold text-emerald-700 mb-4"><i class="fas fa-list mr-2"></i>মাদ্রাসা লিস্ট</h3>
                 <div class="overflow-x-auto">
                     <table class="w-full text-sm border">
-                        <thead class="bg-gray-50"><tr><th class="p-2 border">ক্রম</th><th class="p-2 border">মাদ্রাসার নাম</th><th class="p-2 border">জেলা</th><th class="p-2 border">যোগাযোগ</th><th class="p-2 border">স্ট্যাটাস</th><th class="p-2 border">অ্যাকশন</th></tr></thead>
+                        <thead class="bg-gray-50"><tr><th class="p-2 border">ক্রম</th><th class="p-2 border">মাদ্রাসার নাম</th><th class="p-2 border">জেলা</th><th class="p-2 border">যোগাযোগ</th><th class="p-2 border">স্ট্যাটাস</th><th class="p-2 border">অ্যাকশন</th></td></thead>
                         <tbody id="madrasasList"></tbody>
                     </table>
                 </div>
@@ -1276,7 +1298,7 @@
         <div id="pendingMembersTab" class="hidden"><div class="bg-white rounded-xl shadow-md p-5"><h3 class="text-xl font-bold text-orange-600 mb-4"><i class="fas fa-user-clock mr-2"></i>পেন্ডিং সদস্য অনুমোদন</h3><div class="overflow-x-auto"><table class="w-full text-sm border"><thead class="bg-gray-50"><tr><th class="p-2 border">তারিখ</th><th class="p-2 border">নাম</th><th class="p-2 border">মোবাইল</th><th class="p-2 border">জেলা</th><th class="p-2 border">মাসিক সঞ্চয়</th><th class="p-2 border">মেয়াদ</th><th class="p-2 border text-center">অ্যাকশন</th></tr></thead><tbody id="pendingMembersList"></tbody></table></div></div></div>
 
         <!-- সদস্য লিস্ট ট্যাব -->
-        <div id="membersTab"><div class="bg-white rounded-xl shadow-md overflow-hidden"><div class="bg-emerald-50 px-5 py-3 border-b flex justify-between items-center flex-wrap gap-2"><h3 class="font-bold text-emerald-700"><i class="fas fa-list mr-2"></i>সকল সদস্যের তালিকা</h3><div class="flex gap-2 flex-wrap"><input type="text" id="searchMember" placeholder="নাম বা মোবাইল দিয়ে সার্চ..." class="px-3 py-1 border rounded-lg text-sm"><select id="filterDistrict" class="px-3 py-1 border rounded-lg text-sm"><option value="">সব জেলা</option></select><button onclick="exportToExcel()" class="bg-green-600 text-white px-3 py-1 rounded-lg text-sm"><i class="fas fa-file-excel"></i> এক্সেল</button></div></div><div class="overflow-x-auto p-4"><table class="w-full text-sm"><thead class="bg-gray-50"><tr><th class="p-2">সদস্য আইডি</th><th class="p-2">নাম</th><th class="p-2">মোবাইল</th><th class="p-2">জেলা</th><th class="p-2">সদস্য ধরন</th><th class="p-2">মাসিক সঞ্চয়</th><th class="p-2">জয়েন তারিখ</th><th class="p-2">স্ট্যাটাস</th><th class="p-2">অ্যাকশন</th></td></thead><tbody id="membersList"></tbody></table></div></div></div>
+        <div id="membersTab"><div class="bg-white rounded-xl shadow-md overflow-hidden"><div class="bg-emerald-50 px-5 py-3 border-b flex justify-between items-center flex-wrap gap-2"><h3 class="font-bold text-emerald-700"><i class="fas fa-list mr-2"></i>সকল সদস্যের তালিকা</h3><div class="flex gap-2 flex-wrap"><input type="text" id="searchMember" placeholder="নাম বা মোবাইল দিয়ে সার্চ..." class="px-3 py-1 border rounded-lg text-sm"><select id="filterDistrict" class="px-3 py-1 border rounded-lg text-sm"><option value="">সব জেলা</option></select><button onclick="exportToExcel()" class="bg-green-600 text-white px-3 py-1 rounded-lg text-sm"><i class="fas fa-file-excel"></i> এক্সেল</button></div></div><div class="overflow-x-auto p-4"><table class="w-full text-sm"><thead class="bg-gray-50"><tr><th class="p-2">সদস্য আইডি</th><th class="p-2">নাম</th><th class="p-2">মোবাইল</th><th class="p-2">জেলা</th><th class="p-2">সদস্য ধরন</th><th class="p-2">মাসিক সঞ্চয়</th><th class="p-2">জয়েন তারিখ</th><th class="p-2">স্ট্যাটাস</th><th class="p-2">অ্যাকশন</th></tr></thead><tbody id="membersList"></tbody></table></div></div></div>
         
         <!-- নতুন সদস্য যোগ ট্যাব -->
         <div id="addMemberTab" class="hidden"><div class="bg-white rounded-xl shadow-md p-6 max-w-4xl mx-auto"><h3 class="text-xl font-bold text-emerald-700 mb-4"><i class="fas fa-user-plus mr-2"></i>নতুন সদস্য যোগ করুন</h3><form id="addMemberForm" class="space-y-4"><div class="bg-amber-50 p-4 rounded-lg border border-amber-200"><h3 class="text-lg font-bold text-amber-700 mb-3"><i class="fas fa-code-branch mr-2"></i>রেফারেল কোড (যদি থাকে)</h3><input type="text" id="referCode" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="যেমন: TUKN-XXXX"></div><div class="border-b border-gray-200 pb-4"><h3 class="text-xl font-bold text-emerald-700 mb-4"><i class="fas fa-user-circle mr-2"></i>ব্যক্তিগত তথ্য</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label class="block text-gray-700 font-semibold mb-1">পূর্ণ নাম <span class="text-red-500">*</span></label><input type="text" id="fullName" required class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">পিতার নাম</label><input type="text" id="fatherName" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">মাতার নাম</label><input type="text" id="motherName" class="w-full px-3 py-2 border rounded-lg"></div><div class="border border-gray-200 rounded-lg p-3 bg-gray-50"><label class="block text-gray-700 font-semibold mb-1">পরিচয়পত্রের ধরন <span class="text-red-500">*</span></label><div class="flex gap-4 mb-2"><label class="flex items-center gap-2 cursor-pointer"><input type="radio" name="adminIdType" value="জন্মনিবন্ধন" checked class="w-4 h-4 text-emerald-600" id="adminIdTypeBirth"><span class="text-sm">জন্মনিবন্ধন</span></label><label class="flex items-center gap-2 cursor-pointer"><input type="radio" name="adminIdType" value="এনআইডি" class="w-4 h-4 text-emerald-600" id="adminIdTypeNid"><span class="text-sm">জাতীয় পরিচয়পত্র (এনআইডি)</span></label></div><input type="text" id="adminIdNumber" class="w-full px-3 py-2 border rounded-lg" placeholder="জন্মনিবন্ধন নম্বর দিন (১০ বা ১৭ সংখ্যা)"><p id="adminIdTypeHint" class="text-xs text-gray-400 mt-1">জন্মনিবন্ধন নম্বর দিন (১০ বা ১৭ সংখ্যা)</p></div><div><label class="block text-gray-700 font-semibold mb-1">মোবাইল (হোয়াটসঅ্যাপ) <span class="text-red-500">*</span></label><input type="tel" id="mobile" required class="w-full px-3 py-2 border rounded-lg" placeholder="01XXXXXXXXX"></div><div><label class="block text-gray-700 font-semibold mb-1">মোবাইল (টেলিগ্রাম)</label><input type="tel" id="telegram" class="w-full px-3 py-2 border rounded-lg" placeholder="01XXXXXXXXX"></div><div><label class="block text-gray-700 font-semibold mb-1">ইমেইল</label><input type="email" id="email" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">জন্ম তারিখ</label><input type="date" id="dob" class="w-full px-3 py-2 border rounded-lg"></div></div></div><div class="border-b border-gray-200 pb-4"><h3 class="text-xl font-bold text-emerald-700 mb-4"><i class="fas fa-home mr-2"></i>বর্তমান ঠিকানা</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label class="block text-gray-700 font-semibold mb-1">গ্রাম/মহল্লা <span class="text-red-500">*</span></label><input type="text" id="presentVillage" required class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">ডাকঘর <span class="text-red-500">*</span></label><input type="text" id="presentPostOffice" required class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">থানা/উপজেলা <span class="text-red-500">*</span></label><input type="text" id="presentThana" required class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">বিভাগ <span class="text-red-500">*</span></label><select id="presentDivision" required class="w-full px-3 py-2 border rounded-lg"><option value="">বিভাগ নির্বাচন করুন</option><option value="ঢাকা">ঢাকা</option><option value="চট্টগ্রাম">চট্টগ্রাম</option><option value="রাজশাহী">রাজশাহী</option><option value="খুলনা">খুলনা</option><option value="বরিশাল">বরিশাল</option><option value="সিলেট">সিলেট</option><option value="রংপুর">রংপুর</option><option value="ময়মনসিংহ">ময়মনসিংহ</option></select></div><div><label class="block text-gray-700 font-semibold mb-1">জেলা <span class="text-red-500">*</span></label><select id="presentDistrict" required class="w-full px-3 py-2 border rounded-lg"><option value="">প্রথমে বিভাগ নির্বাচন করুন</option></select></div><div class="md:col-span-2"><label class="block text-gray-700 font-semibold mb-1">বিস্তারিত ঠিকানা</label><textarea id="presentDetails" rows="2" class="w-full px-3 py-2 border rounded-lg" placeholder="বাড়ি নং, রোড, সেক্টর ইত্যাদি..."></textarea></div></div></div><div class="border-b border-gray-200 pb-4"><div class="flex flex-wrap justify-between items-center mb-4"><h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-map-marker-alt mr-2"></i>স্থায়ী ঠিকানা</h3><label class="flex items-center gap-2 cursor-pointer bg-gray-100 px-3 py-1 rounded-lg"><input type="checkbox" id="sameAsPresent" class="checkbox-custom w-4 h-4"><span class="text-sm font-medium text-gray-700">বর্তমান ঠিকানার মতোই</span></label></div><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label class="block text-gray-700 font-semibold mb-1">গ্রাম/মহল্লা</label><input type="text" id="permanentVillage" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">ডাকঘর</label><input type="text" id="permanentPostOffice" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">থানা/উপজেলা</label><input type="text" id="permanentThana" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">বিভাগ</label><select id="permanentDivision" class="w-full px-3 py-2 border rounded-lg"><option value="">বিভাগ নির্বাচন করুন</option><option value="ঢাকা">ঢাকা</option><option value="চট্টগ্রাম">চট্টগ্রাম</option><option value="রাজশাহী">রাজশাহী</option><option value="খুলনা">খুলনা</option><option value="বরিশাল">বরিশাল</option><option value="সিলেট">সিলেট</option><option value="রংপুর">রংপুর</option><option value="ময়মনসিংহ">ময়মনসিংহ</option></select></div><div><label class="block text-gray-700 font-semibold mb-1">জেলা</label><select id="permanentDistrict" class="w-full px-3 py-2 border rounded-lg"><option value="">প্রথমে বিভাগ নির্বাচন করুন</option></select></div><div class="md:col-span-2"><label class="block text-gray-700 font-semibold mb-1">বিস্তারিত ঠিকানা</label><textarea id="permanentDetails" rows="2" class="w-full px-3 py-2 border rounded-lg"></textarea></div></div></div><div class="border-b border-gray-200 pb-4"><h3 class="text-xl font-bold text-emerald-700 mb-4"><i class="fas fa-id-card mr-2"></i>সদস্য তথ্য</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label class="block text-gray-700 font-semibold mb-1">সদস্য মেয়াদ <span class="text-red-500">*</span></label><select id="memberTerm" required class="w-full px-3 py-2 border rounded-lg"><option value="0">সাধারণ সদস্য (মেয়াদহীন)</option><option value="3">৩ বছর মেয়াদী</option><option value="5">৫ বছর মেয়াদী</option><option value="7">৭ বছর মেয়াদী</option><option value="10">১০ বছর মেয়াদী</option><option value="12">১২ বছর মেয়াদী</option><option value="15">১৫ বছর মেয়াদী</option></select></div><div><label class="block text-gray-700 font-semibold mb-1">মাসিক সঞ্চয় পরিমাণ <span class="text-red-500">*</span></label><select id="monthlySavings" required class="w-full px-3 py-2 border rounded-lg"><option value="100">১০০ টাকা</option><option value="200">২০০ টাকা</option><option value="300">৩০০ টাকা</option><option value="400">৪০০ টাকা</option><option value="500" selected>৫০০ টাকা</option><option value="600">৬০০ টাকা</option><option value="700">৭০০ টাকা</option><option value="800">৮০০ টাকা</option><option value="900">৯০০ টাকা</option><option value="1000">১০০০ টাকা</option></select></div><div><label class="block text-gray-700 font-semibold mb-1">পেশা</label><input type="text" id="profession" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">শিক্ষাগত যোগ্যতা</label><input type="text" id="education" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">পাসওয়ার্ড</label><input type="text" id="password" value="1234" class="w-full px-3 py-2 border rounded-lg"></div></div></div><div class="border-b border-gray-200 pb-4"><h3 class="text-xl font-bold text-emerald-700 mb-4"><i class="fas fa-user-friends mr-2"></i>নমিনির তথ্য <span class="text-sm text-gray-500">(ঐচ্ছিক)</span></h3><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label class="block text-gray-700 font-semibold mb-1">নমিনির নাম</label><input type="text" id="nomineeName" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="block text-gray-700 font-semibold mb-1">সম্পর্ক</label><select id="nomineeRelation" class="w-full px-3 py-2 border rounded-lg"><option value="">নির্বাচন করুন</option><option>পিতা</option><option>মাতা</option><option>স্বামী</option><option>স্ত্রী</option><option>পুত্র</option><option>কন্যা</option><option>ভাই</option><option>বোন</option></select></div><div class="md:col-span-2"><label class="block text-gray-700 font-semibold mb-1">জন্মনিবন্ধন/এনআইডি</label><input type="text" id="nomineeNid" class="w-full px-3 py-2 border rounded-lg"></div></div></div><button type="submit" class="w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition">সদস্য যোগ করুন</button></form></div></div>
@@ -1288,7 +1310,7 @@
         <div id="applicationsTab" class="hidden"><div class="bg-white rounded-xl shadow-md overflow-hidden"><div class="bg-emerald-50 px-5 py-3 border-b"><h3 class="font-bold text-emerald-700"><i class="fas fa-file-alt mr-2"></i>জেলা প্রতিনিধি আবেদন সমূহ</h3></div><div class="overflow-x-auto p-4"><table class="w-full text-sm"><thead class="bg-gray-50"><tr><th class="p-2 border">নাম</th><th class="p-2 border">জেলা</th><th class="p-2 border">মাদ্রাসা</th><th class="p-2 border">মোবাইল</th><th class="p-2 border">অভিজ্ঞতা</th><th class="p-2 border">আবেদনের তারিখ</th><th class="p-2 border text-center">অ্যাকশন</th></tr></thead><tbody id="applicationsList"></tbody></table></div></div></div>
 
         <!-- বাতিলকৃত আবেদন ট্যাব -->
-        <div id="rejectedAppsTab" class="hidden"><div class="bg-white rounded-xl shadow-md p-5"><h3 class="text-xl font-bold text-red-700 mb-4"><i class="fas fa-trash-alt mr-2"></i>বাতিলকৃত আবেদন সমূহ</h3><div class="overflow-x-auto"><table class="w-full text-sm border"><thead class="bg-gray-50"><tr><th class="p-2 border">নাম</th><th class="p-2 border">জেলা</th><th class="p-2 border">মোবাইল</th><th class="p-2 border">আবেদনের তারিখ</th><th class="p-2 border">বাতিলের কারণ</th><th class="p-2 border">বাতিল করেছেন</th><th class="p-2 border">বাতিলের তারিখ</th></tr></thead><tbody id="rejectedAppsList"></tbody><td></div></div></div>
+        <div id="rejectedAppsTab" class="hidden"><div class="bg-white rounded-xl shadow-md p-5"><h3 class="text-xl font-bold text-red-700 mb-4"><i class="fas fa-trash-alt mr-2"></i>বাতিলকৃত আবেদন সমূহ</h3><div class="overflow-x-auto"><table class="w-full text-sm border"><thead class="bg-gray-50"><tr><th class="p-2 border">নাম</th><th class="p-2 border">জেলা</th><th class="p-2 border">মোবাইল</th><th class="p-2 border">আবেদনের তারিখ</th><th class="p-2 border">বাতিলের কারণ</th><th class="p-2 border">বাতিল করেছেন</th><th class="p-2 border">বাতিলের তারিখ</th></tr></thead><tbody id="rejectedAppsList"></tbody></table></div></div></div>
 
         <!-- অর্থনীতি ট্যাব -->
         <div id="economyTab" class="hidden"><div class="bg-white rounded-xl shadow-md p-5"><h3 class="text-xl font-bold text-emerald-700 mb-4"><i class="fas fa-chart-line mr-2"></i>অর্থনীতি ব্যবস্থাপনা</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-6"><div class="border rounded-lg p-4"><h4 class="font-bold mb-3">আয় আপডেট</h4><div class="space-y-3"><div><label class="text-sm">সদস্য ফি আয়</label><input type="number" id="editFeeIncome" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="text-sm">দান আয়</label><input type="number" id="editDonationIncome" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="text-sm">বিনিয়োগ লাভ</label><input type="number" id="editInvestmentIncome" class="w-full px-3 py-2 border rounded-lg"></div></div></div><div class="border rounded-lg p-4"><h4 class="font-bold mb-3">ব্যয় আপডেট</h4><div class="space-y-3"><div><label class="text-sm">প্রশিক্ষণ ব্যয়</label><input type="number" id="editTrainingExpense" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="text-sm">পরিচালনা ব্যয়</label><input type="number" id="editManagementExpense" class="w-full px-3 py-2 border rounded-lg"></div><div><label class="text-sm">জরুরি তহবিল</label><input type="number" id="editEmergencyFund" class="w-full px-3 py-2 border rounded-lg"></div></div></div></div><button onclick="updateEconomy()" class="mt-4 bg-emerald-600 text-white px-6 py-2 rounded-lg hover:bg-emerald-700 transition">সংরক্ষণ করুন</button></div></div>
@@ -1337,23 +1359,18 @@
 
         <div id="replyModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4"><div class="bg-white rounded-2xl max-w-md w-full p-5"><div class="flex justify-between items-center border-b pb-2 mb-4"><h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-reply-all mr-2"></i>রিপ্লাই দিন</h3><button onclick="closeReplyModal()" class="text-gray-500 modal-close text-2xl">&times;</button></div><div><div class="mb-3 p-2 bg-gray-50 rounded-lg"><p class="text-sm text-gray-600"><strong>প্রাপক:</strong> <span id="replyToName"></span></p><p class="text-sm text-gray-600"><strong>মূল অভিযোগ:</strong> <span id="originalComplaint" class="text-xs block mt-1"></span></p></div><label class="block text-gray-700 font-semibold mb-2">আপনার উত্তর লিখুন <span class="text-red-500">*</span></label><textarea id="replyMessage" rows="4" class="w-full p-2 border rounded-lg" placeholder="আপনার উত্তর দিন..."></textarea><div class="flex gap-3 mt-4"><button onclick="sendReply()" class="flex-1 bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700">পাঠান</button><button onclick="closeReplyModal()" class="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400">বাতিল</button></div></div></div></div>
     </div>
-   <!-- আপনার বিদ্যমান HTML কন্টেন্টের পরে -->
 
-    </div> <!-- watermarks এবং অন্যান্য div বন্ধ হওয়ার পর -->
+    </div> <!-- watermark-content শেষ -->
     
-    <!-- ========== এখানে কোড যোগ করুন ========== -->
     <script>
-        // Supabase ফাংশন ইনিশিয়ালাইজ করুন
-        if (typeof window.initSupabaseFunctions === 'function') {
-            window.initSupabaseFunctions();
-        } else {
-            setTimeout(() => {
-                if (typeof window.initSupabaseFunctions === 'function') {
-                    window.initSupabaseFunctions();
-                }
-            }, 1000);
-        }
+        // অতিরিক্ত ইনিশিয়ালাইজেশন (যদি supabase-functions.js এর init কাজ না করে)
+        setTimeout(function() {
+            if (typeof window.initSupabaseFunctions === 'function') {
+                window.initSupabaseFunctions();
+            }
+            console.log('🟢 পেজ সম্পূর্ণ লোড হয়েছে');
+        }, 500);
     </script>
-    <!-- ========== কোড শেষ ========== -->                        
+    
 </body>
 </html>
