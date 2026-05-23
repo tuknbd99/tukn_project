@@ -1641,10 +1641,27 @@ window.generatePassword = function() {
 };
 
 // Register Member Form Handler
+// ==================== রেজিস্টার মেম্বার ফাংশন (আপডেটেড) ====================
 window.registerMember = async function(e) {
   e.preventDefault();
   
-  const client = supabase || window.supabase || window._supabase;
+  // ক্লায়েন্ট রেডি না হলে অপেক্ষা করুন
+  let client = supabase || window.supabase || window._supabase;
+  let attempts = 0;
+  
+  while ((!client || typeof client.from !== 'function') && attempts < 20) {
+    console.log(`⏳ Waiting for Supabase client... Attempt ${attempts + 1}/20`);
+    await new Promise(r => setTimeout(r, 500));
+    client = supabase || window.supabase || window._supabase;
+    attempts++;
+  }
+  
+  if (!client || typeof client.from !== 'function') {
+    alert("সার্ভারের সাথে সংযোগ স্থাপন করা যাচ্ছে না। ইন্টারনেট কানেকশন চেক করে আবার চেষ্টা করুন।");
+    return;
+  }
+  
+  console.log("✅ Supabase client ready");
   
   try {
     // Check Agreement
@@ -1669,7 +1686,7 @@ window.registerMember = async function(e) {
     // Validation
     if (!full_name) { alert("পূর্ণ নাম দিন"); return; }
     if (!mobile) { alert("মোবাইল দিন"); return; }
-    if (!/^01[3-9]\d{8}$/.test(mobile)) { alert("সঠিক মোবাইল নাম্বার দিন"); return; }
+    if (!/^01[3-9]\d{8}$/.test(mobile)) { alert("সঠিক মোবাইল নাম্বার দিন (01XXXXXXXXX)"); return; }
     
     // Duplicate Check
     const { data: existingMember } = await client.from("members").select("id").eq("mobile", mobile).maybeSingle();
@@ -1685,8 +1702,8 @@ window.registerMember = async function(e) {
     else if (memberTerm === 12) memberType = "১২ বছর মেয়াদী";
     else if (memberTerm === 15) memberType = "১৫ বছর মেয়াদী";
     
-    // Generate IDs
-    const member_id = await window.generateMemberId(memberTerm);
+    // Generate IDs (ক্লায়েন্ট পাস করে দিন)
+    const member_id = await generateMemberIdWithClient(memberTerm, client);
     const password = window.generatePassword();
     let referral_code = window.generateReferralCode(mobile);
     
@@ -1773,10 +1790,61 @@ window.registerMember = async function(e) {
     location.reload();
     
   } catch (err) {
-    console.error(err);
-    alert("সার্ভার সমস্যা হয়েছে: " + err.message);
+    console.error("Registration error:", err);
+    alert("সার্ভার সমস্যা হয়েছে: " + (err.message || "অজানা ত্রুটি"));
   }
 };
+
+// ==================== ক্লায়েন্ট সহ মেম্বার আইডি জেনারেট ====================
+async function generateMemberIdWithClient(memberTerm, client) {
+  try {
+    const today = new Date();
+    const yy = String(today.getFullYear()).slice(-2);
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const datePart = `${yy}${mm}${dd}`;
+    
+    let typeCode = 'G';
+    if (memberTerm == 3) typeCode = 'T3';
+    else if (memberTerm == 5) typeCode = 'T5';
+    else if (memberTerm == 7) typeCode = 'T7';
+    else if (memberTerm == 10) typeCode = 'T10';
+    else if (memberTerm == 12) typeCode = 'T12';
+    else if (memberTerm == 15) typeCode = 'T15';
+    
+    // ক্লায়েন্ট ব্যবহার করে সিরিয়াল নিন
+    const { data, error } = await client.from("members").select("member_id");
+    if (error) throw error;
+    
+    let maxSerial = 0;
+    if (data && data.length > 0) {
+      for (const member of data) {
+        if (member.member_id) {
+          const match = member.member_id.match(/-(\d{4})$/);
+          if (match && match[1]) {
+            const serial = parseInt(match[1]);
+            if (serial > maxSerial) maxSerial = serial;
+          }
+        }
+      }
+    }
+    
+    const nextSerial = maxSerial + 1;
+    const serial = String(nextSerial).padStart(4, '0');
+    
+    return `TUKN ${typeCode} ${datePart}-${serial}`;
+    
+  } catch (err) {
+    console.error("generateMemberIdWithClient Error:", err);
+    // ব্যাকআপ আইডি
+    const today = new Date();
+    const yy = String(today.getFullYear()).slice(-2);
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const randomSerial = String(Math.floor(Math.random() * 1000) + 1).padStart(4, '0');
+    return `TUKN G ${yy}${mm}${dd}-${randomSerial}`;
+  }
+}
 
 // Auto-initialize when DOM is ready
 if (typeof document !== 'undefined') {
