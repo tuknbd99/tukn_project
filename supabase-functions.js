@@ -128,12 +128,33 @@ async function testSupabaseConnection() {
     }
 }
 
-// ==================== সিরিয়াল নম্বর জেনারেট করার ফাংশন ====================
+// ==================== সিরিয়াল নম্বর জেনারেট করার ফাংশন (Supabase থেকে সর্বশেষ সিরিয়াল চেক করে) ====================
 
 async function getNextMemberSerial() {
     const client = supabase || window.supabase || window._supabase;
+    
+    // ক্লায়েন্ট রেডি না হলে অপেক্ষা করুন
+    if (!client || typeof client.from !== 'function') {
+        console.log('⏳ Waiting for Supabase client...');
+        let attempts = 0;
+        let retryClient = client;
+        while ((!retryClient || typeof retryClient.from !== 'function') && attempts < 20) {
+            await new Promise(r => setTimeout(r, 300));
+            retryClient = supabase || window.supabase || window._supabase;
+            attempts++;
+        }
+        if (!retryClient || typeof retryClient.from !== 'function') {
+            console.error('❌ Supabase client not ready after retries');
+            // ব্যাকআপ: ডিফল্ট সিরিয়াল, কিন্তু এটি যেন 1 থেকে শুরু হয়
+            return 1;
+        }
+    }
+    
+    const finalClient = supabase || window.supabase || window._supabase;
+    
     try {
-        const { data, error } = await client
+        // সব সদস্যের member_id নিয়ে আসুন
+        const { data, error } = await finalClient
             .from('members')
             .select('member_id');
         
@@ -141,9 +162,11 @@ async function getNextMemberSerial() {
         
         let maxSerial = 0;
         
+        // সব member_id থেকে সর্বশেষ সিরিয়াল বের করুন
         if (data && data.length > 0) {
             for (const member of data) {
                 if (member.member_id) {
+                    // প্যাটার্ন: TUKN T3 260519-0018 অথবা TUKN G 260519-0018
                     const match = member.member_id.match(/-(\d{4})$/);
                     if (match && match[1]) {
                         const serial = parseInt(match[1]);
@@ -155,10 +178,8 @@ async function getNextMemberSerial() {
             }
         }
         
-        if (maxSerial === 0) {
-            maxSerial = 17;
-        }
-        
+        // যদি কোনো সিরিয়াল না পাওয়া যায় (টেবিল খালি), তাহলে 0 থেকে শুরু
+        // যদি maxSerial 0 হয়, তাহলে 1 হবে পরবর্তী সিরিয়াল
         const nextSerial = maxSerial + 1;
         
         console.log(`📊 সর্বশেষ সিরিয়াল: ${String(maxSerial).padStart(4, '0')} → পরবর্তী সিরিয়াল: ${String(nextSerial).padStart(4, '0')}`);
@@ -166,9 +187,53 @@ async function getNextMemberSerial() {
         
     } catch (err) {
         console.error('❌ getNextMemberSerial Error:', err);
-        return 18;
+        // এরর হলে 1 রিটার্ন করুন, যাতে 0018 ফিক্স না থাকে
+        return 1;
     }
 }
+
+// ==================== মেম্বার আইডি জেনারেট (আপডেটেড) ====================
+
+async function generateMemberId(memberTerm) {
+    try {
+        const today = new Date();
+        const yy = String(today.getFullYear()).slice(-2);
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        const datePart = `${yy}${mm}${dd}`;
+        
+        let typeCode = 'G';
+        if (memberTerm == 3) typeCode = 'T3';
+        else if (memberTerm == 5) typeCode = 'T5';
+        else if (memberTerm == 7) typeCode = 'T7';
+        else if (memberTerm == 10) typeCode = 'T10';
+        else if (memberTerm == 12) typeCode = 'T12';
+        else if (memberTerm == 15) typeCode = 'T15';
+        
+        // Supabase থেকে সর্বশেষ সিরিয়াল নিন
+        const nextSerial = await getNextMemberSerial();
+        const serial = String(nextSerial).padStart(4, '0');
+        
+        const memberId = `TUKN ${typeCode} ${datePart}-${serial}`;
+        console.log(`✅ Generated Member ID: ${memberId}`);
+        return memberId;
+        
+    } catch (err) {
+        console.error('❌ generateMemberId Error:', err);
+        // ব্যাকআপ: ডাটাবেস চেক না করে লোকালি জেনারেট
+        const today = new Date();
+        const yy = String(today.getFullYear()).slice(-2);
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        // র্যান্ডম সিরিয়াল তৈরি করুন (ব্যাকআপ হিসেবে)
+        const randomSerial = String(Math.floor(Math.random() * 1000) + 1).padStart(4, '0');
+        return `TUKN G ${yy}${mm}${dd}-${randomSerial}`;
+    }
+}
+
+// ==================== গ্লোবালি এক্সপোর্ট করুন ====================
+window.getNextMemberSerial = getNextMemberSerial;
+window.generateMemberId = generateMemberId;
 
 // ==================== সদস্য (MEMBERS) ফাংশন ====================
 
@@ -1573,29 +1638,6 @@ window.generatePassword = function() {
     numPart += numbers[Math.floor(Math.random() * numbers.length)];
   }
   return upperChar + numPart + "p";
-};
-
-// Generate Member ID
-window.generateMemberId = async function(memberTerm) {
-  const client = supabase || window.supabase || window._supabase;
-  const today = new Date();
-  const yy = String(today.getFullYear()).slice(-2);
-  const mm = String(today.getMonth() + 1).padStart(2, "0");
-  const dd = String(today.getDate()).padStart(2, "0");
-  const datePart = `${yy}${mm}${dd}`;
-  
-  let typeCode = "G";
-  if (memberTerm == 3) typeCode = "T3";
-  else if (memberTerm == 5) typeCode = "T5";
-  else if (memberTerm == 7) typeCode = "T7";
-  else if (memberTerm == 10) typeCode = "T10";
-  else if (memberTerm == 12) typeCode = "T12";
-  else if (memberTerm == 15) typeCode = "T15";
-  
-  const { count } = await client.from("members").select("*", { count: "exact", head: true });
-  const serial = String((count || 0) + 1).padStart(4, "0");
-  
-  return `TUKN ${typeCode} ${datePart}-${serial}`.trim();
 };
 
 // Register Member Form Handler
