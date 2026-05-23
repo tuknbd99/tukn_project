@@ -102,34 +102,36 @@ function updateDistricts(
   const selectedDivision =
     divisionSelect.value;
 
+  // আগের অপশন মুছে ফেলুন
   districtSelect.innerHTML =
     '<option value="">জেলা নির্বাচন করুন</option>';
 
-  if (
-    selectedDivision &&
-    divisions[selectedDivision]
-  ) {
+  // বিভাগ না থাকলে disable
+  if (!selectedDivision) {
+
+    districtSelect.disabled = true;
+
+    return;
+  }
+
+  // enable করুন
+  districtSelect.disabled = false;
+
+  // জেলা যোগ করুন
+  if (divisions[selectedDivision]) {
 
     divisions[selectedDivision]
       .forEach(district => {
 
-      const option =
-        document.createElement(
-          "option"
-        );
+        const option =
+          document.createElement("option");
 
-      option.value = district;
+        option.value = district;
 
-      option.textContent = district;
+        option.textContent = district;
 
-      districtSelect.appendChild(
-        option
-      );
-    });
-
-  } else {
-
-    districtSelect.disabled = true;
+        districtSelect.appendChild(option);
+      });
   }
 }
 
