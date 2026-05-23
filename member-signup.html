@@ -12,7 +12,6 @@
     <script src="supabase-functions.js"></script>
     
     <style>
-        /* আপনার স্টাইল এখানে (আগের মতো) */
         * { font-family: 'Noto Sans Bengali', sans-serif; }
         .watermark-container {
             position: relative;
@@ -140,6 +139,18 @@
             margin-right: 12px;
             margin-top: 2px;
         }
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 0.6s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="watermark-container">
@@ -164,7 +175,6 @@
                     <p class="text-xs text-gray-400 mt-1">রেফারেল কোড হবে মোবাইলের শেষ ৬ সংখ্যা + ২টি র্যান্ডম সংখ্যা (যেমন: 3491380955)</p>
                 </div>
 
-                <!-- বাকি ফর্ম ফিল্ড (আগের মতোই) -->
                 <!-- ব্যক্তিগত তথ্য -->
                 <div>
                     <h3 class="section-title"><i class="fas fa-user-circle mr-2 text-emerald-600"></i>ব্যক্তিগত তথ্য</h3>
@@ -342,7 +352,7 @@
                     </label>
                 </div>
 
-                <button type="submit" class="w-full bg-emerald-600 text-white py-4 rounded-xl hover:bg-emerald-700 transition text-xl font-bold shadow-lg">
+                <button type="submit" id="submitBtn" class="w-full bg-emerald-600 text-white py-4 rounded-xl hover:bg-emerald-700 transition text-xl font-bold shadow-lg">
                     <i class="fas fa-paper-plane mr-2"></i>নিবন্ধন জমা দিন
                 </button>
             </form>
@@ -448,28 +458,57 @@ function copyToClipboard(text, fieldName) {
     });
 }
 
-// ==================== আইডি প্রিভিউ আপডেট ====================
+// ==================== আইডি প্রিভিউ আপডেট (এরর হ্যান্ডলিং সহ) ====================
 async function updateIdPreview() {
     try {
+        const previewElement = document.getElementById('memberIdPreview');
+        if (!previewElement) return;
+        
         const memberTerm = parseInt(document.getElementById('memberTerm')?.value || 0);
+        
+        // চেক করুন window.generateMemberId ফাংশন আছে কিনা
         if (typeof window.generateMemberId === 'function') {
-            const memberId = await window.generateMemberId(memberTerm);
-            const previewElement = document.getElementById('memberIdPreview');
-            if (previewElement) {
+            try {
+                const memberId = await window.generateMemberId(memberTerm);
                 previewElement.innerHTML = memberId;
+                previewElement.style.color = '#059669';
+            } catch (err) {
+                console.warn('generateMemberId error:', err);
+                previewElement.innerHTML = 'সংযোগ স্থাপিত হচ্ছে...';
+                previewElement.style.color = '#f59e0b';
+                // 2 সেকেন্ড পরে আবার চেষ্টা করুন
+                setTimeout(updateIdPreview, 2000);
             }
+        } else {
+            // fallback: লোকালি আইডি জেনারেট করুন
+            const today = new Date();
+            const yy = String(today.getFullYear()).slice(-2);
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const dd = String(today.getDate()).padStart(2, '0');
+            let typeCode = 'G';
+            if (memberTerm === 3) typeCode = 'T3';
+            else if (memberTerm === 5) typeCode = 'T5';
+            else if (memberTerm === 7) typeCode = 'T7';
+            else if (memberTerm === 10) typeCode = 'T10';
+            else if (memberTerm === 12) typeCode = 'T12';
+            else if (memberTerm === 15) typeCode = 'T15';
+            previewElement.innerHTML = `TUKN ${typeCode} ${yy}${mm}${dd}-????`;
+            previewElement.style.color = '#f59e0b';
         }
-    } catch(err) {
+    } catch (err) {
         console.error('Update preview error:', err);
         const previewElement = document.getElementById('memberIdPreview');
         if(previewElement) {
-            previewElement.innerHTML = 'TUKN G 260519-0018';
+            previewElement.innerHTML = 'সার্ভার সংযোগ স্থাপিত হচ্ছে...';
+            previewElement.style.color = '#f59e0b';
         }
     }
 }
 
 // ==================== ইভেন্ট লিসেনার ====================
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('Page loaded, initializing...');
+    
     // ডিস্ট্রিক্ট আপডেট
     const presentDivision = document.getElementById('presentDivision');
     if(presentDivision) {
@@ -525,8 +564,25 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // আইডি প্রিভিউ আপডেট
-    setTimeout(updateIdPreview, 1000);
+    // Supabase রেডি হলে আইডি প্রিভিউ আপডেট করুন
+    const checkSupabaseReady = setInterval(() => {
+        const client = window.supabaseClient || window.supabase || window._supabase;
+        if (client && typeof client.from === 'function') {
+            clearInterval(checkSupabaseReady);
+            console.log('Supabase ready, updating preview');
+            updateIdPreview();
+        }
+    }, 500);
+    
+    // 10 সেকেন্ড পরে টাইমআউট
+    setTimeout(() => {
+        clearInterval(checkSupabaseReady);
+        const previewElement = document.getElementById('memberIdPreview');
+        if (previewElement && previewElement.innerHTML === 'লোড হচ্ছে...') {
+            previewElement.innerHTML = 'TUKN G 260519-0018';
+            previewElement.style.color = '#059669';
+        }
+    }, 10000);
 });
 
 // ==================== ফর্ম সাবমিট ====================
@@ -547,12 +603,27 @@ document.getElementById('signupForm').addEventListener('submit', async function(
         return;
     }
     
+    // submit বাটন ডিজেবল করুন
+    const submitBtn = document.getElementById('submitBtn');
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="loading-spinner"></span> নিবন্ধন হচ্ছে...';
+    
     // supabase-functions.js-এর registerMember ব্যবহার করুন
     if(typeof window.registerMember === 'function') {
-        await window.registerMember(e);
+        try {
+            await window.registerMember(e);
+        } catch (err) {
+            console.error('registerMember error:', err);
+            showCenterNotification('নিবন্ধনে সমস্যা হয়েছে। আবার চেষ্টা করুন।', 'error');
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>নিবন্ধন জমা দিন';
+        }
     } else {
         console.error('registerMember function not found');
         showCenterNotification('সিস্টেম এরর। পরে আবার চেষ্টা করুন।', 'error');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>নিবন্ধন জমা দিন';
     }
 });
 </script>
