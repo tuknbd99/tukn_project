@@ -353,34 +353,77 @@ function getPaymentMethodClass(method) {
 
 async function loadPaymentApprovals() {
     const client = window.supabaseClient || window._supabaseClient;
-    if (!client) { console.warn('⚠️ Supabase client not ready'); return; }
+    if (!client) {
+        console.warn('⚠️ Supabase client not ready');
+        // ক্লায়েন্ট রেডি না হলে আবার চেষ্টা করুন
+        setTimeout(loadPaymentApprovals, 2000);
+        return;
+    }
+    
     try {
-        const { data, error } = await client.from('payments').select('*').eq('status', 'pending').order('submitted_at', { ascending: false });
+        // পেন্ডিং পেমেন্ট গুলো লোড করুন
+        const { data, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('status', 'pending')
+            .order('submitted_at', { ascending: false });
+        
         if (error) throw error;
+        
         pendingPaymentsCount = data?.length || 0;
+        
+        // পেন্ডিং পেমেন্ট ব্যাজ আপডেট করুন
+        updatePendingPaymentsBadge(pendingPaymentsCount);
+        
         const tbody = document.getElementById('paymentApprovalList');
         if (!tbody) return;
+        
         if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="10" class="text-center p-4">কোনো পেন্ডিং পেমেন্ট নেই<\/td><\/tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="text-center p-4">কোনো পেন্ডিং পেমেন্ট নেই</td></tr>';
             document.getElementById('pendingPayments').innerText = '0';
             return;
         }
+        
         tbody.innerHTML = data.map(p => `
             <tr class="border-b hover:bg-gray-50">
                 <td class="p-2 border text-xs">${new Date(p.submitted_at).toLocaleDateString('bn-BD')}</td>
                 <td class="p-2 border font-medium">${p.member_name || '-'}</td>
                 <td class="p-2 border">${p.member_id}</td>
-                <td class="p-2 border">${p.month} <td class="p-2 border">${p.year}</td>
-                <td class="p-2 border text-right font-semibold text-emerald-600">${p.amount.toLocaleString()} টাকা<\/td>
+                <td class="p-2 border">${p.month}</td>
+                <td class="p-2 border">${p.year}</td>
+                <td class="p-2 border text-right font-semibold text-emerald-600">${p.amount.toLocaleString()} টাকা</td>
                 <td class="p-2 border"><span class="payment-method-badge ${getPaymentMethodClass(p.payment_method)}">${getPaymentMethodName(p.payment_method)}</span></td>
                 <td class="p-2 border text-xs">${p.transaction_id || '-'}</td>
                 <td class="p-2 border"><span class="px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-700">বিচারাধীন</span></td>
-                <td class="p-2 border"><div class="flex gap-1"><button onclick="approvePayment('${p.id}')" class="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600 transition">অনুমোদন</button><button onclick="rejectPayment('${p.id}')" class="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600 transition">বাতিল</button></div></td>
+                <td class="p-2 border">
+                    <div class="flex gap-1">
+                        <button onclick="approvePayment('${p.id}')" class="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600 transition">অনুমোদন</button>
+                        <button onclick="rejectPayment('${p.id}')" class="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600 transition">বাতিল</button>
+                    </div>
+                </td>
             </tr>
         `).join('');
+        
         document.getElementById('pendingPayments').innerText = pendingPaymentsCount;
         updateStats();
-    } catch(e) { console.error('Load payment approvals error:', e); }
+        
+    } catch (e) {
+        console.error('Load payment approvals error:', e);
+        showToast('পেমেন্ট লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// পেন্ডিং পেমেন্ট ব্যাজ আপডেট ফাংশন
+function updatePendingPaymentsBadge(count) {
+    const badge = document.getElementById('pendingPaymentsBadge');
+    if (badge) {
+        if (count > 0) {
+            badge.innerText = count > 9 ? '9+' : count;
+            badge.style.display = 'inline-block';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
 }
 
 async function approvePayment(paymentId) {
