@@ -1337,5 +1337,6 @@ window.memberLogout = memberLogout;
 window.getAdminPermissions = getAdminPermissions;
 window.updateAdminPermissions = updateAdminPermissions;
 window.checkAdminPermission = checkAdminPermission;
+window.divisions = divisions; 
 
 console.log('✅ supabase-functions.js loaded (all features included)');
