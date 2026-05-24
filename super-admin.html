@@ -214,7 +214,8 @@ if (typeof window._divisions === 'undefined') {
         "ময়মনসিংহ": ["ময়মনসিংহ", "জামালপুর", "নেত্রকোণা", "শেরপুর"]
     };
 }
-
+const divisions = window._divisions; 
+    
 // ========== হেল্পার ফাংশন ==========
 function showToast(message, type) {
     const toast = document.createElement('div');
@@ -352,16 +353,44 @@ function getPaymentMethodClass(method) {
 }
 
 async function loadPaymentApprovals() {
-    const client = window.supabaseClient || window._supabaseClient;
-    if (!client) {
-        console.warn('⚠️ Supabase client not ready');
-        // ক্লায়েন্ট রেডি না হলে আবার চেষ্টা করুন
-        setTimeout(loadPaymentApprovals, 2000);
-        return;
+    // ========== ১. Supabase ক্লায়েন্ট চেক ও সেট ==========
+    let client = window.supabaseClient || window._supabaseClient || window.supabase;
+    
+    // ক্লায়েন্ট না থাকলে নিজে তৈরি করুন
+    if (!client || typeof client.from !== 'function') {
+        console.log('🔄 Creating Supabase client from inside function...');
+        
+        const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
+        
+        // supabase লাইব্রেরি লোড আছে কিনা চেক করুন
+        if (typeof supabase !== 'undefined' && supabase.createClient) {
+            client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        } else {
+            // অপেক্ষা করুন
+            let attempts = 0;
+            while (typeof supabase === 'undefined' && attempts < 20) {
+                await new Promise(r => setTimeout(r, 300));
+                attempts++;
+            }
+            if (typeof supabase !== 'undefined' && supabase.createClient) {
+                client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            } else {
+                console.error('❌ Supabase library not available');
+                showToast('সার্ভার সংযোগ সমস্যা! পেজ রিফ্রেশ করুন।', 'error');
+                return;
+            }
+        }
+        
+        // গ্লোবালি সেট করুন
+        window.supabaseClient = client;
+        window._supabaseClient = client;
     }
     
+    // ========== ২. পেমেন্ট ডাটা লোড ==========
     try {
-        // পেন্ডিং পেমেন্ট গুলো লোড করুন
+        console.log('🟢 Loading payments...');
+        
         const { data, error } = await client
             .from('payments')
             .select('*')
@@ -370,73 +399,84 @@ async function loadPaymentApprovals() {
         
         if (error) throw error;
         
+        console.log('✅ Payments loaded:', data?.length || 0);
+        
         pendingPaymentsCount = data?.length || 0;
         
-        // পেন্ডিং পেমেন্ট ব্যাজ আপডেট করুন
-        updatePendingPaymentsBadge(pendingPaymentsCount);
+        // স্ট্যাটস আপডেট
+        const pendingPaymentsElem = document.getElementById('pendingPayments');
+        if (pendingPaymentsElem) {
+            pendingPaymentsElem.innerText = pendingPaymentsCount;
+        }
         
+        // ব্যাজ আপডেট (যদি থাকে)
+        const badge = document.getElementById('pendingPaymentsBadge');
+        if (badge) {
+            if (pendingPaymentsCount > 0) {
+                badge.innerText = pendingPaymentsCount > 9 ? '9+' : pendingPaymentsCount;
+                badge.style.display = 'inline-block';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+        
+        // ========== ৩. টেবিল আপডেট ==========
         const tbody = document.getElementById('paymentApprovalList');
-        if (!tbody) return;
-        
-        if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="10" class="text-center p-4">কোনো পেন্ডিং পেমেন্ট নেই</td></tr>';
-            document.getElementById('pendingPayments').innerText = '0';
+        if (!tbody) {
+            console.error('❌ paymentApprovalList tbody not found!');
             return;
         }
         
-        tbody.innerHTML = data.map(p => `
-            <tr class="border-b hover:bg-gray-50">
-                <td class="p-2 border text-xs">${new Date(p.submitted_at).toLocaleDateString('bn-BD')}</td>
-                <td class="p-2 border font-medium">${p.member_name || '-'}</td>
-                <td class="p-2 border">${p.member_id}</td>
-                <td class="p-2 border">${p.month}</td>
-                <td class="p-2 border">${p.year}</td>
-                <td class="p-2 border text-right font-semibold text-emerald-600">${p.amount.toLocaleString()} টাকা</td>
-                <td class="p-2 border"><span class="payment-method-badge ${getPaymentMethodClass(p.payment_method)}">${getPaymentMethodName(p.payment_method)}</span></td>
-                <td class="p-2 border text-xs">${p.transaction_id || '-'}</td>
-                <td class="p-2 border"><span class="px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-700">বিচারাধীন</span></td>
-                <td class="p-2 border">
-                    <div class="flex gap-1">
-                        <button onclick="approvePayment('${p.id}')" class="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600 transition">অনুমোদন</button>
-                        <button onclick="rejectPayment('${p.id}')" class="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600 transition">বাতিল</button>
-                    </div>
-                </td>
-            </tr>
-        `).join('');
+        if (!data || data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="10" class="text-center p-4">কোনো পেন্ডিং পেমেন্ট নেই<\/td><\/tr>';
+            return;
+        }
         
-        document.getElementById('pendingPayments').innerText = pendingPaymentsCount;
+        tbody.innerHTML = data.map(p => {
+            // নিরাপদে মান বের করা
+            const date = p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-';
+            const memberName = p.member_name || p.memberName || '-';
+            const memberId = p.member_id || p.memberId || '-';
+            const amount = p.amount || 0;
+            const month = p.month || '-';
+            const year = p.year || '-';
+            const paymentMethod = p.payment_method || p.paymentMethod || 'cash';
+            const transactionId = p.transaction_id || p.transactionId || '-';
+            
+            return `
+                <tr class="border-b hover:bg-gray-50">
+                    <td class="p-2 border text-xs">${date}${''}<\/td>
+                    <td class="p-2 border font-medium">${memberName}${''}<\/td>
+                    <td class="p-2 border">${memberId}${''}<\/td>
+                    <td class="p-2 border">${month}${''}<\/td>
+                    <td class="p-2 border">${year}${''}<\/td>
+                    <td class="p-2 border text-right font-semibold text-emerald-600">${amount.toLocaleString()} টাকা${''}<\/td>
+                    <td class="p-2 border"><span class="payment-method-badge ${getPaymentMethodClass(paymentMethod)}">${getPaymentMethodName(paymentMethod)}</span>${''}<\/td>
+                    <td class="p-2 border text-xs">${transactionId}${''}<\/td>
+                    <td class="p-2 border"><span class="px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-700">বিচারাধীন</span>${''}<\/td>
+                    <td class="p-2 border">
+                        <div class="flex gap-1">
+                            <button onclick="approvePayment(${p.id})" class="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600 transition">অনুমোদন</button>
+                            <button onclick="rejectPayment(${p.id})" class="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600 transition">বাতিল</button>
+                        </div>
+                    <\/td>
+                <\/tr>
+            `;
+        }).join('');
+        
         updateStats();
         
     } catch (e) {
-        console.error('Load payment approvals error:', e);
-        showToast('পেমেন্ট লোড করতে সমস্যা!', 'error');
-    }
-}
-
-// পেন্ডিং পেমেন্ট ব্যাজ আপডেট ফাংশন
-function updatePendingPaymentsBadge(count) {
-    const badge = document.getElementById('pendingPaymentsBadge');
-    if (badge) {
-        if (count > 0) {
-            badge.innerText = count > 9 ? '9+' : count;
-            badge.style.display = 'inline-block';
-        } else {
-            badge.style.display = 'none';
+        console.error('❌ Load payment approvals error:', e);
+        showToast('পেমেন্ট লোড করতে সমস্যা: ' + (e.message || 'অজানা ত্রুটি'), 'error');
+        
+        // এরর হ্যান্ডলিং: টেবিলে এরর মেসেজ দেখান
+        const tbody = document.getElementById('paymentApprovalList');
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="10" class="text-center p-4 text-red-500">পেমেন্ট লোড করতে সমস্যা! পেজ রিফ্রেশ করে আবার চেষ্টা করুন。<br>' + (e.message || '') + '<\/td><\/tr>';
         }
     }
 }
-
-async function approvePayment(paymentId) {
-    const client = window.supabaseClient || window._supabaseClient;
-    if (!confirm('পেমেন্টটি অনুমোদন দিতে চান?')) return;
-    try {
-        await client.from('payments').update({ status: 'approved', approved_at: new Date().toISOString(), approved_by: window.currentAdmin?.name }).eq('id', paymentId);
-        showToast('✅ পেমেন্ট অনুমোদন করা হয়েছে!', 'success');
-        await loadPaymentApprovals();
-        updateStats();
-    } catch(e) { showToast('অনুমোদন ব্যর্থ!', 'error'); }
-}
-
 async function rejectPayment(paymentId) {
     const client = window.supabaseClient || window._supabaseClient;
     const reason = prompt('বাতিলের কারণ লিখুন:');
@@ -526,17 +566,50 @@ async function deleteMadrasa(madrasaId) {
 
 // ========== সদস্য ফাংশন ==========
 async function loadAllMembers() {
-    const client = window.supabaseClient || window._supabaseClient;
-    if(!client) { console.warn('⚠️ Supabase client not ready'); setTimeout(loadAllMembers, 1000); return; }
+    // ========== ১. Supabase ক্লায়েন্ট চেক ও সেট ==========
+    let client = window.supabaseClient || window._supabaseClient || window.supabase;
+    
+    if (!client || typeof client.from !== 'function') {
+        const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
+        
+        let attempts = 0;
+        while ((!client || typeof client.from !== 'function') && attempts < 30) {
+            if (typeof supabase !== 'undefined' && supabase.createClient) {
+                client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                window.supabaseClient = client;
+                window._supabaseClient = client;
+            } else {
+                await new Promise(r => setTimeout(r, 500));
+                attempts++;
+            }
+        }
+        
+        if (!client || typeof client.from !== 'function') {
+            console.error('❌ Supabase client not ready');
+            showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+            return;
+        }
+    }
+    
+    // ========== ২. সদস্য লোড ==========
     try {
         const { data, error } = await client.from('members').select('*').order('created_at', { ascending: false });
-        if(error) throw error;
+        if (error) throw error;
         members = data || [];
-        console.log('✅ সদস্য লোড করা হয়েছে:', members.length);
+        console.log('✅ Members loaded:', members.length);
+        
         renderMembers();
         renderPendingMembers();
         updateStats();
-    } catch(e) { console.error('Load members error:', e); }
+        
+        // পেন্ডিং ব্যাজ আপডেট
+        updatePendingMemberBadge();
+        
+    } catch (e) {
+        console.error('Load members error:', e);
+        showToast('সদস্য লোড করতে সমস্যা!', 'error');
+    }
 }
 
 function renderMembers() {
