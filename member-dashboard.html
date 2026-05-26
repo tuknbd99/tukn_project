@@ -21,6 +21,7 @@
                 console.log('✅ Supabase client initialized');
             }
         })();
+        
     </script>
     
     <style>
@@ -601,7 +602,7 @@ const banglaMonths = ['জানুয়ারি','ফেব্রুয়া
         referId: parsed.referral_code || parsed.referId,
         joinDate: parsed.join_date || parsed.joinDate || new Date().toISOString(),
         memberType: parsed.member_type || parsed.memberType || 'সাধারণ সদস্য',
-        memberTerm: parsed.member_term || 0,
+        memberTerm: parseInt(parsed.member_term) || parseInt(parsed.memberTerm) || 0,
         monthlySavings: parsed.monthly_savings || parsed.monthlySavings || 500,
         status: parsed.status,
         profileImage: parsed.profile_image || parsed.profileImage || 'images/logo.png',
@@ -609,12 +610,55 @@ const banglaMonths = ['জানুয়ারি','ফেব্রুয়া
         permanentAddress: parsed.permanent_address || ''
     };
     console.log('✅ লগইন সফল:', currentUser.name);
+    console.log('📅 মেয়াদ:', currentUser.memberTerm, 'বছর');
 })();
+
+// ========== Supabase থেকে তাজা ডাটা লোড ==========
+async function refreshMemberDataFromSupabase() {
+    if(!currentUser || !currentUser.id) return;
+    let client = window.supabaseClient;
+    if(!client) return;
+    try {
+        const { data, error } = await client
+            .from('members')
+            .select('member_term, join_date, monthly_savings, full_name, mobile, present_address, permanent_address, profile_image')
+            .eq('member_id', currentUser.id)
+            .single();
+        if(error) throw error;
+        if(data) {
+            currentUser.memberTerm = parseInt(data.member_term) || 0;
+            currentUser.joinDate = data.join_date || currentUser.joinDate;
+            currentUser.monthlySavings = data.monthly_savings || currentUser.monthlySavings;
+            currentUser.name = data.full_name || currentUser.name;
+            currentUser.mobile = data.mobile || currentUser.mobile;
+            currentUser.presentAddress = data.present_address || currentUser.presentAddress;
+            currentUser.permanentAddress = data.permanent_address || currentUser.permanentAddress;
+            if(data.profile_image) currentUser.profileImage = data.profile_image;
+            console.log('✅ তাজা ডাটা লোড - মেয়াদ:', currentUser.memberTerm);
+        }
+    } catch(error) { console.error('রিফ্রেশ ব্যর্থ:', error); }
+}
 
 // ========== হেল্পার ফাংশন ==========
 function getSupabaseClient() { return window.supabaseClient; }
-function showToast(message, type) { const toast = document.createElement('div'); toast.className = `toast-notification ${type === 'success' ? 'bg-green-600' : 'bg-red-600'}`; toast.innerHTML = message; document.body.appendChild(toast); setTimeout(() => toast.remove(), 3000); }
-function handleLogout() { if(durationInterval) clearInterval(durationInterval); if(clockInterval) clearInterval(clockInterval); if(expiryInterval) clearInterval(expiryInterval); localStorage.removeItem('tukn_logged_member'); sessionStorage.removeItem('tukn_logged_member'); localStorage.removeItem('TUKNBD_user'); sessionStorage.removeItem('TUKNBD_user'); showToast('লগআউট সফল!', 'success'); setTimeout(() => window.location.href = 'login.html', 1000); }
+function showToast(message, type) { 
+    const toast = document.createElement('div'); 
+    toast.className = `toast-notification ${type === 'success' ? 'bg-green-600' : 'bg-red-600'}`; 
+    toast.innerHTML = message; 
+    document.body.appendChild(toast); 
+    setTimeout(() => toast.remove(), 3000); 
+}
+function handleLogout() { 
+    if(durationInterval) clearInterval(durationInterval);
+    if(clockInterval) clearInterval(clockInterval);
+    if(expiryInterval) clearInterval(expiryInterval);
+    localStorage.removeItem('tukn_logged_member'); 
+    sessionStorage.removeItem('tukn_logged_member');
+    localStorage.removeItem('TUKNBD_user'); 
+    sessionStorage.removeItem('TUKNBD_user');
+    showToast('লগআউট সফল!', 'success');
+    setTimeout(() => window.location.href = 'login.html', 1000);
+}
 function toggleLevel(level) { const el = document.getElementById(`level${level}List`); if(el) el.classList.toggle('hidden'); }
 
 // ========== ঠিকানা ফাংশন ==========
@@ -645,8 +689,10 @@ document.getElementById('addressForm')?.addEventListener('submit', async functio
     closeAddressModal();
 });
 
-function updateUI() {
+// ========== UI আপডেট ==========
+async function updateUI() {
     if(!currentUser) return;
+    await refreshMemberDataFromSupabase();
     
     const hour = new Date().getHours();
     const greeting = hour < 12 ? 'সুপ্রভাত' : (hour < 18 ? 'শুভ অপরাহ্ন' : 'শুভ সন্ধ্যা');
@@ -659,17 +705,17 @@ function updateUI() {
     document.getElementById('cardName').innerHTML = currentUser.name;
     document.getElementById('cardId').innerHTML = currentUser.id;
     document.getElementById('cardReferId').innerHTML = currentUser.referId;
-       
-    // 👇 এখানে এই লাইনটি যোগ করুন (পুরনো লাইন replace করে দিন)
-    let termText = '';
-    if(currentUser.memberTerm === 0) termText = 'মেয়াদহীন সদস্য';
-    else if(currentUser.memberTerm === 3) termText = '৩ বছর মেয়াদী সদস্য';
-    else if(currentUser.memberTerm === 5) termText = '৫ বছর মেয়াদী সদস্য';
-    else if(currentUser.memberTerm === 7) termText = '৭ বছর মেয়াদী সদস্য';
-    else if(currentUser.memberTerm === 10) termText = '১০ বছর মেয়াদী সদস্য';
-    else if(currentUser.memberTerm === 12) termText = '১২ বছর মেয়াদী সদস্য';
-    else termText = `${currentUser.memberTerm} বছর মেয়াদী সদস্য`;
     
+    // মেয়াদ টেক্সট
+    const memberTermNum = parseInt(currentUser.memberTerm) || 0;
+    let termText = '';
+    if(memberTermNum === 0) termText = 'মেয়াদহীন সদস্য';
+    else if(memberTermNum === 3) termText = '৩ বছর মেয়াদী সদস্য';
+    else if(memberTermNum === 5) termText = '৫ বছর মেয়াদী সদস্য';
+    else if(memberTermNum === 7) termText = '৭ বছর মেয়াদী সদস্য';
+    else if(memberTermNum === 10) termText = '১০ বছর মেয়াদী সদস্য';
+    else if(memberTermNum === 12) termText = '১২ বছর মেয়াদী সদস্য';
+    else termText = `${memberTermNum} বছর মেয়াদী সদস্য`;
     document.getElementById('membershipTermDisplay').innerHTML = termText;
     
     document.getElementById('monthlySavingsDisplay').innerHTML = currentUser.monthlySavings + ' টাকা';
@@ -742,29 +788,31 @@ function calculateMembershipDuration() {
 
 function calculateMembershipExpiry() {
     if(!currentUser) return;
-    
-    const memberTerm = currentUser.memberTerm || 0;
     const expiryElement = document.getElementById('membershipExpiry');
+    if(!expiryElement) return;
     
-    // মেয়াদহীন সদস্য
+    let memberTerm = parseInt(currentUser.memberTerm) || 0;
+    
     if(memberTerm === 0) { 
         expiryElement.innerHTML = '<span class="text-green-600 font-bold">🎉 মেয়াদহীন সদস্য (লাইফটাইম)</span>';
         return; 
     }
     
-    // মেয়াদী সদস্য - কাউন্টডাউন দেখাবে
-    const joinDate = new Date(currentUser.joinDate);
-    const expiryDate = new Date(joinDate);
-    expiryDate.setFullYear(joinDate.getFullYear() + memberTerm);
-    const now = new Date();
+    let joinDate = new Date(currentUser.joinDate);
+    if(isNaN(joinDate.getTime())) {
+        expiryElement.innerHTML = '<span class="text-red-600 font-bold">⚠️ তারিখের ত্রুটি!</span>';
+        return;
+    }
     
-    // মেয়াদ উত্তীর্ণ
+    let expiryDate = new Date(joinDate);
+    expiryDate.setFullYear(joinDate.getFullYear() + memberTerm);
+    let now = new Date();
+    
     if(now >= expiryDate) { 
         expiryElement.innerHTML = '<span class="text-red-600 font-bold">⚠️ মেয়াদ উত্তীর্ণ! রিনিউ করুন</span>';
         return; 
     }
     
-    // কাউন্টডাউন গণনা
     let diff = expiryDate - now;
     let years = Math.floor(diff / (1000 * 60 * 60 * 24 * 365));
     diff -= years * (1000 * 60 * 60 * 24 * 365);
@@ -822,16 +870,14 @@ async function loadSavingsData() {
     } catch(error) { console.error('Error loading savings data:', error); }
 }
 
-    async function loadPaymentHistory() {
+async function loadPaymentHistory() {
     if(!currentUser || currentUser.status !== 'active') return;
     let client = getSupabaseClient();
     if(!client) return;
     try {
         const { data: payments, error } = await client.from('payments').select('*').eq('member_id', currentUser.id).order('submitted_at', { ascending: false });
         
-        // মোট ব্যালেন্স গণনা করুন
         let totalBalance = 0;
-        
         const historyBody = document.getElementById('paymentHistoryBody');
         if(historyBody) {
             if(payments && payments.length > 0) {
@@ -839,11 +885,11 @@ async function loadSavingsData() {
                 payments.forEach(payment => {
                     if(payment.status === 'approved') {
                         totalBalance += payment.amount;
-                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা</td><td class="p-2 text-green-600"><i class="fas fa-check-circle mr-1"></i>অনুমোদিত<\/td><td class="p-2"><button onclick="viewPaymentSlip('${payment.month} ${payment.year}', ${payment.amount})" class="text-blue-500"><i class="fas fa-print"></i><\/button><\/td><\/tr>`;
+                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা<\/td><td class="p-2 text-green-600"><i class="fas fa-check-circle mr-1"></i>অনুমোদিত<\/td><td class="p-2"><button onclick="viewPaymentSlip('${payment.month} ${payment.year}', ${payment.amount})" class="text-blue-500"><i class="fas fa-print"></i><\/button><\/td><\/tr>`;
                     } else if(payment.status === 'pending') {
-                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা</td><td class="p-2 text-yellow-600"><i class="fas fa-hourglass-half mr-1"></i>বিচারাধীন<\/td><td class="p-2">-<\/td><\/tr>`;
+                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}<td><td class="p-2">${payment.amount.toLocaleString()} টাকা<\/td><td class="p-2 text-yellow-600"><i class="fas fa-hourglass-half mr-1"></i>বিচারাধীন<\/td><td class="p-2">-<\/td><\/tr>`;
                     } else if(payment.status === 'rejected') {
-                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা</td><td class="p-2 text-red-600"><i class="fas fa-times-circle mr-1"></i>বাতিল<\/td><td class="p-2">-<\/td><\/tr>`;
+                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}<td><td class="p-2">${payment.amount.toLocaleString()} টাকা<\/td><td class="p-2 text-red-600"><i class="fas fa-times-circle mr-1"></i>বাতিল<\/td><td class="p-2">-<\/td><\/tr>`;
                     }
                 });
                 historyBody.innerHTML = historyHtml;
@@ -852,17 +898,10 @@ async function loadSavingsData() {
             }
         }
         
-        // মোট ব্যালেন্স আপডেট করুন
         const totalBalanceEl = document.getElementById('totalBalanceDisplay');
-        if(totalBalanceEl) {
-            totalBalanceEl.innerText = totalBalance.toLocaleString() + ' টাকা';
-        }
-        
-        // totalPaidDisplay আপডেট করুন (যদি আলাদা হয়)
+        if(totalBalanceEl) totalBalanceEl.innerText = totalBalance.toLocaleString() + ' টাকা';
         const totalPaidEl = document.getElementById('totalPaidDisplay');
-        if(totalPaidEl) {
-            totalPaidEl.innerText = totalBalance.toLocaleString() + ' টাকা';
-        }
+        if(totalPaidEl) totalPaidEl.innerText = totalBalance.toLocaleString() + ' টাকা';
         
     } catch(error) { console.error('Load payment history error:', error); }
 }
@@ -873,6 +912,10 @@ function viewPaymentSlip(monthName, amount) {
     document.getElementById('paymentSlipModal').classList.remove('hidden');
     document.getElementById('paymentSlipModal').classList.add('flex');
 }
+function closePaymentSlipModal() { document.getElementById('paymentSlipModal').classList.remove('flex'); }
+function closeSlipModalOnOverlay(e) { if(e.target.id === 'paymentSlipModal') closePaymentSlipModal(); }
+function downloadSlipPDF() { const element = document.getElementById('slipPrintArea'); if(element) html2pdf().set({ margin: 0.3, filename: `TUKNBD_Slip_${Date.now()}.pdf` }).from(element).save(); }
+function printSlip() { window.print(); }
 
 function populateYearAndMonths() {
     const yearSelect = document.getElementById('paymentYear');
@@ -880,17 +923,10 @@ function populateYearAndMonths() {
     const monthsContainer = document.getElementById('monthsContainer');
     if(monthsContainer) { monthsContainer.innerHTML = ''; banglaMonths.forEach(month => { monthsContainer.innerHTML += `<label class="flex items-center gap-2 p-2 border rounded-lg cursor-pointer hover:bg-gray-50"><input type="checkbox" value="${month}" class="month-cb w-4 h-4 text-emerald-600 rounded"><span class="text-sm">${month}</span></label>`; }); document.querySelectorAll('.month-cb').forEach(cb => cb.addEventListener('change', updateTotalAmount)); }
 }
-
-function updateTotalAmount() { const selected = document.querySelectorAll('.month-cb:checked'); const totalAmount = selected.length * currentUser.monthlySavings; document.getElementById('totalAmountDisplay').innerHTML = totalAmount.toLocaleString() + ' টাকা'; }
-
+function updateTotalAmount() { const selected = document.querySelectorAll('.month-cb:checked'); const totalAmount = selected.length * (currentUser?.monthlySavings || 500); document.getElementById('totalAmountDisplay').innerHTML = totalAmount.toLocaleString() + ' টাকা'; }
 function openPaymentSlip() { if(currentUser.status !== 'active') { showToast('সদস্যপদ অনুমোদনের পর সঞ্চয় জমা দিতে পারবেন!', 'error'); return; } populateYearAndMonths(); document.getElementById('paymentInfoModal').classList.remove('hidden'); document.getElementById('paymentInfoModal').classList.add('flex'); document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা'; document.querySelectorAll('.month-cb').forEach(cb => cb.checked = false); document.getElementById('paymentMethod').value = ''; document.getElementById('mobileBankingFields').classList.remove('hidden'); document.getElementById('bankPaymentFields').classList.add('hidden'); document.getElementById('cashPaymentFields').classList.add('hidden'); document.getElementById('receiverInfoDisplay').classList.add('hidden'); selectedReceiver = null; }
-
 function closePaymentInfoModal() { const modal = document.getElementById('paymentInfoModal'); if(modal) { modal.classList.add('hidden'); modal.classList.remove('flex'); } }
 function closePaymentInfoModalOnOverlay(e) { if(e.target.id === 'paymentInfoModal') closePaymentInfoModal(); }
-function closePaymentSlipModal() { const modal = document.getElementById('paymentSlipModal'); if(modal) { modal.classList.add('hidden'); modal.classList.remove('flex'); } }
-function closeSlipModalOnOverlay(e) { if(e.target.id === 'paymentSlipModal') closePaymentSlipModal(); }
-function downloadSlipPDF() { const element = document.getElementById('slipPrintArea'); if(element) html2pdf().set({ margin: 0.3, filename: `TUKNBD_Slip_${Date.now()}.pdf` }).from(element).save(); }
-function printSlip() { window.print(); }
 
 function togglePaymentFields() {
     const paymentMethod = document.getElementById('paymentMethod').value;
@@ -1026,242 +1062,121 @@ if(loanForm) {
     });
 }
 
-    // ========== রেফারেল ডাটা লোড (সার্বজনীন - সব ফরম্যাটের রেফারেল কোড কাজ করবে) ==========
-    async function loadReferralData() {
-        if(!currentUser || isLoadingReferral) return;
-        let client = getSupabaseClient();
-        if(!client) { 
-            console.log('❌ Supabase client not ready'); 
-            setTimeout(() => loadReferralData(), 1000); 
-            return; 
-        }
-        isLoadingReferral = true;
+// ========== রেফারেল ডাটা লোড ==========
+async function loadReferralData() {
+    if(!currentUser || isLoadingReferral) return;
+    let client = getSupabaseClient();
+    if(!client) { console.log('Supabase client not ready'); setTimeout(() => loadReferralData(), 1000); return; }
+    isLoadingReferral = true;
+    
+    for(let i=1; i<=10; i++) { 
+        const container = document.getElementById(`level${i}List`);
+        if(container) container.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-emerald-600"></i> লোড হচ্ছে...</div>';
+    }
+    
+    try {
+        const { data: allMembers, error } = await client.from('members').select('member_id, full_name, mobile, monthly_savings, referred_by, referral_code, status, created_at');
+        if(error) throw error;
         
-        // লোডিং ইন্ডিকেটর Level 1-10 এর জন্য
-        for(let i=1; i<=10; i++) { 
-            const container = document.getElementById(`level${i}List`);
-            if(container) container.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-emerald-600"></i> লোড হচ্ছে...</div>';
-        }
+        const normalizedMembers = allMembers.map(member => {
+            let normalizedReferralCode = member.referral_code;
+            let normalizedReferredBy = member.referred_by;
+            if(normalizedReferralCode && normalizedReferralCode.match(/\d+/)) normalizedReferralCode = normalizedReferralCode.match(/\d+/)[0];
+            if(normalizedReferredBy && normalizedReferredBy.match(/\d+/)) normalizedReferredBy = normalizedReferredBy.match(/\d+/)[0];
+            return { ...member, referral_code_normalized: normalizedReferralCode, referred_by_normalized: normalizedReferredBy };
+        });
         
-        try {
-            // সকল সদস্য ডাটা নিন
-            const { data: allMembers, error } = await client.from('members').select('member_id, full_name, mobile, monthly_savings, referred_by, referral_code, status, created_at');
-            
-            if(error) throw error;
-            
-            // ========== গুরুত্বপূর্ণ: রেফারেল কোড স্বাভাবিকীকরণ (Normalization) ==========
-            // প্রতিটি সদস্যের রেফারেল কোডকে শুধু নাম্বারে রূপান্তর করুন
-            const normalizedMembers = allMembers.map(member => {
-                let normalizedReferralCode = member.referral_code;
-                let normalizedReferredBy = member.referred_by;
-                
-                // referral_code থেকে শুধু সংখ্যা নিন (TUKN-REF-444330 -> 444330)
-                if(normalizedReferralCode && normalizedReferralCode.match(/\d+/)) {
-                    normalizedReferralCode = normalizedReferralCode.match(/\d+/)[0];
-                }
-                
-                // referred_by থেকে শুধু সংখ্যা নিন
-                if(normalizedReferredBy && normalizedReferredBy.match(/\d+/)) {
-                    normalizedReferredBy = normalizedReferredBy.match(/\d+/)[0];
-                }
-                
-                return {
-                    ...member,
-                    referral_code_normalized: normalizedReferralCode,
-                    referred_by_normalized: normalizedReferredBy
-                };
-            });
-            
-            // বর্তমান সদস্যের রেফারেল কোড স্বাভাবিকীকরণ
-            let myReferCode = currentUser.referId;
-            if(myReferCode && myReferCode.match(/\d+/)) {
-                myReferCode = myReferCode.match(/\d+/)[0];
-            }
-            
-            console.log('🔍 আপনার নরমালাইজড রেফারেল কোড:', myReferCode);
-            console.log('📊 নরমালাইজড সদস্য সংখ্যা:', normalizedMembers.length);
-            
-            // আপনার সরাসরি রেফারেল খুঁজুন (নরমালাইজড কোড দিয়ে)
-            const myReferrals = normalizedMembers.filter(m => 
-                m.referred_by_normalized === myReferCode && 
-                m.member_id !== currentUser.id
-            );
-            
-            console.log('👥 আপনার সরাসরি রেফারেল সংখ্যা:', myReferrals.length);
-            
-            if(myReferrals.length > 0) {
-                console.log('📋 আপনার রেফারেল সদস্যরা:');
-                myReferrals.forEach(ref => {
-                    console.log(`   - ${ref.full_name} (${ref.member_id}) | স্ট্যাটাস: ${ref.status}`);
-                });
-            } else {
-                console.log('⚠️ আপনার কোনো সরাসরি রেফারেল নেই!');
-                document.getElementById('totalCommission').innerText = '0';
-                document.getElementById('totalReferrals').innerText = '0';
-                for(let i=1; i<=10; i++) { 
-                    const container = document.getElementById(`level${i}List`);
-                    if(container) container.innerHTML = '<p class="text-gray-500 text-center py-4">কোনো রেফারেল নেই</p>';
-                }
-                isLoadingReferral = false;
-                return;
-            }
-            
-            // Level 1-10 এর জন্য অ্যারে তৈরি (নরমালাইজড কোড ব্যবহার করে)
-            const levelReferrals = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 7: [], 8: [], 9: [], 10: [] };
-            const visited = new Set();
-            
-            // Level 1: সরাসরি রেফারেল (যারা আপনার রেফারেল কোড ব্যবহার করেছে)
-            levelReferrals[1] = myReferrals.filter(m => m.status === 'active' || m.status === 'approved');
-            visited.add(currentUser.id);
-            levelReferrals[1].forEach(m => visited.add(m.member_id));
-            
-            console.log('✅ Level 1 সক্রিয় রেফারেল:', levelReferrals[1].length);
-            
-            // BFS ব্যবহার করে Level 2 থেকে Level 10 পর্যন্ত রেফারেল সংগ্রহ (নরমালাইজড কোড দিয়ে)
-            let currentLevelMembers = [...levelReferrals[1]];
-            
-            for(let level = 2; level <= 10; level++) {
-                const nextLevelMembers = [];
-                for(const member of currentLevelMembers) {
-                    // সদস্যের নরমালাইজড রেফারেল কোড
-                    let memberReferCode = member.referral_code_normalized;
-                    
-                    if(memberReferCode) {
-                        const referrals = normalizedMembers.filter(m => 
-                            m.referred_by_normalized === memberReferCode && 
-                            !visited.has(m.member_id) &&
-                            (m.status === 'active' || m.status === 'approved')
-                        );
-                        for(const ref of referrals) {
-                            if(!visited.has(ref.member_id)) {
-                                visited.add(ref.member_id);
-                                nextLevelMembers.push(ref);
-                            }
-                        }
-                    }
-                }
-                levelReferrals[level] = nextLevelMembers;
-                currentLevelMembers = nextLevelMembers;
-                console.log(`Level ${level}: ${nextLevelMembers.length} জন রেফারেল`);
-            }
-            
-            // কমিশন গণনা এবং UI আপডেট
-            let totalCommission = 0;
-            let totalReferrals = 0;
-            
-            for(let level = 1; level <= 10; level++) {
-                let levelCount = levelReferrals[level].length;
-                totalReferrals += levelCount;
-                
-                let levelCommission = 0;
-                let rate = level === 1 ? 0.15 : (level === 2 ? 0.10 : 0.05);
-                
-                for(const ref of levelReferrals[level]) {
-                    const savings = ref.monthly_savings || 500;
-                    levelCommission += savings * rate;
-                    console.log(`Level ${level}: ${ref.full_name} - সঞ্চয় ${savings} × ${rate*100}% = ${savings * rate} টাকা`);
-                }
-                totalCommission += levelCommission;
-                
-                // UI আপডেট
-                const countEl = document.getElementById(`level${level}Count`);
-                const commissionEl = document.getElementById(`level${level}Commission`);
-                if(countEl) countEl.innerText = levelCount;
-                if(commissionEl) commissionEl.innerText = Math.floor(levelCommission).toLocaleString();
-                
-                // লেভেল লিস্ট আপডেট
-                updateLevelList(level, levelReferrals[level], rate * 100);
-            }
-            
-            console.log(`💰 মোট কমিশন: ${Math.floor(totalCommission)} টাকা`);
-            console.log(`👥 মোট রেফারেল: ${totalReferrals} জন`);
-            
-            document.getElementById('totalReferrals').innerText = totalReferrals;
-            document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
-            document.getElementById('totalLevels').innerText = '১০';
-            
-            // বোনাস ব্যালেন্স আপডেট
-            userBalances.bonus = Math.floor(totalCommission);
-            userBalances.profit = Math.floor(totalCommission * 0.1);
-            
-            // রেফারেল লিংক - শুধু সংখ্যা অংশ ব্যবহার করুন
-            const referralLink = document.getElementById('referralLink');
-            if(referralLink && currentUser.referId) {
-                let cleanRefCode = currentUser.referId;
-                if(cleanRefCode && cleanRefCode.match(/\d+/)) {
-                    cleanRefCode = cleanRefCode.match(/\d+/)[0];
-                }
-                referralLink.value = `https://tuknarif.com.bd/signup?ref=${cleanRefCode}`;
-            }
-            
-            if(totalCommission > 0) {
-                showToast(`🎉 আপনার মোট বোনাস: ${Math.floor(totalCommission)} টাকা!`, 'success');
-            }
-            
-        } catch(error) { 
-            console.error('❌ Referral error:', error); 
+        let myReferCode = currentUser.referId;
+        if(myReferCode && myReferCode.match(/\d+/)) myReferCode = myReferCode.match(/\d+/)[0];
+        
+        console.log('🔍 আপনার নরমালাইজড রেফারেল কোড:', myReferCode);
+        
+        const myReferrals = normalizedMembers.filter(m => m.referred_by_normalized === myReferCode && m.member_id !== currentUser.id);
+        
+        if(myReferrals.length === 0) {
+            document.getElementById('totalCommission').innerText = '0';
+            document.getElementById('totalReferrals').innerText = '0';
             for(let i=1; i<=10; i++) { 
                 const container = document.getElementById(`level${i}List`);
-                if(container) container.innerHTML = '<p class="text-red-500 text-center py-4">⚠️ তথ্য লোড করতে সমস্যা!</p>';
+                if(container) container.innerHTML = '<p class="text-gray-500 text-center py-4">কোনো রেফারেল নেই</p>';
             }
-        } finally { 
-            isLoadingReferral = false; 
+            isLoadingReferral = false;
+            return;
         }
-    }
-
-function updateLevelList(level, referrals, rate) {
-    const container = document.getElementById(`level${level}List`);
-    if(!container) return;
-    
-    if(referrals.length === 0) { 
-        container.innerHTML = `<p class="text-gray-500 text-center py-4">Level ${level} - কোনো রেফারেল নেই</p>`;
-        return; 
-    }
-    
-    const colors = {
-        1: 'emerald', 2: 'blue', 3: 'amber', 4: 'purple', 5: 'pink',
-        6: 'indigo', 7: 'red', 8: 'teal', 9: 'orange', 10: 'cyan'
-    };
-    const color = colors[level] || 'gray';
-    
-    container.innerHTML = referrals.map(ref => {
-        const joinDate = ref.created_at ? new Date(ref.created_at).toLocaleDateString('bn-BD') : '-';
-        const commission = (ref.monthly_savings || 500) * (rate / 100);
-        return `
-            <div class="bg-white p-3 rounded-lg border hover:shadow-md transition mb-2">
-                <div class="flex justify-between items-start flex-wrap gap-2">
-                    <div>
-                        <p class="font-semibold text-gray-800">${ref.full_name || 'নাম নেই'}</p>
-                        <p class="text-xs text-gray-500">📱 ${ref.mobile || 'মোবাইল নেই'}</p>
-                        <p class="text-xs text-${color}-600">🆔 ${ref.member_id}</p>
-                        <p class="text-xs text-gray-400">📅 সদস্য: ${joinDate}</p>
-                        <p class="text-xs text-gray-500">💰 মাসিক সঞ্চয়: ${(ref.monthly_savings || 500).toLocaleString()} টাকা</p>
-                    </div>
-                    <div class="text-right">
-                        <p class="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-1 rounded-full">
-                            🎁 কমিশন: ${Math.floor(commission)} টাকা (${rate}%)
-                        </p>
-                    </div>
-                </div>
-            </div>
-        `;
-    }).join('');
+        
+        const levelReferrals = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 7: [], 8: [], 9: [], 10: [] };
+        const visited = new Set();
+        
+        levelReferrals[1] = myReferrals.filter(m => m.status === 'active' || m.status === 'approved');
+        visited.add(currentUser.id);
+        levelReferrals[1].forEach(m => visited.add(m.member_id));
+        
+        let currentLevelMembers = [...levelReferrals[1]];
+        for(let level = 2; level <= 10; level++) {
+            const nextLevelMembers = [];
+            for(const member of currentLevelMembers) {
+                let memberReferCode = member.referral_code_normalized;
+                if(memberReferCode) {
+                    const referrals = normalizedMembers.filter(m => m.referred_by_normalized === memberReferCode && !visited.has(m.member_id) && (m.status === 'active' || m.status === 'approved'));
+                    for(const ref of referrals) {
+                        if(!visited.has(ref.member_id)) { visited.add(ref.member_id); nextLevelMembers.push(ref); }
+                    }
+                }
+            }
+            levelReferrals[level] = nextLevelMembers;
+            currentLevelMembers = nextLevelMembers;
+        }
+        
+        let totalCommission = 0, totalReferrals = 0;
+        for(let level = 1; level <= 10; level++) {
+            let levelCount = levelReferrals[level].length;
+            totalReferrals += levelCount;
+            let levelCommission = 0;
+            let rate = level === 1 ? 0.15 : (level === 2 ? 0.10 : 0.05);
+            for(const ref of levelReferrals[level]) levelCommission += (ref.monthly_savings || 500) * rate;
+            totalCommission += levelCommission;
+            
+            const countEl = document.getElementById(`level${level}Count`);
+            const commissionEl = document.getElementById(`level${level}Commission`);
+            if(countEl) countEl.innerText = levelCount;
+            if(commissionEl) commissionEl.innerText = Math.floor(levelCommission).toLocaleString();
+            updateLevelList(level, levelReferrals[level], rate * 100);
+        }
+        
+        document.getElementById('totalReferrals').innerText = totalReferrals;
+        document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
+        document.getElementById('totalLevels').innerText = '১০';
+        
+        userBalances.bonus = Math.floor(totalCommission);
+        userBalances.profit = Math.floor(totalCommission * 0.1);
+        
+        const referralLink = document.getElementById('referralLink');
+        if(referralLink && currentUser.referId) {
+            let cleanRefCode = currentUser.referId;
+            if(cleanRefCode && cleanRefCode.match(/\d+/)) cleanRefCode = cleanRefCode.match(/\d+/)[0];
+            referralLink.value = `https://tuknarif.com.bd/signup?ref=${cleanRefCode}`;
+        }
+        if(totalCommission > 0) showToast(`🎉 আপনার মোট বোনাস: ${Math.floor(totalCommission)} টাকা!`, 'success');
+        
+    } catch(error) { console.error('Referral error:', error); 
+        for(let i=1; i<=10; i++) { 
+            const container = document.getElementById(`level${i}List`);
+            if(container) container.innerHTML = '<p class="text-red-500 text-center py-4">⚠️ তথ্য লোড করতে সমস্যা!</p>';
+        }
+    } finally { isLoadingReferral = false; }
 }
 
 function updateLevelList(level, referrals, rate) {
     const container = document.getElementById(`level${level}List`);
     if(!container) return;
     if(referrals.length === 0) { container.innerHTML = `<p class="text-gray-500 text-center py-4">Level ${level} - কোনো রেফারেল নেই</p>`; return; }
-    let commissionRate = rate + '%';
-    let listHtml = '<div class="space-y-2 max-h-64 overflow-y-auto">';
-    referrals.forEach(ref => {
+    const colors = {1:'emerald',2:'blue',3:'amber',4:'purple',5:'pink',6:'indigo',7:'red',8:'teal',9:'orange',10:'cyan'};
+    const color = colors[level] || 'gray';
+    container.innerHTML = referrals.map(ref => {
         const joinDate = ref.created_at ? new Date(ref.created_at).toLocaleDateString('bn-BD') : '-';
-        let commission = (ref.monthly_savings || 500) * (rate/100);
-        let color = level === 1 ? 'emerald' : level === 2 ? 'blue' : level === 3 ? 'amber' : level === 4 ? 'purple' : level === 5 ? 'pink' : level === 6 ? 'indigo' : level === 7 ? 'red' : level === 8 ? 'teal' : level === 9 ? 'orange' : 'cyan';
-        listHtml += `<div class="bg-white p-3 rounded-lg border hover:shadow-md transition"><div class="flex justify-between items-start flex-wrap gap-2"><div><p class="font-semibold text-gray-800">${ref.full_name || 'নাম নেই'}</p><p class="text-xs text-gray-500">📱 ${ref.mobile || 'মোবাইল নেই'}</p><p class="text-xs text-${color}-600">🆔 ${ref.member_id}</p><p class="text-xs text-gray-400">📅 সদস্য: ${joinDate}</p></div><div class="text-right"><p class="text-sm font-bold text-${color}-600">💰 ${ref.monthly_savings || 500} টাকা/মাস</p><p class="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full mt-1">🎁 কমিশন: ${Math.floor(commission)} টাকা (${commissionRate})</p></div></div></div>`;
-    });
-    listHtml += '</div>';
-    container.innerHTML = listHtml;
+        const commission = (ref.monthly_savings || 500) * (rate / 100);
+        return `<div class="bg-white p-3 rounded-lg border hover:shadow-md transition mb-2"><div class="flex justify-between items-start flex-wrap gap-2"><div><p class="font-semibold text-gray-800">${ref.full_name || 'নাম নেই'}</p><p class="text-xs text-gray-500">📱 ${ref.mobile || 'মোবাইল নেই'}</p><p class="text-xs text-${color}-600">🆔 ${ref.member_id}</p><p class="text-xs text-gray-400">📅 সদস্য: ${joinDate}</p><p class="text-xs text-gray-500">💰 মাসিক সঞ্চয়: ${(ref.monthly_savings || 500).toLocaleString()} টাকা</p></div><div class="text-right"><p class="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-1 rounded-full">🎁 কমিশন: ${Math.floor(commission)} টাকা (${rate}%)</p></div></div></div>`;
+    }).join('');
 }
 
 function copyReferralLink() { const inp = document.getElementById('referralLink'); if(inp && inp.value) { inp.select(); navigator.clipboard.writeText(inp.value); showToast('রেফারেল লিংক কপি করা হয়েছে!', 'success'); } }
@@ -1277,18 +1192,9 @@ function openWithdrawModal(type) {
     }
     currentWithdrawType = type;
     let title = '', balance = 0;
-    if(type === 'bonus') { 
-        title = 'বোনাস উত্তোলন'; 
-        balance = userBalances.bonus;  // রেফারেল বোনাস এখানে দেখাবে
-    }
-    else if(type === 'profit') { 
-        title = 'লভ্যাংশ উত্তোলন'; 
-        balance = userBalances.profit; 
-    }
-    else { 
-        title = 'মুলধন উত্তোলন'; 
-        balance = userBalances.capital; 
-    }
+    if(type === 'bonus') { title = 'বোনাস উত্তোলন'; balance = userBalances.bonus; }
+    else if(type === 'profit') { title = 'লভ্যাংশ উত্তোলন'; balance = userBalances.profit; }
+    else { title = 'মুলধন উত্তোলন'; balance = userBalances.capital; }
     
     document.getElementById('modalTitle').innerHTML = title;
     document.getElementById('withdrawContent').innerHTML = `
@@ -1323,7 +1229,6 @@ function openWithdrawModal(type) {
     }
     document.getElementById('withdrawModal').classList.add('active');
 }
-    
 function closeWithdrawModal() { const modal = document.getElementById('withdrawModal'); if(modal) { modal.classList.add('hidden'); modal.classList.remove('flex'); } }
 function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithdrawModal(); }
 function processWithdraw() { const method = document.getElementById('withdrawMethod')?.value; const amount = parseFloat(document.getElementById('withdrawAmount')?.value || 0); if(!method) { alert('উত্তোলনের মাধ্যম নির্বাচন করুন।'); return; } if(!amount || amount <= 0) { alert('সঠিক টাকার পরিমাণ দিন।'); return; } let balance = currentWithdrawType === 'bonus' ? userBalances.bonus : (currentWithdrawType === 'profit' ? userBalances.profit : userBalances.capital); if(amount > balance) { alert(`আপনার ব্যালেন্স ${balance} টাকা। এর বেশি উত্তোলন করতে পারবেন না।`); return; } alert(`উত্তোলনের অনুরোধ গৃহীত হয়েছে!\nপদ্ধতি: ${method}\nপরিমাণ: ${amount} টাকা`); closeWithdrawModal(); }
