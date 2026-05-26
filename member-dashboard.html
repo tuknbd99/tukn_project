@@ -974,67 +974,146 @@ if(loanForm) {
 }
 
 // ========== রেফারেল সিস্টেম (১০ লেভেল পর্যন্ত) - বোনাস দেখানোর জন্য ==========
+// ========== রেফারেল ডাটা লোড (Level 1-10 সম্পূর্ণ) ==========
 async function loadReferralData() {
-    if(!currentUser || currentUser.status !== 'active' || isLoadingReferral) return;
+    if(!currentUser || isLoadingReferral) return;
     let client = getSupabaseClient();
     if(!client) { console.log('Supabase client not ready'); setTimeout(() => loadReferralData(), 1000); return; }
     isLoadingReferral = true;
-    for(let i=1; i<=10; i++) { const container = document.getElementById(`level${i}List`); if(container) container.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-emerald-600"></i> লোড হচ্ছে...</div>'; }
+    
+    // লোডিং ইন্ডিকেটর Level 1-10 এর জন্য
+    for(let i=1; i<=10; i++) { 
+        const container = document.getElementById(`level${i}List`);
+        if(container) container.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-emerald-600"></i> লোড হচ্ছে...</div>';
+    }
     
     try {
-        const { data: allMembers, error } = await client.from('members').select('member_id, full_name, mobile, monthly_savings, referred_by, referral_code, status, created_at');
-        if(error) throw error;
+        const { data: allMembers } = await client.from('members').select('member_id, full_name, mobile, monthly_savings, referred_by, referral_code, status, created_at, balance');
+        if(!allMembers) throw new Error('No data');
         
+        // Level 1-10 এর জন্য অ্যারে তৈরি
         const levelReferrals = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 7: [], 8: [], 9: [], 10: [] };
         const visited = new Set();
-        levelReferrals[1] = allMembers.filter(m => m.referred_by === currentUser.referId && m.member_id !== currentUser.id && (m.status === 'active' || m.status === 'approved'));
-        let currentLevelMembers = [...levelReferrals[1]];
+        
+        // Level 1: সরাসরি রেফারেল
+        levelReferrals[1] = allMembers.filter(m => m.referred_by === currentUser.referId && m.member_id !== currentUser.id);
+        visited.add(currentUser.id);
         levelReferrals[1].forEach(m => visited.add(m.member_id));
         
-        for(let currentLevel = 2; currentLevel <= 10; currentLevel++) {
+        // BFS ব্যবহার করে Level 2 থেকে Level 10 পর্যন্ত রেফারেল সংগ্রহ
+        let currentLevelMembers = [...levelReferrals[1]];
+        
+        for(let level = 2; level <= 10; level++) {
             const nextLevelMembers = [];
             for(const member of currentLevelMembers) {
-                const referrals = allMembers.filter(m => m.referred_by === member.referral_code && !visited.has(m.member_id) && (m.status === 'active' || m.status === 'approved'));
-                for(const ref of referrals) { if(!visited.has(ref.member_id)) { visited.add(ref.member_id); nextLevelMembers.push(ref); } }
+                if(member.referral_code) {
+                    const referrals = allMembers.filter(m => 
+                        m.referred_by === member.referral_code && 
+                        !visited.has(m.member_id)
+                    );
+                    for(const ref of referrals) {
+                        if(!visited.has(ref.member_id)) {
+                            visited.add(ref.member_id);
+                            nextLevelMembers.push(ref);
+                        }
+                    }
+                }
             }
-            levelReferrals[currentLevel] = nextLevelMembers;
+            levelReferrals[level] = nextLevelMembers;
             currentLevelMembers = nextLevelMembers;
+            console.log(`Level ${level}: ${nextLevelMembers.length} জন রেফারেল`);
         }
         
-        let totalMembers = 0, totalCommission = 0, activeReferrals = 0;
+        // কমিশন গণনা এবং UI আপডেট
+        let totalCommission = 0;
+        let totalReferrals = 0;
+        
         for(let level = 1; level <= 10; level++) {
-            totalMembers += levelReferrals[level].length;
+            let levelCount = levelReferrals[level].length;
+            totalReferrals += levelCount;
+            
             let levelCommission = 0;
+            let rate = level === 1 ? 0.15 : (level === 2 ? 0.10 : 0.05);
+            
             for(const ref of levelReferrals[level]) {
-                if(ref.status === 'active' || ref.status === 'approved') activeReferrals++;
-                const rate = level === 1 ? 0.15 : (level === 2 ? 0.10 : 0.05);
                 levelCommission += (ref.monthly_savings || 500) * rate;
             }
             totalCommission += levelCommission;
+            
+            // UI আপডেট
             const countEl = document.getElementById(`level${level}Count`);
             const commissionEl = document.getElementById(`level${level}Commission`);
-            if(countEl) countEl.innerText = levelReferrals[level].length;
+            if(countEl) countEl.innerText = levelCount;
             if(commissionEl) commissionEl.innerText = Math.floor(levelCommission).toLocaleString();
-            updateLevelList(level, levelReferrals[level], level === 1 ? 15 : (level === 2 ? 10 : 5));
+            
+            // লেভেল লিস্ট আপডেট
+            updateLevelList(level, levelReferrals[level], rate * 100);
         }
         
-        document.getElementById('totalReferrals').innerText = totalMembers.toLocaleString();
+        document.getElementById('totalReferrals').innerText = totalReferrals;
         document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
-        document.getElementById('activeReferrals').innerText = activeReferrals;
-        const referralLink = document.getElementById('referralLink');
-        if(referralLink && currentUser.referId) { referralLink.value = `https://tuknarif.com.bd/signup?ref=${currentUser.referId}`; }
+        document.getElementById('totalLevels').innerText = '১০';
         
-        // বোনাস ব্যালেন্স আপডেট করুন - এটি উত্তোলনের জন্য দেখাবে
+        // বোনাস ব্যালেন্স আপডেট
         userBalances.bonus = Math.floor(totalCommission);
         userBalances.profit = Math.floor(totalCommission * 0.1);
-        userBalances.capital = 0;
         
-        console.log(`💰 মোট কমিশন: ${Math.floor(totalCommission)} টাকা`);
+        // রেফারেল লিংক
+        const referralLink = document.getElementById('referralLink');
+        if(referralLink && currentUser.referId) {
+            referralLink.value = `https://tuknarif.com.bd/signup?ref=${currentUser.referId}`;
+        }
+        
+        console.log(`💰 মোট কমিশন: ${Math.floor(totalCommission)} টাকা, মোট রেফারেল: ${totalReferrals} জন`);
         
     } catch(error) { 
-        console.error('❌ রেফারেল এরর:', error); 
-        for(let i=1; i<=10; i++) { const container = document.getElementById(`level${i}List`); if(container) container.innerHTML = '<p class="text-red-500 text-center py-4">⚠️ তথ্য লোড করতে সমস্যা হয়েছে!</p>'; }
-    } finally { isLoadingReferral = false; }
+        console.error('Referral error:', error); 
+        for(let i=1; i<=10; i++) { 
+            const container = document.getElementById(`level${i}List`);
+            if(container) container.innerHTML = '<p class="text-red-500 text-center py-4">⚠️ তথ্য লোড করতে সমস্যা!</p>';
+        }
+    } finally { 
+        isLoadingReferral = false; 
+    }
+}
+
+function updateLevelList(level, referrals, rate) {
+    const container = document.getElementById(`level${level}List`);
+    if(!container) return;
+    
+    if(referrals.length === 0) { 
+        container.innerHTML = `<p class="text-gray-500 text-center py-4">Level ${level} - কোনো রেফারেল নেই</p>`;
+        return; 
+    }
+    
+    const colors = {
+        1: 'emerald', 2: 'blue', 3: 'amber', 4: 'purple', 5: 'pink',
+        6: 'indigo', 7: 'red', 8: 'teal', 9: 'orange', 10: 'cyan'
+    };
+    const color = colors[level] || 'gray';
+    
+    container.innerHTML = referrals.map(ref => {
+        const joinDate = ref.created_at ? new Date(ref.created_at).toLocaleDateString('bn-BD') : '-';
+        const commission = (ref.monthly_savings || 500) * (rate / 100);
+        return `
+            <div class="bg-white p-3 rounded-lg border hover:shadow-md transition mb-2">
+                <div class="flex justify-between items-start flex-wrap gap-2">
+                    <div>
+                        <p class="font-semibold text-gray-800">${ref.full_name || 'নাম নেই'}</p>
+                        <p class="text-xs text-gray-500">📱 ${ref.mobile || 'মোবাইল নেই'}</p>
+                        <p class="text-xs text-${color}-600">🆔 ${ref.member_id}</p>
+                        <p class="text-xs text-gray-400">📅 সদস্য: ${joinDate}</p>
+                        <p class="text-xs text-gray-500">💰 মাসিক সঞ্চয়: ${(ref.monthly_savings || 500).toLocaleString()} টাকা</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-1 rounded-full">
+                            🎁 কমিশন: ${Math.floor(commission)} টাকা (${rate}%)
+                        </p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
 }
 
 function updateLevelList(level, referrals, rate) {
