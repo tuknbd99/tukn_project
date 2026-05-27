@@ -410,6 +410,7 @@ async function loadAllData() {
     loadApplications();
     loadAdmins();
     loadOtherData();
+    await loadNoticesList(); 
     updateStats();
     updateDashboardStats();
 }
@@ -589,13 +590,20 @@ async function loadPayments() {
     if(table) table.style.display = 'none';
     
     try {
-        const saved = localStorage.getItem('tukn_pending_payments');
-        if(saved) {
-            pendingPaymentsData = JSON.parse(saved);
-        } else {
-            pendingPaymentsData = [];
-        }
+        const client = initSupabaseClient();
+        if (!client) throw new Error('Supabase client not initialized');
         
+        // Supabase থেকে pending পেমেন্ট লোড করুন
+        const { data, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('status', 'pending')
+            .order('submitted_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        console.log('Pending payments from Supabase:', data?.length || 0);
+        pendingPaymentsData = data || [];
         renderPaymentList(pendingPaymentsData);
         
         if(loadingDiv) loadingDiv.style.display = 'none';
@@ -621,12 +629,12 @@ function renderPaymentList(payments) {
     
     tbody.innerHTML = payments.map(p => `
         <tr class="border-b">
-            <td class="p-2">${p.date || '-'}</td>
+            <td class="p-2">${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</td>
             <td class="p-2">${p.member_name || '-'}</td>
             <td class="p-2">${p.member_id || '-'}</td>
-            <td class="p-2">${p.month || '-'}</td>
+            <td class="p-2">${p.month || '-'} ${p.year || '-'}</td>
             <td class="p-2 text-right font-semibold">${(p.amount || 0).toLocaleString()} টাকা</td>
-            <td class="p-2"><span class="payment-method-badge payment-method-${p.method === 'bKash' ? 'bkash' : p.method === 'Nagad' ? 'nagad' : 'rocket'}">${p.method || 'cash'}</span></td>
+            <td class="p-2"><span class="payment-method-badge payment-method-${p.payment_method === 'bKash' ? 'bkash' : p.payment_method === 'Nagad' ? 'nagad' : 'rocket'}">${p.payment_method || 'cash'}</span></td>
             <td class="p-2"><button onclick="approvePayment('${p.id}')" class="bg-green-500 text-white px-2 py-1 rounded text-xs mr-1">অনুমোদন</button><button onclick="openRejectModal('${p.id}')" class="bg-red-500 text-white px-2 py-1 rounded text-xs">বাতিল</button></td>
         </table>
     `).join('');
@@ -636,41 +644,76 @@ function renderPaymentList(payments) {
     if(badge) { badge.innerText = payments.length; badge.style.display = payments.length > 0 ? 'inline-block' : 'none'; }
 }
 
-function approvePayment(paymentId) {
+async function approvePayment(paymentId) {
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
     const payment = pendingPaymentsData.find(p => p.id == paymentId);
-    if(payment) {
-        const memberIndex = membersData.findIndex(m => m.member_id === payment.member_id);
-        if(memberIndex !== -1) {
-            membersData[memberIndex].balance = (membersData[memberIndex].balance || 0) + payment.amount;
-            localStorage.setItem('tukn_members_backup', JSON.stringify(membersData));
-        }
+    if (!payment) return;
+    
+    try {
+        // সদস্যের ব্যালেন্স আপডেট
+        const { data: member, error: fetchError } = await client
+            .from('members')
+            .select('balance')
+            .eq('member_id', payment.member_id)
+            .single();
+        
+        if (fetchError) console.error('Member fetch error:', fetchError);
+        
+        const currentBalance = member?.balance || 0;
+        const newBalance = currentBalance + payment.amount;
+        
+        // Member balance update
+        await client.from('members').update({ balance: newBalance }).eq('member_id', payment.member_id);
+        
+        // Payment status update
+        await client.from('payments').update({ 
+            status: 'approved', 
+            approved_by: currentAdmin?.username,
+            approved_at: new Date().toISOString()
+        }).eq('id', paymentId);
+        
+        // লোকাল ডাটা আপডেট
         pendingPaymentsData = pendingPaymentsData.filter(p => p.id != paymentId);
-        localStorage.setItem('tukn_pending_payments', JSON.stringify(pendingPaymentsData));
+        
+        // membersData আপডেট
+        const memberIndex = membersData.findIndex(m => m.member_id === payment.member_id);
+        if (memberIndex !== -1) membersData[memberIndex].balance = newBalance;
         
         renderPaymentList(pendingPaymentsData);
         renderMembersList();
+        updateStats();
         showToast('পেমেন্ট অনুমোদিত হয়েছে!');
+        
+    } catch(error) {
+        console.error('Approve error:', error);
+        showToast('পেমেন্ট অনুমোদন ব্যর্থ!', 'error');
     }
 }
 
-function rejectPayment(paymentId, reason) {
-    const payment = pendingPaymentsData.find(p => p.id == paymentId);
-    if(payment) {
-        const rejectedPayment = {
-            ...payment,
-            reject_reason: reason,
-            rejected_by: currentAdmin?.name,
+async function rejectPayment(paymentId, reason) {
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    try {
+        await client.from('payments').update({ 
+            status: 'rejected', 
+            reject_reason: reason, 
+            rejected_by: currentAdmin?.username,
             rejected_at: new Date().toISOString()
-        };
-        rejectedPaymentsData.push(rejectedPayment);
-        localStorage.setItem('tukn_rejected_payments', JSON.stringify(rejectedPaymentsData));
+        }).eq('id', paymentId);
         
         pendingPaymentsData = pendingPaymentsData.filter(p => p.id != paymentId);
-        localStorage.setItem('tukn_pending_payments', JSON.stringify(pendingPaymentsData));
-        
         renderPaymentList(pendingPaymentsData);
-        renderRejectedPaymentsList();
-        showToast(`পেমেন্ট বাতিল করা হয়েছে! কারণ: ${reason}`, 'info');
+        
+        // বাতিলকৃত পেমেন্ট রিলোড
+        await loadRejectedPayments();
+        showToast('পেমেন্ট বাতিল করা হয়েছে!');
+        
+    } catch(error) {
+        console.error('Reject error:', error);
+        showToast('বাতিল করতে ব্যর্থ!', 'error');
     }
 }
 
@@ -685,12 +728,12 @@ function renderRejectedPaymentsList() {
     
     tbody.innerHTML = rejectedPaymentsData.map(p => `
         <tr class="border-b">
-            <td class="p-2">${p.date || '-'}</td>
+            <td class="p-2">${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</td>
             <td class="p-2">${p.member_name || '-'}</td>
             <td class="p-2">${p.member_id || '-'}</td>
-            <td class="p-2">${p.month || '-'}</td>
+            <td class="p-2">${p.month || '-'} ${p.year || '-'}</td>
             <td class="p-2 text-right">${(p.amount || 0).toLocaleString()} টাকা</td>
-            <td class="p-2">${p.method || '-'}</td>
+            <td class="p-2">${p.payment_method || '-'}</td>
             <td class="p-2 text-red-600">${p.reject_reason || '-'}</td>
             <td class="p-2">${p.rejected_by || '-'}</td>
             <td class="p-2">${p.rejected_at ? new Date(p.rejected_at).toLocaleString('bn-BD') : '-'}</td>
@@ -699,13 +742,26 @@ function renderRejectedPaymentsList() {
 }
 
 async function loadRejectedPayments() {
-    const saved = localStorage.getItem('tukn_rejected_payments');
-    if(saved) {
-        rejectedPaymentsData = JSON.parse(saved);
-    } else {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const { data, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('status', 'rejected')
+            .order('rejected_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        rejectedPaymentsData = data || [];
+        renderRejectedPaymentsList();
+        
+    } catch(error) {
+        console.error('Load rejected error:', error);
         rejectedPaymentsData = [];
+        renderRejectedPaymentsList();
     }
-    renderRejectedPaymentsList();
 }
 
 function openRejectModal(paymentId) {
@@ -764,29 +820,146 @@ function selectMemberForDeposit(memberId) {
     }
 }
 
-document.getElementById('directDepositForm')?.addEventListener('submit', function(e) {
+document.getElementById('directDepositForm')?.addEventListener('submit', async function(e) {
     e.preventDefault();
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
     const memberId = document.getElementById('depositMemberId').value;
     const amount = parseInt(document.getElementById('depositAmount').value);
     const month = document.getElementById('depositMonth').value;
+    const [year, monthNum] = month.split('-');
+    const monthName = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'][parseInt(monthNum)-1];
     const method = document.getElementById('depositMethod').value;
     const transactionId = document.getElementById('depositTransactionId').value;
     
     if(!amount || amount <= 0) { showToast('সঠিক পরিমাণ দিন!', 'error'); return; }
     if(!memberId) { showToast('সদস্য নির্বাচন করুন!', 'error'); return; }
     
-    const memberIndex = membersData.findIndex(m => m.member_id === memberId);
-    if(memberIndex !== -1) {
-        membersData[memberIndex].balance = (membersData[memberIndex].balance || 0) + amount;
-        localStorage.setItem('tukn_members_backup', JSON.stringify(membersData));
+    try {
+        // Member balance update in Supabase
+        const { data: member, error: fetchError } = await client
+            .from('members')
+            .select('balance')
+            .eq('member_id', memberId)
+            .single();
         
-        showToast(`✅ ${amount.toLocaleString()} টাকা জমা হয়েছে! নতুন ব্যালেন্স: ${membersData[memberIndex].balance.toLocaleString()} টাকা`);
+        if (fetchError) throw fetchError;
+        
+        const newBalance = (member?.balance || 0) + amount;
+        
+        await client.from('members').update({ balance: newBalance }).eq('member_id', memberId);
+        
+        // Add payment record
+        await client.from('payments').insert([{
+            member_id: memberId,
+            member_name: document.getElementById('depositMemberName').value,
+            year: year,
+            month: monthName,
+            amount: amount,
+            payment_method: method,
+            transaction_id: transactionId,
+            status: 'approved',
+            approved_by: currentAdmin?.username,
+            approved_at: new Date().toISOString(),
+            submitted_at: new Date().toISOString()
+        }]);
+        
+        // Local update
+        const memberIndex = membersData.findIndex(m => m.member_id === memberId);
+        if (memberIndex !== -1) membersData[memberIndex].balance = newBalance;
+        
+        showToast(`${amount.toLocaleString()} টাকা জমা হয়েছে!`, 'success');
         document.getElementById('depositFormSection').classList.add('hidden');
         document.getElementById('directDepositForm').reset();
         renderMembersList();
+        
+    } catch(error) {
+        console.error('Deposit error:', error);
+        showToast('জমা দিতে ব্যর্থ!', 'error');
     }
 });
+    
+// ========== নোটিশ ফাংশন (Supabase) ==========
+async function loadNoticesList() {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const { data, error } = await client
+            .from('notices')
+            .select('*')
+            .eq('status', 'active')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        const container = document.getElementById('noticesList');
+        if (!container) return;
+        
+        if (!data || data.length === 0) {
+            container.innerHTML = '<div class="text-center text-gray-500 py-4">কোনো নোটিশ নেই</div>';
+            return;
+        }
+        
+        container.innerHTML = data.map(notice => `
+            <div class="flex justify-between items-center bg-gray-50 p-2 rounded-lg">
+                <span><i class="fas fa-bullhorn text-emerald-600 mr-2"></i>${notice.title}</span>
+                <button onclick="deleteNotice(${notice.id})" class="text-red-500 hover:text-red-700"><i class="fas fa-trash"></i></button>
+            </div>
+        `).join('');
+        
+    } catch(error) {
+        console.error('Load notices error:', error);
+    }
+}
 
+async function addNotice() {
+    const title = document.getElementById('noticeTitle').value.trim();
+    if (!title) {
+        showToast('নোটিশের শিরোনাম দিন!', 'error');
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    try {
+        const { error } = await client.from('notices').insert([{
+            title: title,
+            content: title,
+            status: 'active',
+            created_by: currentAdmin?.username,
+            created_at: new Date().toISOString()
+        }]);
+        
+        if (error) throw error;
+        
+        document.getElementById('noticeTitle').value = '';
+        await loadNoticesList();
+        showToast('নোটিশ যোগ করা হয়েছে!');
+        
+    } catch(error) {
+        console.error('Add notice error:', error);
+        showToast('নোটিশ যোগ করতে ব্যর্থ!', 'error');
+    }
+}
+
+async function deleteNotice(id) {
+    if (!confirm('নোটিশ ডিলিট করবেন?')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        await client.from('notices').delete().eq('id', id);
+        await loadNoticesList();
+        showToast('নোটিশ ডিলিট করা হয়েছে');
+    } catch(error) {
+        console.error('Delete notice error:', error);
+        showToast('ডিলিট ব্যর্থ!', 'error');
+    }
+}
 // ========== পূর্ণাঙ্গ তথ্য - সার্চ ফাংশন ==========
 function searchMemberForFullInfo() {
     const searchTerm = document.getElementById('fullInfoSearchInput').value.trim();
@@ -974,7 +1147,6 @@ function loadOtherData() {
     
     document.getElementById('loanApplicationsList').innerHTML = '<div class="text-center text-gray-500 py-4">কোনো লোন আবেদন নেই</div>';
     document.getElementById('sliderList').innerHTML = '<div class="text-center text-gray-500 py-4">কোনো স্লাইডার নেই</div>';
-    document.getElementById('noticesList').innerHTML = '<div class="text-center text-gray-500 py-4">কোনো নোটিশ নেই</div>';
     document.getElementById('aboutContent').innerHTML = '<p class="text-gray-700">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ একটি অরাজনৈতিক সংগঠন।</p>';
     document.getElementById('complaintsList').innerHTML = '<div class="text-center text-gray-500 py-4">কোনো অভিযোগ নেই</div>';
     document.getElementById('careerDescription').innerHTML = '<p class="text-gray-700">আমাদের সংগঠনে নিয়মিত বিভিন্ন পদে নিয়োগ দেওয়া হয়।</p>';
