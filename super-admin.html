@@ -105,6 +105,7 @@
             <button onclick="showTab('about')" id="tabAbout" class="nav-item"><i class="fas fa-info-circle"></i> আমাদের সম্পর্কে</button>
             <button onclick="showTab('complaints')" id="tabComplaints" class="nav-item"><i class="fas fa-comment-dots"></i> অভিযোগ</button>
             <button onclick="showTab('loanForm')" id="tabLoanForm" class="nav-item"><i class="fas fa-file-invoice"></i> লোন আবেদন ফর্ম</button>
+            <button onclick="showTab('withdrawals')" id="tabWithdrawals" class="nav-item"><i class="fas fa-money-bill-transfer"></i> উত্তোলন রিকোয়েস্ট <span id="pendingWithdrawalBadge" class="notification-badge" style="display:none;">0</span></button>
             <button onclick="showTab('career')" id="tabCareer" class="nav-item"><i class="fas fa-briefcase"></i> ক্যারিয়ার</button>
         </div>
         <div class="p-4 border-t border-white/10 mt-auto">
@@ -409,6 +410,7 @@ async function loadAllData() {
     await loadMembers();
     await loadPayments();
     await loadRejectedPayments();
+    await loadPendingWithdrawals();
     loadReps();
     loadApplications();
     loadAdmins();
@@ -785,7 +787,135 @@ document.getElementById('rejectReasonForm')?.addEventListener('submit', function
     rejectPayment(paymentId, reason);
     closeRejectModal();
 });
+// ========== উত্তোলন ফাংশন ==========
+let pendingWithdrawalsData = [];
 
+async function loadPendingWithdrawals() {
+    const container = document.getElementById('withdrawalPendingList');
+    if(!container) return;
+    
+    try {
+        const client = initSupabaseClient();
+        if (!client) throw new Error('Supabase client not initialized');
+        
+        const { data, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('status', 'pending')
+            .order('requested_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        pendingWithdrawalsData = data || [];
+        renderWithdrawalList();
+        
+    } catch(error) {
+        console.error('Load withdrawals error:', error);
+        if(container) container.innerHTML = '<div class="text-red-500 p-4">লোড করতে সমস্যা!</div>';
+    }
+}
+
+function renderWithdrawalList() {
+    const container = document.getElementById('withdrawalPendingList');
+    if(!container) return;
+    
+    if(!pendingWithdrawalsData || pendingWithdrawalsData.length === 0) {
+        container.innerHTML = '<div class="text-center text-gray-500 py-4">কোনো পেন্ডিং উত্তোলন নেই</div>';
+        document.getElementById('pendingWithdrawalsCount').innerText = '0';
+        const badge = document.getElementById('pendingWithdrawalBadge');
+        if(badge) badge.style.display = 'none';
+        return;
+    }
+    
+    container.innerHTML = pendingWithdrawalsData.map(w => {
+        let accountHtml = '';
+        try {
+            const accountInfo = JSON.parse(w.account_info || '{}');
+            if(accountInfo.mobile) accountHtml = `<p class="text-sm text-gray-500">📱 মোবাইল: ${accountInfo.mobile}</p>`;
+            else if(accountInfo.bank_name) accountHtml = `
+                <p class="text-sm text-gray-500">🏦 ব্যাংক: ${accountInfo.bank_name}</p>
+                <p class="text-sm text-gray-500">🔢 একাউন্ট: ${accountInfo.account_number}</p>
+                <p class="text-sm text-gray-500">👤 হোল্ডার: ${accountInfo.holder_name}</p>
+            `;
+        } catch(e) { accountHtml = '<p class="text-sm text-gray-500">তথ্য নেই</p>'; }
+        
+        return `
+            <div class="border rounded-lg p-4 mb-3 bg-white">
+                <div class="flex justify-between items-start flex-wrap gap-2">
+                    <div class="flex-1">
+                        <p class="font-bold text-gray-800">${w.member_name || '-'}</p>
+                        <p class="text-sm text-gray-500">🆔 আইডি: ${w.member_id}</p>
+                        <p class="text-sm text-gray-500">📋 ধরন: ${w.type}</p>
+                        <p class="text-sm text-gray-500">💳 পদ্ধতি: ${w.method}</p>
+                        ${accountHtml}
+                        <p class="text-xs text-gray-400">📅 তারিখ: ${new Date(w.requested_at).toLocaleString('bn-BD')}</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-xl font-bold text-amber-600">💰 ${w.amount.toLocaleString()} টাকা</p>
+                        <div class="flex gap-2 mt-2">
+                            <button onclick="approveWithdrawal(${w.id}, ${w.amount}, '${w.member_id}', '${w.type}')" class="bg-green-500 text-white px-3 py-1 rounded text-sm">✅ অনুমোদন</button>
+                            <button onclick="rejectWithdrawal(${w.id})" class="bg-red-500 text-white px-3 py-1 rounded text-sm">❌ বাতিল</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    document.getElementById('pendingWithdrawalsCount').innerText = pendingWithdrawalsData.length;
+    const badge = document.getElementById('pendingWithdrawalBadge');
+    if(badge) { 
+        badge.innerText = pendingWithdrawalsData.length; 
+        badge.style.display = pendingWithdrawalsData.length > 0 ? 'inline-block' : 'none'; 
+    }
+}
+
+async function approveWithdrawal(id, amount, memberId, type) {
+    if(!confirm(`${amount.toLocaleString()} টাকা উত্তোলন অনুমোদন দেবেন?`)) return;
+    
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    try {
+        await client.from('withdrawals').update({ 
+            status: 'approved', 
+            approved_by: currentAdmin?.username,
+            approved_at: new Date().toISOString()
+        }).eq('id', id);
+        
+        showToast(`✅ ${amount.toLocaleString()} টাকা উত্তোলন অনুমোদিত হয়েছে!`, 'success');
+        await loadPendingWithdrawals();
+        
+    } catch(error) {
+        console.error('Approve error:', error);
+        showToast('অনুমোদন ব্যর্থ!', 'error');
+    }
+}
+
+async function rejectWithdrawal(id) {
+    const reason = prompt('বাতিলের কারণ লিখুন:');
+    if(!reason) return;
+    
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    try {
+        await client.from('withdrawals').update({ 
+            status: 'rejected', 
+            rejection_reason: reason,
+            approved_by: currentAdmin?.username,
+            approved_at: new Date().toISOString()
+        }).eq('id', id);
+        
+        showToast('উত্তোলন বাতিল করা হয়েছে!', 'info');
+        await loadPendingWithdrawals();
+        
+    } catch(error) {
+        console.error('Reject error:', error);
+        showToast('বাতিল করতে ব্যর্থ!', 'error');
+    }
+}
+    
 // ========== সরাসরি জমা দিন - সার্চ ফাংশন ==========
 function searchMemberForDeposit() {
     const searchTerm = document.getElementById('memberSearchInput').value.trim();
@@ -1335,6 +1465,7 @@ function showTab(tabName) {
     if(tabName === 'pendingMembers') renderPendingMembersList();
     if(tabName === 'paymentApproval') loadPayments();
     if(tabName === 'rejectedPayments') renderRejectedPaymentsList();
+    if(tabName === 'withdrawals') loadPendingWithdrawals();
 }
 
 document.getElementById('searchMember')?.addEventListener('input', () => renderMembersList());
