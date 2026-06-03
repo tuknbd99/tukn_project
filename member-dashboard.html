@@ -391,7 +391,7 @@
     </div>
 </div>
 
-<!-- মডাল গুলো -->
+<!-- মডাল গুলো (একই থাকবে) -->
 <div id="addressModal" class="fixed inset-0 bg-black/70 z-50 hidden items-center justify-center p-4 overflow-y-auto" onclick="closeAddressModalOnOverlay(event)">
     <div class="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-5">
         <div class="flex justify-between items-center border-b pb-2 mb-4"><h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-map-marker-alt mr-2"></i>ঠিকানা আপডেট করুন</h3><button onclick="closeAddressModal()" class="text-gray-500 modal-close-btn text-2xl">&times;</button></div>
@@ -467,7 +467,7 @@ const banglaMonths = ['জানুয়ারি','ফেব্রুয়া
         id: parsed.member_id || parsed.id,
         name: parsed.full_name || parsed.name,
         mobile: parsed.mobile,
-        referId: parsed.referral_code || parsed.referId,
+        referId: parsed.referral_code || parsed.referId || parsed.referral_code,
         joinDate: parsed.join_date || parsed.joinDate || new Date().toISOString(),
         memberType: parsed.member_type || parsed.memberType || 'সাধারণ সদস্য',
         memberTerm: parseInt(parsed.member_term) || parseInt(parsed.memberTerm) || 0,
@@ -478,6 +478,7 @@ const banglaMonths = ['জানুয়ারি','ফেব্রুয়া
         permanentAddress: parsed.permanent_address || ''
     };
     console.log('✅ লগইন সফল:', currentUser.name);
+    console.log('🔑 রেফারেল কোড:', currentUser.referId);
 })();
 
 // ========== Supabase ফাংশন ==========
@@ -496,7 +497,7 @@ async function refreshMemberDataFromSupabase() {
     let client = getSupabaseClient();
     if(!client) return;
     try {
-        const { data, error } = await client.from('members').select('member_term, join_date, monthly_savings, full_name, mobile, present_address, permanent_address, profile_image').eq('member_id', currentUser.id).single();
+        const { data, error } = await client.from('members').select('member_term, join_date, monthly_savings, full_name, mobile, present_address, permanent_address, profile_image, referral_code').eq('member_id', currentUser.id).single();
         if(error) throw error;
         if(data) {
             currentUser.memberTerm = parseInt(data.member_term) || 0;
@@ -506,6 +507,7 @@ async function refreshMemberDataFromSupabase() {
             currentUser.mobile = data.mobile || currentUser.mobile;
             currentUser.presentAddress = data.present_address || currentUser.presentAddress;
             currentUser.permanentAddress = data.permanent_address || currentUser.permanentAddress;
+            if(data.referral_code) currentUser.referId = data.referral_code;
             if(data.profile_image) currentUser.profileImage = data.profile_image;
         }
     } catch(error) { console.error('রিফ্রেশ ব্যর্থ:', error); }
@@ -545,6 +547,8 @@ function updateFundsDisplay() {
     userBalances.capital = userFunds.monthlySavings || 0;
     
     console.log('📊 ফান্ড আপডেট: বোনাস=', userFunds.referralBonus);
+    console.log('📊 মাসিক সঞ্চয়=', userFunds.monthlySavings);
+    console.log('📈 লভ্যাংশ=', userFunds.profit);
 }
 
 async function loadUserFunds() {
@@ -559,56 +563,9 @@ async function loadUserFunds() {
         const { data: profits } = await client.from('member_profits').select('amount').eq('member_id', currentUser.id).eq('status', 'approved');
         userFunds.profit = (profits && profits.length > 0) ? profits.reduce((sum, p) => sum + (p.amount || 0), 0) : 0;
         
-        // রেফারেল বোনাস ডাটাবেস থেকে না এনে শুধু ক্যালকুলেশন থেকে দেখানো হবে
-        // কারণ loadReferralData() ইতিমধ্যে ক্যালকুলেট করে
-        
         updateFundsDisplay();
     } catch(error) { console.error('ফান্ড লোড সমস্যা:', error); }
 }
-
-// ========== টাইমার ফাংশন ==========
-function showTimerModal(expiryDate) {
-    const now = new Date();
-    let years = expiryDate.getFullYear() - now.getFullYear();
-    let months = expiryDate.getMonth() - now.getMonth();
-    let days = expiryDate.getDate() - now.getDate();
-    
-    if(days < 0) { months--; const lastMonth = new Date(expiryDate.getFullYear(), expiryDate.getMonth(), 0); days += lastMonth.getDate(); }
-    if(months < 0) { years--; months += 12; }
-    
-    const modalHTML = `<div id="timerModal" class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center"><div class="bg-white rounded-2xl max-w-md w-full p-6 text-center"><i class="fas fa-hourglass-half text-6xl text-amber-500 mb-4"></i><h3 class="text-xl font-bold text-gray-800 mb-2">⚠️ মূলধন উত্তোলন সম্ভব নয়</h3><p class="text-gray-600 mb-4">আপনি একজন <strong>মেয়াদি সদস্য</strong>। নির্ধারিত মেয়াদ শেষ হওয়ার পর মূলধন উত্তোলন করতে পারবেন।</p><div class="bg-amber-50 p-4 rounded-lg mb-4"><p class="text-amber-700 font-semibold">মেয়াদ শেষ হতে বাকি:</p><p class="text-2xl font-bold text-amber-800">${years} বছর ${months} মাস ${days} দিন</p></div><button onclick="closeTimerModal()" class="bg-emerald-600 text-white px-6 py-2 rounded-lg">বন্ধ করুন</button></div></div>`;
-    const existingModal = document.getElementById('timerModal');
-    if(existingModal) existingModal.remove();
-    document.body.insertAdjacentHTML('beforeend', modalHTML);
-}
-
-function closeTimerModal() { const modal = document.getElementById('timerModal'); if(modal) modal.remove(); }
-
-// ========== ঠিকানা ফাংশন ==========
-function openAddressModal() {
-    document.getElementById('presentAddress').value = currentUser.presentAddress || '';
-    document.getElementById('permanentAddress').value = currentUser.permanentAddress || '';
-    document.getElementById('addressModal').classList.remove('hidden');
-    document.getElementById('addressModal').classList.add('flex');
-}
-
-function closeAddressModal() { const modal = document.getElementById('addressModal'); if(modal) { modal.classList.add('hidden'); modal.classList.remove('flex'); } }
-
-function closeAddressModalOnOverlay(e) { if(e.target.id === 'addressModal') closeAddressModal(); }
-
-document.getElementById('addressForm')?.addEventListener('submit', async function(e) {
-    e.preventDefault();
-    const presentAddress = document.getElementById('presentAddress').value;
-    const permanentAddress = document.getElementById('permanentAddress').value;
-    let client = getSupabaseClient();
-    if(client) await client.from('members').update({ present_address: presentAddress, permanent_address: permanentAddress }).eq('member_id', currentUser.id);
-    currentUser.presentAddress = presentAddress;
-    currentUser.permanentAddress = permanentAddress;
-    document.getElementById('presentAddressDisplay').innerHTML = presentAddress || 'যোগ করা হয়নি';
-    document.getElementById('permanentAddressDisplay').innerHTML = permanentAddress || 'যোগ করা হয়নি';
-    showToast('ঠিকানা আপডেট করা হয়েছে!', 'success');
-    closeAddressModal();
-});
 
 // ========== UI আপডেট ==========
 async function updateUI() {
@@ -620,12 +577,12 @@ async function updateUI() {
     
     document.getElementById('greetingMessage').innerHTML = `${greeting}, ${currentUser.name}!`;
     document.getElementById('memberIdDisplay').innerHTML = currentUser.id;
-    document.getElementById('referIdDisplay').innerHTML = currentUser.referId;
+    document.getElementById('referIdDisplay').innerHTML = currentUser.referId || 'N/A';
     document.getElementById('memberMobile').innerHTML = currentUser.mobile;
     document.getElementById('joinDateDisplay').innerHTML = new Date(currentUser.joinDate).toLocaleDateString('bn-BD');
     document.getElementById('cardName').innerHTML = currentUser.name;
     document.getElementById('cardId').innerHTML = currentUser.id;
-    document.getElementById('cardReferId').innerHTML = currentUser.referId;
+    document.getElementById('cardReferId').innerHTML = currentUser.referId || 'N/A';
     
     const memberTermNum = parseInt(currentUser.memberTerm) || 0;
     let termText = memberTermNum === 0 ? 'মেয়াদহীন সদস্য' : `${memberTermNum} বছর মেয়াদী সদস্য`;
@@ -790,24 +747,22 @@ async function loadPaymentHistory() {
                     } else if(payment.status === 'pending') {
                         historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা<\/td><td class="p-2 text-yellow-600"><i class="fas fa-hourglass-half mr-1"></i>বিচারাধীন<\/td><td class="p-2">-<\/td><\/tr>`;
                     } else if(payment.status === 'rejected') {
-                        // 🔥 বাতিলের কারণ দেখানোর জন্য আপডেট করা হলো
                         const rejectReason = payment.reject_reason || 'কারণ উল্লেখ নেই';
                         historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা<\/td><td class="p-2 text-red-600"><i class="fas fa-times-circle mr-1"></i>বাতিল<br><span class="text-xs text-gray-500">কারণ: ${rejectReason}</span><\/td><td class="p-2">-<\/td><\/tr>`;
                     }
                 });
                 historyBody.innerHTML = historyHtml;
             } else { 
-                historyBody.innerHTML = '<td><td colspan="4" class="text-center p-4 text-gray-500">কোনো পেমেন্ট ইতিহাস নেই<\/td><\/tr>';
+                historyBody.innerHTML = '<tr><td colspan="4" class="text-center p-4 text-gray-500">কোনো পেমেন্ট ইতিহাস নেই<\/td><\/tr>';
             }
         }
         
         const totalBalanceEl = document.getElementById('totalBalanceDisplay');
         if(totalBalanceEl) totalBalanceEl.innerText = totalBalance.toLocaleString() + ' টাকা';
-        const totalPaidEl = document.getElementById('totalPaidDisplay');
-        if(totalPaidEl) totalPaidEl.innerText = totalBalance.toLocaleString() + ' টাকা';
         
     } catch(error) { console.error('Load payment history error:', error); }
 }
+
 function viewPaymentSlip(monthName, amount) {
     const slipHTML = `<div style="text-align:center; border:3px solid #059669; border-radius:12px; padding:12px; background:#f0fdf4;"><img src="images/logo.png" style="width:50px; margin:0 auto 10px auto;" onerror="this.src='https://placehold.co/50x50/059669/white?text=T'"><h2 style="font-size:18px; font-weight:bold; color:#059669;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2><p style="font-size:14px; font-weight:bold;">পেমেন্ট স্লিপ</p></div><div style="border:2px solid #059669; border-radius:10px; padding:15px;"><div><strong>সদস্য আইডি:</strong> ${currentUser.id}</div><div><strong>নাম:</strong> ${currentUser.name}</div><div><strong>মাস:</strong> ${monthName}</div><div><strong>পরিমাণ:</strong> ${amount} টাকা</div><div><strong>স্ট্যাটাস:</strong> <span class="text-green-600">পরিশোধিত</span></div><div><strong>তারিখ:</strong> ${new Date().toLocaleDateString('bn-BD')}</div></div>`;
     document.getElementById('slipPrintArea').innerHTML = slipHTML;
@@ -1041,10 +996,12 @@ async function loadReferralData() {
         document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
         document.getElementById('totalLevels').innerText = '১০';
         
-        // 🔥 এটাই মূল ফিক্স - বোনাস ফান্ড আপডেট
+        // 🔥 বোনাস ফান্ড আপডেট - এটাই মূল সমাধান
         const bonusAmount = Math.floor(totalCommission);
         userFunds.referralBonus = bonusAmount;
         userBalances.bonus = bonusAmount;
+        
+        // ফান্ড ডিসপ্লে আপডেট
         updateFundsDisplay();
         
         // সরাসরি বোনাস কার্ড আপডেট
@@ -1061,11 +1018,7 @@ async function loadReferralData() {
             totalFundsElement.innerText = total.toLocaleString() + ' টাকা';
         }
         
-        // কনসোলে ডিবাগ
         console.log('💰 রেফারেল বোনাস:', bonusAmount);
-        console.log('📊 মাসিক সঞ্চয়:', userFunds.monthlySavings);
-        console.log('📈 লভ্যাংশ:', userFunds.profit);
-        console.log('💎 মোট ফান্ড:', (userFunds.monthlySavings + userFunds.profit + bonusAmount));
         
         const referralLink = document.getElementById('referralLink');
         if(referralLink && currentUser.referId) {
@@ -1139,7 +1092,12 @@ async function processWithdraw() {
     expiryDate.setFullYear(joinDate.getFullYear() + memberTerm);
     const now = new Date();
     
-    if(currentWithdrawType === 'capital' && memberTerm > 0 && now < expiryDate) { showTimerModal(expiryDate); return; }
+    if(currentWithdrawType === 'capital' && memberTerm > 0 && now < expiryDate) { 
+        // টাইমার মডাল দেখানোর জন্য
+        const modalHTML = `<div id="timerModal" class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center"><div class="bg-white rounded-2xl max-w-md w-full p-6 text-center"><i class="fas fa-hourglass-half text-6xl text-amber-500 mb-4"></i><h3 class="text-xl font-bold text-gray-800 mb-2">⚠️ মূলধন উত্তোলন সম্ভব নয়</h3><p class="text-gray-600 mb-4">আপনি একজন <strong>মেয়াদি সদস্য</strong>। নির্ধারিত মেয়াদ শেষ হওয়ার পর মূলধন উত্তোলন করতে পারবেন।</p><div class="bg-amber-50 p-4 rounded-lg mb-4"><p class="text-amber-700 font-semibold">মেয়াদ শেষ হতে বাকি:</p><p class="text-2xl font-bold text-amber-800">গণনা করা হচ্ছে...</p></div><button onclick="document.getElementById('timerModal').remove()" class="bg-emerald-600 text-white px-6 py-2 rounded-lg">বন্ধ করুন</button></div></div>`;
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        return; 
+    }
     
     let balance = 0, withdrawTypeName = '';
     if(currentWithdrawType === 'bonus') { balance = userFunds.referralBonus; withdrawTypeName = 'বোনাস'; }
