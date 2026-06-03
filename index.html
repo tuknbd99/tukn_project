@@ -755,11 +755,15 @@
         
         async function initSupabase() {
             try {
-                if (supabaseClient && supabaseClient.from) return true;
+                if (supabaseClient && supabaseClient.from) return supabaseClient;
                 supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
                 window.supabaseClient = supabaseClient;
-                return true;
-            } catch(e) { return false; }
+                console.log('✅ Supabase initialized');
+                return supabaseClient;
+            } catch(e) { 
+                console.error('Supabase init error:', e);
+                return null;
+            }
         }
         
         function showNotification(message, type = 'success') {
@@ -769,11 +773,12 @@
             overlay.className = 'notification-overlay';
             const notif = document.createElement('div');
             notif.className = 'center-notification';
-            const bg = type === 'success' ? '#f0fdf4' : '#fef2f2';
-            const border = type === 'success' ? '#10b981' : '#ef4444';
+            const bg = type === 'success' ? '#f0fdf4' : type === 'error' ? '#fef2f2' : '#fffbeb';
+            const border = type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#f59e0b';
             notif.innerHTML = `<div style="background:${bg}; border-left:4px solid ${border}; padding:15px; border-radius:12px;"><p>${message}</p><button onclick="this.closest('.notification-overlay').remove()" style="margin-top:10px; padding:6px 16px; background:#e5e7eb; border:none; border-radius:20px; cursor:pointer;">ঠিক আছে</button></div>`;
             overlay.appendChild(notif);
             document.body.appendChild(overlay);
+            setTimeout(() => overlay.remove(), 3000);
         }
         
         function copyPhone() { 
@@ -804,9 +809,10 @@
             const username = document.getElementById('loginUsername')?.value.trim();
             const password = document.getElementById('loginPassword')?.value;
             if(!username || !password) { showNotification('আইডি/মোবাইল এবং পাসওয়ার্ড দিন', 'error'); return; }
-            await initSupabase();
+            const sb = await initSupabase();
+            if(!sb) { showNotification('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
             try {
-                let query = supabaseClient.from('members').select('*');
+                let query = sb.from('members').select('*');
                 if(username.match(/^01[3-9]\d{8}$/)) query = query.eq('mobile', username);
                 else query = query.eq('member_id', username);
                 const { data } = await query;
@@ -825,9 +831,10 @@
             const username = document.getElementById('adminUsername')?.value.trim();
             const password = document.getElementById('adminPassword')?.value;
             if(!username || !password) { showNotification('ইউজারনেম ও পাসওয়ার্ড দিন', 'error'); return; }
-            await initSupabase();
+            const sb = await initSupabase();
+            if(!sb) { showNotification('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
             try {
-                const { data } = await supabaseClient.from('admins').select('*').eq('username', username).eq('password', password).maybeSingle();
+                const { data } = await sb.from('admins').select('*').eq('username', username).eq('password', password).maybeSingle();
                 if(data) {
                     localStorage.setItem('tukn_admin', JSON.stringify(data));
                     showNotification('অ্যাডমিন লগইন সফল!', 'success');
@@ -840,11 +847,11 @@
         
         // ========== স্ট্যাট লোড ==========
         async function loadStats() {
-            await initSupabase();
-            if(!supabaseClient) return;
+            const sb = await initSupabase();
+            if(!sb) return;
             try {
-                const { count: memberCount } = await supabaseClient.from('members').select('*', { count: 'exact', head: true }).eq('status', 'active');
-                const { count: madrasaCount } = await supabaseClient.from('madrasas').select('*', { count: 'exact', head: true });
+                const { count: memberCount } = await sb.from('members').select('*', { count: 'exact', head: true }).eq('status', 'active');
+                const { count: madrasaCount } = await sb.from('madrasas').select('*', { count: 'exact', head: true });
                 document.getElementById('statMembers').innerText = (memberCount || 0).toLocaleString();
                 document.getElementById('statMadrasas').innerText = (madrasaCount || 0).toLocaleString();
                 document.getElementById('topMembers').innerText = (memberCount || 0).toLocaleString();
@@ -854,8 +861,8 @@
         
         // ========== ভিজিটর কাউন্ট ==========
         async function updateVisitorCount() {
-            await initSupabase();
-            if(!supabaseClient) {
+            const sb = await initSupabase();
+            if(!sb) {
                 let count = localStorage.getItem('tukn_visitor_count') || 12458;
                 document.getElementById('visitorCount').innerText = parseInt(count).toLocaleString();
                 document.getElementById('topVisitors').innerText = parseInt(count).toLocaleString();
@@ -864,12 +871,12 @@
             try {
                 const today = new Date().toISOString().split('T')[0];
                 if(!sessionStorage.getItem('visitor_counted_' + today)) {
-                    const { data: existing } = await supabaseClient.from('visitor_stats').select('total_count').eq('visit_date', today).maybeSingle();
-                    if(existing) await supabaseClient.from('visitor_stats').update({ total_count: existing.total_count + 1 }).eq('visit_date', today);
-                    else await supabaseClient.from('visitor_stats').insert({ visit_date: today, total_count: 1 });
+                    const { data: existing } = await sb.from('visitor_stats').select('total_count').eq('visit_date', today).maybeSingle();
+                    if(existing) await sb.from('visitor_stats').update({ total_count: existing.total_count + 1 }).eq('visit_date', today);
+                    else await sb.from('visitor_stats').insert({ visit_date: today, total_count: 1 });
                     sessionStorage.setItem('visitor_counted_' + today, 'true');
                 }
-                const { data } = await supabaseClient.from('visitor_stats').select('total_count');
+                const { data } = await sb.from('visitor_stats').select('total_count');
                 const total = data ? data.reduce((s, r) => s + (r.total_count || 0), 0) : 0;
                 document.getElementById('visitorCount').innerText = total.toLocaleString();
                 document.getElementById('topVisitors').innerText = total.toLocaleString();
@@ -877,10 +884,10 @@
         }
         
         async function loadTickerNotices() {
-            await initSupabase();
-            if(!supabaseClient) return;
+            const sb = await initSupabase();
+            if(!sb) return;
             try {
-                const { data } = await supabaseClient.from('notices').select('*').eq('status', 'active').limit(5);
+                const { data } = await sb.from('notices').select('*').eq('status', 'active').limit(5);
                 const marquee = document.getElementById('marqueeContent');
                 if(data && data.length) marquee.innerHTML = data.map(n => `<a href="${n.pdf_url || '#'}">📢 ${n.title}</a>`).join('');
             } catch(e) {}
@@ -958,7 +965,7 @@
             else showNotification('জমা দিতে ব্যর্থ!', 'error');
         });
         
-        // ========== সঞ্চয় পেমেন্ট ফাংশন (মোবাইল নম্বর দিয়ে সার্চ সাপোর্ট) ==========
+        // ========== সঞ্চয় পরিশোধ ফাংশন (মোবাইল নম্বর দিয়ে সার্চ সাপোর্ট) ==========
         function openPaymentModal() { 
             closeSidebar(); 
             document.getElementById('paymentModal').style.display = 'flex';
@@ -983,15 +990,15 @@
             searchBtn.innerHTML = '<span class="search-loading"></span>';
             searchBtn.disabled = true;
             
-            const sb = await initSupabase();
-            if (!sb) {
-                showNotification('সার্ভার সংযোগ সমস্যা!', 'error');
-                searchBtn.innerHTML = originalText;
-                searchBtn.disabled = false;
-                return;
-            }
-            
             try {
+                const sb = await initSupabase();
+                if (!sb) {
+                    showNotification('সার্ভার সংযোগ সমস্যা!', 'error');
+                    searchBtn.innerHTML = originalText;
+                    searchBtn.disabled = false;
+                    return;
+                }
+                
                 const isMobile = /^01[3-9]\d{8}$/.test(searchTerm);
                 let query = sb.from('members').select('member_id, full_name, mobile, referral_code, monthly_savings, status');
                 
@@ -1003,7 +1010,13 @@
                 
                 const { data, error } = await query.maybeSingle();
                 
-                if (error) throw error;
+                if (error) {
+                    console.error('Supabase error:', error);
+                    showNotification('ডাটাবেস ত্রুটি!', 'error');
+                    searchBtn.innerHTML = originalText;
+                    searchBtn.disabled = false;
+                    return;
+                }
                 
                 const resultDiv = document.getElementById('paymentSearchResult');
                 
@@ -1026,7 +1039,7 @@
                     document.getElementById('paymentMemberMobile').innerText = data.mobile || '-';
                     document.getElementById('paymentMonthlyAmount').innerText = data.monthly_savings || 500;
                     
-                    resultDiv.innerHTML = `<i class="fas fa-check-circle text-green-600"></i> সদস্য পাওয়া গেছে!`;
+                    resultDiv.innerHTML = `<i class="fas fa-check-circle text-green-600"></i> <strong>${data.full_name}</strong> (${data.member_id})`;
                     resultDiv.style.display = 'block';
                     resultDiv.className = 'bg-green-50 p-2 rounded-lg text-sm text-green-700';
                     document.getElementById('paymentMemberInfo').style.display = 'block';
@@ -1035,7 +1048,7 @@
                     showNotification(`সদস্য পাওয়া গেছে: ${data.full_name}`, 'success');
                     
                 } else {
-                    resultDiv.innerHTML = `<i class="fas fa-exclamation-circle text-red-600"></i> সদস্য পাওয়া যায়নি!`;
+                    resultDiv.innerHTML = `<i class="fas fa-exclamation-circle text-red-600"></i> "${searchTerm}" এই তথ্যে কোন সদস্য নেই!`;
                     resultDiv.style.display = 'block';
                     resultDiv.className = 'bg-red-50 p-2 rounded-lg text-sm text-red-700';
                     document.getElementById('paymentMemberInfo').style.display = 'none';
@@ -1045,7 +1058,7 @@
                 
             } catch(e) {
                 console.error('Search error:', e);
-                showNotification('সার্চ করতে ব্যর্থ!', 'error');
+                showNotification('সার্চ করতে ব্যর্থ! নেটওয়ার্ক চেক করুন।', 'error');
             } finally {
                 searchBtn.innerHTML = originalText;
                 searchBtn.disabled = false;
@@ -1122,8 +1135,9 @@
             const mobile = document.getElementById('cmobile').value;
             const desc = document.getElementById('cdesc').value;
             if(!name || !mobile || !desc) { showNotification('সব তথ্য দিন', 'error'); return; }
-            await initSupabase();
-            const { error } = await supabaseClient.from('complaints').insert([{ name, mobile, description: desc, status: 'pending' }]);
+            const sb = await initSupabase();
+            if(!sb) { showNotification('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
+            const { error } = await sb.from('complaints').insert([{ name, mobile, description: desc, status: 'pending' }]);
             if(!error) { showNotification('অভিযোগ জমা হয়েছে!', 'success'); closeComplaintModal(); }
             else showNotification('জমা ব্যর্থ!', 'error');
         }
@@ -1138,8 +1152,9 @@
             const district = document.getElementById('repDistrict').value;
             const bio = document.getElementById('repBio').value;
             if(!name || !mobile || !district || !bio) { showNotification('সব তথ্য দিন', 'error'); return; }
-            await initSupabase();
-            const { error } = await supabaseClient.from('representative_applications').insert([{ name, mobile, district, bio, status: 'pending' }]);
+            const sb = await initSupabase();
+            if(!sb) { showNotification('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
+            const { error } = await sb.from('representative_applications').insert([{ name, mobile, district, bio, status: 'pending' }]);
             if(!error) { showNotification('আবেদন জমা হয়েছে!', 'success'); closeRepModal(); }
             else showNotification('জমা ব্যর্থ!', 'error');
         }
@@ -1197,6 +1212,7 @@
             await loadTickerNotices();
             renderAds();
             setInterval(nextAd, 5000);
+            console.log('✅ পেজ লোড সম্পূর্ণ');
         });
     </script>
 </head>
@@ -1246,7 +1262,7 @@
             <p>নেটওয়ার্ক বাংলাদেশ</p>
         </div>
         <div class="sidebar-menu">
-            <div class="sidebar-item" onclick="openPaymentModal()"><i class="fas fa-piggy-bank"></i> সঞ্চয় প্রকল্প</div>
+            <div class="sidebar-item" onclick="openPaymentModal()"><i class="fas fa-piggy-bank"></i> সঞ্চয় পরিশোধ করুন</div>
             <div class="sidebar-item" onclick="openMadrasaModal()"><i class="fas fa-school"></i> মাদরাসা তথ্য</div>
             <div class="sidebar-item" onclick="openComplaintModal()"><i class="fas fa-comment-dots"></i> মতামত ও অভিযোগ</div>
             <div class="sidebar-item" onclick="openRepModal()"><i class="fas fa-user-tie"></i> প্রতিনিধি আবেদন</div>
@@ -1320,8 +1336,8 @@
         <div class="feature-grid">
             <div class="feature-card" onclick="openPaymentModal()">
                 <div class="feature-icon"><i class="fas fa-piggy-bank"></i></div>
-                <h4>সঞ্চয় প্রকল্প</h4>
-                <p>নিয়মিত সঞ্চয়ে নিরাপদ ভবিষ্যৎ</p>
+                <h4>সঞ্চয় পরিশোধ করুন</h4>
+                <p>মাসিক সঞ্চয় জমা দিন</p>
             </div>
             <div class="feature-card" onclick="openMadrasaModal()">
                 <div class="feature-icon"><i class="fas fa-school"></i></div>
@@ -1415,10 +1431,10 @@
     </div>
 </div>
 
-<!-- সঞ্চয় পেমেন্ট মডাল -->
+<!-- সঞ্চয় পরিশোধ মডাল -->
 <div id="paymentModal" class="modal">
     <div class="modal-content">
-        <h3><i class="fas fa-credit-card"></i> সঞ্চয় পেমেন্ট</h3>
+        <h3><i class="fas fa-credit-card"></i> সঞ্চয় পরিশোধ করুন</h3>
         <div style="background:#f0fdf4; padding:10px; border-radius:12px; text-align:center; margin-bottom:12px;">
             <p style="font-weight:bold; color:#059669;">+88 01633157094</p>
             <p style="font-size:11px;">বিকাশ / নগদ / রকেট</p>
@@ -1446,7 +1462,7 @@
                 <label class="block text-gray-700 font-semibold mb-1">মাস ও বছর <span class="text-red-500">*</span></label>
                 <div class="flex gap-2">
                     <select id="payMonthSelect" class="flex-1 p-2 border rounded-lg">
-                        <option value="">মাস</option>
+                        <option value="">মাস নির্বাচন করুন</option>
                         <option value="জানুয়ারি">জানুয়ারি</option><option value="ফেব্রুয়ারি">ফেব্রুয়ারি</option>
                         <option value="মার্চ">মার্চ</option><option value="এপ্রিল">এপ্রিল</option>
                         <option value="মে">মে</option><option value="জুন">জুন</option>
