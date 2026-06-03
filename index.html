@@ -107,7 +107,7 @@
             justify-content: center;
         }
         
-        /* সাইডবার (মোবাইলে স্লাইড) */
+        /* সাইডবার */
         .sidebar-overlay {
             position: fixed;
             top: 0;
@@ -211,9 +211,7 @@
             background: linear-gradient(135deg, #059669, #10b981);
             color: white;
         }
-        .sidebar-login-buttons .btn-primary-sidebar i {
-            color: white;
-        }
+        .sidebar-login-buttons .btn-primary-sidebar i { color: white; }
         .sidebar-login-buttons .btn-outline-sidebar {
             border: 1.5px solid #059669;
             background: transparent;
@@ -223,9 +221,7 @@
             background: linear-gradient(135deg, #f59e0b, #d97706);
             color: white;
         }
-        .sidebar-login-buttons .btn-warning-sidebar i {
-            color: white;
-        }
+        .sidebar-login-buttons .btn-warning-sidebar i { color: white; }
         
         /* ডেস্কটপ নেভিগেশন */
         .desktop-nav {
@@ -733,6 +729,21 @@
             background: rgba(0,0,0,0.6);
             z-index: 1199;
         }
+        
+        .search-loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #059669;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
     
     <script>
@@ -740,6 +751,7 @@
         const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
         const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
         let supabaseClient = null;
+        let currentPaymentMember = null;
         
         async function initSupabase() {
             try {
@@ -946,79 +958,159 @@
             else showNotification('জমা দিতে ব্যর্থ!', 'error');
         });
         
-        // ========== সঞ্চয় পেমেন্ট ==========
-        let searchedMember = null;
-        
-        function openPaymentModal() { closeSidebar(); document.getElementById('paymentModal').style.display = 'flex'; }
+        // ========== সঞ্চয় পেমেন্ট ফাংশন (মোবাইল নম্বর দিয়ে সার্চ সাপোর্ট) ==========
+        function openPaymentModal() { 
+            closeSidebar(); 
+            document.getElementById('paymentModal').style.display = 'flex';
+            // রিসেট ফর্ম
+            document.getElementById('paymentSearchInput').value = '';
+            document.getElementById('paymentSearchResult').style.display = 'none';
+            document.getElementById('paymentMemberInfo').style.display = 'none';
+            document.getElementById('paymentFormFields').style.display = 'none';
+            currentPaymentMember = null;
+        }
         function closePaymentModal() { document.getElementById('paymentModal').style.display = 'none'; }
         
-        async function searchMember() {
-            const search = document.getElementById('memberIdSearch').value.trim();
-            if(!search) { showNotification('আইডি বা মোবাইল দিন', 'error'); return; }
-            await initSupabase();
-            let query = supabaseClient.from('members').select('member_id, full_name, mobile, monthly_savings, status');
-            if(search.match(/^01[3-9]\d{8}$/)) query = query.eq('mobile', search);
-            else query = query.eq('member_id', search);
-            const { data } = await query.maybeSingle();
-            if(data && (data.status === 'active' || data.status === 'approved')) {
-                searchedMember = data;
-                document.getElementById('searchedName').innerText = data.full_name;
-                document.getElementById('searchedId').innerText = data.member_id;
-                document.getElementById('searchedMobile').innerText = data.mobile;
-                document.getElementById('monthlyAmount').innerText = data.monthly_savings || 500;
-                document.getElementById('perMonthAmount').innerText = data.monthly_savings || 500;
-                document.getElementById('memberSearchResult').style.display = 'block';
-                document.getElementById('paymentFields').style.display = 'block';
-                populateMonthsAndYears();
-            } else {
-                showNotification('সদস্য পাওয়া যায়নি', 'error');
+        async function searchMemberForPayment() {
+            const searchTerm = document.getElementById('paymentSearchInput').value.trim();
+            if (!searchTerm) {
+                showNotification('সদস্য আইডি বা মোবাইল নম্বর দিন!', 'error');
+                return;
             }
-        }
-        
-        function populateMonthsAndYears() {
-            const months = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
-            const container = document.getElementById('monthsContainer');
-            container.innerHTML = '';
-            months.forEach(m => {
-                container.innerHTML += `<label style="display:flex; align-items:center; gap:8px; padding:8px; border:1px solid #e5e7eb; border-radius:10px;"><input type="checkbox" value="${m}" class="month-cb"> ${m}</label>`;
-            });
-            document.querySelectorAll('.month-cb').forEach(cb => cb.addEventListener('change', updateTotal));
-            const yearSelect = document.getElementById('paymentYear');
-            yearSelect.innerHTML = '<option value="">সাল নির্বাচন</option>';
-            for(let y=2026; y<=2036; y++) yearSelect.innerHTML += `<option value="${y}">${y}</option>`;
-        }
-        
-        function updateTotal() {
-            if(!searchedMember) return;
-            const monthly = searchedMember.monthly_savings || 500;
-            const selected = document.querySelectorAll('.month-cb:checked');
-            const total = selected.length * monthly;
-            document.getElementById('totalAmount').innerHTML = total.toLocaleString() + ' টাকা';
-        }
-        
-        async function submitPayment() {
-            if(!searchedMember) { showNotification('সদস্য সার্চ করুন', 'error'); return; }
-            const year = document.getElementById('paymentYear').value;
-            const selected = document.querySelectorAll('.month-cb:checked');
-            const method = document.getElementById('paymentMethod').value;
-            const sender = document.getElementById('senderMobile').value;
-            const trx = document.getElementById('transactionId').value;
-            if(!year || selected.length === 0 || !method || !sender || !trx) {
-                showNotification('সব তথ্য দিন', 'error'); return;
+            
+            const searchBtn = document.getElementById('paymentSearchBtn');
+            const originalText = searchBtn.innerHTML;
+            searchBtn.innerHTML = '<span class="search-loading"></span>';
+            searchBtn.disabled = true;
+            
+            const sb = await initSupabase();
+            if (!sb) {
+                showNotification('সার্ভার সংযোগ সমস্যা!', 'error');
+                searchBtn.innerHTML = originalText;
+                searchBtn.disabled = false;
+                return;
             }
-            await initSupabase();
+            
             try {
-                for(let cb of selected) {
-                    await supabaseClient.from('payments').insert([{
-                        member_id: searchedMember.member_id, member_name: searchedMember.full_name,
-                        year: year, month: cb.value, amount: searchedMember.monthly_savings || 500,
-                        payment_method: method, sender_mobile: sender, transaction_id: trx,
-                        status: 'pending', submitted_at: new Date().toISOString()
-                    }]);
+                const isMobile = /^01[3-9]\d{8}$/.test(searchTerm);
+                let query = sb.from('members').select('member_id, full_name, mobile, referral_code, monthly_savings, status');
+                
+                if (isMobile) {
+                    query = query.eq('mobile', searchTerm);
+                } else {
+                    query = query.eq('member_id', searchTerm);
                 }
-                showNotification(`${selected.length} মাসের পেমেন্ট জমা হয়েছে!`, 'success');
+                
+                const { data, error } = await query.maybeSingle();
+                
+                if (error) throw error;
+                
+                const resultDiv = document.getElementById('paymentSearchResult');
+                
+                if (data) {
+                    if (data.status !== 'active' && data.status !== 'approved') {
+                        resultDiv.innerHTML = `<i class="fas fa-exclamation-circle text-red-600"></i> এই সদস্যের একাউন্ট অনুমোদিত নয়!`;
+                        resultDiv.style.display = 'block';
+                        resultDiv.className = 'bg-red-50 p-2 rounded-lg text-sm text-red-700';
+                        document.getElementById('paymentMemberInfo').style.display = 'none';
+                        document.getElementById('paymentFormFields').style.display = 'none';
+                        searchBtn.innerHTML = originalText;
+                        searchBtn.disabled = false;
+                        return;
+                    }
+                    
+                    currentPaymentMember = data;
+                    
+                    document.getElementById('paymentMemberName').innerText = data.full_name || '-';
+                    document.getElementById('paymentMemberId').innerText = data.member_id;
+                    document.getElementById('paymentMemberMobile').innerText = data.mobile || '-';
+                    document.getElementById('paymentMonthlyAmount').innerText = data.monthly_savings || 500;
+                    
+                    resultDiv.innerHTML = `<i class="fas fa-check-circle text-green-600"></i> সদস্য পাওয়া গেছে!`;
+                    resultDiv.style.display = 'block';
+                    resultDiv.className = 'bg-green-50 p-2 rounded-lg text-sm text-green-700';
+                    document.getElementById('paymentMemberInfo').style.display = 'block';
+                    document.getElementById('paymentFormFields').style.display = 'block';
+                    
+                    showNotification(`সদস্য পাওয়া গেছে: ${data.full_name}`, 'success');
+                    
+                } else {
+                    resultDiv.innerHTML = `<i class="fas fa-exclamation-circle text-red-600"></i> সদস্য পাওয়া যায়নি!`;
+                    resultDiv.style.display = 'block';
+                    resultDiv.className = 'bg-red-50 p-2 rounded-lg text-sm text-red-700';
+                    document.getElementById('paymentMemberInfo').style.display = 'none';
+                    document.getElementById('paymentFormFields').style.display = 'none';
+                    showNotification('সদস্য পাওয়া যায়নি!', 'error');
+                }
+                
+            } catch(e) {
+                console.error('Search error:', e);
+                showNotification('সার্চ করতে ব্যর্থ!', 'error');
+            } finally {
+                searchBtn.innerHTML = originalText;
+                searchBtn.disabled = false;
+            }
+        }
+        
+        function generatePaymentSlip() {
+            if (!currentPaymentMember) {
+                showNotification('প্রথমে সদস্য সার্চ করুন!', 'error');
+                return;
+            }
+            
+            const month = document.getElementById('payMonthSelect').value;
+            const year = document.getElementById('payYearSelect').value;
+            const method = document.getElementById('payMethodSelect').value;
+            const senderNumber = document.getElementById('paySenderNumber').value.trim();
+            const transactionId = document.getElementById('payTransactionId').value.trim();
+            const amount = currentPaymentMember.monthly_savings || 500;
+            
+            if (!month) {
+                showNotification('মাস নির্বাচন করুন!', 'error');
+                return;
+            }
+            
+            savePaymentAndRedirect(currentPaymentMember, month, year, amount, method, senderNumber, transactionId);
+        }
+        
+        async function savePaymentAndRedirect(member, month, year, amount, method, senderNumber, transactionId) {
+            const sb = await initSupabase();
+            if (!sb) {
+                showNotification('সার্ভার সংযোগ সমস্যা!', 'error');
+                return;
+            }
+            
+            try {
+                const { data, error } = await sb.from('payments').insert([{
+                    member_id: member.member_id,
+                    member_name: member.full_name,
+                    mobile: member.mobile,
+                    month: month,
+                    year: year,
+                    amount: amount,
+                    payment_method: method,
+                    sender_mobile: senderNumber || null,
+                    transaction_id: transactionId || null,
+                    status: 'pending',
+                    submitted_at: new Date().toISOString()
+                }]).select();
+                
+                if (error) throw error;
+                
+                showNotification('পেমেন্ট সফল হয়েছে! স্লিপ তৈরি হচ্ছে...', 'success');
+                
+                if (data && data[0]) {
+                    window.location.href = `payment.html?payment_id=${data[0].id}`;
+                } else {
+                    window.location.href = `payment.html?id=${member.member_id}&name=${encodeURIComponent(member.full_name)}&amount=${amount}&month=${month}&year=${year}`;
+                }
+                
                 closePaymentModal();
-            } catch(e) { showNotification('পেমেন্ট ব্যর্থ!', 'error'); }
+                
+            } catch(e) {
+                console.error('Payment error:', e);
+                showNotification('পেমেন্ট প্রক্রিয়ায় সমস্যা!', 'error');
+            }
         }
         
         // ========== অভিযোগ ==========
@@ -1144,7 +1236,7 @@
         </div>
     </div>
     
-    <!-- সাইডবার (মোবাইলের জন্য) -->
+    <!-- সাইডবার -->
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
     <div class="sidebar" id="sidebar">
         <button class="sidebar-close" onclick="closeSidebar()"><i class="fas fa-times"></i></button>
@@ -1160,7 +1252,6 @@
             <div class="sidebar-item" onclick="openRepModal()"><i class="fas fa-user-tie"></i> প্রতিনিধি আবেদন</div>
             <div class="sidebar-item" onclick="verifyAndGoToEconomy()"><i class="fas fa-chart-line"></i> অর্থনীতি ড্যাশবোর্ড</div>
         </div>
-        <!-- লগইন বাটন সাইডবারে -->
         <div class="sidebar-login-buttons">
             <div class="sidebar-item btn-primary-sidebar" onclick="window.location.href='member-signup.html'">
                 <i class="fas fa-user-plus"></i> সদস্য হোন
@@ -1324,37 +1415,68 @@
     </div>
 </div>
 
+<!-- সঞ্চয় পেমেন্ট মডাল -->
 <div id="paymentModal" class="modal">
     <div class="modal-content">
         <h3><i class="fas fa-credit-card"></i> সঞ্চয় পেমেন্ট</h3>
         <div style="background:#f0fdf4; padding:10px; border-radius:12px; text-align:center; margin-bottom:12px;">
             <p style="font-weight:bold; color:#059669;">+88 01633157094</p>
+            <p style="font-size:11px;">বিকাশ / নগদ / রকেট</p>
         </div>
+        
+        <!-- সদস্য সার্চ সেকশন -->
         <div style="background:#fef3c7; padding:12px; border-radius:12px; margin-bottom:12px;">
-            <div style="display:flex; gap:8px;">
-                <input type="text" id="memberIdSearch" placeholder="সদস্য আইডি বা মোবাইল" style="flex:1;">
-                <button onclick="searchMember()" style="background:#059669; color:white; padding:8px 16px; border:none; border-radius:25px;">সার্চ</button>
+            <h4 style="font-weight:bold; margin-bottom:8px; font-size:13px;"><i class="fas fa-search"></i> সদস্য আইডি বা মোবাইল দিয়ে সার্চ করুন</h4>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <input type="text" id="paymentSearchInput" placeholder="সদস্য আইডি বা মোবাইল (01XXXXXXXXX)" style="flex:1; padding:8px; border:1px solid #e5e7eb; border-radius:10px;">
+                <button id="paymentSearchBtn" onclick="searchMemberForPayment()" style="background:#059669; color:white; padding:8px 16px; border:none; border-radius:25px; cursor:pointer;"><i class="fas fa-search"></i> সার্চ</button>
             </div>
-            <div id="memberSearchResult" style="margin-top:10px; display:none; background:white; padding:10px; border-radius:10px;">
-                <p><strong>নাম:</strong> <span id="searchedName"></span></p>
-                <p><strong>আইডি:</strong> <span id="searchedId"></span></p>
-                <p><strong>মাসিক সঞ্চয়:</strong> <span id="monthlyAmount"></span> টাকা</p>
+            <div id="paymentSearchResult" style="margin-top:10px; display:none;"></div>
+            <div id="paymentMemberInfo" style="margin-top:10px; display:none; background:white; padding:10px; border-radius:10px;">
+                <p><strong><i class="fas fa-user"></i> নাম:</strong> <span id="paymentMemberName"></span></p>
+                <p><strong><i class="fas fa-id-card"></i> আইডি:</strong> <span id="paymentMemberId"></span></p>
+                <p><strong><i class="fas fa-mobile-alt"></i> মোবাইল:</strong> <span id="paymentMemberMobile"></span></p>
+                <p><strong><i class="fas fa-money-bill-wave"></i> মাসিক সঞ্চয়:</strong> <span id="paymentMonthlyAmount"></span> টাকা</p>
             </div>
         </div>
-        <div id="paymentFields" style="display:none;">
-            <div><select id="paymentYear"></select></div>
-            <div id="monthsContainer" style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px; max-height:150px; overflow-y:auto; border:1px solid #e5e7eb; padding:8px; border-radius:10px; margin:10px 0;"></div>
-            <div><select id="paymentMethod"><option value="">পদ্ধতি</option><option value="bKash">bKash</option><option value="Nagad">Nagad</option><option value="Rocket">Rocket</option></select></div>
-            <div><input type="tel" id="senderMobile" placeholder="সেন্ডার মোবাইল *"></div>
-            <div><input type="text" id="transactionId" placeholder="ট্রানজেকশন আইডি *"></div>
-            <div style="background:#f1f5f9; padding:10px; border-radius:10px; margin:10px 0;">
-                <div style="display:flex; justify-content:space-between;"><span>মোট:</span><span id="totalAmount" style="font-size:20px; font-weight:bold; color:#059669;">০ টাকা</span></div>
-                <p style="font-size:10px;">* প্রতি মাসে <span id="perMonthAmount">৫০০</span> টাকা</p>
+        
+        <!-- পেমেন্ট ফর্ম -->
+        <div id="paymentFormFields" style="display:none;">
+            <div style="margin-bottom:10px;">
+                <label class="block text-gray-700 font-semibold mb-1">মাস ও বছর <span class="text-red-500">*</span></label>
+                <div class="flex gap-2">
+                    <select id="payMonthSelect" class="flex-1 p-2 border rounded-lg">
+                        <option value="">মাস</option>
+                        <option value="জানুয়ারি">জানুয়ারি</option><option value="ফেব্রুয়ারি">ফেব্রুয়ারি</option>
+                        <option value="মার্চ">মার্চ</option><option value="এপ্রিল">এপ্রিল</option>
+                        <option value="মে">মে</option><option value="জুন">জুন</option>
+                        <option value="জুলাই">জুলাই</option><option value="আগস্ট">আগস্ট</option>
+                        <option value="সেপ্টেম্বর">সেপ্টেম্বর</option><option value="অক্টোবর">অক্টোবর</option>
+                        <option value="নভেম্বর">নভেম্বর</option><option value="ডিসেম্বর">ডিসেম্বর</option>
+                    </select>
+                    <select id="payYearSelect" class="w-24 p-2 border rounded-lg">
+                        <option value="2026">২০২৬</option><option value="2027">২০২৭</option>
+                        <option value="2028">২০২৮</option><option value="2029">২০২৯</option>
+                    </select>
+                </div>
             </div>
-            <div style="display:flex; gap:12px;">
-                <button onclick="closePaymentModal()" class="modal-btn" style="background:#e5e7eb; flex:1;">বাতিল</button>
-                <button onclick="submitPayment()" class="modal-btn" style="background:#059669; color:white; flex:1;">জমা দিন</button>
+            <div style="margin-bottom:10px;">
+                <label class="block text-gray-700 font-semibold mb-1">পেমেন্ট মাধ্যম <span class="text-red-500">*</span></label>
+                <select id="payMethodSelect" class="w-full p-2 border rounded-lg">
+                    <option value="bKash">bKash</option><option value="Nagad">Nagad</option>
+                    <option value="Rocket">Rocket</option><option value="ব্যাংক">ব্যাংক</option>
+                    <option value="নগদ">নগদ</option>
+                </select>
             </div>
+            <div style="margin-bottom:10px;">
+                <label class="block text-gray-700 font-semibold mb-1">যে নম্বর থেকে পাঠানো হয়েছে</label>
+                <input type="text" id="paySenderNumber" class="w-full p-2 border rounded-lg" placeholder="01XXXXXXXXX">
+            </div>
+            <div style="margin-bottom:10px;">
+                <label class="block text-gray-700 font-semibold mb-1">ট্রানজেকশন আইডি</label>
+                <input type="text" id="payTransactionId" class="w-full p-2 border rounded-lg" placeholder="TXN123456">
+            </div>
+            <button onclick="generatePaymentSlip()" class="bg-emerald-600 text-white w-full py-2 rounded-lg hover:bg-emerald-700 transition"><i class="fas fa-receipt"></i> স্লিপ জেনারেট করুন</button>
         </div>
     </div>
 </div>
