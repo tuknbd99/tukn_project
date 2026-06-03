@@ -13,14 +13,12 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
     <style>
-        /* ========== আধুনিক ডিজাইন - সব ফাংশন অক্ষত ========== */
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
             font-family: 'Noto Sans Bengali', sans-serif;
         }
-        
         body {
             background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 50%, #f0fdf4 100%);
             min-height: 100vh;
@@ -29,21 +27,12 @@
         /* টপ বার */
         .top-bar {
             background: linear-gradient(135deg, #064e3b, #065f46, #047857);
-            padding: 10px 30px;
+            padding: 8px 30px;
             display: flex;
-            justify-content: space-between;
+            justify-content: flex-end;
             align-items: center;
             flex-wrap: wrap;
             gap: 12px;
-        }
-        .welcome-text {
-            color: rgba(255,255,255,0.9);
-            font-size: 13px;
-            font-weight: 500;
-        }
-        .welcome-text i {
-            margin-right: 6px;
-            color: #fcd34d;
         }
         .top-stats {
             display: flex;
@@ -60,7 +49,7 @@
         }
         .top-stat i {
             margin-right: 5px;
-            color: #a7f3d0;
+            color: #fcd34d;
         }
         
         /* প্রধান হেডার */
@@ -745,6 +734,9 @@
         let supabaseClient = null;
         window.supabaseClient = null;
         
+        // বর্তমান লগইন করা সদস্যের তথ্য
+        let currentMember = null;
+        
         async function initSupabaseClient() {
             try {
                 if (window.supabaseClient && window.supabaseClient.from) return true;
@@ -803,6 +795,7 @@
                 const { data } = await query;
                 const member = data?.[0];
                 if(member && member.password === password && (member.status === 'active' || member.status === 'approved')) {
+                    currentMember = member;
                     localStorage.setItem('tukn_logged_member', JSON.stringify(member));
                     sessionStorage.setItem('tukn_logged_member', JSON.stringify(member));
                     showCenterNotification(`স্বাগতম ${member.full_name}!`, 'success');
@@ -832,8 +825,9 @@
             } catch(e) { showCenterNotification('লগইন ব্যর্থ!', 'error'); }
         }
         
-        // ========== স্ট্যাট লোড ==========
+        // ========== স্ট্যাট লোড (Supabase থেকে লাইভ) ==========
         async function loadStats() {
+            if(!supabaseClient) await initSupabaseClient();
             if(!supabaseClient) return;
             try {
                 const { count: memberCount } = await supabaseClient.from('members').select('*', { count: 'exact', head: true }).eq('status', 'active');
@@ -845,8 +839,9 @@
             } catch(e) { console.error(e); }
         }
         
-        // ========== ভিজিটর কাউন্ট ==========
+        // ========== ভিজিটর কাউন্ট (Supabase থেকে লাইভ) ==========
         async function updateVisitorCount() {
+            if(!supabaseClient) await initSupabaseClient();
             if(!supabaseClient) {
                 let count = localStorage.getItem('tukn_visitor_count');
                 if(!count) { count = 12458; localStorage.setItem('tukn_visitor_count', count); }
@@ -872,6 +867,7 @@
         
         // ========== টিকার নোটিশ ==========
         async function loadTickerNotices() {
+            if(!supabaseClient) await initSupabaseClient();
             if(!supabaseClient) return;
             try {
                 const { data } = await supabaseClient.from('notices').select('*').eq('status', 'active').limit(5);
@@ -1018,14 +1014,43 @@
             } catch(err) { showCenterNotification('তথ্য জমা করতে সমস্যা হয়েছে!', 'error'); }
         });
         
-        // ========== পেমেন্ট ফাংশন ==========
+        // ========== সঞ্চয় পেমেন্ট ফাংশন (সদস্য আইডি দিয়ে সার্চ) ==========
+        let searchedMember = null;
+        
         function openPaymentModal() {
-            const logged = localStorage.getItem('tukn_logged_member') || sessionStorage.getItem('tukn_logged_member');
-            if(!logged) { showCenterNotification('পেমেন্ট করতে লগইন করুন!', 'warning'); openLoginModal(); return; }
-            populatePaymentMonths();
             document.getElementById('paymentModal').style.display = 'flex';
+            document.getElementById('memberSearchResult').style.display = 'none';
+            document.getElementById('paymentAmountDisplay').style.display = 'none';
+            document.getElementById('memberIdSearch').value = '';
+            searchedMember = null;
         }
         function closePaymentModal() { document.getElementById('paymentModal').style.display = 'none'; }
+        
+        async function searchMemberForPayment() {
+            const searchTerm = document.getElementById('memberIdSearch').value.trim();
+            if(!searchTerm) { showCenterNotification('সদস্য আইডি বা মোবাইল নম্বর দিন!', 'error'); return; }
+            if(!supabaseClient) await initSupabaseClient();
+            try {
+                let query = supabaseClient.from('members').select('member_id, full_name, mobile, monthly_savings, status');
+                if(searchTerm.match(/^01[3-9]\d{8}$/)) query = query.eq('mobile', searchTerm);
+                else query = query.eq('member_id', searchTerm);
+                const { data } = await query.maybeSingle();
+                if(data && (data.status === 'active' || data.status === 'approved')) {
+                    searchedMember = data;
+                    document.getElementById('searchedMemberName').innerText = data.full_name;
+                    document.getElementById('searchedMemberId').innerText = data.member_id;
+                    document.getElementById('searchedMemberMobile').innerText = data.mobile;
+                    document.getElementById('monthlyAmount').innerText = data.monthly_savings || 500;
+                    document.getElementById('memberSearchResult').style.display = 'block';
+                    document.getElementById('paymentAmountDisplay').style.display = 'block';
+                    document.getElementById('perMonthSavings').innerText = data.monthly_savings || 500;
+                    populatePaymentMonths();
+                    updateTotalAmount();
+                } else {
+                    showCenterNotification('সদস্য পাওয়া যায়নি বা একাউন্ট অনুমোদিত নয়!', 'error');
+                }
+            } catch(e) { showCenterNotification('সার্চ করতে ব্যর্থ!', 'error'); }
+        }
         
         function populatePaymentMonths() {
             const months = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
@@ -1045,13 +1070,15 @@
         }
         
         function updateTotalAmount() {
-            const monthlySavings = 500;
+            if(!searchedMember) return;
+            const monthlySavings = searchedMember.monthly_savings || 500;
             const selected = document.querySelectorAll('.month-cb:checked');
             const total = selected.length * monthlySavings;
             document.getElementById('totalAmountDisplay').innerHTML = total.toLocaleString() + ' টাকা';
         }
         
         async function submitPayment() {
+            if(!searchedMember) { showCenterNotification('প্রথমে সদস্য সার্চ করুন!', 'error'); return; }
             const year = document.getElementById('paymentYear').value;
             const selectedMonths = document.querySelectorAll('.month-cb:checked');
             const method = document.getElementById('paymentMethod').value;
@@ -1061,13 +1088,11 @@
                 showCenterNotification('সব তথ্য পূরণ করুন!', 'error');
                 return;
             }
-            const member = JSON.parse(localStorage.getItem('tukn_logged_member') || '{}');
-            if(!member.member_id) { showCenterNotification('লগইন করুন!', 'error'); openLoginModal(); return; }
             try {
                 for(let cb of selectedMonths) {
                     await supabaseClient.from('payments').insert([{
-                        member_id: member.member_id, member_name: member.full_name,
-                        year: year, month: cb.value, amount: 500,
+                        member_id: searchedMember.member_id, member_name: searchedMember.full_name,
+                        year: year, month: cb.value, amount: searchedMember.monthly_savings || 500,
                         payment_method: method, sender_mobile: sender, transaction_id: trx,
                         status: 'pending', submitted_at: new Date().toISOString()
                     }]);
@@ -1199,11 +1224,8 @@
 </head>
 <body>
 
-<!-- উপরের বার -->
+<!-- টপ বার (বিসমিল্লাহ বাদ দেওয়া হয়েছে) -->
 <div class="top-bar">
-    <div class="welcome-text">
-        <i class="fas fa-mosque"></i> بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ
-    </div>
     <div class="top-stats">
         <span class="top-stat"><i class="fas fa-users"></i> সদস্য: <span id="topMembers">০</span></span>
         <span class="top-stat"><i class="fas fa-school"></i> মাদরাসা: <span id="topMadrasas">০</span></span>
@@ -1360,7 +1382,7 @@
     </div>
 </footer>
 
-<!-- ========== মডাল গুলো (সব ফাংশন সহ) ========== -->
+<!-- ========== লগইন মডাল ========== -->
 <div id="loginModal" class="modal">
     <div class="modal-content">
         <h3><i class="fas fa-sign-in-alt"></i> লগইন</h3>
@@ -1371,6 +1393,7 @@
     </div>
 </div>
 
+<!-- ========== অ্যাডমিন লগইন মডাল ========== -->
 <div id="adminLoginModal" class="modal">
     <div class="modal-content">
         <h3><i class="fas fa-user-shield"></i> অ্যাডমিন লগইন</h3>
@@ -1381,7 +1404,7 @@
     </div>
 </div>
 
-<!-- সম্পূর্ণ মাদরাসা মডাল (সব ফিল্ড সহ) -->
+<!-- ========== মাদরাসা তথ্য মডাল ========== -->
 <div id="madrasaModal" class="modal">
     <div class="modal-content" style="max-width:700px;">
         <h3><i class="fas fa-school"></i> মাদরাসা তথ্য ফরম</h3>
@@ -1448,7 +1471,7 @@
     </div>
 </div>
 
-<!-- পেমেন্ট মডাল -->
+<!-- ========== সঞ্চয় পেমেন্ট মডাল (সদস্য আইডি দিয়ে সার্চ) ========== -->
 <div id="paymentModal" class="modal">
     <div class="modal-content">
         <h3><i class="fas fa-credit-card"></i> সঞ্চয় পেমেন্ট</h3>
@@ -1456,23 +1479,41 @@
             <p style="font-size:18px; font-weight:bold; color:#059669;">+88 01633157094</p>
             <p style="font-size:12px;">bKash / Nagad / Rocket</p>
         </div>
-        <div><label>সাল নির্বাচন <span style="color:red;">*</span></label><select id="paymentYear"></select></div>
-        <div><label>মাস নির্বাচন (একাধিক) <span style="color:red;">*</span></label><div id="monthsContainer" style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px; max-height:200px; overflow-y:auto; border:1px solid #e5e7eb; padding:10px; border-radius:12px;"></div></div>
-        <div><label>পেমেন্ট পদ্ধতি <span style="color:red;">*</span></label><select id="paymentMethod"><option value="">নির্বাচন করুন</option><option value="bKash">bKash</option><option value="Nagad">Nagad</option><option value="Rocket">Rocket</option><option value="bank">ব্যাংক</option><option value="cash">নগদ</option></select></div>
-        <div><label>মোবাইল নম্বর (সেন্ডার) <span style="color:red;">*</span></label><input type="tel" id="senderMobile"></div>
-        <div><label>ট্রানজেকশন আইডি <span style="color:red;">*</span></label><input type="text" id="transactionId"></div>
-        <div style="background:#f1f5f9; padding:15px; border-radius:12px; margin:15px 0;">
-            <div style="display:flex; justify-content:space-between;"><span>মোট জমার পরিমাণ:</span><span id="totalAmountDisplay" style="font-size:24px; font-weight:bold; color:#059669;">০ টাকা</span></div>
-            <p style="font-size:11px;">* প্রতি মাসের সঞ্চয় ৫০০ টাকা</p>
+        
+        <!-- সদস্য সার্চ সেকশন -->
+        <div style="background:#fef3c7; padding:15px; border-radius:16px; margin-bottom:20px;">
+            <h4 style="font-weight:bold; margin-bottom:10px;"><i class="fas fa-search"></i> সদস্য আইডি / মোবাইল দিয়ে সার্চ করুন</h4>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <input type="text" id="memberIdSearch" placeholder="সদস্য আইডি বা মোবাইল নম্বর" style="flex:1;">
+                <button onclick="searchMemberForPayment()" style="background:#059669; color:white; padding:10px 20px; border:none; border-radius:50px; cursor:pointer;">সার্চ</button>
+            </div>
+            <div id="memberSearchResult" style="margin-top:15px; display:none; background:white; padding:12px; border-radius:12px;">
+                <p><strong><i class="fas fa-user"></i> নাম:</strong> <span id="searchedMemberName"></span></p>
+                <p><strong><i class="fas fa-id-card"></i> আইডি:</strong> <span id="searchedMemberId"></span></p>
+                <p><strong><i class="fas fa-mobile-alt"></i> মোবাইল:</strong> <span id="searchedMemberMobile"></span></p>
+                <p><strong><i class="fas fa-money-bill-wave"></i> মাসিক সঞ্চয়:</strong> <span id="monthlyAmount"></span> টাকা</p>
+            </div>
         </div>
-        <div style="display:flex; gap:15px;">
-            <button onclick="closePaymentModal()" class="modal-btn" style="background:#e5e7eb; flex:1;">বাতিল</button>
-            <button onclick="submitPayment()" class="modal-btn" style="background:linear-gradient(135deg,#059669,#10b981); color:white; flex:1;">জমা দিন</button>
+        
+        <div id="paymentAmountDisplay" style="display:none;">
+            <div><label>সাল নির্বাচন <span style="color:red;">*</span></label><select id="paymentYear"></select></div>
+            <div><label>মাস নির্বাচন (একাধিক) <span style="color:red;">*</span></label><div id="monthsContainer" style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px; max-height:200px; overflow-y:auto; border:1px solid #e5e7eb; padding:10px; border-radius:12px;"></div></div>
+            <div><label>পেমেন্ট পদ্ধতি <span style="color:red;">*</span></label><select id="paymentMethod"><option value="">নির্বাচন করুন</option><option value="bKash">bKash</option><option value="Nagad">Nagad</option><option value="Rocket">Rocket</option><option value="bank">ব্যাংক</option><option value="cash">নগদ</option></select></div>
+            <div><label>মোবাইল নম্বর (সেন্ডার) <span style="color:red;">*</span></label><input type="tel" id="senderMobile" placeholder="01XXXXXXXXX"></div>
+            <div><label>ট্রানজেকশন আইডি <span style="color:red;">*</span></label><input type="text" id="transactionId" placeholder="Transaction ID"></div>
+            <div style="background:#f1f5f9; padding:15px; border-radius:12px; margin:15px 0;">
+                <div style="display:flex; justify-content:space-between;"><span>মোট জমার পরিমাণ:</span><span id="totalAmountDisplay" style="font-size:24px; font-weight:bold; color:#059669;">০ টাকা</span></div>
+                <p style="font-size:11px;">* প্রতি মাসের সঞ্চয় <span id="perMonthSavings">৫০০</span> টাকা</p>
+            </div>
+            <div style="display:flex; gap:15px;">
+                <button onclick="closePaymentModal()" class="modal-btn" style="background:#e5e7eb; flex:1;">বাতিল</button>
+                <button onclick="submitPayment()" class="modal-btn" style="background:linear-gradient(135deg,#059669,#10b981); color:white; flex:1;">জমা দিন</button>
+            </div>
         </div>
     </div>
 </div>
 
-<!-- অভিযোগ মডাল -->
+<!-- ========== মতামত ও অভিযোগ মডাল ========== -->
 <div id="complaintModal" class="modal">
     <div class="modal-content">
         <h3><i class="fas fa-comment-dots"></i> মতামত ও অভিযোগ</h3>
@@ -1487,7 +1528,7 @@
     </div>
 </div>
 
-<!-- প্রতিনিধি আবেদন মডাল -->
+<!-- ========== প্রতিনিধি আবেদন মডাল ========== -->
 <div id="repModal" class="modal">
     <div class="modal-content">
         <h3><i class="fas fa-user-tie"></i> প্রতিনিধি আবেদন</h3>
