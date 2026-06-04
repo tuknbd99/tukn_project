@@ -521,7 +521,7 @@ async function refreshMemberDataFromSupabase() {
     let client = getSupabaseClient();
     if(!client) return;
     try {
-        const { data, error } = await client.from('members').select('member_term, join_date, monthly_savings, full_name, mobile, present_address, permanent_address, profile_image, referral_code, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus').eq('member_id', currentUser.id).single();
+        const { data, error } = await client.from('members').select('member_term, join_date, monthly_savings, full_name, mobile, present_address, permanent_address, profile_image, referral_code, profit_balance_savings, profit_balance_investment, profit_balance_referral').eq('member_id', currentUser.id).single();
         if(error) throw error;
         if(data) {
             currentUser.memberTerm = parseInt(data.member_term) || 0;
@@ -536,7 +536,6 @@ async function refreshMemberDataFromSupabase() {
             userFunds.savingsProfit = data.profit_balance_savings || 0;
             userFunds.investmentProfit = data.profit_balance_investment || 0;
             userFunds.referralProfit = data.profit_balance_referral || 0;
-            userFunds.referralBonus = data.referral_bonus || 0;
         }
     } catch(error) { console.error('রিফ্রেশ ব্যর্থ:', error); }
 }
@@ -555,7 +554,7 @@ function handleLogout() {
 
 function toggleLevel(level) { const el = document.getElementById(`level${level}List`); if(el) el.classList.toggle('hidden'); }
 
-// ========== ফান্ড ডিসপ্লে ফাংশন ==========
+// ========== ফান্ড ডিসপ্লে ফাংশন (আপডেট করা হয়েছে - এটাই মূল পরিবর্তন) ==========
 function updateFundsDisplay() {
     const monthlyElement = document.getElementById('monthlySavingsFund');
     const savingsProfitElement = document.getElementById('savingsProfitFund');
@@ -598,16 +597,21 @@ async function loadUserFunds() {
         userFunds.monthlySavings = (payments && payments.length > 0) ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) : 0;
         
         const { data: member } = await client.from('members')
-            .select('profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus')
+            .select('profit_balance_savings, profit_balance_investment, profit_balance_referral')
             .eq('member_id', currentUser.id)
             .single();
         
         userFunds.savingsProfit = member?.profit_balance_savings || 0;
         userFunds.investmentProfit = member?.profit_balance_investment || 0;
         userFunds.referralProfit = member?.profit_balance_referral || 0;
-        userFunds.referralBonus = member?.referral_bonus || 0;
         
         updateFundsDisplay();
+        
+        // রেফারেল ডাটা লোড করবে এবং বোনাস আপডেট করবে
+        if(currentUser.status === 'active') {
+            loadReferralData();
+        }
+        
     } catch(error) { console.error('ফান্ড লোড সমস্যা:', error); }
 }
 
@@ -645,7 +649,6 @@ async function updateUI() {
     if(currentUser.status === 'active') {
         loadSavingsData();
         loadPaymentHistory();
-        loadReferralData();
         loadUserFunds();
         calculateMembershipExpiry();
         if(expiryInterval) clearInterval(expiryInterval);
@@ -787,7 +790,7 @@ async function loadPaymentHistory() {
                 payments.forEach(payment => {
                     if(payment.status === 'approved') {
                         totalBalance += payment.amount;
-                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা<\/td><td class="p-2 text-green-600"><i class="fas fa-check-circle mr-1"></i>অনুমোদিত<\/td><td class="p-2"><button onclick="viewPaymentSlip('${payment.month} ${payment.year}', ${payment.amount})" class="text-blue-500"><i class="fas fa-print"></i><\/button><\/td><\/tr>`;
+                        historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}<tr><td class="p-2">${payment.amount.toLocaleString()} টাকা<\/td><td class="p-2 text-green-600"><i class="fas fa-check-circle mr-1"></i>অনুমোদিত<\/td><td class="p-2"><button onclick="viewPaymentSlip('${payment.month} ${payment.year}', ${payment.amount})" class="text-blue-500"><i class="fas fa-print"></i><\/button><\/td><\/tr>`;
                     } else if(payment.status === 'pending') {
                         historyHtml += `<tr class="border-b"><td class="p-2">${payment.month} ${payment.year}</td><td class="p-2">${payment.amount.toLocaleString()} টাকা<\/td><td class="p-2 text-yellow-600"><i class="fas fa-hourglass-half mr-1"></i>বিচারাধীন<\/td><td class="p-2">-<\/td><\/tr>`;
                     } else if(payment.status === 'rejected') {
@@ -966,7 +969,7 @@ if(loanForm) {
     });
 }
 
-// ========== রেফারেল ডাটা ==========
+// ========== রেফারেল ডাটা (আপডেট করা হয়েছে - এখানে বোনাস সেট করে updateFundsDisplay কল করা হয়েছে) ==========
 async function loadReferralData() {
     if(!currentUser || isLoadingReferral) return;
     let client = getSupabaseClient();
@@ -1040,22 +1043,18 @@ async function loadReferralData() {
         document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
         document.getElementById('totalLevels').innerText = '১০';
         
+        // এখানে বোনাস সেট করা হচ্ছে
         const bonusAmount = Math.floor(totalCommission);
         userFunds.referralBonus = bonusAmount;
         userBalances.bonus = bonusAmount;
         
+        // ফান্ড ডিসপ্লে আপডেট করা হচ্ছে (এটাই মূল সমাধান)
         updateFundsDisplay();
         
         const bonusCard = document.getElementById('referralBonusFund');
         if(bonusCard) {
             bonusCard.innerText = bonusAmount.toLocaleString() + ' টাকা';
             console.log('✅ বোনাস কার্ড আপডেট:', bonusAmount);
-        }
-        
-        const totalFundsElement = document.getElementById('totalFunds');
-        if(totalFundsElement) {
-            const total = (userFunds.monthlySavings || 0) + (userFunds.savingsProfit || 0) + (userFunds.investmentProfit || 0) + (userFunds.referralProfit || 0) + bonusAmount;
-            totalFundsElement.innerText = total.toLocaleString() + ' টাকা';
         }
         
         console.log('💰 রেফারেল বোনাস:', bonusAmount);
