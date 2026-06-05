@@ -166,42 +166,6 @@
                 </div>
             </div>
             
-            <!-- 👇 বিশেষ বোনাস প্রদান সেকশন (লভ্যাংশ বন্টন ট্যাবের ভিতরেই) -->
-            <div class="mt-6 bg-gradient-to-r from-amber-50 to-yellow-50 rounded-2xl shadow-lg p-6">
-                <div class="flex items-center gap-2 mb-4">
-                    <i class="fas fa-star-of-life text-2xl text-amber-600"></i>
-                    <h2 class="text-xl font-bold text-amber-700">বিশেষ বোনাস প্রদান</h2>
-                </div>
-                <p class="text-sm text-amber-600 mb-4">কোনো নির্দিষ্ট সদস্যকে আলাদাভাবে বোনাস দিতে নিচের ফরম ব্যবহার করুন। <span class="font-bold text-red-600">বোনাসের টাকা কল্যাণ ফান্ড থেকে কেটে নেওয়া হবে।</span></p>
-                
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div class="md:col-span-2">
-                        <label class="block text-sm font-semibold text-amber-700 mb-1">সদস্য নির্বাচন করুন</label>
-                        <select id="specialMemberId" class="w-full p-2 border rounded-lg bg-white">
-                            <option value="">লোড হচ্ছে...</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-semibold text-amber-700 mb-1">পরিমাণ (টাকা)</label>
-                        <input type="number" id="specialBonusAmount" class="w-full p-2 border rounded-lg bg-white" placeholder="যেমন: 5000">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-semibold text-amber-700 mb-1">ফান্ড নির্বাচন</label>
-                        <select id="specialBonusFund" class="w-full p-2 border rounded-lg bg-white">
-                            <option value="savings">সঞ্চয় ফান্ডে</option>
-                            <option value="investment">বিনিয়োগ ফান্ডে</option>
-                            <option value="referral">রেফারেল ফান্ডে</option>
-                            <option value="special">✨ বিশেষ বোনাস ফান্ডে</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="mt-4">
-                    <button onclick="giveSpecialBonus()" class="bg-amber-600 text-white px-6 py-2.5 rounded-lg hover:bg-amber-700 transition w-full font-semibold">
-                        <i class="fas fa-gift mr-2"></i>বিশেষ বোনাস প্রদান করুন (কল্যাণ ফান্ড থেকে কাটা হবে)
-                    </button>
-                </div>
-            </div>
-        </div>
 
         <div id="dashboardTab" class="tab-content active-tab">
             <div class="content-card">
@@ -478,26 +442,10 @@ async function loadAllData() {
     loadAdmins();
     loadOtherData();
     await loadNoticesList(); 
-    await loadSpecialMemberList();
     updateStats();
 }
 
-    async function loadSpecialMemberList() {
-    const sb = initSupabaseClient();
-    if(!sb) return;
-    try {
-        const { data, error } = await sb.from('members').select('member_id, full_name').eq('status', 'active').order('full_name');
-        const select = document.getElementById('specialMemberId');
-        if(select) {
-            if(data && data.length) {
-                select.innerHTML = '<option value="">সদস্য নির্বাচন করুন</option>' + data.map(m => `<option value="${m.member_id}">${m.full_name} (${m.member_id})</option>`).join('');
-            } else {
-                select.innerHTML = '<option value="">কোনো সদস্য নেই</option>';
-            }
-        }
-    } catch(e) { console.error('Load special member list error:', e); }
-}
-    
+   
 async function loadRealDashboard() {
     const client = initSupabaseClient();
     if (!client) return;
@@ -530,128 +478,7 @@ async function loadRealDashboard() {
         document.getElementById('totalCollection').innerText = monthlyCollection.toLocaleString();
     } catch(e) { console.error('Dashboard error:', e); }
 }
-async function giveSpecialBonus() {
-    const memberId = document.getElementById('specialMemberId').value;
-    const amount = parseFloat(document.getElementById('specialBonusAmount').value);
-    const fundType = document.getElementById('specialBonusFund').value;
-    
-    if(!memberId) { showToast('সদস্য নির্বাচন করুন!', 'error'); return; }
-    if(!amount || amount <= 0) { showToast('সঠিক পরিমাণ দিন!', 'error'); return; }
-    
-    const sb = await initSupabase();
-    if(!sb) { showToast('Supabase সংযোগ নেই!', 'error'); return; }
-    
-    let fieldName = '';
-    let fundName = '';
-    if(fundType === 'savings') {
-        fieldName = 'profit_balance_savings';
-        fundName = 'সঞ্চয় ফান্ড';
-    } else if(fundType === 'investment') {
-        fieldName = 'profit_balance_investment';
-        fundName = 'বিনিয়োগ ফান্ড';
-    } else if(fundType === 'referral') {
-        fieldName = 'profit_balance_referral';
-        fundName = 'রেফারেল ফান্ড';
-    } else {
-        fieldName = 'special_bonus_fund';
-        fundName = 'বিশেষ বোনাস ফান্ড';
-    }
-    
-    try {
-        // ========== 1. কল্যাণ ফান্ড (অফিস তহবিল) থেকে টাকা কেটে নিন ==========
-        const { data: welfareData, error: welfareError } = await sb.from('welfare_fund').select('total').limit(1);
-        if(welfareError) throw welfareError;
-        
-        const currentWelfare = (welfareData && welfareData[0]) ? welfareData[0].total : 0;
-        
-        // কল্যাণ ফান্ডে পর্যাপ্ত টাকা আছে কিনা চেক করুন
-        if(currentWelfare < amount) {
-            showToast(`কল্যাণ ফান্ডে পর্যাপ্ত টাকা নেই! (বর্তমানে ${currentWelfare.toFixed(2)} টাকা)`, 'error');
-            return;
-        }
-        
-        // কল্যাণ ফান্ড থেকে টাকা কেটে নিন (মাইনাস)
-        const newWelfare = currentWelfare - amount;
-        await sb.from('welfare_fund').update({ 
-            total: newWelfare, 
-            last_updated: new Date().toISOString() 
-        }).eq('id', welfareData[0].id);
-        
-        console.log(`💰 কল্যাণ ফান্ড থেকে ${amount} টাকা কেটে নেওয়া হয়েছে। বাকি: ${newWelfare}`);
-        
-        // ========== 2. সদস্যের নির্দিষ্ট ফান্ডে বোনাস যোগ করুন ==========
-        const { data: member } = await sb.from('members').select(fieldName).eq('member_id', memberId).single();
-        const newBalance = (member?.[fieldName] || 0) + amount;
-        await sb.from('members').update({ [fieldName]: newBalance }).eq('member_id', memberId);
-        
-        // ========== 3. বোনাসের ইতিহাস সংরক্ষণ করুন ==========
-        await sb.from('bonus_history').insert([{
-            member_id: memberId,
-            amount: amount,
-            fund_type: fundType,
-            deducted_from: 'welfare_fund',  // কল্যাণ ফান্ড থেকে কেটেছে
-            given_by: currentAdmin?.username || 'super_admin',
-            given_at: new Date().toISOString(),
-            description: `${fundName} এ বিশেষ বোনাস প্রদান (কল্যাণ ফান্ড থেকে ${amount} টাকা কেটে নেওয়া হয়েছে)`
-        }]);
-        
-        // ========== 4. সদস্যকে নোটিশ পাঠান ==========
-        await sb.from('notifications').insert([{
-            member_id: memberId,
-            title: 'বিশেষ বোনাস',
-            message: `আপনাকে ${amount.toLocaleString()} টাকা বিশেষ বোনাস দেওয়া হয়েছে। (${fundName})`,
-            type: 'bonus',
-            created_at: new Date().toISOString()
-        }]);
-        
-        showToast(`✅ ${amount.toLocaleString()} টাকা বোনাস দেওয়া হয়েছে!\n📌 কল্যাণ ফান্ড (অফিস তহবিল) থেকে ${amount.toLocaleString()} টাকা কেটে নেওয়া হয়েছে।\n🏦 কল্যাণ ফান্ডের বর্তমান ব্যালেন্স: ${newWelfare.toFixed(2)} টাকা`, 'success');
-        
-        document.getElementById('specialBonusAmount').value = '';
-        await refreshFundBalances();
-        
-    } catch(e) {
-        console.error('Special bonus error:', e);
-        showToast('বোনাস দিতে ব্যর্থ!', 'error');
-    }
-}
-    async function refreshFundBalances() {
-    const sb = await initSupabase();
-    if(!sb) { showToast('Supabase সংযোগ নেই!', 'error'); return; }
-    try {
-        const { data: members, error } = await sb.from('members').select('profit_balance_savings, profit_balance_investment, profit_balance_referral');
-        if(error) throw error;
-        
-        let totalSavings = 0, totalInvestment = 0, totalReferral = 0;
-        if(members) {
-            totalSavings = members.reduce((s, m) => s + (m.profit_balance_savings || 0), 0);
-            totalInvestment = members.reduce((s, m) => s + (m.profit_balance_investment || 0), 0);
-            totalReferral = members.reduce((s, m) => s + (m.profit_balance_referral || 0), 0);
-        }
-        
-        // কল্যাণ ফান্ড ব্যালেন্স (অফিস তহবিল)
-        const { data: welfareData, error: welfareError } = await sb.from('welfare_fund').select('total').limit(1);
-        if(welfareError && welfareError.code === '42P01') {
-            // টেবিল না থাকলে তৈরি করুন
-            await sb.query(`CREATE TABLE IF NOT EXISTS welfare_fund (id SERIAL PRIMARY KEY, total FLOAT DEFAULT 0, created_at TIMESTAMP DEFAULT NOW(), last_updated TIMESTAMP DEFAULT NOW())`);
-            await sb.from('welfare_fund').insert([{ total: 0 }]);
-        }
-        const totalWelfare = (welfareData && welfareData[0]) ? (welfareData[0].total || 0) : 0;
-        
-        document.getElementById('savingsFundBalance').innerHTML = `<span class="text-emerald-300">${totalSavings.toFixed(2)} টাকা</span>`;
-        document.getElementById('investmentFundBalance').innerHTML = `<span class="text-blue-300">${totalInvestment.toFixed(2)} টাকা</span>`;
-        document.getElementById('referralFundBalance').innerHTML = `<span class="text-purple-300">${totalReferral.toFixed(2)} টাকা</span>`;
-        document.getElementById('welfareFundBalance').innerHTML = `<span class="text-amber-300">${totalWelfare.toFixed(2)} টাকা</span>`;
-        
-        console.log('📊 ফান্ড রিফ্রেশ:', {
-            সঞ্চয়: totalSavings,
-            বিনিয়োগ: totalInvestment,
-            রেফারেল: totalReferral,
-            কল্যাণ_ফান্ড_অফিস_তহবিল: totalWelfare
-        });
-        
-    } catch(e) { console.error('Fund refresh error:', e); }
-}
-    
+  
 async function loadMembers() {
     const loadingDiv = document.getElementById('membersLoading');
     const table = document.getElementById('membersTable');
