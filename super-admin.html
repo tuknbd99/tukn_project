@@ -1367,56 +1367,119 @@ function loadOtherData() {
     document.getElementById('complaintsList').innerHTML = '<div class="text-center text-gray-500 py-4">কোনো অভিযোগ নেই</div>';
     document.getElementById('careerDescription').innerHTML = '<p class="text-gray-700">আমাদের সংগঠনে নিয়মিত বিভিন্ন পদে নিয়োগ দেওয়া হয়।</p>';
 }
-function loadLedgerData() {
-    const ledger = JSON.parse(localStorage.getItem('tukn_ledger') || '[]');
-    const totalIncome = ledger.filter(e => e.type === 'income').reduce((s,e) => s + e.amount, 0);
-    const totalExpense = ledger.filter(e => e.type === 'expense').reduce((s,e) => s + e.amount, 0);
-    document.getElementById('totalIncomeAmount').innerText = totalIncome.toLocaleString() + ' টাকা';
-    document.getElementById('totalExpenseAmount').innerText = totalExpense.toLocaleString() + ' টাকা';
-    document.getElementById('balanceAmount').innerText = (totalIncome - totalExpense).toLocaleString() + ' টাকা';
     
-    const tbody = document.getElementById('ledgerTableBody');
-    if(ledger.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center p-4">কোনো এন্ট্রি নেই</td></tr>';
-    } else {
-        tbody.innerHTML = ledger.map(e => `
-            <tr class="border-b">
-                <td class="p-2">${e.date}</td>
-                <td class="p-2">${e.type === 'income' ? '<span class="text-green-600">আয়</span>' : '<span class="text-red-600">ব্যয়</span>'}</td>
-                <td class="p-2">${e.title}</td>
-                <td class="p-2 text-right">${e.amount.toLocaleString()} টাকা</td>
-                <td class="p-2 text-right"><button onclick="deleteLedgerEntry(${e.id})" class="text-red-500"><i class="fas fa-trash"></i></button></td>
-            </tr>
-        `).join('');
+async function loadLedgerData() {
+    try {
+        const client = initSupabaseClient();
+        if (!client) {
+            console.error('Supabase client not initialized');
+            return;
+        }
+        
+        // Supabase থেকে ledger_transactions টেবিল থেকে ডাটা আনুন
+        const { data, error } = await client
+            .from('ledger_transactions')
+            .select('*')
+            .order('date', { ascending: false });
+        
+        if (error) throw error;
+        
+        const ledger = data || [];
+        
+        // আয় ও ব্যয় ক্যালকুলেট
+        let totalIncome = 0, totalExpense = 0;
+        ledger.forEach(entry => {
+            if (entry.type === 'income') totalIncome += entry.amount;
+            else totalExpense += entry.amount;
+        });
+        
+        // UI আপডেট
+        document.getElementById('totalIncomeAmount').innerText = totalIncome.toLocaleString() + ' টাকা';
+        document.getElementById('totalExpenseAmount').innerText = totalExpense.toLocaleString() + ' টাকা';
+        document.getElementById('balanceAmount').innerText = (totalIncome - totalExpense).toLocaleString() + ' টাকা';
+        
+        // টেবিল রেন্ডার
+        const tbody = document.getElementById('ledgerTableBody');
+        if(ledger.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center p-4">কোনো এন্ট্রি নেই</td></tr>';
+        } else {
+            tbody.innerHTML = ledger.map(e => `
+                <tr class="border-b">
+                    <td class="p-2">${new Date(e.date).toLocaleDateString('bn-BD')}</td>
+                    <td class="p-2">${e.type === 'income' ? '<span class="text-green-600">আয়</span>' : '<span class="text-red-600">ব্যয়</span>'}</td>
+                    <td class="p-2">${e.title}</td>
+                    <td class="p-2 text-right">${e.amount.toLocaleString()} টাকা</td>
+                    <td class="p-2 text-right"><button onclick="deleteLedgerEntry('${e.id}')" class="text-red-500"><i class="fas fa-trash"></i></button></td>
+                </tr>
+            `).join('');
+        }
+    } catch(error) {
+        console.error('Error loading ledger data:', error);
+        showToast('ডাটা লোড করতে সমস্যা হয়েছে!', 'error');
     }
 }
     
-function deleteLedgerEntry(id) {
-    let ledger = JSON.parse(localStorage.getItem('tukn_ledger') || '[]');
-    ledger = ledger.filter(e => e.id !== id);
-    localStorage.setItem('tukn_ledger', JSON.stringify(ledger));
+async function deleteLedgerEntry(id) {
+    if(!confirm('এন্ট্রি ডিলিট করবেন?')) return;
     
-    // বর্তমান কোন ট্যাব দেখাচ্ছে চেক করুন
-    const activeTab = document.querySelector('.tab-content.active-tab')?.id;
-    if(activeTab === 'ledgerTab') {
-        loadLedgerData();  // ledger ট্যাব রিফ্রেশ
-    } else {
-        loadOtherData();   // অন্যান্য ট্যাবের জন্য
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
     }
-    showToast('এন্ট্রি ডিলিট করা হয়েছে');
+    
+    try {
+        const { error } = await client
+            .from('ledger_transactions')
+            .delete()
+            .eq('id', id);
+        
+        if (error) throw error;
+        
+        loadLedgerData();  // রিফ্রেশ
+        showToast('এন্ট্রি ডিলিট করা হয়েছে', 'success');
+    } catch(error) {
+        console.error('Error deleting entry:', error);
+        showToast('ডিলিট করতে সমস্যা!', 'error');
+    }
 }
 
 function showAddLedgerModal() { document.getElementById('ledgerModal').classList.add('active'); document.getElementById('ledgerDate').value = new Date().toISOString().split('T')[0]; }
 function closeLedgerModal() { document.getElementById('ledgerModal').classList.remove('active'); document.getElementById('ledgerForm').reset(); }
 
-document.getElementById('ledgerForm')?.addEventListener('submit', function(e) {
+document.getElementById('ledgerForm')?.addEventListener('submit', async function(e) {
     e.preventDefault();
-    const ledger = JSON.parse(localStorage.getItem('tukn_ledger') || '[]');
-    ledger.push({ id: Date.now(), type: document.getElementById('ledgerType').value, title: document.getElementById('ledgerTitle').value, amount: parseInt(document.getElementById('ledgerAmount').value), date: document.getElementById('ledgerDate').value });
-    localStorage.setItem('tukn_ledger', JSON.stringify(ledger));
-    loadLedgerData();  // ✅ এটা সঠিক
-    closeLedgerModal();
-    showToast('নতুন এন্ট্রি যোগ করা হয়েছে');
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const newEntry = {
+        id: Date.now().toString(),
+        date: document.getElementById('ledgerDate').value,
+        type: document.getElementById('ledgerType').value,
+        title: document.getElementById('ledgerTitle').value,
+        amount: parseInt(document.getElementById('ledgerAmount').value),
+        created_by: currentAdmin?.username,
+        created_at: new Date().toISOString()
+    };
+    
+    try {
+        const { error } = await client
+            .from('ledger_transactions')
+            .insert([newEntry]);
+        
+        if (error) throw error;
+        
+        loadLedgerData();  // রিফ্রেশ
+        closeLedgerModal();
+        showToast('নতুন এন্ট্রি যোগ করা হয়েছে!', 'success');
+    } catch(error) {
+        console.error('Error saving entry:', error);
+        showToast('এন্ট্রি সংরক্ষণে সমস্যা!', 'error');
+    }
 });
 
 function updateEconomy() { showToast('অর্থনীতি তথ্য সংরক্ষিত হয়েছে'); }
