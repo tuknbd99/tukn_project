@@ -447,36 +447,88 @@ async function loadAllData() {
 
    
 async function loadRealDashboard() {
-    const client = initSupabaseClient();
-    if (!client) return;
     try {
-        const { count: total } = await client.from('members').select('*', { count: 'exact', head: true });
-        const { count: active } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'active');
-        const { count: pending } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-        const { data: activeMembers } = await client.from('members').select('monthly_savings').eq('status', 'active');
+        // Supabase ক্লায়েন্ট রেডি না হলে অপেক্ষা করুন
+        let client = _supabaseClient;
+        if (!client) {
+            client = initSupabaseClient();
+            if (!client) {
+                console.warn('Supabase not ready yet, retrying...');
+                setTimeout(loadRealDashboard, 1000);
+                return;
+            }
+        }
+        
+        const { count: total, error: totalError } = await client.from('members').select('*', { count: 'exact', head: true });
+        if (totalError) throw totalError;
+        
+        const { count: active, error: activeError } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'active');
+        if (activeError) throw activeError;
+        
+        const { count: pending, error: pendingError } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
+        if (pendingError) throw pendingError;
+        
+        const { data: activeMembers, error: membersError } = await client.from('members').select('monthly_savings').eq('status', 'active');
+        if (membersError) throw membersError;
+        
         const monthlyCollection = activeMembers?.reduce((s, m) => s + (m.monthly_savings || 500), 0) || 0;
         
-        document.getElementById('dashTotalMembers').innerText = total?.toLocaleString() || '০';
-        document.getElementById('dashActiveMembers').innerText = active?.toLocaleString() || '০';
-        document.getElementById('dashPendingMembers').innerText = pending?.toLocaleString() || '০';
-        document.getElementById('dashMonthlyCollection').innerHTML = monthlyCollection.toLocaleString();
+        // Dashboard এলিমেন্ট আপডেট
+        const dashTotalMembers = document.getElementById('dashTotalMembers');
+        const dashActiveMembers = document.getElementById('dashActiveMembers');
+        const dashPendingMembers = document.getElementById('dashPendingMembers');
+        const dashMonthlyCollection = document.getElementById('dashMonthlyCollection');
         
-        const { data: recentMembers } = await client.from('members').select('full_name, member_id, created_at, status').order('created_at', { ascending: false }).limit(5);
-        const recentList = document.getElementById('recentMembersList');
-        if (recentMembers?.length) {
-            recentList.innerHTML = recentMembers.map(m => `<div class="flex justify-between border-b py-2"><div><p class="font-medium">${m.full_name || '-'}</p><p class="text-xs text-gray-500">${m.member_id}</p></div><div class="text-right"><span class="text-xs px-2 py-0.5 rounded-full ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${m.status === 'active' ? 'সক্রিয়' : 'পেন্ডিং'}</span><p class="text-xs text-gray-400">${new Date(m.created_at).toLocaleDateString('bn-BD')}</p></div></div>`).join('');
-        } else { recentList.innerHTML = '<div class="text-center text-gray-400 py-4">কোনো সদস্য নেই</div>'; }
+        if (dashTotalMembers) dashTotalMembers.innerText = total?.toLocaleString() || '০';
+        if (dashActiveMembers) dashActiveMembers.innerText = active?.toLocaleString() || '০';
+        if (dashPendingMembers) dashPendingMembers.innerText = pending?.toLocaleString() || '০';
+        if (dashMonthlyCollection) dashMonthlyCollection.innerHTML = monthlyCollection.toLocaleString() + ' টাকা';
         
-        const { data: recentPayments } = await client.from('payments').select('member_name, amount, status, submitted_at').order('submitted_at', { ascending: false }).limit(5);
-        const paymentList = document.getElementById('recentPaymentsList');
-        if (recentPayments?.length) {
-            paymentList.innerHTML = recentPayments.map(p => `<div class="flex justify-between border-b py-2"><div><p class="font-medium">${p.member_name || '-'}</p><p class="text-xs text-gray-500">${new Date(p.submitted_at).toLocaleDateString('bn-BD')}</p></div><div class="text-right"><p class="font-bold text-emerald-600">${p.amount?.toLocaleString()} টাকা</p><span class="text-xs px-2 py-0.5 rounded-full ${p.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${p.status === 'approved' ? 'অনুমোদিত' : 'বিচারাধীন'}</span></div></div>`).join('');
-        } else { paymentList.innerHTML = '<div class="text-center text-gray-400 py-4">কোনো পেমেন্ট নেই</div>'; }
+        // সাম্প্রতিক সদস্য
+        const { data: recentMembers, error: recentError } = await client.from('members')
+            .select('full_name, member_id, created_at, status')
+            .order('created_at', { ascending: false })
+            .limit(5);
+        if (!recentError && recentMembers?.length) {
+            const recentList = document.getElementById('recentMembersList');
+            if (recentList) {
+                recentList.innerHTML = recentMembers.map(m => `<div class="flex justify-between border-b py-2"><div><p class="font-medium">${m.full_name || '-'}</p><p class="text-xs text-gray-500">${m.member_id}</p></div><div class="text-right"><span class="text-xs px-2 py-0.5 rounded-full ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${m.status === 'active' ? 'সক্রিয়' : 'পেন্ডিং'}</span><p class="text-xs text-gray-400">${new Date(m.created_at).toLocaleDateString('bn-BD')}</p></div></div>`).join('');
+            }
+        } else {
+            const recentList = document.getElementById('recentMembersList');
+            if (recentList) recentList.innerHTML = '<div class="text-center text-gray-400 py-4">কোনো সদস্য নেই</div>';
+        }
         
-        document.getElementById('totalMembers').innerText = total || 0;
-        document.getElementById('pendingApps').innerText = pending || 0;
-        document.getElementById('totalCollection').innerText = monthlyCollection.toLocaleString();
-    } catch(e) { console.error('Dashboard error:', e); }
+        // সর্বশেষ পেমেন্ট
+        const { data: recentPayments, error: paymentError } = await client.from('payments')
+            .select('member_name, amount, status, submitted_at')
+            .order('submitted_at', { ascending: false })
+            .limit(5);
+        if (!paymentError && recentPayments?.length) {
+            const paymentList = document.getElementById('recentPaymentsList');
+            if (paymentList) {
+                paymentList.innerHTML = recentPayments.map(p => `<div class="flex justify-between border-b py-2"><div><p class="font-medium">${p.member_name || '-'}</p><p class="text-xs text-gray-500">${new Date(p.submitted_at).toLocaleDateString('bn-BD')}</p></div><div class="text-right"><p class="font-bold text-emerald-600">${p.amount?.toLocaleString()} টাকা</p><span class="text-xs px-2 py-0.5 rounded-full ${p.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${p.status === 'approved' ? 'অনুমোদিত' : 'বিচারাধীন'}</span></div></div>`).join('');
+            }
+        } else {
+            const paymentList = document.getElementById('recentPaymentsList');
+            if (paymentList) paymentList.innerHTML = '<div class="text-center text-gray-400 py-4">কোনো পেমেন্ট নেই</div>';
+        }
+        
+        // স্ট্যাটস আপডেট
+        const totalMembersEl = document.getElementById('totalMembers');
+        const pendingAppsEl = document.getElementById('pendingApps');
+        const totalCollectionEl = document.getElementById('totalCollection');
+        
+        if (totalMembersEl) totalMembersEl.innerText = total || 0;
+        if (pendingAppsEl) pendingAppsEl.innerText = pending || 0;
+        if (totalCollectionEl) totalCollectionEl.innerText = monthlyCollection.toLocaleString();
+        
+    } catch(e) { 
+        console.error('Dashboard error:', e);
+        // Error হলে ডিফল্ট মান দেখান
+        const dashTotalMembers = document.getElementById('dashTotalMembers');
+        if (dashTotalMembers) dashTotalMembers.innerText = '০';
+    }
 }
   
 async function loadMembers() {
