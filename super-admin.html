@@ -1413,168 +1413,70 @@ async function loadLedgerData() {
             return;
         }
         
-        // 1️⃣ payments টেবিল থেকে অনুমোদিত সঞ্চয় (আয়)
-        const { data: payments, error: paymentsError } = await client
+        const tbody = document.getElementById('ledgerTableBody');
+        if (!tbody) {
+            console.error('ledgerTableBody not found');
+            return;
+        }
+        
+        // Show loading
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4"><div class="loading-spinner mx-auto"></div> লোড হচ্ছে...</td></tr>';
+        
+        const { data: payments, error } = await client
             .from('payments')
             .select('*')
             .eq('status', 'approved')
             .order('submitted_at', { ascending: false });
         
-        if (paymentsError) throw paymentsError;
+        if (error) throw error;
         
-        // 2️⃣ loan_applications টেবিল থেকে লোন বিতরণ (ব্যয়)
-        const { data: loans, error: loansError } = await client
-            .from('loan_applications')
-            .select('*')
-            .eq('status', 'approved');
-        
-        if (loansError) throw loansError;
-        
-        // 3️⃣ withdrawals টেবিল থেকে উত্তোলন (ব্যয়)
-        const { data: withdrawals, error: withdrawalsError } = await client
-            .from('withdrawals')
-            .select('*')
-            .eq('status', 'approved');
-        
-        if (withdrawalsError) throw withdrawalsError;
-        
-        // 4️⃣ ledger_transactions টেবিল থেকে অন্যান্য লেনদেন
-        const { data: otherTransactions, error: otherError } = await client
-            .from('ledger_transactions')
-            .select('*')
-            .order('date', { ascending: false });
-        
-        if (otherError) throw otherError;
-        
-        // ========== সব লেনদেন একত্রে মের্জ করা ==========
-        let allTransactions = [];
-        
-        // পেমেন্ট থেকে (আয়)
-        if (payments && payments.length > 0) {
-            payments.forEach(p => {
-                let memberId = p.member_id || '';
-                memberId = memberId.replace(/^TUKN-/, '');
-                
-                allTransactions.push({
-                    id: `payment_${p.id}`,
-                    date: p.submitted_at?.split('T')[0] || new Date().toISOString().split('T')[0],
-                    type: 'income',
-                    category: 'মাসিক সঞ্চয়',
-                    title: `${p.month || ''} ${p.year || ''} মাসিক সঞ্চয়`,
-                    amount: p.amount,
-                    member_name: p.member_name,
-                    member_id: memberId,
-                    source: 'সঞ্চয়'
-                });
-            });
+        if (!payments || payments.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4">কোনো লেনদেন নেই</td></tr>';
+            document.getElementById('totalIncomeAmount').innerHTML = '০ টাকা';
+            document.getElementById('totalExpenseAmount').innerHTML = '০ টাকা';
+            document.getElementById('balanceAmount').innerHTML = '০ টাকা';
+            document.getElementById('footerTotalAmount').innerHTML = '০ টাকা';
+            return;
         }
         
-        // লোন বিতরণ থেকে (ব্যয়)
-        if (loans && loans.length > 0) {
-            loans.forEach(l => {
-                let memberId = l.member_id || '';
-                memberId = memberId.replace(/^TUKN-/, '');
-                
-                allTransactions.push({
-                    id: `loan_${l.id}`,
-                    date: l.approved_at?.split('T')[0] || l.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
-                    type: 'expense',
-                    category: 'লোন বিতরণ',
-                    title: `${l.loan_type || 'লোন'} - ${l.amount || 0} টাকা`,
-                    amount: l.amount || 0,
-                    member_name: l.member_name,
-                    member_id: memberId,
-                    source: 'লোন'
-                });
-            });
+        let totalIncome = 0;
+        let html = '';
+        
+        for (let idx = 0; idx < payments.length; idx++) {
+            const p = payments[idx];
+            totalIncome += p.amount;
+            let memberId = (p.member_id || '').replace(/^TUKN-/, '');
+            if (memberId === '') memberId = '-';
+            
+            const dateStr = new Date(p.submitted_at).toLocaleDateString('bn-BD');
+            const monthName = p.month || '';
+            const yearName = p.year || '';
+            
+            html += '<tr class="border-b hover:bg-gray-50">';
+            html += '<td class="p-2 border text-center">' + (idx + 1) + '</td>';
+            html += '<td class="p-2 border text-center">' + dateStr + '</td>';
+            html += '<td class="p-2 border">' + (p.member_name || '-') + '</td>';
+            html += '<td class="p-2 border text-center">' + memberId + '</td>';
+            html += '<td class="p-2 border text-center"><span class="px-2 py-0.5 rounded-full text-xs category-income">মাসিক সঞ্চয়</span></td>';
+            html += '<td class="p-2 border">' + monthName + ' ' + yearName + ' মাসিক সঞ্চয়</td>';
+            html += '<td class="p-2 border text-right text-emerald-600 font-semibold">' + p.amount.toLocaleString() + ' টাকা</td>';
+            html += '<td class="p-2 border text-center">-</td>';
+            html += '</tr>';
         }
         
-        // উত্তোলন থেকে (ব্যয়)
-        if (withdrawals && withdrawals.length > 0) {
-            withdrawals.forEach(w => {
-                let memberId = w.member_id || '';
-                memberId = memberId.replace(/^TUKN-/, '');
-                
-                allTransactions.push({
-                    id: `withdrawal_${w.id}`,
-                    date: w.approved_at?.split('T')[0] || w.requested_at?.split('T')[0] || new Date().toISOString().split('T')[0],
-                    type: 'expense',
-                    category: 'উত্তোলন',
-                    title: `উত্তোলন - ${w.amount} টাকা`,
-                    amount: w.amount || 0,
-                    member_name: w.member_name,
-                    member_id: memberId,
-                    source: 'উত্তোলন'
-                });
-            });
-        }
+        tbody.innerHTML = html;
         
-        // অন্যান্য লেনদেন থেকে (আয়/ব্যয়)
-        if (otherTransactions && otherTransactions.length > 0) {
-            otherTransactions.forEach(o => {
-                allTransactions.push({
-                    id: `other_${o.id}`,
-                    date: o.date,
-                    type: o.type,
-                    category: o.category || (o.type === 'income' ? 'অন্যান্য আয়' : 'অন্যান্য ব্যয়'),
-                    title: o.title,
-                    amount: o.amount,
-                    member_name: o.member_name || '-',
-                    member_id: o.member_id || '-',
-                    source: 'অন্যান্য'
-                });
-            });
-        }
-        
-        // তারিখ অনুযায়ী সাজানো (নতুন থেকে পুরনো)
-        allTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
-        
-        // আয় ও ব্যয় ক্যালকুলেট
-        let totalIncome = 0, totalExpense = 0;
-        allTransactions.forEach(entry => {
-            if (entry.type === 'income') totalIncome += entry.amount;
-            else totalExpense += entry.amount;
-        });
-        
-        // UI আপডেট
         document.getElementById('totalIncomeAmount').innerHTML = totalIncome.toLocaleString() + ' টাকা';
-        document.getElementById('totalExpenseAmount').innerHTML = totalExpense.toLocaleString() + ' টাকা';
-        document.getElementById('balanceAmount').innerHTML = (totalIncome - totalExpense).toLocaleString() + ' টাকা';
+        document.getElementById('totalExpenseAmount').innerHTML = '০ টাকা';
+        document.getElementById('balanceAmount').innerHTML = totalIncome.toLocaleString() + ' টাকা';
+        document.getElementById('footerTotalAmount').innerHTML = totalIncome.toLocaleString() + ' টাকা';
         
-        // ফুটার টোটাল আপডেট
-        const footerTotal = document.getElementById('footerTotalAmount');
-        if (footerTotal) footerTotal.innerHTML = (totalIncome + totalExpense).toLocaleString() + ' টাকা';
-        
-        // টেবিল রেন্ডার
-        const tbody = document.getElementById('ledgerTableBody');
-        if(allTransactions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4">কোনো লেনদেন নেই<\/td><\/tr>';
-        } else {
-            tbody.innerHTML = allTransactions.map((e, index) => {
-                const typeClass = e.type === 'income' ? 'text-emerald-600' : 'text-red-600';
-                const categoryClass = e.type === 'income' ? 'category-income' : 'category-expense';
-                const amountClass = e.type === 'income' ? 'text-emerald-600' : 'text-red-600';
-                
-                let displayMemberId = e.member_id || '-';
-                if (displayMemberId !== '-') displayMemberId = displayMemberId.replace(/^TUKN-/, '');
-                
-                return `<tr class="border-b hover:bg-gray-50">
-                    <td class="p-2 border text-center">${index + 1}</td>
-                    <td class="p-2 border text-center">${new Date(e.date).toLocaleDateString('bn-BD')}</td>
-                    <td class="p-2 border">${e.member_name || '-'}</td>
-                    <td class="p-2 border text-center">${displayMemberId}</td>
-                    <td class="p-2 border text-center"><span class="px-2 py-0.5 rounded-full text-xs ${categoryClass}">${e.category}</span></td>
-                    <td class="p-2 border">${e.title}</td>
-                    <td class="p-2 border text-right ${amountClass} font-semibold">${e.amount.toLocaleString()} টাকা}还
-                    <td class="p-2 border text-center">-</td>
-                </td>`;
-            }).join('');
-        }
-        
-        console.log(`✅ লেজার লোড হয়েছে: ${allTransactions.length} টি লেনদেন (আয়: ${totalIncome}, ব্যয়: ${totalExpense})`);
+        console.log('✅ লেজার লোড হয়েছে:', payments.length, 'টি লেনদেন, মোট:', totalIncome);
         
     } catch(error) {
         console.error('Error loading ledger data:', error);
+        const tbody = document.getElementById('ledgerTableBody');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4 text-red-500">ডাটা লোড করতে সমস্যা হয়েছে!</td></tr>';
         showToast('ডাটা লোড করতে সমস্যা হয়েছে!', 'error');
     }
 }
