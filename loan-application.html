@@ -42,10 +42,6 @@
             z-index: 0;
         }
 
-        .watermark img {
-            width: 550px;
-        }
-
         .top-header {
             display: flex;
             justify-content: space-between;
@@ -475,8 +471,8 @@
             
             <div class="form-grid">
                 <div class="form-group">
-                    <label>সদস্য আইডি / মোবাইল <span style="color:red;">*</span></label>
-                    <input type="text" id="memberSearchInput" placeholder="MEM-1001 বা 01XXXXXXXXX">
+                    <label>সদস্য আইডি / মোবাইল নম্বর <span style="color:red;">*</span></label>
+                    <input type="text" id="memberSearchInput" placeholder="যেমন: MEM-1001 বা 017XXXXXXXX">
                 </div>
                 <div class="form-group">
                     <label>&nbsp;</label>
@@ -493,8 +489,8 @@
                     <input type="text" id="memberPhone" disabled>
                 </div>
                 <div class="form-group">
-                    <label>ইমেইল</label>
-                    <input type="text" id="memberEmail" disabled>
+                    <label>মাসিক সঞ্চয় (টাকা)</label>
+                    <input type="text" id="memberMonthlySavings" disabled>
                 </div>
                 <div class="form-group full">
                     <label>ঠিকানা</label>
@@ -610,14 +606,14 @@
     <div class="emi-section" id="emiSection" style="display:none;">
         <div class="card">
             <div class="card-title">📅 কিস্তির সময়সূচি (EMI Schedule)</div>
-            <table>
+             <table>
                 <thead>
                     <tr><th>কিস্তি</th><th>তারিখ</th><th>পরিমাণ</th><th>স্ট্যাটাস</th></tr>
                 </thead>
                 <tbody id="emiTableBody">
                     <tr><td colspan="4" style="text-align:center;">প্রথমে লোনের তথ্য দিন</td></tr>
                 </tbody>
-            </table>
+             </table>
         </div>
     </div>
 
@@ -709,9 +705,10 @@
         document.getElementById('profitRate').value = getProfitRate(months);
     }
 
-    // সদস্য অনুসন্ধান
+    // সদস্য অনুসন্ধান - মোবাইল নম্বর ও আইডি উভয়ভাবেই কাজ করবে
     async function searchMember() {
         const searchTerm = document.getElementById('memberSearchInput').value.trim();
+        
         if (!searchTerm) {
             showAlert('দয়া করে সদস্য আইডি বা মোবাইল নম্বর লিখুন!', 'error');
             return;
@@ -727,14 +724,28 @@
         searchBtn.disabled = true;
 
         try {
+            // প্রথমে মোবাইল নম্বর দিয়ে চেষ্টা (বাংলাদেশি ফরম্যাট)
+            let query = null;
             const isMobile = /^01[3-9]\d{8}$/.test(searchTerm);
-            let query = supabase.from('members').select('*');
-            if (isMobile) query = query.eq('mobile', searchTerm);
-            else query = query.eq('member_id', searchTerm);
-
+            
+            if (isMobile) {
+                // মোবাইল নম্বর দিয়ে সার্চ
+                console.log("মোবাইল নম্বর দিয়ে সার্চ: " + searchTerm);
+                query = supabase.from('members').select('*').eq('mobile', searchTerm);
+            } else {
+                // সদস্য আইডি দিয়ে সার্চ
+                console.log("সদস্য আইডি দিয়ে সার্চ: " + searchTerm);
+                query = supabase.from('members').select('*').eq('member_id', searchTerm);
+            }
+            
             const { data, error } = await query;
 
-            if (error) throw error;
+            if (error) {
+                console.error("Supabase Error:", error);
+                throw error;
+            }
+
+            console.log("সার্চ রেজাল্ট:", data);
 
             if (!data || data.length === 0) {
                 showAlert('❌ সদস্য পাওয়া যায়নি! সঠিক আইডি বা মোবাইল নম্বর দিন।', 'error');
@@ -750,6 +761,7 @@
             }
 
             const member = data[0];
+            console.log("পাওয়া সদস্য:", member);
 
             if (member.status !== 'active' && member.status !== 'approved') {
                 showAlert('⚠️ আপনার সদস্যপদ এখনও সক্রিয় হয়নি। প্রশাসনের অনুমোদন প্রয়োজন।', 'warning');
@@ -770,7 +782,7 @@
             // ফর্মে তথ্য পপুলেট
             document.getElementById('memberName').value = member.full_name || member.name || '-';
             document.getElementById('memberPhone').value = member.mobile || '-';
-            document.getElementById('memberEmail').value = member.email || 'প্রদান করা হয়নি';
+            document.getElementById('memberMonthlySavings').value = (member.monthly_savings || 500) + ' টাকা';
             document.getElementById('memberAddress').value = member.address || 'প্রদান করা হয়নি';
             
             // মেম্বার কার্ড দেখানো
@@ -798,7 +810,7 @@
             
         } catch(e) {
             console.error('Search error:', e);
-            showAlert('সার্ভার সংযোগে সমস্যা! আবার চেষ্টা করুন।', 'error');
+            showAlert('সার্ভার সংযোগে সমস্যা! আবার চেষ্টা করুন। ' + e.message, 'error');
         } finally {
             searchBtn.innerHTML = originalText;
             searchBtn.disabled = false;
@@ -920,7 +932,6 @@
             member_id: currentMember.member_id,
             member_name: currentMember.full_name || currentMember.name,
             member_mobile: currentMember.mobile,
-            member_email: currentMember.email || '',
             member_address: currentMember.address || '',
             monthly_savings: currentMember.monthly_savings || 500,
             loan_type: loanType,
@@ -968,7 +979,10 @@
     
     // Enter চাপলে সার্চ
     document.getElementById('memberSearchInput').addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') searchMember();
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            searchMember();
+        }
     });
     
     // গ্লোবাল ফাংশন
