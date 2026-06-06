@@ -867,37 +867,121 @@ function editMember(id) {
 async function loadPayments() {
     const loadingDiv = document.getElementById('paymentLoading');
     const table = document.getElementById('paymentTable');
-    if(loadingDiv) loadingDiv.style.display = 'block';
+    
+    if(loadingDiv) {
+        loadingDiv.style.display = 'flex';
+        loadingDiv.innerHTML = '<div class="loading-spinner"></div><p class="text-gray-500 mt-2">পেমেন্ট লোড হচ্ছে...</p>';
+    }
     if(table) table.style.display = 'none';
+    
     try {
         const client = initSupabaseClient();
-        if (!client) throw new Error('Supabase client not initialized');
-        const { data, error } = await client.from('payments').select('*').eq('status', 'pending').order('submitted_at', { ascending: false });
-        if (error) throw error;
+        if (!client) {
+            console.error('Supabase client not initialized');
+            if(loadingDiv) loadingDiv.innerHTML = '<div class="text-red-500 p-4">❌ সংযোগ সমস্যা!</div>';
+            return;
+        }
+        
+        console.log("পেমেন্ট লোড হচ্ছে...");
+        
+        const { data, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('status', 'pending')
+            .order('submitted_at', { ascending: false });
+        
+        if (error) {
+            console.error('Supabase error:', error);
+            throw error;
+        }
+        
+        console.log("পেমেন্ট ডাটা পাওয়া গেছে:", data?.length);
         pendingPaymentsData = data || [];
+        
         renderPaymentList(pendingPaymentsData);
+        
         if(loadingDiv) loadingDiv.style.display = 'none';
         if(table) table.style.display = 'table';
+        
     } catch(error) {
-        console.error('Payment error:', error);
-        if(loadingDiv) loadingDiv.innerHTML = '<div class="text-red-500 p-4">❌ পেমেন্ট লোড করতে সমস্যা!</div>';
+        console.error('Payment loading error:', error);
+        if(loadingDiv) {
+            loadingDiv.innerHTML = '<div class="text-red-500 p-4">❌ পেমেন্ট লোড করতে সমস্যা!<br><small>' + error.message + '</small></div>';
+        }
+        pendingPaymentsData = [];
+        renderPaymentList([]);
     }
 }
 
 function renderPaymentList(payments) {
     const tbody = document.getElementById('paymentApprovalList');
-    if(!tbody) return;
-    if(!payments || payments.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4">কোনো পেন্ডিং পেমেন্ট নেই<\/td><\/tr>';
-        document.getElementById('pendingPayments').innerText = '0';
-        const badge = document.getElementById('pendingPaymentBadge');
-        if(badge) badge.style.display = 'none';
+    if(!tbody) {
+        console.error('paymentApprovalList element not found');
         return;
     }
-    tbody.innerHTML = payments.map(p => `<tr class="border-b"><td class="p-2">${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</td><td class="p-2">${p.member_name || '-'}</td><td class="p-2">${p.member_id || '-'}</td><td class="p-2">${p.month || '-'} ${p.year || '-'}</td><td class="p-2 text-right font-semibold">${(p.amount || 0).toLocaleString()} টাকা}还<td class="p-2"><span class="payment-method-badge payment-method-${p.payment_method === 'bKash' ? 'bkash' : p.payment_method === 'Nagad' ? 'nagad' : 'rocket'}">${p.payment_method || 'cash'}</span></td><td class="p-2"><button onclick="approvePayment('${p.id}')" class="bg-green-500 text-white px-2 py-1 rounded text-xs mr-1">অনুমোদন</button><button onclick="openRejectModal('${p.id}')" class="bg-red-500 text-white px-2 py-1 rounded text-xs">বাতিল</button></td></tr>`).join('');
-    document.getElementById('pendingPayments').innerText = payments.length;
+    
+    console.log("রেন্ডার করছি পেমেন্ট:", payments?.length);
+    
+    if(!payments || payments.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4 text-gray-500">✅ কোনো পেন্ডিং পেমেন্ট নেই</td></tr>';
+        
+        const pendingSpan = document.getElementById('pendingPayments');
+        if(pendingSpan) pendingSpan.innerText = '0';
+        
+        const pendingStats = document.getElementById('pendingPaymentsStat');
+        if(pendingStats) pendingStats.innerText = '0';
+        
+        const badge = document.getElementById('pendingPaymentBadge');
+        if(badge) { 
+            badge.innerText = '0'; 
+            badge.style.display = 'none'; 
+        }
+        return;
+    }
+    
+    tbody.innerHTML = payments.map(p => {
+        // মাসের নাম সঠিকভাবে দেখানো
+        const monthName = p.month || '';
+        const yearText = p.year ? ' ' + p.year : '';
+        const monthDisplay = monthName + yearText;
+        
+        // পেমেন্ট মেথডের জন্য ক্লাস
+        let methodClass = 'payment-method-bkash';
+        if(p.payment_method === 'Nagad') methodClass = 'payment-method-nagad';
+        else if(p.payment_method === 'Rocket') methodClass = 'payment-method-rocket';
+        
+        return `<tr class="border-b hover:bg-gray-50">
+            <td class="p-2 text-center">${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</td>
+            <td class="p-2 font-medium">${p.member_name || '-'}</td>
+            <td class="p-2">${p.member_id || '-'}</td>
+            <td class="p-2 text-center">${monthDisplay || '-'}</td>
+            <td class="p-2 text-right font-semibold text-emerald-600">${(p.amount || 0).toLocaleString()} টাকা</td>
+            <td class="p-2 text-center"><span class="payment-method-badge ${methodClass}">${p.payment_method || 'cash'}</span></td>
+            <td class="p-2 text-center">
+                <button onclick="approvePayment('${p.id}')" class="bg-green-500 text-white px-3 py-1 rounded text-xs mr-1 hover:bg-green-600 transition">
+                    <i class="fas fa-check"></i> অনুমোদন
+                </button>
+                <button onclick="openRejectModal('${p.id}')" class="bg-red-500 text-white px-3 py-1 rounded text-xs hover:bg-red-600 transition">
+                    <i class="fas fa-times"></i> বাতিল
+                </button>
+            </td>
+        </tr>`;
+    }).join('');
+    
+    // স্ট্যাটাস আপডেট
+    const pendingSpan = document.getElementById('pendingPayments');
+    if(pendingSpan) pendingSpan.innerText = payments.length;
+    
+    const pendingStats = document.getElementById('pendingPaymentsStat');
+    if(pendingStats) pendingStats.innerText = payments.length;
+    
     const badge = document.getElementById('pendingPaymentBadge');
-    if(badge) { badge.innerText = payments.length; badge.style.display = payments.length > 0 ? 'inline-block' : 'none'; }
+    if(badge) { 
+        badge.innerText = payments.length; 
+        badge.style.display = payments.length > 0 ? 'inline-block' : 'none'; 
+    }
+    
+    console.log("পেমেন্ট রেন্ডার সম্পন্ন:", payments.length, "টি");
 }
 
 async function approvePayment(paymentId) {
