@@ -1075,42 +1075,141 @@ async function loadPaymentHistory() {
     } catch(error) { console.error('Load payment history error:', error); }
 }
 
-function viewPaymentSlip(paymentId, monthName, amount, paymentMethod) {
+async function viewPaymentSlip(paymentId, monthName, amount, paymentMethod) {
+    showToast('স্লিপ লোড হচ্ছে...', 'info');
+    
+    let approvedBy = '-';
+    let approvedAt = '-';
+    let approvedDate = '-';
+    let approvedTime = '-';
+    let transactionIdUnique = '-';
+    let voucherSlipNo = '-';
+    
+    try {
+        const client = getSupabaseClient();
+        if(client && paymentId) {
+            const { data, error } = await client
+                .from('payments')
+                .select('approved_by, approved_at, transaction_id_unique, voucher_slip_no, status')
+                .eq('id', paymentId)
+                .single();
+            
+            if(!error && data) {
+                if(data.approved_by) approvedBy = data.approved_by;
+                if(data.approved_at) {
+                    approvedAt = data.approved_at;
+                    const approvedDateObj = new Date(data.approved_at);
+                    approvedDate = approvedDateObj.toLocaleDateString('bn-BD');
+                    approvedTime = approvedDateObj.toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                }
+                if(data.transaction_id_unique) transactionIdUnique = data.transaction_id_unique;
+                if(data.voucher_slip_no) voucherSlipNo = data.voucher_slip_no;
+            }
+        }
+    } catch(e) {
+        console.error('Error fetching approval info:', e);
+    }
+    
+    // পেমেন্ট মাধ্যমের নাম বাংলায়
+    let methodDisplay = paymentMethod;
+    if(paymentMethod === 'bank') methodDisplay = 'ব্যাংক';
+    else if(paymentMethod === 'cash') methodDisplay = 'নগদ';
+    else if(paymentMethod === 'bKash') methodDisplay = 'বিকাশ (bKash)';
+    else if(paymentMethod === 'Nagad') methodDisplay = 'নগদ (Nagad)';
+    else if(paymentMethod === 'Rocket') methodDisplay = 'রকেট (Rocket)';
+    else if(paymentMethod === 'CellFin') methodDisplay = 'সেলফিন (CellFin)';
+    
     const slipHTML = `
-    <div style="border:2px solid #059669; border-radius:16px; padding:20px; background:white; max-width:500px; margin:0 auto; font-family:'Noto Sans Bengali', sans-serif;">
+    <div style="border:2px solid #059669; border-radius:16px; padding:20px; background:white; max-width:550px; margin:0 auto; font-family:'Noto Sans Bengali', sans-serif;">
         <div style="text-align:center; border-bottom:2px solid #059669; padding-bottom:15px; margin-bottom:15px;">
             <img src="images/logo.png" style="width:60px; margin:0 auto 10px;" onerror="this.src='https://placehold.co/60x60/059669/white?text=T'">
             <h2 style="font-size:18px; font-weight:bold; color:#059669;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2>
-            <p style="font-size:12px; font-weight:bold;">পেমেন্ট স্লিপ</p>
+            <p style="font-size:12px; font-weight:bold;">পেমেন্ট স্লিপ / ভাউচার</p>
         </div>
-        <div style="margin-bottom:10px;">
-            <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #e5e7eb;">
-                <span style="font-weight:600;">সদস্য আইডি:</span>
-                <span>${currentUser.id}</span>
+        
+        <!-- ভাউচার তথ্য (যদি থাকে) -->
+        ${(voucherSlipNo !== '-' || transactionIdUnique !== '-') ? `
+        <div style="background:#f0fdf4; padding:10px; border-radius:10px; margin-bottom:15px; border:1px solid #059669;">
+            ${voucherSlipNo !== '-' ? `
+            <div style="display:flex; justify-content:space-between; padding:5px 0;">
+                <span style="font-weight:600;">🎫 ভাউচার স্লিপ নং:</span>
+                <span class="font-mono font-bold text-emerald-700">${voucherSlipNo}</span>
             </div>
-            <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #e5e7eb;">
-                <span style="font-weight:600;">নাম:</span>
-                <span>${currentUser.name}</span>
+            ` : ''}
+            ${transactionIdUnique !== '-' ? `
+            <div style="display:flex; justify-content:space-between; padding:5px 0;">
+                <span style="font-weight:600;">🔑 ট্রানজেকশন আইডি:</span>
+                <span class="font-mono text-emerald-700">${transactionIdUnique}</span>
             </div>
-            <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #e5e7eb;">
-                <span style="font-weight:600;">মাস:</span>
-                <span>${monthName}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #e5e7eb;">
-                <span style="font-weight:600;">পরিমাণ:</span>
-                <span class="text-emerald-600 font-bold">${amount.toLocaleString()} টাকা</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #e5e7eb;">
-                <span style="font-weight:600;">পেমেন্ট মাধ্যম:</span>
-                <span>${paymentMethod === 'bank' ? 'ব্যাংক' : (paymentMethod === 'cash' ? 'নগদ' : paymentMethod)}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; padding:8px 0;">
-                <span style="font-weight:600;">স্ট্যাটাস:</span>
-                <span class="text-green-600">✅ পরিশোধিত</span>
+            ` : ''}
+        </div>
+        ` : ''}
+        
+        <!-- সদস্য তথ্য -->
+        <div style="margin-bottom:15px;">
+            <h3 style="font-size:14px; font-weight:bold; color:#064e3b; border-left:3px solid #059669; padding-left:10px; margin-bottom:10px;">📋 সদস্য তথ্য</h3>
+            <div style="background:#f8fafc; padding:10px; border-radius:10px; font-size:13px;">
+                <div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed #e5e7eb;">
+                    <span style="font-weight:600;">সদস্য আইডি:</span>
+                    <span>${currentUser.id}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed #e5e7eb;">
+                    <span style="font-weight:600;">নাম:</span>
+                    <span>${currentUser.name}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:5px 0;">
+                    <span style="font-weight:600;">মোবাইল:</span>
+                    <span>${currentUser.mobile}</span>
+                </div>
             </div>
         </div>
+        
+        <!-- পেমেন্ট তথ্য -->
+        <div style="margin-bottom:15px;">
+            <h3 style="font-size:14px; font-weight:bold; color:#064e3b; border-left:3px solid #059669; padding-left:10px; margin-bottom:10px;">💰 পেমেন্ট তথ্য</h3>
+            <div style="background:#f8fafc; padding:10px; border-radius:10px; font-size:13px;">
+                <div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed #e5e7eb;">
+                    <span style="font-weight:600;">মাস:</span>
+                    <span>${monthName}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed #e5e7eb;">
+                    <span style="font-weight:600;">পরিমাণ:</span>
+                    <span class="text-emerald-600 font-bold">${amount.toLocaleString()} টাকা</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:5px 0;">
+                    <span style="font-weight:600;">পেমেন্ট মাধ্যম:</span>
+                    <span>${methodDisplay}</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- অনুমোদন তথ্য -->
+        <div style="margin-bottom:15px;">
+            <h3 style="font-size:14px; font-weight:bold; color:#064e3b; border-left:3px solid #059669; padding-left:10px; margin-bottom:10px;">✅ অনুমোদন তথ্য</h3>
+            <div style="background:#f8fafc; padding:10px; border-radius:10px; font-size:13px;">
+                <div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed #e5e7eb;">
+                    <span style="font-weight:600;">স্ট্যাটাস:</span>
+                    <span class="text-green-600 font-semibold"><i class="fas fa-check-circle"></i> অনুমোদিত</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed #e5e7eb;">
+                    <span style="font-weight:600;">অনুমোদনকারী:</span>
+                    <span>${approvedBy}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed #e5e7eb;">
+                    <span style="font-weight:600;">অনুমোদনের তারিখ:</span>
+                    <span>${approvedDate !== '-' ? approvedDate : '-'}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; padding:5px 0;">
+                    <span style="font-weight:600;">অনুমোদনের সময়:</span>
+                    <span>${approvedTime !== '-' ? approvedTime : '-'}</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- প্রিন্ট তথ্য -->
         <div style="text-align:center; margin-top:15px; padding-top:10px; border-top:1px dashed #e5e7eb;">
-            <p style="font-size:10px; color:#999;">প্রিন্টের তারিখ: ${new Date().toLocaleString('bn-BD')}</p>
+            <p style="font-size:9px; color:#999;">প্রিন্টের তারিখ: ${new Date().toLocaleString('bn-BD')}</p>
+            <p style="font-size:9px; color:#999;">স্বয়ংক্রিয়ভাবে জেনারেটেড ভাউচার</p>
         </div>
     </div>`;
     
