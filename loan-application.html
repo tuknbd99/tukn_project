@@ -341,7 +341,6 @@
             100% { transform: rotate(360deg); }
         }
 
-        /* ডায়নামিক ফিল্ডের স্টাইল */
         .dynamic-fields {
             margin-top: 15px;
             padding: 15px;
@@ -351,6 +350,18 @@
         }
         .dynamic-fields.show {
             display: block;
+        }
+        
+        .status-paid { color: #16a34a; font-weight: bold; }
+        .status-pending { color: #eab308; font-weight: bold; }
+        .status-overdue { color: #dc2626; font-weight: bold; }
+        .late-fee-badge {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 2px 6px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 600;
         }
 
         @media (max-width: 768px) {
@@ -490,6 +501,21 @@
                             <option value="weekly">সাপ্তাহিক</option>
                         </select>
                     </div>
+                    <div class="form-group">
+                        <label>লোন কার্যকরের তারিখ</label>
+                        <input type="date" id="loanStartDate">
+                        <p class="text-xs text-gray-500 mt-1">* খালি থাকলে বর্তমান তারিখ নেওয়া হবে</p>
+                    </div>
+                    <div class="form-group">
+                        <label>বিলম্ব ফি (%)</label>
+                        <input type="number" id="lateFeePercent" value="2" step="0.5" oninput="calculateLoan()">
+                        <p class="text-xs text-gray-500 mt-1">* কিস্তির নির্ধারিত তারিখের ৫ দিন পর ২% হারে বিলম্ব ফি প্রযোজ্য</p>
+                    </div>
+                    <div class="form-group">
+                        <label>গ্রেস পিরিয়ড (দিন)</label>
+                        <input type="number" id="gracePeriod" value="5" readonly class="bg-gray-100">
+                        <p class="text-xs text-gray-500 mt-1">* কিস্তি জমা দিতে ৫ দিন সময় (বিলম্ব ফি মুক্ত)</p>
+                    </div>
                     <div class="form-group full">
                         <label>বিনিয়োগের উদ্দেশ্য <span style="color:red;">*</span></label>
                         <textarea id="purpose" rows="2" placeholder="বিস্তারিত জানান..."></textarea>
@@ -534,12 +560,18 @@
     <div class="emi-section" id="emiSection" style="display:none;">
         <div class="card">
             <div class="card-title">📅 কিস্তির সময়সূচি (EMI Schedule)</div>
+            <div id="overdueWarning" class="hidden mb-3 p-3 bg-red-50 border border-red-200 rounded-lg"></div>
             <table>
                 <thead>
-                    <tr><th>কিস্তি</th><th>তারিখ</th><th>পরিমাণ</th><th>স্ট্যাটাস</th></tr>
+                    <tr>
+                        <th>কিস্তি</th>
+                        <th>নির্ধারিত তারিখ</th>
+                        <th>পরিমাণ</th>
+                        <th>স্ট্যাটাস</th>
+                    </tr>
                 </thead>
                 <tbody id="emiTableBody">
-                    <tr><td colspan="4" style="text-align:center;">প্রথমে লোনের তথ্য দিন</td></tr>
+                    <tr><td colspan="4" style="text-align:center;">প্রথমে লোনের তথ্য দিন<\/td><\/tr>
                 </tbody>
             </table>
         </div>
@@ -569,6 +601,9 @@
     // পেজ লোডে
     document.getElementById('todayDate').innerHTML = new Date().toLocaleDateString('bn-BD');
     document.getElementById('applicationNo').innerHTML = 'LN-' + Date.now().toString().slice(-8);
+    
+    // লোন কার্যকরের তারিখ ডিফল্ট আজকের তারিখ সেট করুন
+    document.getElementById('loanStartDate').value = new Date().toISOString().split('T')[0];
 
     function showAlert(msg, type) {
         const alertDiv = document.getElementById('alertMsg');
@@ -677,6 +712,33 @@
         }
     };
 
+    // বিলম্ব ফি ক্যালকুলেশন ফাংশন
+    function calculateLateFee(dueDate, emiAmount, lateFeePercent, gracePeriod) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const due = new Date(dueDate);
+        due.setHours(0, 0, 0, 0);
+        
+        // গ্রেস পিরিয়ড শেষের তারিখ
+        const graceEndDate = new Date(due);
+        graceEndDate.setDate(due.getDate() + gracePeriod);
+        
+        // যদি আজকের তারিখ গ্রেস পিরিয়ডের মধ্যে হয়, তাহলে বিলম্ব ফি নেই
+        if (today <= graceEndDate) {
+            return 0;
+        }
+        
+        // কত দিন বিলম্ব হয়েছে
+        const daysOverdue = Math.floor((today - graceEndDate) / (1000 * 60 * 60 * 24));
+        
+        // বিলম্ব ফি গণনা (প্রতি মাসের বিলম্বের জন্য)
+        const monthsOverdue = Math.ceil(daysOverdue / 30);
+        const lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
+        
+        return Math.round(lateFee * 100) / 100;
+    }
+
     // সদস্য অনুসন্ধান
     window.searchMember = async function() {
         const searchTerm = document.getElementById('memberSearchInput').value.trim();
@@ -766,19 +828,27 @@
         }
     };
 
-    // লোন ক্যালকুলেশন
+    // লোন ক্যালকুলেশন (বিলম্ব ফি সহ)
     window.calculateLoan = function() {
         if (!currentMember) return;
         
         const amount = parseFloat(document.getElementById('loanAmount').value) || 0;
         const months = parseInt(document.getElementById('duration').value) || 0;
         const profitRate = parseFloat(document.getElementById('profitRate').value) || 0;
+        const lateFeePercent = parseFloat(document.getElementById('lateFeePercent').value) || 2;
+        const gracePeriod = parseInt(document.getElementById('gracePeriod').value) || 5;
+        
+        let startDate = document.getElementById('loanStartDate').value;
+        if (!startDate) {
+            startDate = new Date().toISOString().split('T')[0];
+            document.getElementById('loanStartDate').value = startDate;
+        }
         
         if (amount <= 0 || months <= 0) {
             document.getElementById('totalProfit').innerHTML = '৳ 0';
             document.getElementById('grandTotal').innerHTML = '৳ 0';
             document.getElementById('emiAmount').innerHTML = '৳ 0';
-            document.getElementById('emiTableBody').innerHTML = '<tr><td colspan="4" style="text-align:center;">লোনের পরিমাণ ও মেয়াদ দিন</td></tr>';
+            document.getElementById('emiTableBody').innerHTML = '<td><td colspan="4" style="text-align:center;">লোনের পরিমাণ ও মেয়াদ দিন<\/td><\/tr>';
             return;
         }
         
@@ -792,25 +862,104 @@
         document.getElementById('grandTotal').innerHTML = '৳ ' + total.toFixed(2);
         document.getElementById('emiAmount').innerHTML = '৳ ' + emi.toFixed(2);
         
-        const startDate = new Date();
+        // EMI টেবিল তৈরি (বিলম্ব ফি সহ)
+        const startDateObj = new Date(startDate);
         let html = '';
+        let overdueCount = 0;
+        let totalLateFeeAmount = 0;
         
         if (installmentType === 'weekly') {
             const weeks = months * 4;
             for (let i = 1; i <= weeks; i++) {
-                let date = new Date(startDate);
-                date.setDate(startDate.getDate() + (i * 7));
-                html += `<tr><td>${i}</td><td>${date.toLocaleDateString('bn-BD')}</td><td>৳ ${emi.toFixed(2)}</td><td>⏳ pending</td></tr>`;
+                let date = new Date(startDateObj);
+                date.setDate(startDateObj.getDate() + (i * 7));
+                const dueDateStr = date.toISOString().split('T')[0];
+                
+                let status = 'pending';
+                let statusText = '<span class="status-pending">⏳ pending</span>';
+                let statusClass = '';
+                let lateFee = 0;
+                
+                // বিলম্ব ফি ক্যালকুলেশন
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const due = new Date(dueDateStr);
+                due.setHours(0, 0, 0, 0);
+                const graceEndDate = new Date(due);
+                graceEndDate.setDate(due.getDate() + gracePeriod);
+                
+                if (today > graceEndDate) {
+                    lateFee = calculateLateFee(dueDateStr, emi, lateFeePercent, gracePeriod);
+                    totalLateFeeAmount += lateFee;
+                    overdueCount++;
+                    status = 'overdue';
+                    statusText = `<span class="status-overdue">⚠️ বিলম্বিত</span> <span class="late-fee-badge">+ ৳ ${lateFee.toFixed(2)}</span>`;
+                    statusClass = 'style="background:#fff3e0;"';
+                } else if (today > due) {
+                    statusText = '<span class="status-warning">⏳ গ্রেস পিরিয়ডে</span>';
+                }
+                
+                html += `<tr ${statusClass}>
+                    <td>${i}<\/td>
+                    <td>${date.toLocaleDateString('bn-BD')}<\/td>
+                    <td>৳ ${emi.toFixed(2)}${lateFee > 0 ? `<br><span class="text-red-500 text-xs">বিলম্ব ফি: ৳ ${lateFee.toFixed(2)}</span>` : ''}<\/td>
+                    <td>${statusText}<\/td>
+                <\/tr>`;
             }
         } else {
             for (let i = 1; i <= months; i++) {
-                let date = new Date(startDate);
-                date.setMonth(startDate.getMonth() + i);
-                html += `<tr><td>${i}</td><td>${date.toLocaleDateString('bn-BD')}</td><td>৳ ${emi.toFixed(2)}</td><td>⏳ pending</td></tr>`;
+                let date = new Date(startDateObj);
+                date.setMonth(startDateObj.getMonth() + i);
+                const dueDateStr = date.toISOString().split('T')[0];
+                
+                let status = 'pending';
+                let statusText = '<span class="status-pending">⏳ pending</span>';
+                let statusClass = '';
+                let lateFee = 0;
+                
+                // বিলম্ব ফি ক্যালকুলেশন
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const due = new Date(dueDateStr);
+                due.setHours(0, 0, 0, 0);
+                const graceEndDate = new Date(due);
+                graceEndDate.setDate(due.getDate() + gracePeriod);
+                
+                if (today > graceEndDate) {
+                    lateFee = calculateLateFee(dueDateStr, emi, lateFeePercent, gracePeriod);
+                    totalLateFeeAmount += lateFee;
+                    overdueCount++;
+                    status = 'overdue';
+                    statusText = `<span class="status-overdue">⚠️ বিলম্বিত</span> <span class="late-fee-badge">+ ৳ ${lateFee.toFixed(2)}</span>`;
+                    statusClass = 'style="background:#fff3e0;"';
+                } else if (today > due) {
+                    statusText = '<span class="status-warning">⏳ গ্রেস পিরিয়ডে</span>';
+                }
+                
+                html += `<tr ${statusClass}>
+                    <td>${i}<\/td>
+                    <td>${date.toLocaleDateString('bn-BD')}<\/td>
+                    <td>৳ ${emi.toFixed(2)}${lateFee > 0 ? `<br><span class="text-red-500 text-xs">বিলম্ব ফি: ৳ ${lateFee.toFixed(2)}</span>` : ''}<\/td>
+                    <td>${statusText}<\/td>
+                <\/tr>`;
             }
         }
         
         document.getElementById('emiTableBody').innerHTML = html;
+        
+        // বিলম্বিত কিস্তির সতর্কতা
+        const overdueWarning = document.getElementById('overdueWarning');
+        if (overdueCount > 0) {
+            overdueWarning.classList.remove('hidden');
+            overdueWarning.innerHTML = `
+                <i class="fas fa-exclamation-triangle text-red-500 mr-2"></i>
+                <span class="text-red-700 font-semibold">${overdueCount} টি কিস্তি বিলম্বিত হয়েছে!</span><br>
+                <span class="text-red-600 text-sm">মোট আনুমানিক বিলম্ব ফি: ৳ ${totalLateFeeAmount.toFixed(2)}</span>
+                <p class="text-xs text-gray-600 mt-1">* ${gracePeriod} দিন গ্রেস পিরিয়ড শেষ হবার পর বিলম্ব ফি প্রযোজ্য হবে</p>
+            `;
+        } else {
+            overdueWarning.classList.add('hidden');
+        }
     };
 
     // লোন আবেদন জমা
@@ -825,6 +974,13 @@
         const months = parseInt(document.getElementById('duration').value) || 0;
         const purpose = document.getElementById('purpose').value;
         const financeType = document.getElementById('financeType').value;
+        const lateFeePercent = parseFloat(document.getElementById('lateFeePercent').value) || 2;
+        const gracePeriod = parseInt(document.getElementById('gracePeriod').value) || 5;
+        
+        let loanStartDate = document.getElementById('loanStartDate').value;
+        if (!loanStartDate) {
+            loanStartDate = new Date().toISOString().split('T')[0];
+        }
         
         if (!loanType) {
             showAlert('❌ লোনের ধরন নির্বাচন করুন!', 'error');
@@ -905,6 +1061,9 @@
             emi_amount: emi,
             purpose: purpose,
             additional_data: additionalData,
+            loan_start_date: loanStartDate,
+            late_fee_percent: lateFeePercent,
+            grace_period_days: gracePeriod,
             status: 'pending',
             submitted_at: new Date().toISOString()
         };
@@ -950,6 +1109,11 @@
     // লোনের ধরন পরিবর্তনে ডায়নামিক ফিল্ড আপডেট
     document.getElementById('loanType').addEventListener('change', function() {
         updateDynamicFields();
+        calculateLoan();
+    });
+    
+    // লোন শুরুর তারিখ পরিবর্তনে ক্যালকুলেশন আপডেট
+    document.getElementById('loanStartDate').addEventListener('change', function() {
         calculateLoan();
     });
     
