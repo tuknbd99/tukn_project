@@ -2113,13 +2113,31 @@ async function processWithdraw() {
     }
     
     let balance = 0, withdrawTypeName = '';
-    if(currentWithdrawType === 'bonus') { balance = userFunds.referralBonus; withdrawTypeName = 'রেফারেল বোনাস'; }
-    else if(currentWithdrawType === 'savingsProfit') { balance = userFunds.savingsProfit; withdrawTypeName = 'সঞ্চয় লভ্যাংশ'; }
-    else if(currentWithdrawType === 'investmentProfit') { balance = userFunds.investmentProfit; withdrawTypeName = 'বিনিয়োগ লভ্যাংশ'; }
-    else if(currentWithdrawType === 'referralProfit') { balance = userFunds.referralProfit; withdrawTypeName = 'রেফারেল লভ্যাংশ'; }
-    else { balance = userFunds.monthlySavings; withdrawTypeName = 'মূলধন'; }
+    if(currentWithdrawType === 'bonus') { 
+        balance = userFunds.referralBonus; 
+        withdrawTypeName = 'রেফারেল বোনাস'; 
+    }
+    else if(currentWithdrawType === 'savingsProfit') { 
+        balance = userFunds.savingsProfit; 
+        withdrawTypeName = 'সঞ্চয় লভ্যাংশ'; 
+    }
+    else if(currentWithdrawType === 'investmentProfit') { 
+        balance = userFunds.investmentProfit; 
+        withdrawTypeName = 'বিনিয়োগ লভ্যাংশ'; 
+    }
+    else if(currentWithdrawType === 'referralProfit') { 
+        balance = userFunds.referralProfit; 
+        withdrawTypeName = 'রেফারেল লভ্যাংশ'; 
+    }
+    else { 
+        balance = userFunds.monthlySavings; 
+        withdrawTypeName = 'মূলধন'; 
+    }
     
-    if(amount > balance) { showToast(`আপনার ব্যালেন্স ${balance.toLocaleString()} টাকা। এর বেশি উত্তোলন করতে পারবেন না।`, 'error'); return; }
+    if(amount > balance) { 
+        showToast(`আপনার ব্যালেন্স ${balance.toLocaleString()} টাকা। এর বেশি উত্তোলন করতে পারবেন না।`, 'error'); 
+        return; 
+    }
     
     const mobileNumber = document.getElementById('mobileNumber')?.value;
     const bankNameInput = document.getElementById('bankName')?.value;
@@ -2127,29 +2145,86 @@ async function processWithdraw() {
     const accountHolderNameInput = document.getElementById('accountHolderName')?.value;
     const mobileMethods = ['bkash', 'nagad', 'rocket', 'cellfin', 'mcash'];
     
-    if(mobileMethods.includes(method)) { if(!mobileNumber || mobileNumber.length < 11) { showToast('সঠিক মোবাইল নম্বর দিন!', 'error'); return; } }
-    else if(method === 'bank') { if(!bankNameInput || !accountNumberInput || !accountHolderNameInput) { showToast('ব্যাংকের সকল তথ্য পূরণ করুন!', 'error'); return; } }
+    let accountInfo = {};
+    let methodDisplay = method;
+    
+    if(mobileMethods.includes(method)) {
+        if(!mobileNumber || mobileNumber.length < 11) { 
+            showToast('সঠিক মোবাইল নম্বর দিন!', 'error'); 
+            return; 
+        }
+        accountInfo = { mobile: mobileNumber };
+        if(method === 'bkash') methodDisplay = 'বিকাশ (bKash)';
+        else if(method === 'nagad') methodDisplay = 'নগদ (Nagad)';
+        else if(method === 'rocket') methodDisplay = 'রকেট (Rocket)';
+        else if(method === 'cellfin') methodDisplay = 'সেলফিন (CellFin)';
+        else if(method === 'mcash') methodDisplay = 'এমক্যাশ (mCash)';
+    } 
+    else if(method === 'bank') {
+        if(!bankNameInput || !accountNumberInput || !accountHolderNameInput) { 
+            showToast('ব্যাংকের সকল তথ্য পূরণ করুন!', 'error'); 
+            return; 
+        }
+        accountInfo = { bank_name: bankNameInput, account_number: accountNumberInput, holder_name: accountHolderNameInput };
+        methodDisplay = 'ব্যাংক';
+    }
     
     showToast('উত্তোলনের অনুরোধ প্রক্রিয়াকরণ হচ্ছে...', 'info');
     
-    const methodNames = { 'bkash': 'বিকাশ (bKash)', 'nagad': 'নগদ (Nagad)', 'rocket': 'রকেট (Rocket)', 'cellfin': 'সেলফিন (CellFin)', 'mcash': 'এমক্যাশ (mCash)', 'bank': 'ব্যাংক' };
-    let accountInfo = {};
-    if(mobileMethods.includes(method)) accountInfo = { mobile: mobileNumber };
-    else if(method === 'bank') accountInfo = { bank_name: bankNameInput, account_number: accountNumberInput, holder_name: accountHolderNameInput };
-    
     let client = getSupabaseClient();
+    if (!client) {
+        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
     try {
-        const withdrawData = { member_id: currentUser.id, member_name: currentUser.name, type: withdrawTypeName, amount: amount, method: methodNames[method] || method, account_info: JSON.stringify(accountInfo), status: 'pending', requested_at: new Date().toISOString() };
-        if(client) { await client.from('withdrawals').insert([withdrawData]); showToast(`✅ ${amount.toLocaleString()} টাকা উত্তোলনের অনুরোধ জমা হয়েছে!`, 'success');
-            if(currentWithdrawType === 'bonus') userFunds.referralBonus -= amount;
-            else if(currentWithdrawType === 'savingsProfit') userFunds.savingsProfit -= amount;
-            else if(currentWithdrawType === 'investmentProfit') userFunds.investmentProfit -= amount;
-            else if(currentWithdrawType === 'referralProfit') userFunds.referralProfit -= amount;
-            else userFunds.monthlySavings -= amount;
-            updateFundsDisplay();
-        } else { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); }
+        // 1. উত্তোলনের রিকোয়েস্ট ডাটাবেসে সেভ করুন
+        const withdrawData = { 
+            member_id: currentUser.id, 
+            member_name: currentUser.name, 
+            type: withdrawTypeName, 
+            amount: amount, 
+            method: methodDisplay, 
+            account_info: JSON.stringify(accountInfo), 
+            status: 'pending', 
+            requested_at: new Date().toISOString() 
+        };
+        
+        const { error: insertError } = await client.from('withdrawals').insert([withdrawData]);
+        if (insertError) {
+            console.error('Insert error:', insertError);
+            throw insertError;
+        }
+        
+        // 2. সদস্যের ব্যালেন্স থেকে টাকা কেটে নিন (শুধু লোকাল স্টেট আপডেট করুন, ডাটাবেস থেকে কাটবেন না)
+        // নোট: সুপার অ্যাডমিন অনুমোদন করার পর ডাটাবেস থেকে টাকা কাটা হবে
+        if(currentWithdrawType === 'bonus') {
+            userFunds.referralBonus -= amount;
+            userBalances.bonus -= amount;
+        } else if(currentWithdrawType === 'savingsProfit') {
+            userFunds.savingsProfit -= amount;
+            userBalances.savingsProfit -= amount;
+        } else if(currentWithdrawType === 'investmentProfit') {
+            userFunds.investmentProfit -= amount;
+            userBalances.investmentProfit -= amount;
+        } else if(currentWithdrawType === 'referralProfit') {
+            userFunds.referralProfit -= amount;
+            userBalances.referralProfit -= amount;
+        } else {
+            userFunds.monthlySavings -= amount;
+            userBalances.capital -= amount;
+        }
+        
+        // লোকাল স্টেট আপডেট করুন
+        updateFundsDisplay();
+        
+        showToast(`✅ ${amount.toLocaleString()} টাকা উত্তোলনের অনুরোধ জমা হয়েছে! প্রশাসন অনুমোদন দিলে টাকা পাবেন।`, 'success');
         closeWithdrawModal();
-    } catch(error) { console.error('Withdraw error:', error); showToast('উত্তোলন প্রক্রিয়ায় সমস্যা!', 'error'); }
+        
+    } catch(error) { 
+        console.error('Withdraw error:', error); 
+        showToast('উত্তোলন প্রক্রিয়ায় সমস্যা! আবার চেষ্টা করুন।', 'error'); 
+    }
 }
 
 // সদস্য ড্যাশবোর্ডে উত্তোলন ইতিহাস দেখানোর ফাংশন
