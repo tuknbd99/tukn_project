@@ -72,7 +72,7 @@
         .status-completed { background: #e3f2fd; color: #1565c0; }
         .status-cancelled { background: #eceff1; color: #546e7a; }
         iframe { background: white; }
-    </style>
+        </style>
 </head>
 <body class="watermark-container">
 <div class="dashboard-wrapper">
@@ -924,7 +924,7 @@ function renderPaymentList(payments) {
     console.log("রেন্ডার করছি পেমেন্ট:", payments?.length);
     
     if(!payments || payments.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4 text-gray-500">✅ কোনো পেন্ডিং পেমেন্ট নেই</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4 text-gray-500">✅ কোনো পেন্ডিং পেমেন্ট নেই</td></tr>';
         
         const pendingSpan = document.getElementById('pendingPayments');
         if(pendingSpan) pendingSpan.innerText = '0';
@@ -941,30 +941,41 @@ function renderPaymentList(payments) {
     }
     
     tbody.innerHTML = payments.map(p => {
-        // মাসের নাম সঠিকভাবে দেখানো
         const monthName = p.month || '';
         const yearText = p.year ? ' ' + p.year : '';
         const monthDisplay = monthName + yearText;
         
-        // পেমেন্ট মেথডের জন্য ক্লাস
         let methodClass = 'payment-method-bkash';
         if(p.payment_method === 'Nagad') methodClass = 'payment-method-nagad';
         else if(p.payment_method === 'Rocket') methodClass = 'payment-method-rocket';
         else if(p.payment_method === 'bank') methodClass = 'payment-method-bkash';
         
-        return `<tr class="border-b hover:bg-gray-50">
+        // পেমেন্ট তথ্য সংক্ষেপে দেখানো
+        let paymentInfo = '';
+        if(p.payment_method === 'bank') {
+            paymentInfo = `<span class="text-xs text-gray-500">🏦 ${p.bank_name || '-'}</span>`;
+        } else if(p.payment_method === 'cash') {
+            paymentInfo = `<span class="text-xs text-gray-500">👤 ${p.receiver_name || '-'}</span>`;
+        } else {
+            paymentInfo = `<span class="text-xs text-gray-500">📱 ${p.sender_mobile || '-'}</span>`;
+        }
+        
+        return `<tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="showPaymentDetails('${p.id}')">
             <td class="p-2 text-center">${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</td>
             <td class="p-2 font-medium">${p.member_name || '-'}</td>
             <td class="p-2">${p.member_id || '-'}</td>
             <td class="p-2 text-center">${monthDisplay || '-'}</td>
             <td class="p-2 text-right font-semibold text-emerald-600">${(p.amount || 0).toLocaleString()} টাকা</td>
-            <td class="p-2 text-center"><span class="payment-method-badge ${methodClass}">${p.payment_method || 'cash'}</span></td>
+            <td class="p-2 text-center"><span class="payment-method-badge ${methodClass}">${p.payment_method || 'cash'}</span><br>${paymentInfo}</td>
             <td class="p-2 text-center">
-                <button onclick="approvePayment('${p.id}')" class="bg-green-500 text-white px-3 py-1 rounded text-xs mr-1 hover:bg-green-600 transition">
+                <button onclick="event.stopPropagation(); approvePayment('${p.id}')" class="bg-green-500 text-white px-3 py-1 rounded text-xs mr-1 hover:bg-green-600 transition">
                     <i class="fas fa-check"></i> অনুমোদন
                 </button>
-                <button onclick="openRejectModal('${p.id}')" class="bg-red-500 text-white px-3 py-1 rounded text-xs hover:bg-red-600 transition">
+                <button onclick="event.stopPropagation(); openRejectModal('${p.id}')" class="bg-red-500 text-white px-3 py-1 rounded text-xs hover:bg-red-600 transition">
                     <i class="fas fa-times"></i> বাতিল
+                </button>
+                <button onclick="event.stopPropagation(); showPaymentDetails('${p.id}')" class="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600 transition">
+                    <i class="fas fa-eye"></i> বিস্তারিত
                 </button>
             </td>
         </tr>`;
@@ -986,6 +997,239 @@ function renderPaymentList(payments) {
     console.log("পেমেন্ট রেন্ডার সম্পন্ন:", payments.length, "টি");
 }
 
+    // পেমেন্ট বিস্তারিত দেখানোর মডাল HTML
+function addPaymentDetailsModal() {
+    if(document.getElementById('paymentDetailsModal')) return;
+    
+    const modalHTML = `
+    <div id="paymentDetailsModal" class="modal-overlay" onclick="closePaymentDetailsModalOnOverlay(event)">
+        <div class="modal-container" style="max-width: 650px;">
+            <div class="p-5">
+                <div class="flex justify-between items-center border-b pb-3 mb-4">
+                    <h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-info-circle mr-2"></i>পেমেন্ট বিস্তারিত তথ্য</h3>
+                    <button onclick="closePaymentDetailsModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
+                </div>
+                <div id="paymentDetailsContent" class="space-y-3">
+                    <div class="text-center py-8"><div class="loading-spinner mx-auto"></div><p>লোড হচ্ছে...</p></div>
+                </div>
+                <div class="flex gap-3 mt-5 pt-3 border-t">
+                    <button onclick="approvePaymentFromDetails()" id="detailsApproveBtn" class="flex-1 bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition">✅ অনুমোদন</button>
+                    <button onclick="openRejectModalFromDetails()" id="detailsRejectBtn" class="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 transition">❌ বাতিল</button>
+                    <button onclick="closePaymentDetailsModal()" class="flex-1 bg-gray-500 text-white py-2 rounded-lg hover:bg-gray-600 transition">বন্ধ</button>
+                </div>
+            </div>
+        </div>
+    </div>`;
+    
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+}
+
+let currentPaymentDetails = null;
+
+async function showPaymentDetails(paymentId) {
+    addPaymentDetailsModal();
+    
+    const modal = document.getElementById('paymentDetailsModal');
+    const contentDiv = document.getElementById('paymentDetailsContent');
+    
+    if(!modal || !contentDiv) return;
+    
+    modal.classList.add('active');
+    contentDiv.innerHTML = '<div class="text-center py-8"><div class="loading-spinner mx-auto"></div><p>তথ্য লোড হচ্ছে...</p></div>';
+    
+    try {
+        const client = initSupabaseClient();
+        if(!client) throw new Error('Supabase client not initialized');
+        
+        const { data, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('id', paymentId)
+            .single();
+        
+        if(error) throw error;
+        
+        currentPaymentDetails = data;
+        
+        // পেমেন্ট মাধ্যম অনুযায়ী তথ্য দেখানো
+        let paymentSpecificHtml = '';
+        
+        if(data.payment_method === 'bank') {
+            paymentSpecificHtml = `
+                <div class="bg-blue-50 p-3 rounded-lg">
+                    <h4 class="font-bold text-blue-700 mb-2"><i class="fas fa-university mr-1"></i>ব্যাংক পেমেন্ট তথ্য</h4>
+                    <div class="grid grid-cols-2 gap-2 text-sm">
+                        <div><span class="font-semibold">ব্যাংকের নাম:</span></div><div>${data.bank_name || '-'}</div>
+                        <div><span class="font-semibold">শাখার নাম:</span></div><div>${data.branch_name || '-'}</div>
+                        <div><span class="font-semibold">একাউন্ট নম্বর:</span></div><div>${data.account_number || '-'}</div>
+                        <div><span class="font-semibold">একাউন্টের নাম:</span></div><div>${data.account_name || '-'}</div>
+                        <div><span class="font-semibold">ট্রানজেকশন রেফারেন্স:</span></div><div>${data.transaction_ref || '-'}</div>
+                        <div><span class="font-semibold">টেলিফোন নম্বর:</span></div><div>${data.bank_phone || '-'}</div>
+                    </div>
+                </div>
+            `;
+        } 
+        else if(data.payment_method === 'cash') {
+            paymentSpecificHtml = `
+                <div class="bg-yellow-50 p-3 rounded-lg">
+                    <h4 class="font-bold text-yellow-700 mb-2"><i class="fas fa-hand-holding-usd mr-1"></i>ক্যাশ পেমেন্ট তথ্য</h4>
+                    <div class="grid grid-cols-2 gap-2 text-sm">
+                        <div><span class="font-semibold">গ্রহীতার নাম:</span></div><div>${data.receiver_name || '-'}</div>
+                        <div><span class="font-semibold">গ্রহীতার আইডি:</span></div><div>${data.receiver_id || '-'}</div>
+                        <div><span class="font-semibold">গ্রহীতার মোবাইল:</span></div><div>${data.receiver_mobile || '-'}</div>
+                    </div>
+                </div>
+            `;
+        }
+        else if(data.payment_method === 'bKash' || data.payment_method === 'Nagad' || data.payment_method === 'Rocket' || data.payment_method === 'CellFin') {
+            let methodName = data.payment_method;
+            if(methodName === 'bKash') methodName = 'বিকাশ';
+            else if(methodName === 'Nagad') methodName = 'নগদ';
+            else if(methodName === 'Rocket') methodName = 'রকেট';
+            else if(methodName === 'CellFin') methodName = 'সেলফিন';
+            
+            paymentSpecificHtml = `
+                <div class="bg-green-50 p-3 rounded-lg">
+                    <h4 class="font-bold text-green-700 mb-2"><i class="fas fa-mobile-alt mr-1"></i>${methodName} পেমেন্ট তথ্য</h4>
+                    <div class="grid grid-cols-2 gap-2 text-sm">
+                        <div><span class="font-semibold">সেন্ডার নম্বর:</span></div><div>${data.sender_mobile || '-'}</div>
+                        <div><span class="font-semibold">ট্রানজেকশন আইডি:</span></div><div>${data.transaction_id || '-'}</div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // ভাউচার তথ্য দেখানো
+        let voucherHtml = '';
+        if(data.voucher_slip_no || data.transaction_id_unique) {
+            voucherHtml = `
+                <div class="bg-purple-50 p-3 rounded-lg">
+                    <h4 class="font-bold text-purple-700 mb-2"><i class="fas fa-receipt mr-1"></i>ভাউচার তথ্য</h4>
+                    <div class="grid grid-cols-2 gap-2 text-sm">
+                        <div><span class="font-semibold">ভাউচার স্লিপ নং:</span></div><div class="font-mono">${data.voucher_slip_no || '-'}</div>
+                        <div><span class="font-semibold">ট্রানজেকশন আইডি:</span></div><div class="font-mono">${data.transaction_id_unique || '-'}</div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        const html = `
+            <div class="bg-gray-50 p-3 rounded-lg">
+                <h4 class="font-bold text-gray-700 mb-2"><i class="fas fa-user-circle mr-1"></i>সদস্য তথ্য</h4>
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div><span class="font-semibold">সদস্য আইডি:</span></div><div>${data.member_id || '-'}</div>
+                    <div><span class="font-semibold">সদস্যের নাম:</span></div><div>${data.member_name || '-'}</div>
+                    <div><span class="font-semibold">মোবাইল নম্বর:</span></div><div>${data.mobile || '-'}</div>
+                </div>
+            </div>
+            
+            <div class="bg-gray-50 p-3 rounded-lg">
+                <h4 class="font-bold text-gray-700 mb-2"><i class="fas fa-credit-card mr-1"></i>পেমেন্ট তথ্য</h4>
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div><span class="font-semibold">পেমেন্ট মাধ্যম:</span></div><div><span class="payment-method-badge payment-method-${data.payment_method === 'bKash' ? 'bkash' : (data.payment_method === 'Nagad' ? 'nagad' : 'rocket')}">${data.payment_method || 'cash'}</span></div>
+                    <div><span class="font-semibold">মাস/বছর:</span></div><div>${data.month || '-'} ${data.year || '-'}</div>
+                    <div><span class="font-semibold">পরিমাণ:</span></div><div class="text-emerald-600 font-bold">${(data.amount || 0).toLocaleString()} টাকা</div>
+                    <div><span class="font-semibold">জমার তারিখ:</span></div><div>${data.submitted_at ? new Date(data.submitted_at).toLocaleString('bn-BD') : '-'}</div>
+                </div>
+            </div>
+            
+            ${paymentSpecificHtml}
+            ${voucherHtml}
+            
+            <div class="bg-orange-50 p-3 rounded-lg">
+                <h4 class="font-bold text-orange-700 mb-2"><i class="fas fa-clock mr-1"></i>অনুমোদন অবস্থা</h4>
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div><span class="font-semibold">বর্তমান স্ট্যাটাস:</span></div><div><span class="status-badge status-pending">বিচারাধীন</span></div>
+                </div>
+            </div>
+        `;
+        
+        contentDiv.innerHTML = html;
+        
+        // অনুমোদন ও বাতিল বাটনের জন্য আইডি সেট
+        const approveBtn = document.getElementById('detailsApproveBtn');
+        const rejectBtn = document.getElementById('detailsRejectBtn');
+        
+        if(approveBtn) approveBtn.onclick = () => approvePaymentFromDetails();
+        if(rejectBtn) rejectBtn.onclick = () => openRejectModalFromDetails();
+        
+    } catch(e) {
+        console.error('Error loading payment details:', e);
+        contentDiv.innerHTML = '<div class="text-red-500 text-center py-4">❌ তথ্য লোড করতে সমস্যা হয়েছে!</div>';
+    }
+}
+
+function closePaymentDetailsModal() {
+    const modal = document.getElementById('paymentDetailsModal');
+    if(modal) {
+        modal.classList.remove('active');
+    }
+    currentPaymentDetails = null;
+}
+
+function closePaymentDetailsModalOnOverlay(e) {
+    if(e.target.id === 'paymentDetailsModal') {
+        closePaymentDetailsModal();
+    }
+}
+
+async function approvePaymentFromDetails() {
+    if(!currentPaymentDetails) {
+        showToast('কোনো পেমেন্ট নির্বাচিত নেই!', 'error');
+        return;
+    }
+    
+    if(!confirm(`সদস্য: ${currentPaymentDetails.member_name}\nপরিমাণ: ${currentPaymentDetails.amount} টাকা\nপেমেন্ট মাধ্যম: ${currentPaymentDetails.payment_method}\n\nপেমেন্ট অনুমোদন দেবেন?`)) return;
+    
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    try {
+        const { data: member, error: fetchError } = await client.from('members').select('balance').eq('member_id', currentPaymentDetails.member_id).single();
+        if (fetchError) console.error('Member fetch error:', fetchError);
+        
+        const currentBalance = member?.balance || 0;
+        const newBalance = currentBalance + currentPaymentDetails.amount;
+        
+        await client.from('members').update({ balance: newBalance }).eq('member_id', currentPaymentDetails.member_id);
+        await client.from('payments').update({ 
+            status: 'approved', 
+            approved_by: currentAdmin?.username, 
+            approved_at: new Date().toISOString() 
+        }).eq('id', currentPaymentDetails.id);
+        
+        // লোকাল ডাটা আপডেট
+        const paymentIndex = pendingPaymentsData.findIndex(p => p.id == currentPaymentDetails.id);
+        if (paymentIndex !== -1) {
+            pendingPaymentsData.splice(paymentIndex, 1);
+        }
+        
+        const memberIndex = membersData.findIndex(m => m.member_id === currentPaymentDetails.member_id);
+        if (memberIndex !== -1) membersData[memberIndex].balance = newBalance;
+        
+        renderPaymentList(pendingPaymentsData);
+        renderMembersList();
+        updateStats();
+        
+        showToast('✅ পেমেন্ট অনুমোদিত হয়েছে!', 'success');
+        closePaymentDetailsModal();
+        loadPayments();
+        
+    } catch(error) {
+        console.error('Approve error:', error);
+        showToast('পেমেন্ট অনুমোদন ব্যর্থ!', 'error');
+    }
+}
+
+function openRejectModalFromDetails() {
+    if(!currentPaymentDetails) {
+        showToast('কোনো পেমেন্ট নির্বাচিত নেই!', 'error');
+        return;
+    }
+    openRejectModal(currentPaymentDetails.id);
+    closePaymentDetailsModal();
+}
+    
 async function approvePayment(paymentId) {
     const client = initSupabaseClient();
     if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
