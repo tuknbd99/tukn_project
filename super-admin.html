@@ -720,6 +720,234 @@ function addWithdrawalDetailsModal() {
     document.body.insertAdjacentHTML('beforeend', modalHTML);
 }
 
+// বিস্তারিত দেখানোর ফাংশন
+async function showWithdrawalDetails(withdrawalId) {
+    addWithdrawalDetailsModal();
+    
+    const modal = document.getElementById('withdrawalDetailsModal');
+    const contentDiv = document.getElementById('withdrawalDetailsContent');
+    
+    if(!modal || !contentDiv) return;
+    
+    modal.classList.add('active');
+    contentDiv.innerHTML = '<div class="text-center py-8"><div class="loading-spinner mx-auto"></div><p>তথ্য লোড হচ্ছে...</p></div>';
+    
+    try {
+        const client = initSupabaseClient();
+        if(!client) throw new Error('Supabase client not initialized');
+        
+        const { data, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('id', withdrawalId)
+            .single();
+        
+        if(error) throw error;
+        
+        currentWithdrawalDetails = data;
+        
+        // ফান্ডের ধরন অনুযায়ী আইকন ও রঙ
+        let fundIcon = '', fundColor = '', fundBg = '';
+        if(data.type === 'রেফারেল বোনাস') {
+            fundIcon = '🎁';
+            fundColor = 'text-purple-700';
+            fundBg = 'bg-purple-50';
+        } else if(data.type === 'সঞ্চয় লভ্যাংশ') {
+            fundIcon = '💰';
+            fundColor = 'text-blue-700';
+            fundBg = 'bg-blue-50';
+        } else if(data.type === 'বিনিয়োগ লভ্যাংশ') {
+            fundIcon = '📈';
+            fundColor = 'text-indigo-700';
+            fundBg = 'bg-indigo-50';
+        } else if(data.type === 'রেফারেল লভ্যাংশ') {
+            fundIcon = '👥';
+            fundColor = 'text-pink-700';
+            fundBg = 'bg-pink-50';
+        } else if(data.type === 'মূলধন') {
+            fundIcon = '💵';
+            fundColor = 'text-emerald-700';
+            fundBg = 'bg-emerald-50';
+        } else {
+            fundIcon = '💰';
+            fundColor = 'text-amber-700';
+            fundBg = 'bg-amber-50';
+        }
+        
+        // একাউন্ট তথ্য পার্স করা
+        let accountHtml = '';
+        let methodDisplay = data.method || '';
+        let accountDetails = {};
+        
+        try {
+            accountDetails = JSON.parse(data.account_info || '{}');
+            if(accountDetails.mobile) {
+                accountHtml = `
+                    <div class="bg-green-50 p-3 rounded-lg">
+                        <h4 class="font-bold text-green-700 mb-2"><i class="fas fa-mobile-alt mr-1"></i>মোবাইল ব্যাংকিং তথ্য</h4>
+                        <p class="text-sm"><span class="font-semibold">মোবাইল নম্বর:</span> ${accountDetails.mobile}</p>
+                    </div>
+                `;
+                methodDisplay = 'মোবাইল ব্যাংকিং';
+            } else if(accountDetails.bank_name) {
+                accountHtml = `
+                    <div class="bg-blue-50 p-3 rounded-lg">
+                        <h4 class="font-bold text-blue-700 mb-2"><i class="fas fa-university mr-1"></i>ব্যাংক তথ্য</h4>
+                        <p class="text-sm"><span class="font-semibold">ব্যাংকের নাম:</span> ${accountDetails.bank_name}</p>
+                        <p class="text-sm"><span class="font-semibold">একাউন্ট নম্বর:</span> ${accountDetails.account_number}</p>
+                        <p class="text-sm"><span class="font-semibold">হোল্ডারের নাম:</span> ${accountDetails.holder_name}</p>
+                    </div>
+                `;
+                methodDisplay = 'ব্যাংক';
+            }
+        } catch(e) { accountHtml = '<p class="text-gray-500">তথ্য পাওয়া যায়নি</p>'; }
+        
+        const requestedDate = new Date(data.requested_at);
+        const requestedDateStr = requestedDate.toLocaleDateString('bn-BD');
+        const requestedTimeStr = requestedDate.toLocaleTimeString('bn-BD');
+        
+        const html = `
+            <div class="${fundBg} p-3 rounded-lg">
+                <h4 class="font-bold ${fundColor} mb-2">📊 ফান্ডের তথ্য</h4>
+                <p><strong>${fundIcon} ধরন:</strong> ${data.type}</p>
+                <p><strong>💰 পরিমাণ:</strong> ${data.amount.toLocaleString()} টাকা</p>
+            </div>
+            
+            <div class="bg-gray-50 p-3 rounded-lg">
+                <h4 class="font-bold text-gray-700 mb-2">👤 সদস্য তথ্য</h4>
+                <p><strong>সদস্য আইডি:</strong> ${data.member_id || '-'}</p>
+                <p><strong>নাম:</strong> ${data.member_name || '-'}</p>
+                <p><strong>মোবাইল:</strong> ${data.mobile || '-'}</p>
+            </div>
+            
+            <div class="bg-gray-50 p-3 rounded-lg">
+                <h4 class="font-bold text-gray-700 mb-2">💳 উত্তোলন তথ্য</h4>
+                <p><strong>মাধ্যম:</strong> ${methodDisplay}</p>
+                <p><strong>আবেদনের তারিখ:</strong> ${requestedDateStr}</p>
+                <p><strong>আবেদনের সময়:</strong> ${requestedTimeStr}</p>
+                <p><strong>স্ট্যাটাস:</strong> <span class="status-badge status-pending">বিচারাধীন</span></p>
+            </div>
+            
+            ${accountHtml}
+        `;
+        
+        contentDiv.innerHTML = html;
+        
+    } catch(e) {
+        console.error('Error:', e);
+        contentDiv.innerHTML = '<div class="text-red-500 text-center py-4">❌ তথ্য লোড করতে সমস্যা হয়েছে!</div>';
+    }
+}
+
+function closeWithdrawalDetailsModal() {
+    const modal = document.getElementById('withdrawalDetailsModal');
+    if(modal) {
+        modal.classList.remove('active');
+    }
+    currentWithdrawalDetails = null;
+}
+
+function closeWithdrawalDetailsModalOnOverlay(e) {
+    if(e.target.id === 'withdrawalDetailsModal') {
+        closeWithdrawalDetailsModal();
+    }
+}
+
+// অনুমোদন ফাংশন (সঠিকটি - ব্যালেন্স আপডেট সহ)
+async function approveWithdrawalFromDetails() {
+    if(!currentWithdrawalDetails) {
+        showToast('কোনো উত্তোলন নির্বাচিত নেই!', 'error');
+        return;
+    }
+    
+    const w = currentWithdrawalDetails;
+    if(!confirm(`${w.member_name}\nফান্ডের ধরন: ${w.type}\nপরিমাণ: ${w.amount.toLocaleString()} টাকা\nমাধ্যম: ${w.method}\n\nউত্তোলন অনুমোদন দেবেন?`)) return;
+    
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    try {
+        // উত্তোলন স্ট্যাটাস আপডেট
+        const { error: updateError } = await client
+            .from('withdrawals')
+            .update({ 
+                status: 'approved', 
+                approved_by: currentAdmin?.username, 
+                approved_at: new Date().toISOString() 
+            })
+            .eq('id', w.id);
+        
+        if (updateError) throw updateError;
+        
+        // সদস্যের ব্যালেন্স আপডেট (টাকা কেটে নেওয়া)
+        const { data: member, error: memberError } = await client
+            .from('members')
+            .select('balance, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus')
+            .eq('member_id', w.member_id)
+            .single();
+        
+        if (memberError) {
+            console.error('Member fetch error:', memberError);
+        } else {
+            let updateData = {};
+            if (w.type === 'রেফারেল বোনাস') {
+                updateData = { referral_bonus: Math.max(0, (member.referral_bonus || 0) - w.amount) };
+            } else if (w.type === 'সঞ্চয় লভ্যাংশ') {
+                updateData = { profit_balance_savings: Math.max(0, (member.profit_balance_savings || 0) - w.amount) };
+            } else if (w.type === 'বিনিয়োগ লভ্যাংশ') {
+                updateData = { profit_balance_investment: Math.max(0, (member.profit_balance_investment || 0) - w.amount) };
+            } else if (w.type === 'রেফারেল লভ্যাংশ') {
+                updateData = { profit_balance_referral: Math.max(0, (member.profit_balance_referral || 0) - w.amount) };
+            } else if (w.type === 'মূলধন') {
+                updateData = { balance: Math.max(0, (member.balance || 0) - w.amount) };
+            }
+            
+            if (Object.keys(updateData).length > 0) {
+                await client.from('members').update(updateData).eq('member_id', w.member_id);
+            }
+        }
+        
+        showToast(`✅ ${w.amount.toLocaleString()} টাকা উত্তোলন অনুমোদিত হয়েছে!`, 'success');
+        
+        closeWithdrawalDetailsModal();
+        await loadPendingWithdrawals();
+        
+    } catch(error) {
+        console.error('Approve error:', error);
+        showToast('অনুমোদন ব্যর্থ!', 'error');
+    }
+}
+
+function openRejectWithdrawalModalFromDetails() {
+    if(!currentWithdrawalDetails) {
+        showToast('কোনো উত্তোলন নির্বাচিত নেই!', 'error');
+        return;
+    }
+    const reason = prompt('বাতিলের কারণ লিখুন:');
+    if(reason) {
+        rejectWithdrawalById(currentWithdrawalDetails.id, reason);
+        closeWithdrawalDetailsModal();
+    }
+}
+
+async function rejectWithdrawalById(id, reason) {
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    try {
+        await client.from('withdrawals').update({ 
+            status: 'rejected', 
+            rejection_reason: reason, 
+            rejected_by: currentAdmin?.username, 
+            rejected_at: new Date().toISOString() 
+        }).eq('id', id);
+        showToast('উত্তোলন বাতিল করা হয়েছে!', 'info');
+        await loadPendingWithdrawals();
+    } catch(error) {
+        console.error('Reject error:', error);
+        showToast('বাতিল করতে ব্যর্থ!', 'error');
+    }
+}
+
 function closeWithdrawalDetailsModal() {
     const modal = document.getElementById('withdrawalDetailsModal');
     if(modal) {
