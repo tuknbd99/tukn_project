@@ -230,7 +230,13 @@
             </div>
         </div>
     </div>
-    
+
+    <!-- প্রোফাইল কার্ডের ভিতরে অনুমোদনের তারিখ দেখানোর জন্য -->
+<div class="flex items-center gap-1 bg-green-50 px-2 py-1 rounded-lg">
+    <i class="fas fa-check-circle text-green-600 text-sm"></i>
+    <span class="text-gray-600 text-sm">অনুমোদিত:</span>
+    <span id="approvalDateDisplay" class="font-bold text-green-700 text-sm">-</span>
+</div>
     <!-- ঠিকানা বিভাগ -->
     <div class="bg-white rounded-xl shadow-md p-4 mb-6">
         <div class="flex justify-between items-center mb-3">
@@ -850,6 +856,205 @@ async function processWithdrawAll() {
         closeWithdrawModal();
     } catch(error) { console.error('Withdraw error:', error); showToast('উত্তোলন প্রক্রিয়ায় সমস্যা!', 'error'); }
 }
+// ========== বাংলাদেশ টাইম কনফিগারেশন ==========
+const BANGLADESH_TIMEZONE = 'Asia/Dhaka';
+let bangladeshTimeOffset = 6 * 60 * 60 * 1000; // UTC+6
+
+// বর্তমান বাংলাদেশ টাইম পাওয়ার ফাংশন
+function getCurrentBangladeshTime() {
+    const now = new Date();
+    return new Date(now.getTime() + bangladeshTimeOffset);
+}
+
+// অনুমোদনের তারিখ ফরম্যাট করা
+function formatApprovalDate(date) {
+    if(!date) return 'অনুমোদিত হয়নি';
+    return date.toLocaleString('bn-BD', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+    });
+}
+
+// ========== "আমাদের সাথে রয়েছেন" টাইমার (অনুমোদনের সময় থেকে শুরু) ==========
+async function calculateMembershipDuration() {
+    if(!currentUser || (currentUser.status !== 'active' && currentUser.status !== 'approved')) {
+        const durationElement = document.getElementById('membershipDuration');
+        if(durationElement) durationElement.innerHTML = 'অনুমোদনের অপেক্ষায়';
+        return;
+    }
+    
+    let startDate;
+    if(currentUser.approved_at) {
+        startDate = new Date(currentUser.approved_at);
+        startDate = new Date(startDate.getTime() + bangladeshTimeOffset);
+    } else {
+        startDate = new Date(currentUser.joinDate);
+        startDate = new Date(startDate.getTime() + bangladeshTimeOffset);
+    }
+    
+    if(isNaN(startDate.getTime())) {
+        const durationElement = document.getElementById('membershipDuration');
+        if(durationElement) durationElement.innerHTML = 'তারিখ ত্রুটিপূর্ণ';
+        return;
+    }
+    
+    const now = getCurrentBangladeshTime();
+    
+    if(startDate > now) {
+        const durationElement = document.getElementById('membershipDuration');
+        if(durationElement) durationElement.innerHTML = 'শুরু হয়নি';
+        return;
+    }
+    
+    let diff = now - startDate;
+    
+    const millisecondsPerSecond = 1000;
+    const millisecondsPerMinute = millisecondsPerSecond * 60;
+    const millisecondsPerHour = millisecondsPerMinute * 60;
+    const millisecondsPerDay = millisecondsPerHour * 24;
+    const millisecondsPerMonth = millisecondsPerDay * 30.44;
+    const millisecondsPerYear = millisecondsPerDay * 365.25;
+    
+    let years = Math.floor(diff / millisecondsPerYear);
+    diff -= years * millisecondsPerYear;
+    
+    let months = Math.floor(diff / millisecondsPerMonth);
+    diff -= months * millisecondsPerMonth;
+    
+    let days = Math.floor(diff / millisecondsPerDay);
+    diff -= days * millisecondsPerDay;
+    
+    let hours = Math.floor(diff / millisecondsPerHour);
+    diff -= hours * millisecondsPerHour;
+    
+    let minutes = Math.floor(diff / millisecondsPerMinute);
+    diff -= minutes * millisecondsPerMinute;
+    
+    let seconds = Math.floor(diff / millisecondsPerSecond);
+    
+    let text = '';
+    if(years > 0) text += `${years} বছর `;
+    if(months > 0) text += `${months} মাস `;
+    if(days > 0) text += `${days} দিন `;
+    if(hours > 0 || text === '') text += `${hours} ঘন্টা `;
+    if(minutes > 0 || text === '') text += `${minutes} মিনিট `;
+    text += `${seconds} সেকেন্ড`;
+    
+    const durationElement = document.getElementById('membershipDuration');
+    if(durationElement) durationElement.innerHTML = text;
+    
+    const approvalDateElement = document.getElementById('approvalDateDisplay');
+    if(approvalDateElement && currentUser.approved_at) {
+        approvalDateElement.innerHTML = formatApprovalDate(startDate);
+    }
+}
+
+// ========== মেয়াদ শেষ হতে বাকি সময় (অনুমোদনের তারিখ + মেয়াদ থেকে) ==========
+async function calculateMembershipExpiry() {
+    if(!currentUser) return;
+    
+    const expiryElement = document.getElementById('membershipExpiry');
+    if(!expiryElement) return;
+    
+    let memberTerm = parseInt(currentUser.memberTerm) || 0;
+    if(memberTerm === 0) { 
+        expiryElement.innerHTML = '<span class="text-green-600 font-bold">🎉 মেয়াদহীন সদস্য (লাইফটাইম)</span>'; 
+        return; 
+    }
+    
+    let startDate;
+    if(currentUser.approved_at) {
+        startDate = new Date(currentUser.approved_at);
+        startDate = new Date(startDate.getTime() + bangladeshTimeOffset);
+    } else {
+        startDate = new Date(currentUser.joinDate);
+        startDate = new Date(startDate.getTime() + bangladeshTimeOffset);
+    }
+    
+    if(isNaN(startDate.getTime())) { 
+        expiryElement.innerHTML = '<span class="text-red-600 font-bold">⚠️ তারিখের ত্রুটি!</span>'; 
+        return; 
+    }
+    
+    let expiryDate = new Date(startDate);
+    expiryDate.setFullYear(startDate.getFullYear() + memberTerm);
+    let now = getCurrentBangladeshTime();
+    
+    if(now >= expiryDate) { 
+        expiryElement.innerHTML = '<span class="text-red-600 font-bold">⚠️ মেয়াদ উত্তীর্ণ! রিনিউ করুন</span>'; 
+        return; 
+    }
+    
+    let diff = expiryDate - now;
+    
+    const millisecondsPerSecond = 1000;
+    const millisecondsPerMinute = millisecondsPerSecond * 60;
+    const millisecondsPerHour = millisecondsPerMinute * 60;
+    const millisecondsPerDay = millisecondsPerHour * 24;
+    const millisecondsPerMonth = millisecondsPerDay * 30.44;
+    const millisecondsPerYear = millisecondsPerDay * 365.25;
+    
+    let years = Math.floor(diff / millisecondsPerYear);
+    diff -= years * millisecondsPerYear;
+    
+    let months = Math.floor(diff / millisecondsPerMonth);
+    diff -= months * millisecondsPerMonth;
+    
+    let days = Math.floor(diff / millisecondsPerDay);
+    diff -= days * millisecondsPerDay;
+    
+    let hours = Math.floor(diff / millisecondsPerHour);
+    diff -= hours * millisecondsPerHour;
+    
+    let minutes = Math.floor(diff / millisecondsPerMinute);
+    diff -= minutes * millisecondsPerMinute;
+    
+    let seconds = Math.floor(diff / millisecondsPerSecond);
+    
+    let text = '';
+    if(years > 0) text += `${years} বছর `;
+    if(months > 0) text += `${months} মাস `;
+    if(days > 0) text += `${days} দিন `;
+    if(hours > 0) text += `${hours} ঘন্টা `;
+    if(minutes > 0) text += `${minutes} মিনিট `;
+    text += `${seconds} সেকেন্ড`;
+    
+    expiryElement.innerHTML = text;
+}
+
+// ========== ডিজিটাল ক্লক (বাংলাদেশ টাইম) ==========
+function updateDigitalClock() {
+    const now = getCurrentBangladeshTime();
+    let hours = now.getHours();
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12;
+    const clockElement = document.getElementById('digitalClock');
+    if(clockElement) {
+        clockElement.innerHTML = `${String(hours).padStart(2, '0')}:${minutes}:${seconds} ${ampm}`;
+    }
+}
+
+// ========== টাইমার ইন্টারভাল সেটআপ ==========
+let clockInterval = null;
+let durationInterval = null;
+let expiryInterval = null;
+
+function setupTimeIntervals() {
+    if(clockInterval) clearInterval(clockInterval);
+    clockInterval = setInterval(updateDigitalClock, 1000);
+    
+    if(durationInterval) clearInterval(durationInterval);
+    durationInterval = setInterval(calculateMembershipDuration, 1000);
+    
+    if(expiryInterval) clearInterval(expiryInterval);
+    expiryInterval = setInterval(calculateMembershipExpiry, 1000);
+}    
 // ========== UI আপডেট ==========
 async function updateUI() {
     if(!currentUser) return;
@@ -862,7 +1067,29 @@ async function updateUI() {
     document.getElementById('memberIdDisplay').innerHTML = currentUser.id;
     document.getElementById('referIdDisplay').innerHTML = currentUser.referId || 'N/A';
     document.getElementById('memberMobile').innerHTML = currentUser.mobile;
-    document.getElementById('joinDateDisplay').innerHTML = new Date(currentUser.joinDate).toLocaleDateString('bn-BD');
+    
+    // joinDate দেখানো
+    const joinDate = new Date(currentUser.joinDate);
+    const bangladeshJoinDate = new Date(joinDate.getTime() + bangladeshTimeOffset);
+    document.getElementById('joinDateDisplay').innerHTML = bangladeshJoinDate.toLocaleDateString('bn-BD');
+    
+    // অনুমোদনের তারিখ দেখানো (যদি থাকে)
+    if(currentUser.approved_at) {
+        const approvedDate = new Date(currentUser.approved_at);
+        const bangladeshApprovedDate = new Date(approvedDate.getTime() + bangladeshTimeOffset);
+        const approvalDisplay = document.getElementById('approvalDateDisplay');
+        if(approvalDisplay) {
+            approvalDisplay.innerHTML = bangladeshApprovedDate.toLocaleString('bn-BD', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true
+            });
+        }
+    }
+    
     document.getElementById('cardName').innerHTML = currentUser.name;
     document.getElementById('cardId').innerHTML = currentUser.id;
     document.getElementById('cardReferId').innerHTML = currentUser.referId || 'N/A';
@@ -885,99 +1112,26 @@ async function updateUI() {
         loadSavingsData();
         loadPaymentHistory();
         loadUserFunds();
+        loadWithdrawalHistory();
         calculateMembershipExpiry();
-        if(expiryInterval) clearInterval(expiryInterval);
-        expiryInterval = setInterval(calculateMembershipExpiry, 1000);
     }
     
     loadNotices();
     loadComplaintReplies();
     loadBonusHistory(); 
     
-    if(clockInterval) clearInterval(clockInterval);
-    if(durationInterval) clearInterval(durationInterval);
-    updateDigitalClock();
-    clockInterval = setInterval(updateDigitalClock, 1000);
-    calculateMembershipDuration();
-    durationInterval = setInterval(calculateMembershipDuration, 1000);
+    setupTimeIntervals();
 }
 
-function updateDigitalClock() {
-    const now = new Date();
-    let hours = now.getHours();
-    const minutes = String(now.getMinutes()).padStart(2,'0');
-    const seconds = String(now.getSeconds()).padStart(2,'0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12 || 12;
-    document.getElementById('digitalClock').innerHTML = `${String(hours).padStart(2,'0')}:${minutes}:${seconds} ${ampm}`;
-}
-
-function calculateMembershipDuration() {
-    if(!currentUser || (currentUser.status !== 'active' && currentUser.status !== 'approved')) {
-        document.getElementById('membershipDuration').innerHTML = 'অনুমোদনের অপেক্ষায়';
-        return;
+// ========== পেজ লোড ==========
+document.addEventListener('DOMContentLoaded', function() { 
+    if(currentUser) {
+        updateUI();
+    } else {
+        setTimeout(() => window.location.href = 'login.html', 100);
     }
-    const startDate = new Date(currentUser.joinDate), now = new Date();
-    let years = now.getFullYear() - startDate.getFullYear();
-    let months = now.getMonth() - startDate.getMonth();
-    let days = now.getDate() - startDate.getDate();
-    let hours = now.getHours() - startDate.getHours();
-    let minutes = now.getMinutes() - startDate.getMinutes();
-    let seconds = now.getSeconds() - startDate.getSeconds();
-    
-    if(seconds < 0) { seconds += 60; minutes--; }
-    if(minutes < 0) { minutes += 60; hours--; }
-    if(hours < 0) { hours += 24; days--; }
-    if(days < 0) { const prevMonth = new Date(now.getFullYear(), now.getMonth(), 0); days += prevMonth.getDate(); months--; }
-    if(months < 0) { months += 12; years--; }
-    
-    let text = '';
-    if(years > 0) text += `${years} বছর `;
-    if(months > 0) text += `${months} মাস `;
-    if(days > 0) text += `${days} দিন `;
-    text += `${hours} ঘন্টা ${minutes} মিনিট ${seconds} সেকেন্ড`;
-    document.getElementById('membershipDuration').innerHTML = text;
-}
+});
 
-function calculateMembershipExpiry() {
-    if(!currentUser) return;
-    const expiryElement = document.getElementById('membershipExpiry');
-    if(!expiryElement) return;
-    
-    let memberTerm = parseInt(currentUser.memberTerm) || 0;
-    if(memberTerm === 0) { expiryElement.innerHTML = '<span class="text-green-600 font-bold">🎉 মেয়াদহীন সদস্য (লাইফটাইম)</span>'; return; }
-    
-    let joinDate = new Date(currentUser.joinDate);
-    if(isNaN(joinDate.getTime())) { expiryElement.innerHTML = '<span class="text-red-600 font-bold">⚠️ তারিখের ত্রুটি!</span>'; return; }
-    
-    let expiryDate = new Date(joinDate);
-    expiryDate.setFullYear(joinDate.getFullYear() + memberTerm);
-    let now = new Date();
-    
-    if(now >= expiryDate) { expiryElement.innerHTML = '<span class="text-red-600 font-bold">⚠️ মেয়াদ উত্তীর্ণ! রিনিউ করুন</span>'; return; }
-    
-    let diff = expiryDate - now;
-    let years = Math.floor(diff / (1000 * 60 * 60 * 24 * 365));
-    diff -= years * (1000 * 60 * 60 * 24 * 365);
-    let months = Math.floor(diff / (1000 * 60 * 60 * 24 * 30));
-    diff -= months * (1000 * 60 * 60 * 24 * 30);
-    let days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    diff -= days * (1000 * 60 * 60 * 24);
-    let hours = Math.floor(diff / (1000 * 60 * 60));
-    diff -= hours * (1000 * 60 * 60);
-    let minutes = Math.floor(diff / (1000 * 60));
-    diff -= minutes * (1000 * 60);
-    let seconds = Math.floor(diff / 1000);
-    
-    let text = '';
-    if(years > 0) text += `${years} বছর `;
-    if(months > 0) text += `${months} মাস `;
-    if(days > 0) text += `${days} দিন `;
-    if(hours > 0) text += `${hours} ঘন্টা `;
-    if(minutes > 0) text += `${minutes} মিনিট `;
-    text += `${seconds} সেকেন্ড`;
-    expiryElement.innerHTML = text;
-}
 
 // ========== সঞ্চয় ও পেমেন্ট ==========
 async function loadSavingsData() {
