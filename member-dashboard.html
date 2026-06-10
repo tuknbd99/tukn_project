@@ -1670,6 +1670,10 @@ async function generateSlipAndPrint() {
     let paymentDetailsHtml = '';
     let methodDisplayName = '';
     
+    // বাংলাদেশের বর্তমান সময় তৈরি করুন
+    const bangladeshNow = getCurrentBangladeshTime();  // ← এই ফাংশনটি ইতিমধ্যেই আছে
+    const submittedAtISO = bangladeshNow.toISOString();  // ← বাংলাদেশ সময় ISO তে কনভার্ট
+    
     if(paymentMethod === 'bank') {
         methodDisplayName = 'ব্যাংক';
         let bankName = document.getElementById('bankName').value;
@@ -1850,7 +1854,7 @@ async function generateSlipAndPrint() {
                 amount: currentUser.monthlySavings || 500, 
                 payment_method: paymentMethod, 
                 status: 'pending', 
-                submitted_at: new Date().toISOString(),
+                submitted_at: submittedAtISO,  // ← বাংলাদেশ সময় ISO তে সেভ হবে
                 transaction_id_unique: uniqueTransactionId,
                 voucher_slip_no: uniqueVoucherSlipNo
             };
@@ -1882,9 +1886,16 @@ async function generateSlipAndPrint() {
         
         showToast('পেমেন্ট তথ্য জমা হয়েছে! অনুমোদনের অপেক্ষায়...', 'success');
         
-        const now = new Date();
-        const banglaDate = now.toLocaleDateString('bn-BD');
-        const banglaTime = now.toLocaleTimeString('bn-BD');
+        // স্লিপের জন্য বাংলাদেশের তারিখ ও সময় (সঠিকভাবে ফরম্যাটেড)
+        const bangladeshDate = bangladeshNow.toLocaleDateString('bn-BD', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+        });
         
         const slipHTML = `
         <div style="border:2px solid #059669; border-radius:16px; padding:20px; background:white; max-width:650px; margin:0 auto; font-family:'Noto Sans Bengali', sans-serif;">
@@ -1905,10 +1916,11 @@ async function generateSlipAndPrint() {
                 </div>
                 <div style="display:flex; justify-content:space-between; padding:5px 0;">
                     <span style="font-weight:600;">📅 জেনারেটের তারিখ ও সময়:</span>
-                    <span>${banglaDate}, ${banglaTime}</span>
+                    <span>${bangladeshDate}</span>
                 </div>
             </div>
             
+            <!-- বাকি HTML একই থাকবে -->
             <div style="margin-bottom:15px;">
                 <h3 style="font-size:15px; font-weight:bold; color:#064e3b; border-left:3px solid #059669; padding-left:10px; margin-bottom:10px;">📋 সদস্য তথ্য</h3>
                 <div style="background:#f8fafc; padding:12px; border-radius:10px; font-size:13px;">
@@ -1955,7 +1967,7 @@ async function generateSlipAndPrint() {
                 <div style="background:#f8fafc; padding:12px; border-radius:10px; font-size:13px;">
                     <div style="display:flex; justify-content:space-between; padding:5px 0;">
                         <span style="font-weight:600;">ইনপুটের তারিখ ও সময়:</span>
-                        <span>${banglaDate}, ${banglaTime}</span>
+                        <span>${bangladeshDate}</span>
                     </div>
                 </div>
             </div>
@@ -1981,6 +1993,7 @@ async function generateSlipAndPrint() {
             
             <div style="text-align:center; margin-top:15px; padding-top:8px; border-top:1px dashed #e5e7eb;">
                 <p style="font-size:9px; color:#999;">স্বয়ংক্রিয়ভাবে জেনারেটেড ভাউচার | অনুমোদন সাপেক্ষে বৈধ</p>
+                <p style="font-size:8px; color:#ccc; margin-top:3px;">প্রিন্টের তারিখ: ${bangladeshDate}</p>
             </div>
         </div>`;
         
@@ -2204,12 +2217,25 @@ function closeWithdrawModal() { const modal = document.getElementById('withdrawM
 function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithdrawModal(); }
 
 
-        async function processWithdraw() {
+async function processWithdraw() {
     const method = document.getElementById('withdrawMethod')?.value;
     const amount = parseFloat(document.getElementById('withdrawAmount')?.value || 0);
     
     if(!method) { showToast('উত্তোলনের মাধ্যম নির্বাচন করুন।', 'error'); return; }
     if(!amount || amount <= 0) { showToast('সঠিক টাকার পরিমাণ দিন।', 'error'); return; }
+    
+    // মেয়াদি সদস্যের মূলধন উত্তোলন চেক
+    const memberTerm = parseInt(currentUser.memberTerm) || 0;
+    const joinDate = new Date(currentUser.joinDate);
+    const expiryDate = new Date(joinDate);
+    expiryDate.setFullYear(joinDate.getFullYear() + memberTerm);
+    const now = new Date();
+    
+    if(currentWithdrawType === 'capital' && memberTerm > 0 && now < expiryDate) { 
+        const modalHTML = `<div id="timerModal" class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center"><div class="bg-white rounded-2xl max-w-md w-full p-6 text-center"><i class="fas fa-hourglass-half text-6xl text-amber-500 mb-4"></i><h3 class="text-xl font-bold text-gray-800 mb-2">⚠️ মূলধন উত্তোলন সম্ভব নয়</h3><p class="text-gray-600 mb-4">আপনি একজন <strong>মেয়াদি সদস্য</strong>। নির্ধারিত মেয়াদ শেষ হওয়ার পর মূলধন উত্তোলন করতে পারবেন।</p><div class="bg-amber-50 p-4 rounded-lg mb-4"><p class="text-amber-700 font-semibold">মেয়াদ শেষ হতে বাকি:</p><p class="text-2xl font-bold text-amber-800">গণনা করা হচ্ছে...</p></div><button onclick="document.getElementById('timerModal').remove()" class="bg-emerald-600 text-white px-6 py-2 rounded-lg">বন্ধ করুন</button></div></div>`;
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        return; 
+    }
     
     let balance = 0, withdrawTypeName = '';
     if(currentWithdrawType === 'bonus') { 
@@ -2238,10 +2264,12 @@ function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithd
         return; 
     }
     
+    // মোবাইল ও ব্যাংক তথ্য সংগ্রহ (সঠিক আইডি ব্যবহার করে)
     const mobileNumber = document.getElementById('mobileNumber')?.value;
-    const bankNameInput = document.getElementById('bankName')?.value;
-    const accountNumberInput = document.getElementById('accountNumber')?.value;
-    const accountHolderNameInput = document.getElementById('accountHolderName')?.value;
+    const bankNameInput = document.getElementById('bankNameWithdraw')?.value;
+    const accountNumberInput = document.getElementById('accountNumberWithdraw')?.value;
+    const accountHolderNameInput = document.getElementById('accountHolderNameWithdraw')?.value;
+    
     const mobileMethods = ['bkash', 'nagad', 'rocket', 'cellfin', 'mcash'];
     
     let accountInfo = {};
@@ -2277,7 +2305,7 @@ function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithd
     }
     
     try {
-        // উত্তোলন রিকোয়েস্ট সেভ করুন (এখানে ব্যালেন্স কাটবেন না)
+        // উত্তোলন রিকোয়েস্ট সেভ করুন (এখানে ব্যালেন্স কাটবেন না, সুপার অ্যাডমিন অনুমোদন দিলে কাটা হবে)
         const withdrawData = { 
             member_id: currentUser.id, 
             member_name: currentUser.name, 
@@ -2295,8 +2323,17 @@ function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithd
             throw insertError;
         }
         
+        // সফল হলে সাফাই মেসেজ ও মডাল বন্ধ
         showToast(`✅ ${amount.toLocaleString()} টাকা উত্তোলনের অনুরোধ জমা হয়েছে! প্রশাসন অনুমোদন দিলে টাকা পাবেন।`, 'success');
         closeWithdrawModal();
+        
+        // উত্তোলন ফর্মের মান রিসেট করুন
+        if(document.getElementById('withdrawMethod')) document.getElementById('withdrawMethod').value = '';
+        if(document.getElementById('withdrawAmount')) document.getElementById('withdrawAmount').value = '';
+        if(document.getElementById('mobileNumber')) document.getElementById('mobileNumber').value = '';
+        if(document.getElementById('bankNameWithdraw')) document.getElementById('bankNameWithdraw').value = '';
+        if(document.getElementById('accountNumberWithdraw')) document.getElementById('accountNumberWithdraw').value = '';
+        if(document.getElementById('accountHolderNameWithdraw')) document.getElementById('accountHolderNameWithdraw').value = '';
         
         // উত্তোলন ইতিহাস রিলোড
         await loadWithdrawalHistory();
@@ -2308,7 +2345,7 @@ function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithd
 }
         
 
-    async function loadWithdrawalHistory() {
+async function loadWithdrawalHistory() {
     if(!currentUser) return;
     
     const client = getSupabaseClient();
@@ -2360,6 +2397,11 @@ function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithd
             else if(w.type === 'রেফারেল লভ্যাংশ') fundIcon = '👥';
             else fundIcon = '💵';
             
+            // বাতিলের কারণ ডিবাগ করার জন্য কনসোল লগ
+            if(w.status === 'rejected' && w.rejection_reason) {
+                console.log('বাতিলের কারণ পাওয়া গেছে:', w.rejection_reason);
+            }
+            
             return `
                 <div class="border rounded-lg p-3 mb-2 ${statusBg} hover:shadow-md transition">
                     <div class="flex justify-between items-center flex-wrap gap-2">
@@ -2367,7 +2409,7 @@ function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithd
                             <p class="font-semibold text-gray-800">${fundIcon} ${w.type}</p>
                             <p class="text-xs text-gray-500">📅 ${new Date(w.requested_at).toLocaleString('bn-BD')}</p>
                             <p class="text-xs text-gray-500">💳 মাধ্যম: ${w.method}</p>
-                            ${w.rejection_reason ? `<p class="text-xs text-red-500 mt-1">❌ বাতিলের কারণ: ${w.rejection_reason}</p>` : ''}
+                            ${w.rejection_reason ? `<p class="text-xs text-red-600 mt-2 bg-red-50 p-1 rounded"><i class="fas fa-exclamation-circle mr-1"></i><strong>বাতিলের কারণ:</strong> ${w.rejection_reason}</p>` : (w.status === 'rejected' ? '<p class="text-xs text-red-500 mt-1">⚠️ কারণ উল্লেখ নেই</p>' : '')}
                             ${w.approved_by ? `<p class="text-xs text-green-600 mt-1">✅ অনুমোদনকারী: ${w.approved_by}</p>` : ''}
                             ${w.approved_at ? `<p class="text-xs text-gray-500">📅 অনুমোদনের তারিখ: ${new Date(w.approved_at).toLocaleString('bn-BD')}</p>` : ''}
                         </div>
@@ -2389,9 +2431,8 @@ function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithd
     }
 }
 
-    
-// ========== নোটিশ ও অভিযোগ ==========
-async function loadNotices() { 
+    // ========== নোটিশ ও অভিযোগ ==========
+    async function loadNotices() { 
     let client = getSupabaseClient();
     if(!client) return;
     try {
