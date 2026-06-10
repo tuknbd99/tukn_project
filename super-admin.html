@@ -2037,8 +2037,78 @@ async function approveWithdrawal(id, amount, memberId, type) {
     if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
     
     try {
-        // উত্তোলন স্ট্যাটাস আপডেট
-        const { error: updateError } = await client
+        // 1️⃣ সদস্যের বর্তমান ব্যালেন্স আনা
+        const { data: member, error: memberError } = await client
+            .from('members')
+            .select('balance, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus')
+            .eq('member_id', memberId)
+            .single();
+        
+        if (memberError) throw memberError;
+        
+        // 2️⃣ ফান্ডের ধরন অনুযায়ী ব্যালেন্স কমানো
+        let updateData = {};
+        let fundName = '';
+        
+        if (type === 'রেফারেল বোনাস') {
+            const currentBonus = member.referral_bonus || 0;
+            if (currentBonus < amount) {
+                showToast(`রেফারেল বোনাসে ${currentBonus.toLocaleString()} টাকা আছে। এর বেশি উত্তোলন সম্ভব নয়!`, 'error');
+                return;
+            }
+            updateData = { referral_bonus: currentBonus - amount };
+            fundName = 'রেফারেল বোনাস';
+        } 
+        else if (type === 'সঞ্চয় লভ্যাংশ') {
+            const currentProfit = member.profit_balance_savings || 0;
+            if (currentProfit < amount) {
+                showToast(`সঞ্চয় লভ্যাংশে ${currentProfit.toLocaleString()} টাকা আছে। এর বেশি উত্তোলন সম্ভব নয়!`, 'error');
+                return;
+            }
+            updateData = { profit_balance_savings: currentProfit - amount };
+            fundName = 'সঞ্চয় লভ্যাংশ';
+        } 
+        else if (type === 'বিনিয়োগ লভ্যাংশ') {
+            const currentProfit = member.profit_balance_investment || 0;
+            if (currentProfit < amount) {
+                showToast(`বিনিয়োগ লভ্যাংশে ${currentProfit.toLocaleString()} টাকা আছে। এর বেশি উত্তোলন সম্ভব নয়!`, 'error');
+                return;
+            }
+            updateData = { profit_balance_investment: currentProfit - amount };
+            fundName = 'বিনিয়োগ লভ্যাংশ';
+        } 
+        else if (type === 'রেফারেল লভ্যাংশ') {
+            const currentProfit = member.profit_balance_referral || 0;
+            if (currentProfit < amount) {
+                showToast(`রেফারেল লভ্যাংশে ${currentProfit.toLocaleString()} টাকা আছে। এর বেশি উত্তোলন সম্ভব নয়!`, 'error');
+                return;
+            }
+            updateData = { profit_balance_referral: currentProfit - amount };
+            fundName = 'রেফারেল লভ্যাংশ';
+        } 
+        else if (type === 'মূলধন') {
+            const currentBalance = member.balance || 0;
+            if (currentBalance < amount) {
+                showToast(`মূলধনে ${currentBalance.toLocaleString()} টাকা আছে। এর বেশি উত্তোলন সম্ভব নয়!`, 'error');
+                return;
+            }
+            updateData = { balance: currentBalance - amount };
+            fundName = 'মূলধন';
+        }
+        
+        // 3️⃣ সদস্যের ব্যালেন্স আপডেট করা
+        if (Object.keys(updateData).length > 0) {
+            const { error: updateError } = await client
+                .from('members')
+                .update(updateData)
+                .eq('member_id', memberId);
+            
+            if (updateError) throw updateError;
+            console.log(`✅ ${fundName} থেকে ${amount} টাকা কেটে নেওয়া হয়েছে`);
+        }
+        
+        // 4️⃣ উত্তোলন স্ট্যাটাস আপডেট করা
+        const { error: withdrawalError } = await client
             .from('withdrawals')
             .update({ 
                 status: 'approved', 
@@ -2047,36 +2117,41 @@ async function approveWithdrawal(id, amount, memberId, type) {
             })
             .eq('id', id);
         
-        if (updateError) throw updateError;
+        if (withdrawalError) throw withdrawalError;
         
-        // সদস্যের ব্যালেন্স আপডেট (যদি প্রয়োজন)
-        // নোট: উত্তোলন অনুমোদনের সময় সদস্যের ব্যালেন্স থেকে টাকা কেটে নিতে হবে
-        const { data: member } = await client
-            .from('members')
-            .select('balance, profit_balance_savings, profit_balance_investment, profit_balance_referral')
-            .eq('member_id', memberId)
-            .single();
+        // 5️⃣ লোকাল ডাটা আপডেট করা
+        const withdrawalIndex = pendingWithdrawalsData.findIndex(w => w.id == id);
+        if (withdrawalIndex !== -1) {
+            pendingWithdrawalsData.splice(withdrawalIndex, 1);
+        }
         
-        if (member) {
-            let newBalance = member.balance || 0;
-            let newProfitBalance = member.profit_balance_savings || 0;
-            
-            if (type === 'savings_withdrawal') {
-                newProfitBalance = Math.max(0, newProfitBalance - amount);
-            } else {
-                newBalance = Math.max(0, newBalance - amount);
+        // 6️⃣ সদস্যের লোকাল ডাটা আপডেট
+        const memberIndex = membersData.findIndex(m => m.member_id === memberId);
+        if (memberIndex !== -1) {
+            if (type === 'রেফারেল বোনাস') {
+                membersData[memberIndex].referral_bonus = (membersData[memberIndex].referral_bonus || 0) - amount;
+                userFunds.referralBonus = membersData[memberIndex].referral_bonus;
+            } else if (type === 'সঞ্চয় লভ্যাংশ') {
+                membersData[memberIndex].profit_balance_savings = (membersData[memberIndex].profit_balance_savings || 0) - amount;
+                userFunds.savingsProfit = membersData[memberIndex].profit_balance_savings;
+            } else if (type === 'বিনিয়োগ লভ্যাংশ') {
+                membersData[memberIndex].profit_balance_investment = (membersData[memberIndex].profit_balance_investment || 0) - amount;
+                userFunds.investmentProfit = membersData[memberIndex].profit_balance_investment;
+            } else if (type === 'রেফারেল লভ্যাংশ') {
+                membersData[memberIndex].profit_balance_referral = (membersData[memberIndex].profit_balance_referral || 0) - amount;
+                userFunds.referralProfit = membersData[memberIndex].profit_balance_referral;
+            } else if (type === 'মূলধন') {
+                membersData[memberIndex].balance = (membersData[memberIndex].balance || 0) - amount;
+                userFunds.monthlySavings = membersData[memberIndex].balance;
             }
-            
-            await client
-                .from('members')
-                .update({ 
-                    balance: newBalance,
-                    profit_balance_savings: newProfitBalance
-                })
-                .eq('member_id', memberId);
         }
         
         showToast(`✅ ${amount.toLocaleString()} টাকা উত্তোলন অনুমোদিত হয়েছে!`, 'success');
+        
+        // 7️⃣ তালিকা রিফ্রেশ
+        renderWithdrawalList();
+        renderMembersList();
+        updateFundsDisplay();
         await loadPendingWithdrawals();
         
     } catch(error) {
