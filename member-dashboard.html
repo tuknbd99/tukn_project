@@ -2203,24 +2203,13 @@ function openWithdrawModal(type) {
 function closeWithdrawModal() { const modal = document.getElementById('withdrawModal'); if(modal) { modal.classList.add('hidden'); modal.classList.remove('flex'); } }
 function closeModalOnOverlay(e) { if(e.target.id === 'withdrawModal') closeWithdrawModal(); }
 
-async function processWithdraw() {
+
+        async function processWithdraw() {
     const method = document.getElementById('withdrawMethod')?.value;
     const amount = parseFloat(document.getElementById('withdrawAmount')?.value || 0);
     
     if(!method) { showToast('উত্তোলনের মাধ্যম নির্বাচন করুন।', 'error'); return; }
     if(!amount || amount <= 0) { showToast('সঠিক টাকার পরিমাণ দিন।', 'error'); return; }
-    
-    const memberTerm = parseInt(currentUser.memberTerm) || 0;
-    const joinDate = new Date(currentUser.joinDate);
-    const expiryDate = new Date(joinDate);
-    expiryDate.setFullYear(joinDate.getFullYear() + memberTerm);
-    const now = new Date();
-    
-    if(currentWithdrawType === 'capital' && memberTerm > 0 && now < expiryDate) { 
-        const modalHTML = `<div id="timerModal" class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center"><div class="bg-white rounded-2xl max-w-md w-full p-6 text-center"><i class="fas fa-hourglass-half text-6xl text-amber-500 mb-4"></i><h3 class="text-xl font-bold text-gray-800 mb-2">⚠️ মূলধন উত্তোলন সম্ভব নয়</h3><p class="text-gray-600 mb-4">আপনি একজন <strong>মেয়াদি সদস্য</strong>। নির্ধারিত মেয়াদ শেষ হওয়ার পর মূলধন উত্তোলন করতে পারবেন।</p><div class="bg-amber-50 p-4 rounded-lg mb-4"><p class="text-amber-700 font-semibold">মেয়াদ শেষ হতে বাকি:</p><p class="text-2xl font-bold text-amber-800">গণনা করা হচ্ছে...</p></div><button onclick="document.getElementById('timerModal').remove()" class="bg-emerald-600 text-white px-6 py-2 rounded-lg">বন্ধ করুন</button></div></div>`;
-        document.body.insertAdjacentHTML('beforeend', modalHTML);
-        return; 
-    }
     
     let balance = 0, withdrawTypeName = '';
     if(currentWithdrawType === 'bonus') { 
@@ -2250,9 +2239,9 @@ async function processWithdraw() {
     }
     
     const mobileNumber = document.getElementById('mobileNumber')?.value;
-    const bankNameInput = document.getElementById('bankNameWithdraw')?.value;
-    const accountNumberInput = document.getElementById('accountNumberWithdraw')?.value;
-    const accountHolderNameInput = document.getElementById('accountHolderNameWithdraw')?.value;
+    const bankNameInput = document.getElementById('bankName')?.value;
+    const accountNumberInput = document.getElementById('accountNumber')?.value;
+    const accountHolderNameInput = document.getElementById('accountHolderName')?.value;
     const mobileMethods = ['bkash', 'nagad', 'rocket', 'cellfin', 'mcash'];
     
     let accountInfo = {};
@@ -2288,6 +2277,7 @@ async function processWithdraw() {
     }
     
     try {
+        // উত্তোলন রিকোয়েস্ট সেভ করুন (এখানে ব্যালেন্স কাটবেন না)
         const withdrawData = { 
             member_id: currentUser.id, 
             member_name: currentUser.name, 
@@ -2305,36 +2295,20 @@ async function processWithdraw() {
             throw insertError;
         }
         
-        if(currentWithdrawType === 'bonus') {
-            userFunds.referralBonus -= amount;
-            userBalances.bonus -= amount;
-        } else if(currentWithdrawType === 'savingsProfit') {
-            userFunds.savingsProfit -= amount;
-            userBalances.savingsProfit -= amount;
-        } else if(currentWithdrawType === 'investmentProfit') {
-            userFunds.investmentProfit -= amount;
-            userBalances.investmentProfit -= amount;
-        } else if(currentWithdrawType === 'referralProfit') {
-            userFunds.referralProfit -= amount;
-            userBalances.referralProfit -= amount;
-        } else {
-            userFunds.monthlySavings -= amount;
-            userBalances.capital -= amount;
-        }
-        
-        updateFundsDisplay();
-        
         showToast(`✅ ${amount.toLocaleString()} টাকা উত্তোলনের অনুরোধ জমা হয়েছে! প্রশাসন অনুমোদন দিলে টাকা পাবেন।`, 'success');
         closeWithdrawModal();
-        loadWithdrawalHistory();
+        
+        // উত্তোলন ইতিহাস রিলোড
+        await loadWithdrawalHistory();
         
     } catch(error) { 
         console.error('Withdraw error:', error); 
         showToast('উত্তোলন প্রক্রিয়ায় সমস্যা! আবার চেষ্টা করুন।', 'error'); 
     }
 }
+        
 
-async function loadWithdrawalHistory() {
+    async function loadWithdrawalHistory() {
     if(!currentUser) return;
     
     const client = getSupabaseClient();
@@ -2359,20 +2333,26 @@ async function loadWithdrawalHistory() {
         
         container.innerHTML = data.map(w => {
             let statusClass = '', statusIcon = '', statusText = '';
+            let statusBg = '';
+            
             if(w.status === 'approved') {
                 statusClass = 'bg-green-100 text-green-700';
                 statusIcon = '✅';
                 statusText = 'অনুমোদিত';
+                statusBg = 'border-green-200 bg-green-50';
             } else if(w.status === 'pending') {
                 statusClass = 'bg-yellow-100 text-yellow-700';
                 statusIcon = '⏳';
                 statusText = 'বিচারাধীন';
+                statusBg = 'border-yellow-200 bg-yellow-50';
             } else {
                 statusClass = 'bg-red-100 text-red-700';
                 statusIcon = '❌';
                 statusText = 'বাতিল';
+                statusBg = 'border-red-200 bg-red-50';
             }
             
+            // ফান্ডের ধরন অনুযায়ী আইকন
             let fundIcon = '';
             if(w.type === 'রেফারেল বোনাস') fundIcon = '🎁';
             else if(w.type === 'সঞ্চয় লভ্যাংশ') fundIcon = '💰';
@@ -2381,7 +2361,7 @@ async function loadWithdrawalHistory() {
             else fundIcon = '💵';
             
             return `
-                <div class="border rounded-lg p-3 mb-2 bg-white hover:shadow-md transition">
+                <div class="border rounded-lg p-3 mb-2 ${statusBg} hover:shadow-md transition">
                     <div class="flex justify-between items-center flex-wrap gap-2">
                         <div class="flex-1">
                             <p class="font-semibold text-gray-800">${fundIcon} ${w.type}</p>
@@ -2408,6 +2388,7 @@ async function loadWithdrawalHistory() {
         }
     }
 }
+
     
 // ========== নোটিশ ও অভিযোগ ==========
 async function loadNotices() { 
