@@ -1224,106 +1224,92 @@ async function loadRealDashboard() {
         if (!client) {
             client = initSupabaseClient();
             if (!client) {
-                console.warn('Supabase not ready yet, retrying...');
                 setTimeout(loadRealDashboard, 1000);
                 return;
             }
         }
         
         // ========== 1. মোট সদস্য ও সক্রিয় সদস্য ==========
-        const { count: totalMembersCount, error: totalError } = await client.from('members').select('*', { count: 'exact', head: true });
-        if (totalError) throw totalError;
-        
-        const { count: activeCount, error: activeError } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'active');
-        if (activeError) throw activeError;
-        
-        const { count: pendingCount, error: pendingError } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-        if (pendingError) throw pendingError;
+        const { count: totalMembersCount } = await client.from('members').select('*', { count: 'exact', head: true });
+        const { count: activeCount } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'active');
+        const { count: pendingCount } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
         
         // ========== 2. মাসিক সংগ্রহ (এই মাসের অনুমোদিত সঞ্চয়) ==========
         const now = new Date();
         const currentYear = now.getFullYear();
         const currentMonth = now.getMonth();
         
-        const firstDayOfMonth = new Date(currentYear, currentMonth, 1).toISOString();
-        const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59).toISOString();
+        let monthlyCollection = 0;
         
-        const { data: monthlyPayments, error: monthlyError } = await client
+        const { data: allApprovedPayments } = await client
             .from('payments')
-            .select('amount')
-            .eq('status', 'approved')
-            .gte('submitted_at', firstDayOfMonth)
-            .lte('submitted_at', lastDayOfMonth);
+            .select('amount, created_at, submitted_at, month, year')
+            .eq('status', 'approved');
         
-        if (monthlyError) throw monthlyError;
-        const monthlyCollection = monthlyPayments?.reduce((sum, p) => sum + (p.amount || 0), 0) || 0;
+        if (allApprovedPayments && allApprovedPayments.length > 0) {
+            const thisMonthPayments = allApprovedPayments.filter(p => {
+                if (p.month && p.year) {
+                    const monthNames = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 
+                                        'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
+                    const paymentMonth = monthNames.indexOf(p.month);
+                    return paymentMonth === currentMonth && parseInt(p.year) === currentYear;
+                }
+                if (p.submitted_at) {
+                    const paymentDate = new Date(p.submitted_at);
+                    return paymentDate.getFullYear() === currentYear && paymentDate.getMonth() === currentMonth;
+                }
+                if (p.created_at) {
+                    const paymentDate = new Date(p.created_at);
+                    return paymentDate.getFullYear() === currentYear && paymentDate.getMonth() === currentMonth;
+                }
+                return false;
+            });
+            monthlyCollection = thisMonthPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        }
         
         // ========== 3. মোট লোন প্রদান ==========
-        const { data: loans, error: loanError } = await client
-            .from('loan_applications')
-            .select('amount')
-            .eq('status', 'approved');
-        
-        if (loanError) throw loanError;
-        const totalLoanGiven = loans?.reduce((sum, l) => sum + (l.amount || 0), 0) || 0;
+        let totalLoanGiven = 0;
+        const { data: loans } = await client.from('loan_applications').select('amount').eq('status', 'approved');
+        if (loans) totalLoanGiven = loans.reduce((sum, l) => sum + (l.amount || 0), 0);
         
         // ========== 4. মোট উত্তোলন ==========
-        const { data: withdrawals, error: withdrawalError } = await client
-            .from('withdrawals')
-            .select('amount')
-            .eq('status', 'approved');
-        
-        if (withdrawalError) throw withdrawalError;
-        const totalWithdrawal = withdrawals?.reduce((sum, w) => sum + (w.amount || 0), 0) || 0;
+        let totalWithdrawal = 0;
+        const { data: withdrawals } = await client.from('withdrawals').select('amount').eq('status', 'approved');
+        if (withdrawals) totalWithdrawal = withdrawals.reduce((sum, w) => sum + (w.amount || 0), 0);
         
         // ========== 5. মোট লভ্যাংশ ==========
-        const { data: members, error: membersError } = await client
-            .from('members')
+        let totalProfit = 0;
+        const { data: members } = await client.from('members')
             .select('profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus');
         
-        if (membersError) throw membersError;
-        
-        const totalProfit = members?.reduce((sum, m) => {
-            return sum + (m.profit_balance_savings || 0) + (m.profit_balance_investment || 0) + 
-                   (m.profit_balance_referral || 0) + (m.referral_bonus || 0);
-        }, 0) || 0;
+        if (members) {
+            totalProfit = members.reduce((sum, m) => {
+                return sum + (m.profit_balance_savings || 0) + (m.profit_balance_investment || 0) + 
+                       (m.profit_balance_referral || 0) + (m.referral_bonus || 0);
+            }, 0);
+        }
         
         // ========== 6. বিতরণকৃত লভ্যাংশ ==========
         let totalProfitDistributed = 0;
         try {
-            const { data: distributions, error: distError } = await client
-                .from('profit_distributions')
-                .select('amount')
-                .eq('status', 'distributed');
-            
-            if (!distError && distributions) {
-                totalProfitDistributed = distributions.reduce((sum, d) => sum + (d.amount || 0), 0);
-            }
-        } catch(e) { console.log('profit_distributions টেবিল নেই', e); }
+            const { data: distributions } = await client.from('profit_distributions').select('amount').eq('status', 'distributed');
+            if (distributions) totalProfitDistributed = distributions.reduce((sum, d) => sum + (d.amount || 0), 0);
+        } catch(e) {}
         
         // ========== 7. মোট সঞ্চয় ==========
-        const { data: allPayments, error: allPaymentsError } = await client
-            .from('payments')
-            .select('amount')
-            .eq('status', 'approved');
+        let totalSavings = 0;
+        const { data: allPayments } = await client.from('payments').select('amount').eq('status', 'approved');
+        if (allPayments) totalSavings = allPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
         
-        if (allPaymentsError) throw allPaymentsError;
-        const totalSavings = allPayments?.reduce((sum, p) => sum + (p.amount || 0), 0) || 0;
-        
-        // ========== 8. বর্তমান তহবিল ==========
+        // ========== 8. বর্তমান তহবিল ও নিট আয় ==========
         const currentFund = totalSavings - (totalWithdrawal + totalLoanGiven + totalProfitDistributed);
-        
-        // ========== 9. নিট আয় ==========
         const netIncome = totalSavings - totalWithdrawal;
         
         // ========== পেন্ডিং পেমেন্ট ও উত্তোলন ==========
-        const { count: pendingPaymentsCount, error: pendingPayError } = await client.from('payments').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-        if (pendingPayError) throw pendingPayError;
+        const { count: pendingPaymentsCount } = await client.from('payments').select('*', { count: 'exact', head: true }).eq('status', 'pending');
+        const { count: pendingWithdrawalsCount } = await client.from('withdrawals').select('*', { count: 'exact', head: true }).eq('status', 'pending');
         
-        const { count: pendingWithdrawalsCount, error: pendingWithError } = await client.from('withdrawals').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-        if (pendingWithError) throw pendingWithError;
-        
-        // ========== ড্যাশবোর্ড UI আপডেট (প্রধান ৭টি কার্ড) ==========
+        // ========== ড্যাশবোর্ড UI আপডেট ==========
         const dashTotalMembers = document.getElementById('dashTotalMembers');
         const dashActiveMembers = document.getElementById('dashActiveMembers');
         const dashPendingMembers = document.getElementById('dashPendingMembers');
@@ -1347,15 +1333,15 @@ async function loadRealDashboard() {
         if (dashNetIncome) dashNetIncome.innerHTML = netIncome.toLocaleString() + ' টাকা';
         
         // ========== সাম্প্রতিক সদস্য ==========
-        const { data: recentMembers, error: recentError } = await client
+        const { data: recentMembers } = await client
             .from('members')
             .select('full_name, member_id, created_at, status')
             .order('created_at', { ascending: false })
             .limit(5);
             
-        if (!recentError && recentMembers?.length) {
-            const recentList = document.getElementById('recentMembersList');
-            if (recentList) {
+        const recentList = document.getElementById('recentMembersList');
+        if (recentList) {
+            if (recentMembers && recentMembers.length) {
                 recentList.innerHTML = recentMembers.map(m => `
                     <div class="flex justify-between border-b py-2">
                         <div>
@@ -1370,22 +1356,21 @@ async function loadRealDashboard() {
                         </div>
                     </div>
                 `).join('');
+            } else {
+                recentList.innerHTML = '<div class="text-center text-gray-400 py-4">কোনো সদস্য নেই</div>';
             }
-        } else {
-            const recentList = document.getElementById('recentMembersList');
-            if (recentList) recentList.innerHTML = '<div class="text-center text-gray-400 py-4">কোনো সদস্য নেই</div>';
         }
         
         // ========== সর্বশেষ পেমেন্ট ==========
-        const { data: recentPayments, error: paymentError } = await client
+        const { data: recentPayments } = await client
             .from('payments')
             .select('member_name, amount, status, submitted_at')
             .order('submitted_at', { ascending: false })
             .limit(5);
             
-        if (!paymentError && recentPayments?.length) {
-            const paymentList = document.getElementById('recentPaymentsList');
-            if (paymentList) {
+        const paymentList = document.getElementById('recentPaymentsList');
+        if (paymentList) {
+            if (recentPayments && recentPayments.length) {
                 paymentList.innerHTML = recentPayments.map(p => `
                     <div class="flex justify-between border-b py-2">
                         <div>
@@ -1400,13 +1385,12 @@ async function loadRealDashboard() {
                         </div>
                     </div>
                 `).join('');
+            } else {
+                paymentList.innerHTML = '<div class="text-center text-gray-400 py-4">কোনো পেমেন্ট নেই</div>';
             }
-        } else {
-            const paymentList = document.getElementById('recentPaymentsList');
-            if (paymentList) paymentList.innerHTML = '<div class="text-center text-gray-400 py-4">কোনো পেমেন্ট নেই</div>';
         }
         
-        // ========== স্ট্যাটস গ্রিড আপডেট (নিচের ছোট কার্ডগুলো) ==========
+        // ========== স্ট্যাটস গ্রিড আপডেট ==========
         const totalMembersEl = document.getElementById('totalMembers');
         const newMembersEl = document.getElementById('newMembers');
         const totalCollectionEl = document.getElementById('totalCollection');
@@ -1446,17 +1430,18 @@ async function loadRealDashboard() {
             pendingWithdrawalBadge.style.display = pendingWithdrawalsCount > 0 ? 'inline-block' : 'none';
         }
         
-        console.log('✅ ড্যাশবোর্ড আপডেট: মোট সদস্য=', totalMembersCount, 'সক্রিয়=', activeCount, 'মাসিক সংগ্রহ=', monthlyCollection, 'মোট লোন=', totalLoanGiven, 'মোট উত্তোলন=', totalWithdrawal, 'বর্তমান তহবিল=', currentFund);
+        // লাস্ট আপডেট টাইম
+        const lastUpdateEl = document.getElementById('lastUpdateTime');
+        if (lastUpdateEl) {
+            const nowTime = new Date();
+            lastUpdateEl.innerText = nowTime.toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
         
     } catch(e) { 
+        // শুধু Error টা কনসোল এ দেখাবে (প্রোডাকশনের জন্য optional)
+        // আপনি চাইলে এই লাইনটি কমেন্ট করে দিতে পারেন
         console.error('Dashboard error:', e);
     }
-    // লাস্ট আপডেট টাইম
-const lastUpdateEl = document.getElementById('lastUpdateTime');
-if (lastUpdateEl) {
-    const now = new Date();
-    lastUpdateEl.innerText = now.toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
 }
   
 async function loadMembers() {
