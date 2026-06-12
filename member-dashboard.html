@@ -732,8 +732,9 @@ async function loadUserFunds() {
         
         updateFundsDisplay();
         
+        // রেফারেল ডাটা লোড করুন (এটা referralBonus আপডেট করবে)
         if(currentUser.status === 'active') {
-            loadReferralData();
+            await loadReferralData();
         }
         
         console.log('✅ loadUserFunds সম্পন্ন:', {
@@ -790,12 +791,22 @@ async function refreshFundsFromSupabase() {
             return;
         }
         
-        // 3️⃣ ফান্ড আপডেট করুন
+        // 3️⃣ ফান্ড আপডেট করুন - কিন্তু রেফারেল বোনাস শুধু আপডেট করুন যদি মান পরিবর্তন হয়
         userFunds.monthlySavings = totalSavings;
         userFunds.savingsProfit = member?.profit_balance_savings || 0;
         userFunds.investmentProfit = member?.profit_balance_investment || 0;
         userFunds.referralProfit = member?.profit_balance_referral || 0;
-        userFunds.referralBonus = member?.referral_bonus || 0;
+        
+        // 🔥 গুরুত্বপূর্ণ: রেফারেল বোনাস শুধু আপডেট করুন যদি ডাটাবেসে মান থাকে
+        // আর যদি currentUser.referralBonus থেকে মান আসে তাহলে সেটা রাখুন
+        if (member?.referral_bonus !== undefined && member.referral_bonus > 0) {
+            userFunds.referralBonus = member.referral_bonus;
+        } else if (userFunds.referralBonus === 0) {
+            // রেফারেল বোনাস যদি 0 হয়, তাহলে loadReferralData() থেকে আবার লোড করার চেষ্টা করুন
+            if (currentUser.status === 'active') {
+                loadReferralData();
+            }
+        }
         
         console.log('✅ আপডেটেড ফান্ড:', {
             monthlySavings: userFunds.monthlySavings,
@@ -1319,10 +1330,14 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-    // প্রতি 30 সেকেন্ডে ফান্ড রিফ্রেশ করুন (সুপার অ্যাডমিন অনুমোদন auto দেখানোর জন্য)
+   // প্রতি 30 সেকেন্ডে ফান্ড রিফ্রেশ করুন
 setInterval(async function() {
     if(currentUser && currentUser.status === 'active') {
         await refreshFundsFromSupabase();
+        // রেফারেল বোনাস পুনরুদ্ধারের জন্য (যদি রিফ্রেশে রিসেট হয়ে যায়)
+        if(userFunds.referralBonus === 0 && currentUser.referId) {
+            await loadReferralData();
+        }
     }
 }, 30000);
     
