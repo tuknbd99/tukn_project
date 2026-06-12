@@ -660,17 +660,28 @@ async function loadUserFunds() {
     if(!client) return;
     
     try {
-        const { data: payments } = await client.from('payments').select('amount').eq('member_id', currentUser.id).eq('status', 'approved');
-        userFunds.monthlySavings = (payments && payments.length > 0) ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) : 0;
+        // সঞ্চয় (approved পেমেন্টের যোগফল)
+        const { data: payments } = await client
+            .from('payments')
+            .select('amount')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved');
         
-        const { data: member } = await client.from('members')
-            .select('profit_balance_savings, profit_balance_investment, profit_balance_referral')
+        userFunds.monthlySavings = (payments && payments.length > 0) 
+            ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) 
+            : 0;
+        
+        // লভ্যাংশ ও বোনাস (members টেবিল থেকে)
+        const { data: member } = await client
+            .from('members')
+            .select('profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus')
             .eq('member_id', currentUser.id)
             .single();
         
         userFunds.savingsProfit = member?.profit_balance_savings || 0;
         userFunds.investmentProfit = member?.profit_balance_investment || 0;
         userFunds.referralProfit = member?.profit_balance_referral || 0;
+        userFunds.referralBonus = member?.referral_bonus || 0;
         
         updateFundsDisplay();
         
@@ -678,16 +689,21 @@ async function loadUserFunds() {
             loadReferralData();
         }
         
-    } catch(error) { console.error('ফান্ড লোড সমস্যা:', error); }
+    } catch(error) { 
+        console.error('ফান্ড লোড সমস্যা:', error); 
+    }
 }
     
-    // ========== ফান্ড রিফ্রেশ ফাংশন (সুপার অ্যাডমিন অনুমোদনের পর কল হবে) ==========
+
 // ========== ফান্ড রিফ্রেশ ফাংশন (সুপার অ্যাডমিন অনুমোদনের পর কল হবে) ==========
 async function refreshFundsFromSupabase() {
     if(!currentUser) return;
     
     let client = getSupabaseClient();
-    if(!client) return;
+    if(!client) {
+        console.log('⚠️ Supabase client not ready');
+        return;
+    }
     
     try {
         console.log('🔄 ফান্ড রিফ্রেশ শুরু...');
@@ -695,11 +711,22 @@ async function refreshFundsFromSupabase() {
         // 1️⃣ সদস্যের সর্বশেষ ডাটা আনুন (লভ্যাংশ ও বোনাস)
         const { data: member, error: memberError } = await client
             .from('members')
-            .select('balance, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, monthly_savings')
+            .select('profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, balance')
             .eq('member_id', currentUser.id)
             .single();
         
-        if(memberError) throw memberError;
+        if (memberError) {
+            console.error('Member fetch error:', memberError);
+            throw memberError;
+        }
+        
+        console.log('📊 সদস্য ডাটা:', {
+            savingsProfit: member?.profit_balance_savings,
+            investmentProfit: member?.profit_balance_investment,
+            referralProfit: member?.profit_balance_referral,
+            referralBonus: member?.referral_bonus,
+            balance: member?.balance
+        });
         
         // 2️⃣ সঞ্চয়ের জন্য approved পেমেন্টের যোগফল
         const { data: payments, error: paymentError } = await client
@@ -708,9 +735,16 @@ async function refreshFundsFromSupabase() {
             .eq('member_id', currentUser.id)
             .eq('status', 'approved');
         
-        if(paymentError) throw paymentError;
+        if (paymentError) {
+            console.error('Payments fetch error:', paymentError);
+            throw paymentError;
+        }
         
-        const totalSavings = payments && payments.length > 0 ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) : 0;
+        const totalSavings = payments && payments.length > 0 
+            ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) 
+            : 0;
+        
+        console.log('💰 মোট সঞ্চয়:', totalSavings);
         
         // 3️⃣ উত্তোলন করা হয়েছে কিনা চেক করুন (approved status)
         const { data: withdrawals, error: withdrawalError } = await client
@@ -719,7 +753,10 @@ async function refreshFundsFromSupabase() {
             .eq('member_id', currentUser.id)
             .eq('status', 'approved');
         
-        if(withdrawalError) throw withdrawalError;
+        if (withdrawalError) {
+            console.error('Withdrawals fetch error:', withdrawalError);
+            throw withdrawalError;
+        }
         
         // 4️⃣ উত্তোলনের পরিমাণ বের করুন (টাইপ অনুযায়ী)
         let withdrawnCapital = 0;
@@ -728,30 +765,33 @@ async function refreshFundsFromSupabase() {
         let withdrawnReferralProfit = 0;
         let withdrawnBonus = 0;
         
-        if(withdrawals && withdrawals.length > 0) {
+        if (withdrawals && withdrawals.length > 0) {
             withdrawals.forEach(w => {
-                if(w.type === 'মূলধন') withdrawnCapital += w.amount;
-                else if(w.type === 'সঞ্চয় লভ্যাংশ') withdrawnSavingsProfit += w.amount;
-                else if(w.type === 'বিনিয়োগ লভ্যাংশ') withdrawnInvestmentProfit += w.amount;
-                else if(w.type === 'রেফারেল লভ্যাংশ') withdrawnReferralProfit += w.amount;
-                else if(w.type === 'রেফারেল বোনাস' || w.type === 'বোনাস') withdrawnBonus += w.amount;
+                if (w.type === 'মূলধন') withdrawnCapital += w.amount;
+                else if (w.type === 'সঞ্চয় লভ্যাংশ') withdrawnSavingsProfit += w.amount;
+                else if (w.type === 'বিনিয়োগ লভ্যাংশ') withdrawnInvestmentProfit += w.amount;
+                else if (w.type === 'রেফারেল লভ্যাংশ') withdrawnReferralProfit += w.amount;
+                else if (w.type === 'রেফারেল বোনাস' || w.type === 'বোনাস') withdrawnBonus += w.amount;
             });
         }
         
+        console.log('📤 উত্তোলিত পরিমাণ:', {
+            withdrawnCapital,
+            withdrawnSavingsProfit,
+            withdrawnInvestmentProfit,
+            withdrawnReferralProfit,
+            withdrawnBonus
+        });
+        
         // 5️⃣ ফান্ড আপডেট করুন (মোট সঞ্চয় - উত্তোলিত মূলধন)
+        // সুপার অ্যাডমিন ইতিমধ্যে ব্যালেন্স কেটে দিয়েছে, তাই আমরা শুধু ডাটাবেস থেকে সরাসরি নিচ্ছি
         userFunds.monthlySavings = Math.max(0, totalSavings - withdrawnCapital);
-        userFunds.savingsProfit = Math.max(0, (member?.profit_balance_savings || 0) - withdrawnSavingsProfit);
-        userFunds.investmentProfit = Math.max(0, (member?.profit_balance_investment || 0) - withdrawnInvestmentProfit);
-        userFunds.referralProfit = Math.max(0, (member?.profit_balance_referral || 0) - withdrawnReferralProfit);
-        userFunds.referralBonus = Math.max(0, (member?.referral_bonus || 0) - withdrawnBonus);
+        userFunds.savingsProfit = Math.max(0, (member?.profit_balance_savings || 0));
+        userFunds.investmentProfit = Math.max(0, (member?.profit_balance_investment || 0));
+        userFunds.referralProfit = Math.max(0, (member?.profit_balance_referral || 0));
+        userFunds.referralBonus = Math.max(0, (member?.referral_bonus || 0));
         
-        // 6️⃣ ডিসপ্লে আপডেট করুন
-        updateFundsDisplay();
-        
-        // 7️⃣ উত্তোলন ইতিহাসও রিলোড করুন (স্ট্যাটাস আপডেট দেখার জন্য)
-        await loadWithdrawalHistory();
-        
-        console.log('✅ ফান্ড রিফ্রেশ সম্পন্ন:', {
+        console.log('✅ আপডেটেড ফান্ড:', {
             monthlySavings: userFunds.monthlySavings,
             savingsProfit: userFunds.savingsProfit,
             investmentProfit: userFunds.investmentProfit,
@@ -759,10 +799,16 @@ async function refreshFundsFromSupabase() {
             referralBonus: userFunds.referralBonus
         });
         
-        showToast('আপনার ফান্ড তথ্য আপডেট করা হয়েছে!', 'success');
+        // 6️⃣ ডিসপ্লে আপডেট করুন
+        updateFundsDisplay();
+        
+        // 7️⃣ উত্তোলন ইতিহাসও রিলোড করুন (স্ট্যাটাস আপডেট দেখার জন্য)
+        await loadWithdrawalHistory();
+        
+        console.log('✅ ফান্ড রিফ্রেশ সম্পন্ন!');
         
     } catch(error) {
-        console.error('ফান্ড রিফ্রেশ ব্যর্থ:', error);
+        console.error('❌ ফান্ড রিফ্রেশ ব্যর্থ:', error);
     }
 }
     
