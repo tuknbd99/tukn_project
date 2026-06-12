@@ -677,6 +677,63 @@ async function loadUserFunds() {
         
     } catch(error) { console.error('ফান্ড লোড সমস্যা:', error); }
 }
+    // ========== ফান্ড রিফ্রেশ ফাংশন (সুপার অ্যাডমিন অনুমোদনের পর কল হবে) ==========
+async function refreshFundsFromSupabase() {
+    if(!currentUser) return;
+    
+    let client = getSupabaseClient();
+    if(!client) return;
+    
+    try {
+        console.log('🔄 ফান্ড রিফ্রেশ শুরু...');
+        
+        // সদস্যের সর্বশেষ ডাটা আনুন
+        const { data: member, error: memberError } = await client
+            .from('members')
+            .select('balance, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus')
+            .eq('member_id', currentUser.id)
+            .single();
+        
+        if(memberError) throw memberError;
+        
+        // সঞ্চয়ের জন্য approved পেমেন্টের যোগফল
+        const { data: payments, error: paymentError } = await client
+            .from('payments')
+            .select('amount')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved');
+        
+        if(paymentError) throw paymentError;
+        
+        const totalSavings = payments ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) : 0;
+        
+        // ফান্ড আপডেট করুন
+        userFunds.monthlySavings = totalSavings;
+        userFunds.savingsProfit = member?.profit_balance_savings || 0;
+        userFunds.investmentProfit = member?.profit_balance_investment || 0;
+        userFunds.referralProfit = member?.profit_balance_referral || 0;
+        userFunds.referralBonus = member?.referral_bonus || 0;
+        
+        // ডিসপ্লে আপডেট করুন
+        updateFundsDisplay();
+        
+        // উত্তোলন ইতিহাসও রিলোড করুন (স্ট্যাটাস আপডেট দেখার জন্য)
+        await loadWithdrawalHistory();
+        
+        console.log('✅ ফান্ড রিফ্রেশ সম্পন্ন:', {
+            monthlySavings: userFunds.monthlySavings,
+            savingsProfit: userFunds.savingsProfit,
+            investmentProfit: userFunds.investmentProfit,
+            referralProfit: userFunds.referralProfit,
+            referralBonus: userFunds.referralBonus
+        });
+        
+        showToast('আপনার ফান্ড তথ্য আপডেট করা হয়েছে!', 'success');
+        
+    } catch(error) {
+        console.error('ফান্ড রিফ্রেশ ব্যর্থ:', error);
+    }
+}
 
 async function loadBonusHistory() {
     const client = getSupabaseClient();
@@ -858,11 +915,62 @@ async function processWithdrawAll() {
 const BANGLADESH_TIMEZONE = 'Asia/Dhaka';
 let bangladeshTimeOffset = 6 * 60 * 60 * 1000;
 
+// ========== বাংলাদেশ টাইম ফাংশন (সঠিক সংস্করণ) ==========
 function getCurrentBangladeshTime() {
+    try {
+        // Intl.DateTimeFormat ব্যবহার করে সঠিক বাংলাদেশ সময়
+        const now = new Date();
+        const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'Asia/Dhaka',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        });
+        
+        const parts = formatter.formatToParts(now);
+        const year = parts.find(p => p.type === 'year')?.value;
+        const month = parts.find(p => p.type === 'month')?.value;
+        const day = parts.find(p => p.type === 'day')?.value;
+        const hour = parts.find(p => p.type === 'hour')?.value;
+        const minute = parts.find(p => p.type === 'minute')?.value;
+        const second = parts.find(p => p.type === 'second')?.value;
+        
+        if (year && month && day && hour && minute && second) {
+            return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}+06:00`);
+        }
+    } catch(e) {
+        console.log('Timezone fallback used');
+    }
+    
+    // ব্যাকআপ পদ্ধতি
     const now = new Date();
-    return new Date(now.getTime() + bangladeshTimeOffset);
+    const utcTime = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
+    return new Date(utcTime + (6 * 60 * 60 * 1000));
 }
 
+    // ========== বাংলাদেশ সময় ফরম্যাট করার ফাংশন (ইংরেজি সংখ্যা + ডট + PM/AM) ==========
+function formatBangladeshDateTime(date) {
+    const bangladeshDate = new Date(date);
+    
+    const day = bangladeshDate.getDate();
+    const monthNames = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 
+                        'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
+    const month = monthNames[bangladeshDate.getMonth()];
+    const year = bangladeshDate.getFullYear();
+    
+    let hours = bangladeshDate.getHours();
+    let minutes = bangladeshDate.getMinutes();
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12;
+    const minutesStr = minutes < 10 ? '0' + minutes : minutes;
+    
+    return `${day} ${month}, ${year}, ${hours}.${minutesStr} ${ampm}`;
+}
+    
 function formatApprovalDate(date) {
     if(!date) return 'অনুমোদিত হয়নি';
     return date.toLocaleString('bn-BD', {
@@ -1027,9 +1135,10 @@ function updateDigitalClock() {
     const seconds = String(now.getSeconds()).padStart(2, '0');
     const ampm = hours >= 12 ? 'PM' : 'AM';
     hours = hours % 12 || 12;
+    const hoursStr = hours < 10 ? '0' + hours : hours;
     const clockElement = document.getElementById('digitalClock');
     if(clockElement) {
-        clockElement.innerHTML = `${String(hours).padStart(2, '0')}:${minutes}:${seconds} ${ampm}`;
+        clockElement.innerHTML = `${hoursStr}:${minutes}:${seconds} ${ampm}`;
     }
 }
 
@@ -1117,6 +1226,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+    // প্রতি 30 সেকেন্ডে ফান্ড রিফ্রেশ করুন (সুপার অ্যাডমিন অনুমোদন auto দেখানোর জন্য)
+setInterval(async function() {
+    if(currentUser && currentUser.status === 'active') {
+        await refreshFundsFromSupabase();
+    }
+}, 30000);
+    
 // ========== সঞ্চয় ও পেমেন্ট ==========
 async function loadSavingsData() {
     if(!currentUser || currentUser.status !== 'active') return;
@@ -1163,6 +1279,8 @@ async function loadPaymentHistory() {
                 let historyHtml = '';
                 payments.forEach(payment => {
                     let statusClass = '', statusIcon = '', statusText = '';
+                    let rejectionReasonHtml = '';
+                    
                     if(payment.status === 'approved') {
                         totalBalance += payment.amount;
                         statusClass = 'bg-green-100 text-green-700';
@@ -1173,7 +1291,7 @@ async function loadPaymentHistory() {
                             <td class="p-2 text-right font-semibold text-emerald-600">${payment.amount.toLocaleString()} টাকা</td>
                             <td class="p-2 text-center"><span class="px-2 py-1 rounded-full text-xs ${statusClass}">${statusIcon} ${statusText}</span></td>
                             <td class="p-2 text-center"><button onclick="viewPaymentSlip('${payment.id}', '${payment.month} ${payment.year}', ${payment.amount}, '${payment.payment_method}')" class="text-blue-500 hover:text-blue-700 transition"><i class="fas fa-print"></i></button></td>
-                         </tr>`;
+                          </tr>`;
                     } else if(payment.status === 'pending') {
                         statusClass = 'bg-yellow-100 text-yellow-700';
                         statusIcon = '<i class="fas fa-hourglass-half mr-1"></i>';
@@ -1183,18 +1301,30 @@ async function loadPaymentHistory() {
                             <td class="p-2 text-right font-semibold text-amber-600">${payment.amount.toLocaleString()} টাকা</td>
                             <td class="p-2 text-center"><span class="px-2 py-1 rounded-full text-xs ${statusClass}">${statusIcon} ${statusText}</span></td>
                             <td class="p-2 text-center"><span class="text-gray-400"><i class="fas fa-print"></i></span></td>
-                         </tr>`;
+                          </tr>`;
                     } else if(payment.status === 'rejected') {
-                        const rejectReason = payment.reject_reason || 'কারণ উল্লেখ নেই';
+                        // ✅ বাতিলের কারণ দেখানোর জন্য সঠিক কোড
+                        const rejectReason = payment.reject_reason || payment.rejection_reason || 'কারণ উল্লেখ নেই';
                         statusClass = 'bg-red-100 text-red-700';
                         statusIcon = '<i class="fas fa-times-circle mr-1"></i>';
                         statusText = 'বাতিল';
+                        
+                        // টুলটিপ সহ বাতিলের কারণ দেখানো
+                        rejectionReasonHtml = `<div class="text-xs text-red-600 mt-1" title="${rejectReason}">
+                            <i class="fas fa-info-circle mr-1"></i> কারণ: ${rejectReason.length > 30 ? rejectReason.substring(0, 30) + '...' : rejectReason}
+                        </div>`;
+                        
                         historyHtml += `<tr class="border-b hover:bg-gray-50 transition" title="বাতিলের কারণ: ${rejectReason}">
                             <td class="p-2 text-center font-medium">${payment.month} ${payment.year}</td>
                             <td class="p-2 text-right font-semibold text-red-600">${payment.amount.toLocaleString()} টাকা</td>
-                            <td class="p-2 text-center"><span class="px-2 py-1 rounded-full text-xs ${statusClass}" title="${rejectReason}">${statusIcon} ${statusText}</span></td>
+                            <td class="p-2 text-center">
+                                <div>
+                                    <span class="px-2 py-1 rounded-full text-xs ${statusClass}">${statusIcon} ${statusText}</span>
+                                    ${rejectionReasonHtml}
+                                </div>
+                            </td>
                             <td class="p-2 text-center"><span class="text-gray-400"><i class="fas fa-print"></i></span></td>
-                         </tr>`;
+                          </tr>`;
                     }
                 });
                 historyBody.innerHTML = historyHtml;
@@ -1280,17 +1410,8 @@ async function viewPaymentSlip(paymentId, monthName, amount, paymentMethod) {
         voucherSlipNo = generateVoucherSlipNo();
     }
     
-    const now = new Date();
-    const generateDate = now.toLocaleDateString('bn-BD', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-    });
-    const generateHours = now.getHours();
-    const generateMinutes = now.getMinutes();
-    const generateAmpm = generateHours >= 12 ? 'দুপুর' : (generateHours >= 4 ? 'সকাল' : 'রাত');
-    const generateFormattedHours = generateHours % 12 || 12;
-    const generateTime = `${generateFormattedHours}.${generateMinutes.toString().padStart(2, '0')} ${generateAmpm}`;
+    const bangladeshDate = getCurrentBangladeshTime();
+    const generateDateTime = formatBangladeshDateTime(bangladeshDate);
     
     let methodDisplay = paymentMethod;
     let paymentSpecificHtml = '';
@@ -1485,7 +1606,7 @@ async function viewPaymentSlip(paymentId, monthName, amount, paymentMethod) {
             
             <div class="voucher-box">
                 <div class="info-row"><span class="info-label">🎫 ভাউচার নং :</span><span class="info-value" style="font-family:monospace;">${voucherSlipNo}</span></div>
-                <div class="info-row"><span class="info-label">📅 জেনারেটের তারিখ :</span><span class="info-value">${generateDate}, ${generateTime}</span></div>
+                <div class="info-row"><span class="info-label">📅 জেনারেটের তারিখ :</span><span class="info-value">${generateDateTime}</span></div>
             </div>
             
             <div class="section">
@@ -1887,15 +2008,7 @@ async function generateSlipAndPrint() {
         showToast('পেমেন্ট তথ্য জমা হয়েছে! অনুমোদনের অপেক্ষায়...', 'success');
         
         // স্লিপের জন্য বাংলাদেশের তারিখ ও সময় (সঠিকভাবে ফরম্যাটেড)
-        const bangladeshDate = bangladeshNow.toLocaleDateString('bn-BD', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: true
-        });
+      const bangladeshDate = formatBangladeshDateTime(bangladeshNow);
         
         const slipHTML = `
         <div style="border:2px solid #059669; border-radius:16px; padding:20px; background:white; max-width:650px; margin:0 auto; font-family:'Noto Sans Bengali', sans-serif;">
