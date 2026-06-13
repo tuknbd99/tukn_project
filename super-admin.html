@@ -379,7 +379,20 @@ async function loadRealDashboard() {
         const { data: members } = await client.from('members').select('profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus');
         if (members && members.length > 0) totalProfit = members.reduce((sum, m) => sum + (m.profit_balance_savings || 0) + (m.profit_balance_investment || 0) + (m.profit_balance_referral || 0) + (m.referral_bonus || 0), 0);
         
-        let totalProfitDistributed = 0;
+       let totalProfitDistributed = 0;
+try {
+    const { data: distributions, error: distError } = await client.from('profit_distributions').select('amount');
+    if (distError) {
+        console.log('profit_distributions table may not exist:', distError.message);
+        // টেবিল না থাকলে 0 রাখুন
+        totalProfitDistributed = 0;
+    } else if (distributions && distributions.length > 0) {
+        totalProfitDistributed = distributions.reduce((sum, d) => sum + (d.amount || 0), 0);
+    }
+} catch(e) {
+    console.log('profit_distributions table error:', e);
+    totalProfitDistributed = 0;
+}
         const { data: distributions } = await client.from('profit_distributions').select('amount');
         if (distributions && distributions.length > 0) totalProfitDistributed = distributions.reduce((sum, d) => sum + (d.amount || 0), 0);
         
@@ -910,12 +923,30 @@ async function loadSliders() {
     if (!container) return;
     try {
         const client = initSupabaseClient();
-        if (!client) { container.innerHTML = '<div class="text-center text-gray-500 py-4">স্লাইডার লোড করতে সমস্যা!</div>'; return; }
+        if (!client) { 
+            container.innerHTML = '<div class="text-center text-gray-500 py-4">স্লাইডার লোড করতে সমস্যা!</div>'; 
+            return; 
+        }
+        
         const { data, error } = await client.from('sliders').select('*').order('order_num', { ascending: true });
-        if (error) throw error;
-        if (!data || data.length === 0) { container.innerHTML = '<div class="text-center text-gray-500 py-4">কোনো স্লাইডার নেই</div>'; return; }
+        
+        if (error) {
+            console.error('Slider error - table may not exist:', error);
+            container.innerHTML = '<div class="text-center text-gray-500 py-4">📭 স্লাইডার টেবিল নেই। প্রথমে টেবিল তৈরি করুন।</div>';
+            return;
+        }
+        
+        if (!data || data.length === 0) { 
+            container.innerHTML = '<div class="text-center text-gray-500 py-4">📭 কোনো স্লাইডার নেই</div>'; 
+            return; 
+        }
+        
         container.innerHTML = data.map(s => `<div class="border rounded-lg overflow-hidden shadow-sm bg-white"><img src="${s.image_url}" class="w-full h-32 object-cover" onerror="this.src='images/logo.png'"><div class="p-2"><p class="text-sm font-semibold">${s.title || 'স্লাইডার'}</p><div class="flex gap-2 mt-2"><button onclick="deleteSlider(${s.id})" class="bg-red-500 text-white px-2 py-1 rounded text-xs w-full">🗑️ ডিলিট</button></div></div></div>`).join('');
-    } catch(e) { console.error(e); container.innerHTML = '<div class="text-center text-gray-500 py-4">স্লাইডার লোড করতে সমস্যা!</div>'; }
+        
+    } catch(e) { 
+        console.error(e); 
+        container.innerHTML = '<div class="text-center text-gray-500 py-4">স্লাইডার লোড করতে সমস্যা!</div>'; 
+    }
 }
 
 async function uploadSliderImage() {
@@ -1010,14 +1041,20 @@ document.getElementById('addRepForm')?.addEventListener('submit', function(e) { 
 // ========== অ্যাডমিন ফাংশন ==========
 function loadAdmins() {
     const container = document.getElementById('adminsList');
-    // চেক করুন এলিমেন্ট আছে কিনা
     if (!container) {
-        console.log('adminsList element not found, creating...');
+        console.log('adminsList element not found yet, will retry...');
+        // 1 সেকেন্ড পরে আবার চেষ্টা করুন
+        setTimeout(loadAdmins, 500);
         return;
     }
     
-    const admins = JSON.parse(localStorage.getItem('tukn_admins') || '[{"id":1,"username":"superadmin","name":"সুপার অ্যাডমিন","role":"সুপার অ্যাডমিন"}]');
-    container.innerHTML = admins.map(a => `<div class="flex justify-between border-b py-2"><div><strong>${a.username}</strong> - ${a.name} (${a.role})</div><button onclick="deleteAdmin(${a.id})" class="text-red-500 hover:text-red-700"><i class="fas fa-trash"></i></button></div>`).join('');
+    try {
+        const admins = JSON.parse(localStorage.getItem('tukn_admins') || '[{"id":1,"username":"superadmin","name":"সুপার অ্যাডমিন","role":"সুপার অ্যাডমিন"}]');
+        container.innerHTML = admins.map(a => `<div class="flex justify-between border-b py-2"><div><strong>${a.username}</strong> - ${a.name} (${a.role})</div><button onclick="deleteAdmin(${a.id})" class="text-red-500 hover:text-red-700"><i class="fas fa-trash"></i></button></div>`).join('');
+    } catch(e) {
+        console.error('Error loading admins:', e);
+        container.innerHTML = '<div class="text-red-500">অ্যাডমিন লোড করতে সমস্যা!</div>';
+    }
 }
 function deleteAdmin(id) { let admins = JSON.parse(localStorage.getItem('tukn_admins') || '[]'); admins = admins.filter(a => a.id !== id); localStorage.setItem('tukn_admins', JSON.stringify(admins)); loadAdmins(); showToast('অ্যাডমিন ডিলিট করা হয়েছে'); }
 function showAddAdminModal() { document.getElementById('addAdminModal').classList.add('active'); }
@@ -1090,18 +1127,38 @@ document.addEventListener('DOMContentLoaded', function() {
     loadMembers();
     loadRealDashboard();
     loadNoticesList();
-    loadSliders();
-    loadAdmins();
-    loadReps();
-    loadApplications();
     
-    document.getElementById('aboutContent').innerHTML = `<p class="text-gray-700">${localStorage.getItem('tukn_about') || 'ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ একটি অরাজনৈতিক সংগঠন।'}</p>`;
-    const career = JSON.parse(localStorage.getItem('tukn_career') || '{"description":"আমাদের সংগঠনে নিয়মিত বিভিন্ন পদে নিয়োগ দেওয়া হয়।"}');
-    document.getElementById('careerDescription').innerHTML = `<p class="text-gray-700">${career.description}</p>`;
-    document.getElementById('loanApplicationsListOld').innerHTML = '<div class="text-center text-gray-500 py-4">লোন আবেদন দেখতে "লোন ব্যবস্থাপনা" ট্যাবে ক্লিক করুন</div>';
-    document.getElementById('complaintsList').innerHTML = '<div class="text-center text-gray-500 py-4">কোনো অভিযোগ নেই</div>';
+    // একটু delay দিয়ে load করুন
+    setTimeout(() => {
+        loadSliders();
+        loadAdmins();
+        loadReps();
+        loadApplications();
+    }, 500);
     
-    // অটো রিফ্রেশ (শুধু ড্যাশবোর্ড ট্যাব খোলা থাকলে)
+    // about content
+    const aboutContent = document.getElementById('aboutContent');
+    if (aboutContent) {
+        aboutContent.innerHTML = `<p class="text-gray-700">${localStorage.getItem('tukn_about') || 'ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ একটি অরাজনৈতিক সংগঠন।'}</p>`;
+    }
+    
+    const careerDescription = document.getElementById('careerDescription');
+    if (careerDescription) {
+        const career = JSON.parse(localStorage.getItem('tukn_career') || '{"description":"আমাদের সংগঠনে নিয়মিত বিভিন্ন পদে নিয়োগ দেওয়া হয়।"}');
+        careerDescription.innerHTML = `<p class="text-gray-700">${career.description}</p>`;
+    }
+    
+    const loanAppsOld = document.getElementById('loanApplicationsListOld');
+    if (loanAppsOld) {
+        loanAppsOld.innerHTML = '<div class="text-center text-gray-500 py-4">লোন আবেদন দেখতে "লোন ব্যবস্থাপনা" ট্যাবে ক্লিক করুন</div>';
+    }
+    
+    const complaintsList = document.getElementById('complaintsList');
+    if (complaintsList) {
+        complaintsList.innerHTML = '<div class="text-center text-gray-500 py-4">কোনো অভিযোগ নেই</div>';
+    }
+    
+    // অটো রিফ্রেশ
     setInterval(function() {
         if (document.getElementById('dashboardTab') && document.getElementById('dashboardTab').classList.contains('active-tab')) {
             loadRealDashboard();
