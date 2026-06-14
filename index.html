@@ -2314,12 +2314,82 @@
         } catch(e) {}
     }
     
-    async function updateVisitorCount() {
-        let count = localStorage.getItem('tukn_visitor_count') || 12458;
-        count = parseInt(count) + 1;
-        localStorage.setItem('tukn_visitor_count', count);
-        document.getElementById('topVisitors').innerHTML = count.toLocaleString();
+    // লাইভ ভিজিটর কাউন্ট - Supabase ভার্সন (লোকাল স্টোরেজ ছাড়া)
+async function updateVisitorCount() {
+    const sb = await initSupabase();
+    if(!sb) {
+        console.error('Supabase সংযোগ নেই');
+        document.getElementById('topVisitors').innerHTML = '০';
+        document.getElementById('visitorCount').innerHTML = '০';
+        return;
     }
+    
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        
+        // চেক করুন আজকে এই সেশন থেকে ভিজিট হয়েছে কিনা
+        const sessionKey = `tukn_visited_${today}`;
+        
+        if (!sessionStorage.getItem(sessionKey)) {
+            // আজকে এই সেশনে প্রথম ভিজিট
+            
+            // আজকের রেকর্ড আছে কিনা চেক করুন
+            let { data: existing, error: selectError } = await sb
+                .from('visitor_stats')
+                .select('total_count, id')
+                .eq('visit_date', today)
+                .maybeSingle();
+            
+            if (existing) {
+                // আজকে আগে ভিজিট হয়েছে, কাউন্ট বাড়ান
+                const newCount = existing.total_count + 1;
+                const { error: updateError } = await sb
+                    .from('visitor_stats')
+                    .update({ total_count: newCount, updated_at: new Date() })
+                    .eq('id', existing.id);
+                
+                if (updateError) throw updateError;
+            } else {
+                // আজকে প্রথম ভিজিট
+                const { error: insertError } = await sb
+                    .from('visitor_stats')
+                    .insert({ 
+                        visit_date: today, 
+                        total_count: 1,
+                        created_at: new Date(),
+                        updated_at: new Date()
+                    });
+                
+                if (insertError) throw insertError;
+            }
+            
+            // সেশন মার্ক করুন যাতে আজকে আবার কাউন্ট না বাড়ে
+            sessionStorage.setItem(sessionKey, 'true');
+        }
+        
+        // মোট ভিজিটর সংখ্যা বের করুন (সব দিনের যোগফল)
+        const { data: allVisitors, error: sumError } = await sb
+            .from('visitor_stats')
+            .select('total_count');
+        
+        if (sumError) throw sumError;
+        
+        const totalVisitors = allVisitors.reduce((sum, row) => sum + (row.total_count || 0), 0);
+        
+        // সব জায়গায় ভিজিটর সংখ্যা আপডেট করুন
+        const visitorElements = document.querySelectorAll('#topVisitors, #visitorCount');
+        visitorElements.forEach(el => {
+            if (el) el.innerHTML = totalVisitors.toLocaleString();
+        });
+        
+        console.log(`মোট ভিজিটর: ${totalVisitors.toLocaleString()}`);
+        
+    } catch(error) {
+        console.error('ভিজিটর কাউন্ট আপডেট করতে ব্যর্থ:', error);
+        document.getElementById('topVisitors').innerHTML = '০';
+        document.getElementById('visitorCount').innerHTML = '০';
+    }
+}
     
     async function loadTickerNotices() {
         const sb = await initSupabase();
