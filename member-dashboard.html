@@ -127,6 +127,15 @@
         ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
         ::-webkit-scrollbar-thumb { background: #059669; border-radius: 10px; }
         
+        /* প্রিমিয়াম স্লিপের জন্য অতিরিক্ত স্টাইল */
+        .status-approved {
+            background: #d1fae5 !important;
+            color: #065f46 !important;
+        }
+        .status-rejected {
+            background: #fee2e2 !important;
+            color: #991b1b !important;
+        }
     </style>
 </head>
     
@@ -397,10 +406,10 @@
                             <th class="p-2 text-right font-semibold text-gray-700">টাকা</th>
                             <th class="p-2 text-center font-semibold text-gray-700">স্ট্যাটাস</th>
                             <th class="p-2 text-center font-semibold text-gray-700">প্রিন্ট</th>
-                        </tr>
+                        <tr>
                     </thead>
                     <tbody id="paymentHistoryBody">
-                        <tr><td colspan="4" class="text-center p-4 text-gray-500">লোড হচ্ছে...<\/td></tr>
+                        <tr><td colspan="4" class="text-center p-4 text-gray-500">লোড হচ্ছে...<\/td></table>
                     </tbody>
                 </table>
             </div>
@@ -972,48 +981,227 @@ async function loadPaymentHistory() {
     } catch(error) { console.error('Load payment history error:', error); }
 }
 
+// আপডেটেড প্রিমিয়াম viewPaymentSlip ফাংশন
 async function viewPaymentSlip(paymentId, monthName, amount, paymentMethod) {
+    if (!paymentId) {
+        showToast('স্লিপ আইডি পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
     showToast('স্লিপ লোড হচ্ছে...', 'info');
-    let approvedBy = '-', approvedDate = '-', approvedTime = '-', voucherSlipNo = '-';
-    let paymentFullDetails = { sender_mobile: '-', transaction_id: '-', bank_name: '-', branch_name: '-', account_number: '-', account_name: '-', transaction_ref: '-', bank_phone: '-', receiver_id: '-', receiver_name: '-', receiver_mobile: '-' };
+    
     try {
         const client = getSupabaseClient();
-        if(client && paymentId) {
-            const { data, error } = await client.from('payments').select('*').eq('id', paymentId).single();
-            if(!error && data) {
-                if(data.approved_by) approvedBy = data.approved_by;
-                if(data.approved_at) {
-                    const approvedDateObj = new Date(data.approved_at);
-                    approvedDate = approvedDateObj.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric' });
-                    const hours = approvedDateObj.getHours();
-                    const minutes = approvedDateObj.getMinutes();
-                    const ampm = hours >= 12 ? 'দুপুর' : (hours >= 4 ? 'সকাল' : 'রাত');
-                    const formattedHours = hours % 12 || 12;
-                    approvedTime = `${formattedHours}.${minutes.toString().padStart(2,'0')} ${ampm}`;
-                }
-                if(data.voucher_slip_no) voucherSlipNo = data.voucher_slip_no;
-                paymentFullDetails = { sender_mobile: data.sender_mobile || '-', transaction_id: data.transaction_id || '-', bank_name: data.bank_name || '-', branch_name: data.branch_name || '-', account_number: data.account_number || '-', account_name: data.account_name || '-', transaction_ref: data.transaction_ref || '-', bank_phone: data.bank_phone || '-', receiver_id: data.receiver_id || '-', receiver_name: data.receiver_name || '-', receiver_mobile: data.receiver_mobile || '-' };
-            }
+        if (!client) {
+            showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+            return;
         }
-    } catch(e) { console.error(e); }
-    if(voucherSlipNo === '-' || voucherSlipNo === 'পেন্ডিং') voucherSlipNo = generateVoucherSlipNo();
-    const bangladeshDate = getCurrentBangladeshTime();
-    const generateDateTime = formatBangladeshDateTime(bangladeshDate);
-    let methodDisplay = paymentMethod;
-    let paymentSpecificHtml = '';
-    if(paymentMethod === 'bank') {
-        methodDisplay = 'ব্যাংক';
-        paymentSpecificHtml = `<div><span>ব্যাংকের নাম:</span><span>${paymentFullDetails.bank_name}</span></div><div><span>শাখার নাম:</span><span>${paymentFullDetails.branch_name}</span></div><div><span>একাউন্ট নম্বর:</span><span>${paymentFullDetails.account_number}</span></div><div><span>একাউন্টের নাম:</span><span>${paymentFullDetails.account_name}</span></div>`;
-    } else if(paymentMethod === 'cash') {
-        methodDisplay = 'নগদ';
-        paymentSpecificHtml = `<div><span>গ্রহীতার নাম:</span><span>${paymentFullDetails.receiver_name}</span></div><div><span>গ্রহীতার আইডি:</span><span>${paymentFullDetails.receiver_id}</span></div><div><span>গ্রহীতার মোবাইল:</span><span>${paymentFullDetails.receiver_mobile}</span></div>`;
-    } else {
-        paymentSpecificHtml = `<div><span>সেন্ডার নম্বর:</span><span>${paymentFullDetails.sender_mobile}</span></div><div><span>ট্রানজেকশন আইডি:</span><span>${paymentFullDetails.transaction_id}</span></div>`;
+        
+        const { data: payment, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('id', paymentId)
+            .single();
+        
+        if (error || !payment) {
+            showToast('স্লিপ ডাটা পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        const { data: member } = await client
+            .from('members')
+            .select('*')
+            .eq('member_id', payment.member_id)
+            .single();
+        
+        const currentMemberData = member || currentUser;
+        
+        const slipNumber = payment.voucher_slip_no || `TUK${Date.now()}${Math.floor(Math.random() * 1000)}`;
+        const verificationCode = payment.verification_code || (() => {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
+            let code = '';
+            for(let i = 0; i < 8; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+            return code;
+        })();
+        
+        const receiptHash = payment.receipt_hash || (() => {
+            let hash = 0;
+            const str = JSON.stringify(payment);
+            for(let i = 0; i < str.length; i++) {
+                hash = ((hash << 5) - hash) + str.charCodeAt(i);
+                hash |= 0;
+            }
+            return Math.abs(hash).toString(16).toUpperCase();
+        })();
+        
+        const bangladeshDate = getCurrentBangladeshTime();
+        const inputDate = bangladeshDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric' });
+        const inputTime = bangladeshDate.toLocaleTimeString('bn-BD');
+        
+        let paymentDetailsHtml = '';
+        if (payment.payment_method === 'bKash' || payment.payment_method === 'Nagad' || payment.payment_method === 'Rocket' || payment.payment_method === 'CellFin') {
+            paymentDetailsHtml = `
+                <div class="info-row"><span class="info-label"><i class="fas fa-mobile-alt"></i> সেন্ডার মোবাইল:</span><span class="info-value">${payment.sender_mobile || '-'}</span></div>
+                <div class="info-row"><span class="info-label"><i class="fas fa-hashtag"></i> ট্রানজেকশন আইডি:</span><span class="info-value">${payment.transaction_id || '-'}</span></div>
+            `;
+        } else if (payment.payment_method === 'bank') {
+            paymentDetailsHtml = `
+                <div class="info-row"><span class="info-label"><i class="fas fa-university"></i> ব্যাংকের নাম:</span><span class="info-value">${payment.bank_name || '-'}</span></div>
+                <div class="info-row"><span class="info-label"><i class="fas fa-code-branch"></i> শাখার নাম:</span><span class="info-value">${payment.branch_name || '-'}</span></div>
+                <div class="info-row"><span class="info-label"><i class="fas fa-credit-card"></i> একাউন্ট নম্বর:</span><span class="info-value">${payment.account_number || '-'}</span></div>
+                <div class="info-row"><span class="info-label"><i class="fas fa-user"></i> একাউন্টের নাম:</span><span class="info-value">${payment.account_name || '-'}</span></div>
+            `;
+        } else if (payment.payment_method === 'cash') {
+            paymentDetailsHtml = `
+                <div class="info-row"><span class="info-label"><i class="fas fa-user-check"></i> গ্রহীতার নাম:</span><span class="info-value">${payment.receiver_name || '-'}</span></div>
+                <div class="info-row"><span class="info-label"><i class="fas fa-id-card"></i> গ্রহীতার আইডি:</span><span class="info-value">${payment.receiver_id || '-'}</span></div>
+                <div class="info-row"><span class="info-label"><i class="fas fa-mobile-alt"></i> গ্রহীতার মোবাইল:</span><span class="info-value">${payment.receiver_mobile || '-'}</span></div>
+            `;
+        }
+        
+        let statusClass = 'status-pending';
+        let statusText = 'বিচারাধীন';
+        let statusIcon = '<i class="fas fa-clock"></i>';
+        if (payment.status === 'approved') {
+            statusClass = 'status-approved';
+            statusText = 'অনুমোদিত';
+            statusIcon = '<i class="fas fa-check-circle"></i>';
+        } else if (payment.status === 'rejected') {
+            statusClass = 'status-rejected';
+            statusText = 'বাতিল';
+            statusIcon = '<i class="fas fa-times-circle"></i>';
+        }
+        
+        const getMemberPhoto = (name, id) => `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=059669&color=fff&size=80&rounded=true&bold=true`;
+        const formatDate = (dateString) => {
+            if(!dateString) return '-';
+            const date = new Date(dateString);
+            return date.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric' });
+        };
+        const joiningDate = formatDate(currentMemberData?.join_date || payment.submitted_at);
+        
+        const slipHTML = `
+            <div style="max-width:550px; margin:0 auto; background:white; border-radius:24px; overflow:hidden; position:relative;">
+                <div style="position:relative; z-index:1;">
+                    <div style="border:2px dashed #10b981; margin:15px; border-radius:20px; background:white;">
+                        <div style="background:linear-gradient(135deg, #064e3b, #059669); padding:20px; text-align:center; color:white; position:relative;">
+                            <img src="images/logo.png" style="width:65px; height:65px; border-radius:16px; margin-bottom:10px; border:2px solid rgba(255,255,255,0.3);" onerror="this.src='https://placehold.co/65x65/059669/white?text=T'">
+                            <h2 style="font-size:18px;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2>
+                            <p style="font-size:11px;">সঞ্চয় পেমেন্ট স্লিপ / ভাউচার</p>
+                            <div style="position:absolute; bottom:0; left:0; right:0; height:4px; background:linear-gradient(90deg, #fcd34d, #f59e0b, #fcd34d);"></div>
+                        </div>
+                        
+                        <div style="display:flex; justify-content:space-between; background:#f8fafc; padding:12px 20px; font-size:11px; border-bottom:1px solid #e5e7eb; flex-wrap:wrap; gap:8px;">
+                            <span><i class="fas fa-hashtag"></i> স্লিপ নং: <strong style="color:#059669;">${slipNumber}</strong></span>
+                            <span><i class="fas fa-qrcode"></i> ভেরিফিকেশন: <strong style="color:#059669;">${verificationCode}</strong></span>
+                        </div>
+                        
+                        <div style="padding:20px;">
+                            <div style="background:#f8fafc; border-radius:12px; padding:15px; margin-bottom:15px; border:1px solid #e5e7eb;">
+                                <div style="font-size:14px; font-weight:700; color:#064e3b; border-bottom:2px solid #fcd34d; display:inline-block; padding-bottom:4px; margin-bottom:12px;">
+                                    <i class="fas fa-user-circle"></i> সদস্য তথ্য
+                                </div>
+                                <div style="display:flex; gap:15px; align-items:center; margin-bottom:15px;">
+                                    <img src="${getMemberPhoto(currentMemberData?.full_name || payment.member_name, currentMemberData?.member_id || payment.member_id)}" style="width:55px; height:55px; border-radius:50%; border:2px solid #059669;">
+                                    <div style="flex:1;">
+                                        <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px dashed #e5e7eb; font-size:13px;">
+                                            <span style="font-weight:600;">সদস্য আইডি:</span><span>${currentMemberData?.member_id || payment.member_id}</span>
+                                        </div>
+                                        <div style="display:flex; justify-content:space-between; padding:8px 0; font-size:13px;">
+                                            <span style="font-weight:600;">নাম:</span><span>${currentMemberData?.full_name || payment.member_name}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px dashed #e5e7eb; font-size:13px;">
+                                    <span style="font-weight:600;"><i class="fas fa-mobile-alt"></i> মোবাইল:</span><span>${currentMemberData?.mobile || payment.mobile}</span>
+                                </div>
+                                <div style="display:flex; justify-content:space-between; padding:8px 0; font-size:13px;">
+                                    <span style="font-weight:600;"><i class="fas fa-calendar-alt"></i> জয়েনিং তারিখ:</span><span>${joiningDate}</span>
+                                </div>
+                            </div>
+                            
+                            <div style="background:#f8fafc; border-radius:12px; padding:15px; margin-bottom:15px; border:1px solid #e5e7eb;">
+                                <div style="font-size:14px; font-weight:700; color:#064e3b; border-bottom:2px solid #fcd34d; display:inline-block; padding-bottom:4px; margin-bottom:12px;">
+                                    <i class="fas fa-credit-card"></i> পেমেন্ট তথ্য
+                                </div>
+                                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px dashed #e5e7eb; font-size:13px;">
+                                    <span style="font-weight:600;">মাস:</span><span>${payment.month} ${payment.year}</span>
+                                </div>
+                                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px dashed #e5e7eb; font-size:13px;">
+                                    <span style="font-weight:600;">পরিমাণ:</span><span style="color:#059669; font-weight:bold;">${payment.amount.toLocaleString()} টাকা</span>
+                                </div>
+                                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px dashed #e5e7eb; font-size:13px;">
+                                    <span style="font-weight:600;">পেমেন্ট মাধ্যম:</span><span>${payment.payment_method}</span>
+                                </div>
+                                ${paymentDetailsHtml}
+                            </div>
+                            
+                            <div style="background:#f8fafc; border-radius:12px; padding:15px; margin-bottom:15px; border:1px solid #e5e7eb;">
+                                <div style="font-size:14px; font-weight:700; color:#064e3b; border-bottom:2px solid #fcd34d; display:inline-block; padding-bottom:4px; margin-bottom:12px;">
+                                    <i class="fas fa-keyboard"></i> ইনপুট তথ্য
+                                </div>
+                                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px dashed #e5e7eb; font-size:13px;">
+                                    <span style="font-weight:600;"><i class="fas fa-calendar-alt"></i> জমার তারিখ:</span><span>${inputDate}</span>
+                                </div>
+                                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px dashed #e5e7eb; font-size:13px;">
+                                    <span style="font-weight:600;"><i class="fas fa-clock"></i> জমার সময়:</span><span>${inputTime}</span>
+                                </div>
+                                <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px dashed #e5e7eb; font-size:13px;">
+                                    <span style="font-weight:600;"><i class="fas fa-fingerprint"></i> রিসিপ্ট হ্যাশ:</span><span style="font-size:10px; word-break:break-all;">${receiptHash}</span>
+                                </div>
+                                <div style="display:flex; justify-content:space-between; padding:8px 0; font-size:13px;">
+                                    <span style="font-weight:600;"><i class="fas fa-tag"></i> স্ট্যাটাস:</span>
+                                    <span style="background:#fed7aa; color:#9a3412; padding:4px 12px; border-radius:50px; font-size:12px;">${statusIcon} ${statusText}</span>
+                                </div>
+                            </div>
+                            
+                            <div style="background:#f8fafc; border-radius:12px; padding:15px; margin-bottom:15px; border:1px solid #e5e7eb;">
+                                <div style="font-size:14px; font-weight:700; color:#064e3b; border-bottom:2px solid #fcd34d; display:inline-block; padding-bottom:4px; margin-bottom:12px;">
+                                    <i class="fas fa-history"></i> টাইমলাইন
+                                </div>
+                                <div style="position:relative; padding-left:25px;">
+                                    <div style="position:absolute; left:8px; top:0; bottom:0; width:2px; background:linear-gradient(180deg, #10b981, #fcd34d);"></div>
+                                    <div style="position:relative; padding-bottom:12px;">
+                                        <div style="position:absolute; left:-21px; top:5px; width:10px; height:10px; border-radius:50%; background:#10b981; border:2px solid white; box-shadow:0 0 0 2px #10b981;"></div>
+                                        <div style="font-size:10px; color:#9ca3af;">${inputDate} ${inputTime}</div>
+                                        <div style="font-size:12px; font-weight:500;"><i class="fas fa-file-invoice"></i> স্লিপ তৈরি ও পেমেন্ট সাবমিট</div>
+                                    </div>
+                                    <div style="position:relative; padding-bottom:12px;">
+                                        <div style="position:absolute; left:-21px; top:5px; width:10px; height:10px; border-radius:50%; background:#f59e0b; border:2px solid white; box-shadow:0 0 0 2px #f59e0b;"></div>
+                                        <div style="font-size:12px; font-weight:500;"><i class="fas fa-clock"></i> বিচারাধীন - অনুমোদনের অপেক্ষায়</div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div style="text-align:center; margin:15px 0; padding:10px; background:white; border-radius:12px;">
+                                <img src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(JSON.stringify({slip: slipNumber, code: verificationCode, member: payment.member_id, amount: payment.amount}))}" style="margin:0 auto;" width="80" height="80">
+                                <p style="font-size:10px; color:#6b7280; margin-top:5px;"><i class="fas fa-qrcode"></i> স্ক্যান করে পেমেন্ট ভেরিফাই করুন</p>
+                            </div>
+                        </div>
+                        
+                        <div style="background:#f9fafb; padding:15px 20px; border-top:1px solid #e5e7eb; text-align:center;">
+                            <div style="display:flex; justify-content:space-between; gap:15px; margin-bottom:12px; flex-wrap:wrap;">
+                                <span style="flex:1; text-align:center; font-size:10px; color:#6b7280; padding-top:20px; border-top:1px dashed #9ca3af;">সঞ্চয় গ্রহীতার স্বাক্ষর</span>
+                                <span style="flex:1; text-align:center; font-size:10px; color:#6b7280; padding-top:20px; border-top:1px dashed #9ca3af;">সঞ্চয় প্রদানকারীর স্বাক্ষর</span>
+                                <span style="flex:1; text-align:center; font-size:10px; color:#6b7280; padding-top:20px; border-top:1px dashed #9ca3af;">অ্যাডমিন স্বাক্ষর</span>
+                            </div>
+                            <div style="font-size:10px; color:#9ca3af;">
+                                <i class="fas fa-robot"></i> স্বয়ংক্রিয়ভাবে জেনারেটেড স্লিপ | <i class="fas fa-check-circle"></i> এই স্লিপটি পেমেন্টের রেকর্ড হিসেবে সংরক্ষিত থাকবে
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.getElementById('slipPrintArea').innerHTML = slipHTML;
+        document.getElementById('paymentSlipModal').classList.remove('hidden');
+        document.getElementById('paymentSlipModal').classList.add('flex');
+        
+    } catch (error) {
+        console.error('Error loading slip:', error);
+        showToast('স্লিপ লোড করতে ব্যর্থ!', 'error');
     }
-    const slipHTML = `<div style="border:2px solid #059669; border-radius:16px; padding:20px; background:white;"><div style="text-align:center;"><h2>ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক</h2><p>পেমেন্ট স্লিপ / ভাউচার</p></div><div><p>ভাউচার নং: ${voucherSlipNo}</p><p>তারিখ: ${generateDateTime}</p></div><div><h3>সদস্য তথ্য</h3><p>আইডি: ${currentUser.id}</p><p>নাম: ${currentUser.name}</p></div><div><h3>পেমেন্ট তথ্য</h3><p>মাস: ${monthName}</p><p>পরিমাণ: ${amount} টাকা</p><p>মাধ্যম: ${methodDisplay}</p>${paymentSpecificHtml}</div></div>`;
-    document.getElementById('slipPrintArea').innerHTML = slipHTML;
-    document.getElementById('paymentSlipModal').classList.remove('hidden');
-    document.getElementById('paymentSlipModal').classList.add('flex');
 }
 
 function closePaymentSlipModal() { 
@@ -1223,7 +1411,6 @@ async function loadReferralData() {
         document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
         document.getElementById('totalLevels').innerText = '১০';
         
-        // গুরুত্বপূর্ণ: শুধু রেফারেল লভ্যাংশ আপডেট করুন, বোনাস অপরিবর্তিত রাখুন
         const referralAmount = Math.floor(totalCommission);
         userFunds.referralProfit = referralAmount;
         
@@ -1442,9 +1629,9 @@ function openAddressModal() {
 }
 function closeAddressModal() { const modal = document.getElementById('addressModal'); if(modal) { modal.classList.add('hidden'); modal.classList.remove('flex'); } }
 function closeAddressModalOnOverlay(e) { if(e.target.id === 'addressModal') closeAddressModal(); }
-const addressForm = document.getElementById('addressForm');
-if(addressForm) {
-    addressForm.addEventListener('submit', async function(e) {
+const addressFormElement = document.getElementById('addressForm');
+if(addressFormElement) {
+    addressFormElement.addEventListener('submit', async function(e) {
         e.preventDefault();
         const presentAddress = document.getElementById('presentAddress').value;
         const permanentAddress = document.getElementById('permanentAddress').value;
@@ -1505,9 +1692,9 @@ function processChangePassword() {
 }
 
 // ========== লোন আবেদন ইভেন্ট লিসেনার ==========
-const loanFormElement = document.getElementById('loanApplicationForm');
-if(loanFormElement) {
-    loanFormElement.addEventListener('submit', function(e) {
+const loanForm = document.getElementById('loanApplicationForm');
+if(loanForm) {
+    loanForm.addEventListener('submit', function(e) {
         e.preventDefault();
         if(!document.getElementById('loanTermsCheck').checked) { alert('শর্তাবলীতে সম্মত হতে হবে।'); return; }
         const loanData = { applicationNo: `LN-${Date.now()}`, fullName: document.getElementById('loanFullName')?.value || '', mobile: document.getElementById('loanMobile')?.value || '', loanType: document.getElementById('loanType')?.value || '', amount: parseFloat(document.getElementById('loanAmount')?.value || 0), duration: document.getElementById('loanDuration')?.value || '', purpose: document.getElementById('loanPurpose')?.value || '', date: new Date().toLocaleString('bn-BD') };
