@@ -332,7 +332,7 @@
         <div class="bg-white p-4 rounded-xl shadow-md text-center"><i class="fas fa-calendar-check text-2xl text-emerald-600"></i><p class="text-gray-500 text-sm mt-1">পরিশোধিত মাস</p><p class="text-xl font-bold" id="paidMonthsDisplay">-</p></div>
         <div class="bg-white p-4 rounded-xl shadow-md text-center"><i class="fas fa-exclamation-triangle text-2xl text-amber-500"></i><p class="text-gray-500 text-sm mt-1">বাকি</p><p class="text-xl font-bold text-amber-600" id="dueMonthsDisplay">-</p></div>
         <div class="bg-white p-4 rounded-xl shadow-md text-center"><i class="fas fa-chart-line text-2xl text-emerald-600"></i><p class="text-gray-500 text-sm mt-1">মোট পরিশোধ</p><p class="text-xl font-bold" id="totalPaidDisplay">-</p></div>
-        <div class="bg-white p-4 rounded-xl shadow-md text-center"><i class="fas fa-university text-2xl text-blue-600"></i><p class="text-gray-500 text-sm mt-1">মোট সঞ্চয় ব্যালেন্স</p><p class="text-xl font-bold text-blue-600" id="totalBalanceDisplay">-</p></div>
+        <div class="bg-white p-4 rounded-xl shadow-md text-center"><i class="fas fa-university text-2xl text-blue-600"></i><p class="text-gray-500 text-sm mt-1">মোট সঞ্চয় ব্যালেন্স</p><p id="totalBalanceDisplay" class="text-xl font-bold text-blue-600">০ টাকা</p></div>
     </div>
     
     <!-- বিশেষ বোনাস ইতিহাস কার্ড -->
@@ -772,6 +772,7 @@ function updateFundsDisplay() {
     const referralBonusElement = document.getElementById('referralBonusFund');
     const totalElement = document.getElementById('totalFunds');
     const totalDividendElement = document.getElementById('totalDividendFund');
+    const balanceElement = document.getElementById('totalBalanceDisplay');
     
     const monthlySavings = userFunds.monthlySavings || 0;
     const savingsProfit = userFunds.savingsProfit || 0;
@@ -789,8 +790,9 @@ function updateFundsDisplay() {
     if(investmentProfitElement) investmentProfitElement.innerText = investmentProfit.toFixed(2) + ' টাকা';
     if(totalDividendElement) totalDividendElement.innerText = totalDividend.toFixed(2) + ' টাকা';
     if(totalElement) totalElement.innerText = grandTotal.toLocaleString() + ' টাকা';
+    if(balanceElement) balanceElement.innerText = monthlySavings.toLocaleString() + ' টাকা';
     
-    console.log('Funds Updated:', { referralBonus, referralProfit, total: grandTotal });
+    console.log('Funds Updated:', { monthlySavings, referralBonus, referralProfit, total: grandTotal });
 }
 
 async function loadUserFunds() {
@@ -799,6 +801,7 @@ async function loadUserFunds() {
     if(!client) return;
     
     try {
+        // অ্যাপ্রুভড পেমেন্ট থেকে মোট সঞ্চয়
         const { data: payments } = await client
             .from('payments')
             .select('amount')
@@ -809,6 +812,7 @@ async function loadUserFunds() {
             ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) 
             : 0;
         
+        // মেম্বারের প্রোফিট ব্যালেন্স
         const { data: member, error: memberError } = await client
             .from('members')
             .select('profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, balance')
@@ -817,7 +821,7 @@ async function loadUserFunds() {
         
         if (memberError) console.error('Member fetch error:', memberError);
         
-        userFunds.monthlySavings = totalSavings;
+        userFunds.monthlySavings = totalSavings > 0 ? totalSavings : (member?.balance || 0);
         userFunds.savingsProfit = member?.profit_balance_savings || 0;
         userFunds.investmentProfit = member?.profit_balance_investment || 0;
         userFunds.referralProfit = member?.profit_balance_referral || 0;
@@ -1159,7 +1163,7 @@ function shareSlipWhatsApp() {
 ⏰ জমার সময়: ${currentSlipData.paymentTime}
 🏧 মাধ্যম: ${currentSlipData.method}
 ━━━━━━━━━━━━━━━━━━━
-🔗 ভিজিট করুন: tuknbd.org
+🔗 ভিজিট করুন: www.tuknarif.com.bd
 📱 TUKNBD - ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক`;
     
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
@@ -1244,7 +1248,7 @@ async function submitPayment() {
     const selectedMonths = Array.from(document.querySelectorAll('.month-cb:checked')).map(cb => cb.value);
     
     if(!paymentMethod || !year || selectedMonths.length === 0) {
-        showToast('সব তথ্য পূরণ করুন!', 'error');
+        showToast('সব তথ্য সঠিকভাবে পূরণ করুন!', 'error');
         return;
     }
     if((paymentMethod === 'bKash' || paymentMethod === 'Nagad' || paymentMethod === 'Rocket') && (!senderMobile || !transactionId)) {
@@ -1273,7 +1277,7 @@ async function submitPayment() {
             };
             await client.from('payments').insert([paymentData]);
         }
-        showToast('পেমেন্ট সফলভাবে জমা হয়েছে!', 'success');
+        showToast('পেমেন্ট সফলভাবে জমা হয়েছে! এডমিন যাচাই সাপেক্ষে অনুমোদন দিলে আপনার একাউন্টে জমা হবে। ', 'success');
         closePaymentModal();
         await loadPaymentHistory();
         await loadUserFunds();
@@ -1323,7 +1327,7 @@ function submitWithdraw() {
     const amount = parseFloat(document.getElementById('withdrawAmount')?.value || 0);
     if(!method) { showToast('উত্তোলনের মাধ্যম নির্বাচন করুন!', 'error'); return; }
     if(!amount || amount <= 0) { showToast('সঠিক টাকার পরিমাণ দিন!', 'error'); return; }
-    showToast('উত্তোলনের অনুরোধ জমা হয়েছে! প্রশাসক অনুমোদন দিলে টাকা পাবেন।', 'success');
+    showToast('উত্তোলনের অনুরোধ জমা হয়েছে! প্রসেসিং সম্পন্ন হতে ৩-১২ ঘণ্টা সময় লাগতে পারে। অনুগ্রহ করে অপেক্ষা করুন‌। ধন্যবাদ Tuknbd', 'success');
     closeWithdrawModal();
 }
 
