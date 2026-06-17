@@ -890,47 +890,74 @@ async function loadSavingsData() {
 }
 
 async function loadPaymentHistory() {
-    if(!currentUser) return;
+    if(!currentUser) {
+        console.log('❌ currentUser নেই');
+        return;
+    }
+    
     let client = await initSupabase();
-    if(!client) return;
+    if(!client) {
+        console.log('❌ Supabase client নেই');
+        return;
+    }
+    
+    console.log('🔄 পেমেন্ট হিস্ট্রি লোড হচ্ছে...');
+    
     try {
-        // ✅ সব পেমেন্ট দেখাবে (pending, approved, rejected)
-        const { data: payments } = await client
+        // ⬇️ সব পেমেন্ট দেখাবে (pending, approved, rejected)
+        const { data: payments, error } = await client
             .from('payments')
             .select('*')
             .eq('member_id', currentUser.id)
             .order('submitted_at', { ascending: false });
-            
-        const historyBody = document.getElementById('paymentHistoryBody');
-        if(historyBody) {
-            if(payments && payments.length > 0) {
-                historyBody.innerHTML = payments.map(p => {
-                    let statusClass = '', statusIcon = '', statusText = '';
-                    if(p.status === 'approved') {
-                        statusClass = 'status-approved';
-                        statusIcon = '✅';
-                        statusText = 'অনুমোদিত';
-                    } else if(p.status === 'rejected') {
-                        statusClass = 'status-rejected';
-                        statusIcon = '❌';
-                        statusText = 'বাতিল';
-                    } else {
-                        statusClass = 'status-pending';
-                        statusIcon = '⏳';
-                        statusText = 'বিচারাধীন';
-                    }
-                    return `<tr class="border-b">
-                        <td class="p-2 text-center">${p.month} ${p.year}</td>
-                        <td class="p-2 text-right font-semibold">${p.amount.toLocaleString()} টাকা</td>
-                        <td class="p-2 text-center"><span class="${statusClass} px-2 py-1 rounded-full text-xs">${statusIcon} ${statusText}</span></td>
-                        <td class="p-2 text-center"><button onclick="viewPaymentSlip('${p.id}')" class="text-blue-500 hover:text-blue-700"><i class="fas fa-print"></i></button></td>
-                    </tr>`;
-                }).join('');
-            } else {
-                historyBody.innerHTML = '<tr><td colspan="4" class="text-center p-4">📭 কোনো পেমেন্ট ইতিহাস নেই</td></tr>';
-            }
+        
+        if (error) {
+            console.error('❌ পেমেন্ট লোড এরর:', error);
+            showToast('পেমেন্ট লোড করতে সমস্যা!', 'error');
+            return;
         }
-    } catch(e) { console.error(e); }
+        
+        console.log('📋 পাওয়া পেমেন্ট:', payments);
+        console.log('📊 মোট পেমেন্ট:', payments?.length || 0);
+        
+        const historyBody = document.getElementById('paymentHistoryBody');
+        if(!historyBody) {
+            console.log('❌ paymentHistoryBody element পাওয়া যায়নি');
+            return;
+        }
+        
+        if(payments && payments.length > 0) {
+            historyBody.innerHTML = payments.map(p => {
+                let statusClass = '', statusIcon = '', statusText = '';
+                if(p.status === 'approved') {
+                    statusClass = 'status-approved';
+                    statusIcon = '✅';
+                    statusText = 'অনুমোদিত';
+                } else if(p.status === 'rejected') {
+                    statusClass = 'status-rejected';
+                    statusIcon = '❌';
+                    statusText = 'বাতিল';
+                } else {
+                    statusClass = 'status-pending';
+                    statusIcon = '⏳';
+                    statusText = 'বিচারাধীন';
+                }
+                return `<tr class="border-b">
+                    <td class="p-2 text-center">${p.month} ${p.year}</td>
+                    <td class="p-2 text-right font-semibold">${p.amount.toLocaleString()} টাকা</td>
+                    <td class="p-2 text-center"><span class="${statusClass} px-2 py-1 rounded-full text-xs">${statusIcon} ${statusText}</span></td>
+                    <td class="p-2 text-center"><button onclick="viewPaymentSlip('${p.id}')" class="text-blue-500 hover:text-blue-700"><i class="fas fa-print"></i></button></td>
+                </tr>`;
+            }).join('');
+        } else {
+            historyBody.innerHTML = '<tr><td colspan="4" class="text-center p-4">📭 কোনো পেমেন্ট ইতিহাস নেই</td></tr>';
+        }
+        
+        console.log('✅ পেমেন্ট হিস্ট্রি লোড সম্পূর্ণ');
+        
+    } catch(e) { 
+        console.error('❌ loadPaymentHistory error:', e); 
+    }
 }
 
 // ========== স্লিপ ফাংশন ==========
@@ -1268,11 +1295,15 @@ function openPaymentModal() {
 function closePaymentModal() { document.getElementById('paymentModal').classList.add('hidden'); document.getElementById('paymentModal').classList.remove('flex'); }
 
 async function submitPayment() {
+    console.log('🔄 submitPayment() কল হয়েছে');
+    
     const paymentMethod = document.getElementById('paymentMethod').value;
     const senderMobile = document.getElementById('senderMobile').value;
     const transactionId = document.getElementById('transactionId').value;
     const year = document.getElementById('paymentYear').value;
     const selectedMonths = Array.from(document.querySelectorAll('.month-cb:checked')).map(cb => cb.value);
+    
+    console.log('📝 ফর্ম ডেটা:', { paymentMethod, senderMobile, transactionId, year, selectedMonths });
     
     if(!paymentMethod || !year || selectedMonths.length === 0) {
         showToast('সব তথ্য সঠিকভাবে পূরণ করুন!', 'error');
@@ -1284,10 +1315,15 @@ async function submitPayment() {
     }
     
     const client = await initSupabase();
-    if(!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
+    if(!client) { 
+        showToast('সার্ভার সংযোগ সমস্যা!', 'error'); 
+        return; 
+    }
+    
+    console.log('✅ Supabase client ready');
     
     // লোডিং ইন্ডিকেটর
-    const btn = event?.target || document.querySelector('button[onclick*="submitPayment"]');
+    const btn = document.querySelector('#paymentModal button[type="submit"]') || document.querySelector('#paymentModal button');
     const originalText = btn?.innerHTML;
     if(btn) {
         btn.disabled = true;
@@ -1296,6 +1332,8 @@ async function submitPayment() {
     
     try {
         let successCount = 0;
+        let errorMessages = [];
+        
         for(const month of selectedMonths) {
             const paymentData = {
                 member_id: currentUser.id,
@@ -1307,48 +1345,65 @@ async function submitPayment() {
                 payment_method: paymentMethod,
                 sender_mobile: senderMobile || '',
                 transaction_id: transactionId || '',
-                status: 'pending',  // ⬅️ গুরুত্বপূর্ণ: pending থাকতে হবে
+                status: 'pending',
                 submitted_at: new Date().toISOString(),
                 voucher_slip_no: `TUK${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`
             };
             
-            // ⬇️ ডিবাগিং: কনসোলে লগ করুন
             console.log('📤 পেমেন্ট ডেটা পাঠানো হচ্ছে:', paymentData);
             
-            const { data, error } = await client.from('payments').insert([paymentData]).select();
+            // ⬇️ এখানে ডেটা ইনসার্ট হচ্ছে
+            const { data, error } = await client
+                .from('payments')
+                .insert([paymentData])
+                .select();
             
             if (error) {
                 console.error('❌ ইনসার্ট এরর:', error);
-                showToast('পেমেন্ট জমা দিতে ব্যর্থ: ' + error.message, 'error');
-                return;
+                errorMessages.push(`${month}: ${error.message}`);
+                continue;
             }
             
             console.log('✅ পেমেন্ট সেভ হয়েছে:', data);
             successCount++;
         }
         
-        showToast(`✅ ${successCount} মাসের পেমেন্ট সফলভাবে জমা হয়েছে! এডমিন যাচাই সাপেক্ষে অনুমোদন দিলে আপনার একাউন্টে জমা হবে।`, 'success');
+        if (errorMessages.length > 0) {
+            showToast(`❌ ${errorMessages.length} মাসের পেমেন্ট ব্যর্থ: ${errorMessages[0]}`, 'error');
+            return;
+        }
+        
+        if (successCount === 0) {
+            showToast('❌ কোনো পেমেন্ট জমা হয়নি!', 'error');
+            return;
+        }
+        
+        showToast(`✅ ${successCount} মাসের পেমেন্ট সফলভাবে জমা হয়েছে!`, 'success');
+        
+        // পেমেন্ট মডাল বন্ধ করুন
         closePaymentModal();
         
-        // ডেটা রিলোড
-        await loadPaymentHistory();
-        await loadUserFunds();
-        await loadSavingsData();
-        
-        // ফর্ম রিসেট
+        // ফর্ম রিসেট করুন
         document.getElementById('senderMobile').value = '';
         document.getElementById('transactionId').value = '';
         document.getElementById('paymentYear').value = '';
         document.querySelectorAll('.month-cb').forEach(cb => cb.checked = false);
         document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
         
+        // ⬇️ গুরুত্বপূর্ণ: পেমেন্ট হিস্ট্রি রিলোড করুন
+        await loadPaymentHistory();
+        await loadUserFunds();
+        await loadSavingsData();
+        
+        console.log('✅ সব ডেটা রিলোড সম্পূর্ণ');
+        
     } catch(e) { 
         console.error('❌ পেমেন্ট এরর:', e); 
-        showToast('পেমেন্ট জমা দিতে ব্যর্থ!', 'error'); 
+        showToast('পেমেন্ট জমা দিতে ব্যর্থ: ' + e.message, 'error'); 
     } finally {
         if(btn) {
             btn.disabled = false;
-            btn.innerHTML = originalText || 'জমা দিন';
+            btn.innerHTML = originalText || 'স্লিপ জেনারেট করুন';
         }
     }
 }
