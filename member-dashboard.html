@@ -175,6 +175,24 @@
         .level-header:hover {
             background: #e5e7eb;
         }
+.loading-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #059669;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+        
     </style>
 </head>
     
@@ -1260,7 +1278,16 @@ async function submitPayment() {
     const client = await initSupabase();
     if(!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
     
+    // লোডিং ইন্ডিকেটর
+    const btn = event?.target || document.querySelector('button[onclick*="submitPayment"]');
+    const originalText = btn?.innerHTML;
+    if(btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loading-spinner"></span> জমা হচ্ছে...';
+    }
+    
     try {
+        let successCount = 0;
         for(const month of selectedMonths) {
             const paymentData = {
                 member_id: currentUser.id,
@@ -1268,26 +1295,54 @@ async function submitPayment() {
                 mobile: currentUser.mobile,
                 month: month,
                 year: year,
-                amount: currentUser.monthlySavings,
+                amount: currentUser.monthlySavings || 500,
                 payment_method: paymentMethod,
-                sender_mobile: senderMobile,
-                transaction_id: transactionId,
-                status: 'pending',
+                sender_mobile: senderMobile || '',
+                transaction_id: transactionId || '',
+                status: 'pending',  // ⬅️ গুরুত্বপূর্ণ: pending থাকতে হবে
                 submitted_at: new Date().toISOString(),
-                voucher_slip_no: `TUK${Date.now()}${Math.floor(Math.random() * 1000)}`
+                voucher_slip_no: `TUK${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`
             };
-            await client.from('payments').insert([paymentData]);
+            
+            // ⬇️ ডিবাগিং: কনসোলে লগ করুন
+            console.log('📤 পেমেন্ট ডেটা পাঠানো হচ্ছে:', paymentData);
+            
+            const { data, error } = await client.from('payments').insert([paymentData]).select();
+            
+            if (error) {
+                console.error('❌ ইনসার্ট এরর:', error);
+                showToast('পেমেন্ট জমা দিতে ব্যর্থ: ' + error.message, 'error');
+                return;
+            }
+            
+            console.log('✅ পেমেন্ট সেভ হয়েছে:', data);
+            successCount++;
         }
-        showToast('পেমেন্ট সফলভাবে জমা হয়েছে! এডমিন যাচাই সাপেক্ষে অনুমোদন দিলে আপনার একাউন্টে জমা হবে। ', 'success');
+        
+        showToast(`✅ ${successCount} মাসের পেমেন্ট সফলভাবে জমা হয়েছে! এডমিন যাচাই সাপেক্ষে অনুমোদন দিলে আপনার একাউন্টে জমা হবে।`, 'success');
         closePaymentModal();
+        
+        // ডেটা রিলোড
         await loadPaymentHistory();
         await loadUserFunds();
         await loadSavingsData();
+        
+        // ফর্ম রিসেট
         document.getElementById('senderMobile').value = '';
         document.getElementById('transactionId').value = '';
         document.getElementById('paymentYear').value = '';
         document.querySelectorAll('.month-cb').forEach(cb => cb.checked = false);
-    } catch(e) { console.error(e); showToast('পেমেন্ট জমা দিতে ব্যর্থ!', 'error'); }
+        document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
+        
+    } catch(e) { 
+        console.error('❌ পেমেন্ট এরর:', e); 
+        showToast('পেমেন্ট জমা দিতে ব্যর্থ!', 'error'); 
+    } finally {
+        if(btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText || 'জমা দিন';
+        }
+    }
 }
 
 // ========== উত্তোলন ফাংশন ==========
