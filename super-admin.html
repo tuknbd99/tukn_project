@@ -905,20 +905,30 @@ async function loadRealDashboard() {
         }
         totalProfit = fixDecimal(totalProfit);
         
-        let totalProfitDistributed = 0;
-        try {
-            const { data: distributions, error: distError } = await client.from('profit_distributions').select('amount');
-            if (distError) {
-                console.log('⚠️ profit_distributions table may not exist or amount column missing');
-                totalProfitDistributed = 0;
-            } else if (distributions && distributions.length > 0) {
-                totalProfitDistributed = distributions.reduce((sum, d) => sum + (d.amount || 0), 0);
-                totalProfitDistributed = fixDecimal(totalProfitDistributed);
-            }
-        } catch(e) {
-            console.log('⚠️ profit_distributions table error:', e.message);
-            totalProfitDistributed = 0;
-        }
+       // নতুন কোড (আপনার টেবিলের কলাম অনুযায়ী):
+let totalProfitDistributed = 0;
+try {
+    // আপনার টেবিলের কলাম নাম অনুযায়ী: total_profit অথবা distributed_amount
+    const { data: distributions, error: distError } = await client
+        .from('profit_distributions')
+        .select('total_profit, distributed_amount, totalprofit');
+    
+    if (distError) {
+        console.log('⚠️ profit_distributions table error:', distError.message);
+        totalProfitDistributed = 0;
+    } else if (distributions && distributions.length > 0) {
+        // যেকোনো একটি কলাম ব্যবহার করুন (যেটাতে ডেটা আছে)
+        totalProfitDistributed = distributions.reduce((sum, d) => {
+            // total_profit, distributed_amount, totalprofit - যেটাতে ডেটা আছে সেটা নিন
+            const amount = d.total_profit || d.distributed_amount || d.totalprofit || 0;
+            return sum + amount;
+        }, 0);
+        totalProfitDistributed = fixDecimal(totalProfitDistributed);
+    }
+} catch(e) {
+    console.log('⚠️ profit_distributions table error:', e.message);
+    totalProfitDistributed = 0;
+}
         
         let welfareFundBalance = 0;
         try {
@@ -1863,14 +1873,21 @@ async function loadSliders() {
             return; 
         }
         
-        const { data, error } = await client
-            .from('sliders')
-            .select('*')
-            .order('order_num', { ascending: true })
-            .catch(e => {
-                console.warn('⚠️ sliders table or order_num column may not exist:', e.message);
-                return { data: null, error: e };
-            });
+        let data = null;
+        let error = null;
+        
+        try {
+            const result = await client
+                .from('sliders')
+                .select('*')
+                .order('order_num', { ascending: true });
+            data = result.data;
+            error = result.error;
+        } catch(e) {
+            console.warn('⚠️ sliders table or order_num column may not exist:', e.message);
+            container.innerHTML = '<div class="text-center text-gray-500 py-4">📭 স্লাইডার টেবিল নেই। প্রথমে টেবিল তৈরি করুন।</div>';
+            return;
+        }
         
         if (error) {
             console.error('Slider error - table may not exist:', error.message);
