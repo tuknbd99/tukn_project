@@ -1370,6 +1370,7 @@ function openPaymentModal() {
 }
 function closePaymentModal() { document.getElementById('paymentModal').classList.add('hidden'); document.getElementById('paymentModal').classList.remove('flex'); }
 
+// submitPayment() ফাংশন আপডেট করুন
 async function submitPayment() {
     console.log('🔄 submitPayment() কল হয়েছে');
     
@@ -1378,8 +1379,6 @@ async function submitPayment() {
     const transactionId = document.getElementById('transactionId').value;
     const year = document.getElementById('paymentYear').value;
     const selectedMonths = Array.from(document.querySelectorAll('.month-cb:checked')).map(cb => cb.value);
-    
-    console.log('📝 ফর্ম ডেটা:', { paymentMethod, senderMobile, transactionId, year, selectedMonths });
     
     if(!paymentMethod || !year || selectedMonths.length === 0) {
         showToast('সব তথ্য সঠিকভাবে পূরণ করুন!', 'error');
@@ -1396,9 +1395,6 @@ async function submitPayment() {
         return; 
     }
     
-    console.log('✅ Supabase client ready');
-    
-    // লোডিং ইন্ডিকেটর
     const btn = document.querySelector('#paymentModal button[type="submit"]') || document.querySelector('#paymentModal button');
     const originalText = btn?.innerHTML;
     if(btn) {
@@ -1408,10 +1404,9 @@ async function submitPayment() {
     
     try {
         let successCount = 0;
-        let errorMessages = [];
+        let paymentIds = [];
         
         for(const month of selectedMonths) {
-            // ✅ শুধু existing কলাম ব্যবহার করুন
             const paymentData = {
                 member_id: currentUser.id,
                 member_name: currentUser.name,
@@ -1427,8 +1422,6 @@ async function submitPayment() {
                 voucher_slip_no: `TUK${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`
             };
             
-            console.log('📤 পেমেন্ট ডেটা পাঠানো হচ্ছে:', paymentData);
-            
             const { data, error } = await client
                 .from('payments')
                 .insert([paymentData])
@@ -1436,17 +1429,14 @@ async function submitPayment() {
             
             if (error) {
                 console.error('❌ ইনসার্ট এরর:', error);
-                errorMessages.push(`${month}: ${error.message}`);
                 continue;
             }
             
             console.log('✅ পেমেন্ট সেভ হয়েছে:', data);
+            if (data && data.length > 0) {
+                paymentIds.push(data[0].id);
+            }
             successCount++;
-        }
-        
-        if (errorMessages.length > 0) {
-            showToast(`❌ ${errorMessages.length} মাসের পেমেন্ট ব্যর্থ: ${errorMessages[0]}`, 'error');
-            return;
         }
         
         if (successCount === 0) {
@@ -1454,22 +1444,41 @@ async function submitPayment() {
             return;
         }
         
+        // ✅ Supabase Realtime এর মাধ্যমে সুপার এডমিনকে নোটিফাই করুন
+        // একটি notification টেবিলে এন্ট্রি যোগ করুন
+        try {
+            await client
+                .from('notifications')
+                .insert([{
+                    type: 'new_payment',
+                    message: `${currentUser.name} নতুন সঞ্চয় জমা দিয়েছেন`,
+                    member_id: currentUser.id,
+                    payment_ids: paymentIds,
+                    is_read: false,
+                    created_at: new Date().toISOString()
+                }]);
+            console.log('✅ নোটিফিকেশন সেভ হয়েছে');
+        } catch(notifError) {
+            console.warn('⚠️ নোটিফিকেশন সেভ করতে সমস্যা:', notifError);
+        }
+        
         showToast(`✅ ${successCount} মাসের পেমেন্ট সফলভাবে জমা হয়েছে!`, 'success');
         
-        // পেমেন্ট মডাল বন্ধ করুন
         closePaymentModal();
         
-        // ফর্ম রিসেট করুন
         document.getElementById('senderMobile').value = '';
         document.getElementById('transactionId').value = '';
         document.getElementById('paymentYear').value = '';
         document.querySelectorAll('.month-cb').forEach(cb => cb.checked = false);
         document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
         
-        // ⬇️ গুরুত্বপূর্ণ: পেমেন্ট হিস্ট্রি রিলোড করুন
         await loadPaymentHistory();
         await loadUserFunds();
         await loadSavingsData();
+        
+        // ✅ পেমেন্ট আইডি সংরক্ষণ করুন
+        localStorage.setItem('tukn_last_payment_ids', JSON.stringify(paymentIds));
+        localStorage.setItem('tukn_payment_submitted_at', new Date().toISOString());
         
         console.log('✅ সব ডেটা রিলোড সম্পূর্ণ');
         
