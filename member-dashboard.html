@@ -1410,17 +1410,7 @@ async function submitPayment() {
     const year = document.getElementById('paymentYear').value;
     const selectedMonths = Array.from(document.querySelectorAll('.month-cb:checked')).map(cb => cb.value);
     
-    // ব্যাংক ফিল্ড
-    const bankName = document.getElementById('bankName')?.value || '';
-    const branchName = document.getElementById('branchName')?.value || '';
-    const accountNo = document.getElementById('accountNo')?.value || '';
-    const accountName = document.getElementById('accountName')?.value || '';
-    const bankPhone = document.getElementById('bankPhone')?.value || '';
-    
-    // ক্যাশ ফিল্ড
-    const receiverId = document.getElementById('receiverId')?.value || '';
-    const receiverName = document.getElementById('receiverName')?.value || '';
-    const receiverMobile = document.getElementById('receiverMobile')?.value || '';
+    console.log('📝 ফর্ম ডেটা:', { paymentMethod, senderMobile, transactionId, year, selectedMonths });
     
     if(!paymentMethod || !year || selectedMonths.length === 0) {
         showToast('সব তথ্য সঠিকভাবে পূরণ করুন!', 'error');
@@ -1430,14 +1420,6 @@ async function submitPayment() {
         showToast('সেন্ডার মোবাইল এবং ট্রানজেকশন আইডি দিন!', 'error');
         return;
     }
-    if(paymentMethod === 'bank' && (!bankName || !accountNo)) {
-        showToast('ব্যাংকের নাম এবং একাউন্ট নম্বর দিন!', 'error');
-        return;
-    }
-    if(paymentMethod === 'cash' && (!receiverName || !receiverMobile)) {
-        showToast('গ্রহীতার নাম এবং মোবাইল দিন!', 'error');
-        return;
-    }
     
     const client = await initSupabase();
     if(!client) { 
@@ -1445,7 +1427,10 @@ async function submitPayment() {
         return; 
     }
     
-    const btn = document.querySelector('#paymentModal button[type="button"]') || document.querySelector('#paymentModal button');
+    console.log('✅ Supabase client ready');
+    
+    // লোডিং ইন্ডিকেটর
+    const btn = document.querySelector('#paymentModal button[type="submit"]') || document.querySelector('#paymentModal button');
     const originalText = btn?.innerHTML;
     if(btn) {
         btn.disabled = true;
@@ -1454,44 +1439,28 @@ async function submitPayment() {
     
     try {
         let successCount = 0;
+        let errorMessages = [];
         
         for(const month of selectedMonths) {
-            // ✅ আপনার টেবিলের কলাম অনুযায়ী ডাটা তৈরি করুন
+            // ✅ verification_code এবং receipt_hash যোগ করুন
             const paymentData = {
                 member_id: currentUser.id,
                 member_name: currentUser.name,
-                year: year,
+                mobile: currentUser.mobile,
                 month: month,
+                year: year,
                 amount: currentUser.monthlySavings || 500,
                 payment_method: paymentMethod,
-                sender_mobile: senderMobile || null,
-                transaction_id: transactionId || null,
+                sender_mobile: senderMobile || '',
+                transaction_id: transactionId || '',
                 status: 'pending',
                 submitted_at: new Date().toISOString(),
                 voucher_slip_no: `TUK${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`,
-                // ব্যাংক ফিল্ড (যদি থাকে)
-                bank_name: paymentMethod === 'bank' ? bankName : null,
-                branch_name: paymentMethod === 'bank' ? branchName : null,
-                account_number: paymentMethod === 'bank' ? accountNo : null,
-                account_name: paymentMethod === 'bank' ? accountName : null,
-                bank_phone: paymentMethod === 'bank' ? bankPhone : null,
-                // ক্যাশ ফিল্ড (যদি থাকে)
-                receiver_id: paymentMethod === 'cash' ? receiverId : null,
-                receiver_name: paymentMethod === 'cash' ? receiverName : null,
-                receiver_mobile: paymentMethod === 'cash' ? receiverMobile : null,
-                // বাকি কলামগুলো null
-                approved_at: null,
-                approved_by: null,
-                reject_reason: null,
-                rejected_by: null,
-                rejected_at: null,
-                transaction_ref: null,
-                transaction_id_unique: null,
-                verification_code: null,
-                receipt_hash: null
+                verification_code: Math.random().toString(36).substring(2, 8).toUpperCase(), // ✅ যোগ করুন
+                receipt_hash: `HASH-${Date.now()}-${Math.floor(Math.random() * 10000)}` // ✅ যোগ করুন
             };
             
-            console.log('📤 পাঠানোর ডাটা:', paymentData);
+            console.log('📤 পেমেন্ট ডেটা পাঠানো হচ্ছে:', paymentData);
             
             const { data, error } = await client
                 .from('payments')
@@ -1500,13 +1469,17 @@ async function submitPayment() {
             
             if (error) {
                 console.error('❌ ইনসার্ট এরর:', error);
-                console.error('❌ Error details:', error.message, error.details, error.hint);
-                showToast(`❌ ${month} মাসের পেমেন্ট ব্যর্থ: ${error.message}`, 'error');
+                errorMessages.push(`${month}: ${error.message}`);
                 continue;
             }
             
             console.log('✅ পেমেন্ট সেভ হয়েছে:', data);
             successCount++;
+        }
+        
+        if (errorMessages.length > 0) {
+            showToast(`❌ ${errorMessages.length} মাসের পেমেন্ট ব্যর্থ: ${errorMessages[0]}`, 'error');
+            return;
         }
         
         if (successCount === 0) {
@@ -1516,36 +1489,22 @@ async function submitPayment() {
         
         showToast(`✅ ${successCount} মাসের পেমেন্ট সফলভাবে জমা হয়েছে!`, 'success');
         
+        // পেমেন্ট মডাল বন্ধ করুন
         closePaymentModal();
         
-        // ফর্ম রিসেট
+        // ফর্ম রিসেট করুন
         document.getElementById('senderMobile').value = '';
         document.getElementById('transactionId').value = '';
         document.getElementById('paymentYear').value = '';
         document.querySelectorAll('.month-cb').forEach(cb => cb.checked = false);
         document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
         
-        // ব্যাংক ফিল্ড রিসেট
-        if(document.getElementById('bankName')) document.getElementById('bankName').value = '';
-        if(document.getElementById('branchName')) document.getElementById('branchName').value = '';
-        if(document.getElementById('accountNo')) document.getElementById('accountNo').value = '';
-        if(document.getElementById('accountName')) document.getElementById('accountName').value = '';
-        if(document.getElementById('bankPhone')) document.getElementById('bankPhone').value = '';
-        
-        // ক্যাশ ফিল্ড রিসেট
-        if(document.getElementById('receiverId')) document.getElementById('receiverId').value = '';
-        if(document.getElementById('receiverName')) document.getElementById('receiverName').value = '';
-        if(document.getElementById('receiverMobile')) document.getElementById('receiverMobile').value = '';
-        
+        // ⬇️ গুরুত্বপূর্ণ: পেমেন্ট হিস্ট্রি রিলোড করুন
         await loadPaymentHistory();
         await loadUserFunds();
         await loadSavingsData();
         
         console.log('✅ সব ডেটা রিলোড সম্পূর্ণ');
-        
-        setTimeout(() => {
-            window.location.reload();
-        }, 2000);
         
     } catch(e) { 
         console.error('❌ পেমেন্ট এরর:', e); 
@@ -1553,7 +1512,7 @@ async function submitPayment() {
     } finally {
         if(btn) {
             btn.disabled = false;
-            btn.innerHTML = originalText || 'স্লিপ জেনারেট করুন';
+            btn.innerHTML = originalText || 'জমা দিন';
         }
     }
 }
