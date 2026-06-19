@@ -788,18 +788,37 @@ async function calculateMembershipDuration() {
     document.getElementById('membershipDuration').innerHTML = text;
 }
 
+// ============================================================
+// মেয়াদ গণনা - আপডেটেড
+// ============================================================
 async function calculateMembershipExpiry() {
     if(!currentUser) return;
     const expiryElement = document.getElementById('membershipExpiry');
     if(!expiryElement) return;
+    
     let memberTerm = parseInt(currentUser.memberTerm) || 0;
-    if(memberTerm === 0) { expiryElement.innerHTML = '<span class="text-green-600 font-bold">🎉 মেয়াদহীন সদস্য</span>'; return; }
+    
+    // ✅ মেয়াদহীন চেক - শুধুমাত্র 0 হলে মেয়াদহীন দেখাবে
+    if(memberTerm === 0) { 
+        expiryElement.innerHTML = '<span class="text-green-600 font-bold">🎉 মেয়াদহীন সদস্য</span>'; 
+        return; 
+    }
+    
     let startDate = currentUser.approved_at ? new Date(currentUser.approved_at) : new Date(currentUser.joinDate);
-    if(isNaN(startDate.getTime())) { expiryElement.innerHTML = '<span class="text-red-600">⚠️ তারিখের ত্রুটি!</span>'; return; }
+    if(isNaN(startDate.getTime())) { 
+        expiryElement.innerHTML = '<span class="text-red-600">⚠️ তারিখের ত্রুটি!</span>'; 
+        return; 
+    }
+    
     let expiryDate = new Date(startDate);
     expiryDate.setFullYear(startDate.getFullYear() + memberTerm);
     let now = getCurrentBangladeshTime();
-    if(now >= expiryDate) { expiryElement.innerHTML = '<span class="text-red-600 font-bold">⚠️ মেয়াদ উত্তীর্ণ!</span>'; return; }
+    
+    if(now >= expiryDate) { 
+        expiryElement.innerHTML = '<span class="text-red-600 font-bold">⚠️ মেয়াদ উত্তীর্ণ!</span>'; 
+        return; 
+    }
+    
     let diff = expiryDate - now;
     const msPerYear = 365.25 * 24 * 60 * 60 * 1000;
     const msPerMonth = 30.44 * 24 * 60 * 60 * 1000;
@@ -836,13 +855,20 @@ async function updateUI() {
     document.getElementById('memberIdDisplay').innerHTML = currentUser.id;
     document.getElementById('referIdDisplay').innerHTML = currentUser.referId || 'N/A';
     document.getElementById('memberMobile').innerHTML = currentUser.mobile;
+    
     if(currentUser.joinDate) document.getElementById('joinDateDisplay').innerHTML = new Date(currentUser.joinDate).toLocaleDateString('bn-BD');
     if(currentUser.approved_at) document.getElementById('approvalDateDisplay').innerHTML = new Date(currentUser.approved_at).toLocaleString('bn-BD');
+    
     document.getElementById('cardName').innerHTML = currentUser.name;
     document.getElementById('cardId').innerHTML = currentUser.id;
     document.getElementById('cardReferId').innerHTML = currentUser.referId || 'N/A';
-    let termText = (currentUser.memberTerm === 0) ? 'মেয়াদহীন' : currentUser.memberTerm + ' বছর';
+    
+    // ✅ মেয়াদ দেখানো - আপডেটেড (null/undefined চেক সহ)
+    let termText = (currentUser.memberTerm === 0 || currentUser.memberTerm === null || currentUser.memberTerm === undefined) 
+        ? 'মেয়াদহীন' 
+        : currentUser.memberTerm + ' বছর';
     document.getElementById('membershipTermDisplay').innerHTML = termText;
+    
     document.getElementById('monthlySavingsDisplay').innerHTML = currentUser.monthlySavings + ' টাকা';
     document.getElementById('perMonthSavings').innerHTML = currentUser.monthlySavings;
     document.getElementById('qrCode').src = `https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(currentUser.id)}`;
@@ -871,13 +897,16 @@ async function updateUI() {
     setupTimeIntervals();
 }
 
+// ============================================================
+// Refresh Member Data - memberTerm যোগ করা হয়েছে
+// ============================================================
 async function refreshMemberDataFromSupabase() {
     if(!currentUser || !currentUser.id) return;
     let client = await initSupabase();
     if(!client) return;
     try {
         const { data, error } = await client.from('members')
-            .select('present_address, permanent_address, profile_image, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, balance')
+            .select('present_address, permanent_address, profile_image, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, balance, member_term, approved_at')
             .eq('member_id', currentUser.id)
             .single();
         if(error) throw error;
@@ -885,6 +914,8 @@ async function refreshMemberDataFromSupabase() {
             if(data.present_address) currentUser.presentAddress = data.present_address;
             if(data.permanent_address) currentUser.permanentAddress = data.permanent_address;
             if(data.profile_image) currentUser.profileImage = data.profile_image;
+            if(data.member_term !== undefined) currentUser.memberTerm = data.member_term;
+            if(data.approved_at) currentUser.approved_at = data.approved_at;
             userFunds.savingsProfit = data.profit_balance_savings || 0;
             userFunds.investmentProfit = data.profit_balance_investment || 0;
             userFunds.referralProfit = data.profit_balance_referral || 0;
@@ -1665,13 +1696,13 @@ function deselectAllMonths() {
 }
 
 // ============================================================
-// Withdraw Functions - সম্পূর্ণ আপডেটেড
+// Withdraw Functions - আপডেটেড (কার্ড রিলোড ঠেকানো)
 // ============================================================
 function openWithdrawModal(type) {
     let title = '', balance = 0, fieldLabel = '';
     
-    // ফান্ড রিফ্রেশ করুন
-    loadUserFunds();
+    // ❌ loadUserFunds() কল করবেন না - এটা কার্ড রিলোড করে
+    // loadUserFunds();
     
     if(type === 'bonus') { 
         title = 'রেফারেল বোনাস উত্তোলন'; 
