@@ -825,7 +825,7 @@ function showTab(tabName) {
 }
 
 // ============================================================
-// Dashboard Functions
+// Dashboard Functions - সম্পূর্ণ ফিক্সড
 // ============================================================
 async function loadRealDashboard() {
     console.log("🔄 ড্যাশবোর্ড লোড হচ্ছে...");
@@ -841,24 +841,53 @@ async function loadRealDashboard() {
         const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0);
         lastDayOfMonth.setHours(23, 59, 59, 999);
         
+        // ১. মাসিক সংগ্রহ
         let monthlyCollection = 0;
-        const { data: monthlyPayments } = await client.from('payments').select('amount').eq('status', 'approved').gte('submitted_at', firstDayOfMonth.toISOString()).lte('submitted_at', lastDayOfMonth.toISOString());
-        if (monthlyPayments && monthlyPayments.length > 0) monthlyCollection = monthlyPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const { data: monthlyPayments } = await client
+            .from('payments')
+            .select('amount')
+            .eq('status', 'approved')
+            .gte('submitted_at', firstDayOfMonth.toISOString())
+            .lte('submitted_at', lastDayOfMonth.toISOString());
+        if (monthlyPayments && monthlyPayments.length > 0) {
+            monthlyCollection = monthlyPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        }
         
+        // ২. মোট লোন প্রদান
         let totalLoanGiven = 0;
-        const { data: loans } = await client.from('loan_applications').select('amount').eq('status', 'approved');
-        if (loans && loans.length > 0) totalLoanGiven = loans.reduce((sum, l) => sum + (l.amount || 0), 0);
+        const { data: loans } = await client
+            .from('loan_applications')
+            .select('amount')
+            .eq('status', 'approved');
+        if (loans && loans.length > 0) {
+            totalLoanGiven = loans.reduce((sum, l) => sum + (l.amount || 0), 0);
+        }
         
+        // ৩. মোট উত্তোলন
         let totalWithdrawal = 0;
-        const { data: withdrawals } = await client.from('withdrawals').select('amount').eq('status', 'approved');
-        if (withdrawals && withdrawals.length > 0) totalWithdrawal = withdrawals.reduce((sum, w) => sum + (w.amount || 0), 0);
+        const { data: withdrawals } = await client
+            .from('withdrawals')
+            .select('amount')
+            .eq('status', 'approved');
+        if (withdrawals && withdrawals.length > 0) {
+            totalWithdrawal = withdrawals.reduce((sum, w) => sum + (w.amount || 0), 0);
+        }
         
+        // ৪. মোট সঞ্চয়
         let totalSavings = 0;
-        const { data: allPayments } = await client.from('payments').select('amount').eq('status', 'approved');
-        if (allPayments && allPayments.length > 0) totalSavings = allPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const { data: allPayments } = await client
+            .from('payments')
+            .select('amount')
+            .eq('status', 'approved');
+        if (allPayments && allPayments.length > 0) {
+            totalSavings = allPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        }
         
+        // ৫. 📊 মোট লাভ (সদস্যদের লাভ ব্যালেন্স)
         let totalProfit = 0;
-        const { data: members } = await client.from('members').select('profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus');
+        const { data: members } = await client
+            .from('members')
+            .select('profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus');
         if (members && members.length > 0) {
             totalProfit = members.reduce((sum, m) => {
                 return sum + (m.profit_balance_savings || 0) + (m.profit_balance_investment || 0) + 
@@ -867,38 +896,87 @@ async function loadRealDashboard() {
         }
         totalProfit = fixDecimal(totalProfit);
         
+        // ৬. ✅ বিতরণকৃত লভ্যাংশ - ফিক্সড!
         let totalProfitDistributed = 0;
         try {
-            const { data: distributions } = await client.from('profit_distributions').select('amount');
-            if (distributions && distributions.length > 0) {
-                totalProfitDistributed = distributions.reduce((sum, d) => sum + (d.amount || 0), 0);
-                totalProfitDistributed = fixDecimal(totalProfitDistributed);
+            const { data: distributions, error: distError } = await client
+                .from('profit_distributions')
+                .select('amount')
+                .eq('status', 'approved');
+            
+            if (distError) {
+                console.error('Profit distributions error:', distError);
+            } else if (distributions && distributions.length > 0) {
+                totalProfitDistributed = distributions.reduce((sum, d) => {
+                    const amount = parseFloat(d.amount) || 0;
+                    return sum + amount;
+                }, 0);
+                console.log('📊 বিতরণকৃত লভ্যাংশ:', totalProfitDistributed, 'টাকা');
             }
-        } catch(e) { console.log('⚠️ profit_distributions error:', e.message); }
+        } catch(e) { 
+            console.error('⚠️ profit_distributions error:', e); 
+        }
         
+        // ৭. ✅ কল্যাণ তহবিল - ফিক্সড!
         let welfareFundBalance = 0;
         try {
-            const { data: welfareData } = await client.from('welfare_fund').select('amount, type');
-            if (welfareData && welfareData.length > 0) {
-                let deposits = 0, distributions = 0;
+            const { data: welfareData, error: welfareError } = await client
+                .from('welfare_fund')
+                .select('amount, type');
+            
+            if (welfareError) {
+                console.error('Welfare fund error:', welfareError);
+            } else if (welfareData && welfareData.length > 0) {
+                let totalDeposits = 0;
+                let totalDistributions = 0;
+                
                 welfareData.forEach(entry => {
-                    if (entry.type === 'deposit') deposits += entry.amount || 0;
-                    else if (entry.type === 'distribution') distributions += entry.amount || 0;
+                    const amount = parseFloat(entry.amount) || 0;
+                    if (entry.type === 'deposit') {
+                        totalDeposits += amount;
+                    } else if (entry.type === 'distribution') {
+                        totalDistributions += amount;
+                    }
                 });
-                welfareFundBalance = fixDecimal(deposits - distributions);
+                
+                welfareFundBalance = fixDecimal(totalDeposits - totalDistributions);
+                console.log('💰 কল্যাণ তহবিল:', welfareFundBalance, 'টাকা');
             }
-        } catch(e) { console.error('Welfare fund error:', e); }
+        } catch(e) { 
+            console.error('⚠️ Welfare fund error:', e); 
+        }
         
+        // ৮. বর্তমান তহবিল এবং নিট আয়
         const currentFund = fixDecimal(totalSavings - (totalWithdrawal + totalLoanGiven + totalProfitDistributed));
         const netIncome = fixDecimal(totalSavings - totalWithdrawal);
         
-        const { count: totalMembersCount } = await client.from('members').select('*', { count: 'exact', head: true });
-        const { count: pendingCount } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-        const { count: pendingPaymentsCount } = await client.from('payments').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-        const { count: pendingWithdrawalsCount } = await client.from('withdrawals').select('*', { count: 'exact', head: true }).eq('status', 'pending');
+        // ৯. কাউন্টার
+        const { count: totalMembersCount } = await client
+            .from('members')
+            .select('*', { count: 'exact', head: true });
+            
+        const { count: pendingCount } = await client
+            .from('members')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'pending');
+            
+        const { count: pendingPaymentsCount } = await client
+            .from('payments')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'pending');
+            
+        const { count: pendingWithdrawalsCount } = await client
+            .from('withdrawals')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'pending');
+            
         const thisMonthStart = new Date(currentYear, currentMonth, 1).toISOString();
-        const { count: newMembersCount } = await client.from('members').select('*', { count: 'exact', head: true }).gte('created_at', thisMonthStart);
+        const { count: newMembersCount } = await client
+            .from('members')
+            .select('*', { count: 'exact', head: true })
+            .gte('created_at', thisMonthStart);
         
+        // ১০. ✅ UI আপডেট - ফরম্যাটেড ভ্যালু দেখানো
         document.getElementById('dashMonthlyCollection').innerHTML = formatAmountWithText(monthlyCollection);
         document.getElementById('dashTotalLoanGiven').innerHTML = formatAmountWithText(totalLoanGiven);
         document.getElementById('dashTotalWithdrawal').innerHTML = formatAmountWithText(totalWithdrawal);
@@ -908,6 +986,7 @@ async function loadRealDashboard() {
         document.getElementById('dashProfitDistributed').innerHTML = formatAmountWithText(totalProfitDistributed);
         document.getElementById('dashNetIncome').innerHTML = formatAmountWithText(netIncome);
         
+        // ১১. স্ট্যাটস আপডেট
         document.getElementById('totalMembersStat').innerText = totalMembersCount || 0;
         document.getElementById('newMembersStat').innerText = newMembersCount || 0;
         document.getElementById('totalCollectionStat').innerText = formatAmount(monthlyCollection);
@@ -921,25 +1000,81 @@ async function loadRealDashboard() {
         document.getElementById('statPendingPayments').innerText = pendingPaymentsCount || 0;
         document.getElementById('statPendingWithdrawals').innerText = pendingWithdrawalsCount || 0;
         
+        // ১২. ব্যাজ আপডেট
         const pendingMemberBadge = document.getElementById('pendingMemberBadge');
-        if (pendingMemberBadge) { pendingMemberBadge.innerText = pendingCount > 0 ? pendingCount : ''; pendingMemberBadge.style.display = pendingCount > 0 ? 'inline-block' : 'none'; }
+        if (pendingMemberBadge) { 
+            pendingMemberBadge.innerText = pendingCount > 0 ? pendingCount : ''; 
+            pendingMemberBadge.style.display = pendingCount > 0 ? 'inline-block' : 'none'; 
+        }
+        
         const pendingPaymentBadge = document.getElementById('pendingPaymentBadge');
-        if (pendingPaymentBadge) { pendingPaymentBadge.innerText = pendingPaymentsCount > 0 ? pendingPaymentsCount : ''; pendingPaymentBadge.style.display = pendingPaymentsCount > 0 ? 'inline-block' : 'none'; }
+        if (pendingPaymentBadge) { 
+            pendingPaymentBadge.innerText = pendingPaymentsCount > 0 ? pendingPaymentsCount : ''; 
+            pendingPaymentBadge.style.display = pendingPaymentsCount > 0 ? 'inline-block' : 'none'; 
+        }
+        
         const pendingWithdrawalBadge = document.getElementById('pendingWithdrawalBadge');
-        if (pendingWithdrawalBadge) { pendingWithdrawalBadge.innerText = pendingWithdrawalsCount > 0 ? pendingWithdrawalsCount : ''; pendingWithdrawalBadge.style.display = pendingWithdrawalsCount > 0 ? 'inline-block' : 'none'; }
+        if (pendingWithdrawalBadge) { 
+            pendingWithdrawalBadge.innerText = pendingWithdrawalsCount > 0 ? pendingWithdrawalsCount : ''; 
+            pendingWithdrawalBadge.style.display = pendingWithdrawalsCount > 0 ? 'inline-block' : 'none'; 
+        }
         
         document.getElementById('lastUpdateTime').innerHTML = new Date().toLocaleTimeString('bn-BD');
         
-        const { data: recentMembers } = await client.from('members').select('full_name, member_id, created_at, status').order('created_at', { ascending: false }).limit(5);
+        // ১৩. সাম্প্রতিক সদস্য
+        const { data: recentMembers } = await client
+            .from('members')
+            .select('full_name, member_id, created_at, status')
+            .order('created_at', { ascending: false })
+            .limit(5);
+            
         const recentList = document.getElementById('recentMembersList');
-        if (recentList && recentMembers) recentList.innerHTML = recentMembers.map(m => `<div class="flex justify-between border-b py-2"><div><p class="font-medium">${m.full_name || '-'}</p><p class="text-xs text-gray-500">${m.member_id}</p></div><div class="text-right"><span class="text-xs px-2 py-0.5 rounded-full ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${m.status === 'active' ? 'সক্রিয়' : 'পেন্ডিং'}</span></div></div>`).join('');
+        if (recentList && recentMembers) {
+            recentList.innerHTML = recentMembers.map(m => `
+                <div class="flex justify-between border-b py-2">
+                    <div>
+                        <p class="font-medium">${m.full_name || '-'}</p>
+                        <p class="text-xs text-gray-500">${m.member_id}</p>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-xs px-2 py-0.5 rounded-full ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">
+                            ${m.status === 'active' ? 'সক্রিয়' : 'পেন্ডিং'}
+                        </span>
+                    </div>
+                </div>
+            `).join('');
+        }
         
-        const { data: recentPayments } = await client.from('payments').select('member_name, amount, status, submitted_at').order('submitted_at', { ascending: false }).limit(5);
+        // ১৪. সাম্প্রতিক পেমেন্ট
+        const { data: recentPayments } = await client
+            .from('payments')
+            .select('member_name, amount, status, submitted_at')
+            .order('submitted_at', { ascending: false })
+            .limit(5);
+            
         const paymentList = document.getElementById('recentPaymentsList');
-        if (paymentList && recentPayments) paymentList.innerHTML = recentPayments.map(p => `<div class="flex justify-between border-b py-2"><div><p class="font-medium">${p.member_name || '-'}</p><p class="text-xs text-gray-500">${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</p></div><div class="text-right"><p class="font-bold text-emerald-600">${formatAmountWithText(p.amount)}</p></div></div>`).join('');
+        if (paymentList && recentPayments) {
+            paymentList.innerHTML = recentPayments.map(p => `
+                <div class="flex justify-between border-b py-2">
+                    <div>
+                        <p class="font-medium">${p.member_name || '-'}</p>
+                        <p class="text-xs text-gray-500">${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="font-bold text-emerald-600">${formatAmountWithText(p.amount)}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
         
         console.log('✅ ড্যাশবোর্ড আপডেট সম্পন্ন');
-    } catch(e) { console.error('Dashboard error:', e); }
+        console.log(`📊 বিতরণকৃত লভ্যাংশ: ${formatAmount(totalProfitDistributed)} টাকা`);
+        console.log(`💰 কল্যাণ তহবিল: ${formatAmount(welfareFundBalance)} টাকা`);
+        
+    } catch(e) { 
+        console.error('Dashboard error:', e);
+        showToast('ড্যাশবোর্ড লোড করতে সমস্যা!', 'error');
+    }
 }
 
 // ============================================================
@@ -1621,7 +1756,7 @@ function loadAdmins() {
     const container = document.getElementById('adminsList');
     if (!container) return;
     try {
-        const admins = JSON.parse(localStorage.getItem('tukn_admins') || '[{"id":1,"username":"superadmin","name":"সুপার অ্যাডমিন","role":"সুপার অ্যাডমин","permissions":{"view_dashboard":true,"view_members":true,"manage_members":true,"approve_payments":true,"manage_withdrawals":true,"manage_loans":true,"manage_admins":true,"manage_slider":true,"manage_notices":true,"view_ledger":true}}]');
+        const admins = JSON.parse(localStorage.getItem('tukn_admins') || '[{"id":1,"username":"superadmin","name":"সুপার অ্যাডমিন","role":"সুপার অ্যাডমিন","permissions":{"view_dashboard":true,"view_members":true,"manage_members":true,"approve_payments":true,"manage_withdrawals":true,"manage_loans":true,"manage_admins":true,"manage_slider":true,"manage_notices":true,"view_ledger":true}}]');
         const getRoleClass = (role) => {
             if (role === 'সুপার অ্যাডমিন') return 'role-super-admin';
             if (role === 'অ্যাডমিন') return 'role-admin';
@@ -1888,7 +2023,11 @@ async function loadWelfareFund() {
         const client = initSupabaseClient();
         if (!client) throw new Error('Supabase client not initialized');
         
-        const { data, error } = await client.from('welfare_fund').select('*').order('created_at', { ascending: false });
+        const { data, error } = await client
+            .from('welfare_fund')
+            .select('*')
+            .order('created_at', { ascending: false });
+            
         if (error) throw error;
         
         const entries = data || [];
@@ -1898,18 +2037,22 @@ async function loadWelfareFund() {
         let totalDistributed = 0;
         
         entries.forEach(entry => {
+            const amount = parseFloat(entry.amount) || 0;
             if (entry.type === 'deposit') {
-                totalDeposits += entry.amount || 0;
-                totalBalance += entry.amount || 0;
+                totalDeposits += amount;
+                totalBalance += amount;
             } else if (entry.type === 'distribution') {
-                totalDistributed += entry.amount || 0;
-                totalBalance -= entry.amount || 0;
+                totalDistributed += amount;
+                totalBalance -= amount;
             }
         });
         
         if (totalEl) totalEl.innerHTML = formatAmountWithText(totalBalance);
         if (depositsEl) depositsEl.innerHTML = formatAmountWithText(totalDeposits);
         if (distributedEl) distributedEl.innerHTML = formatAmountWithText(totalDistributed);
+        
+        // ড্যাশবোর্ড আপডেট
+        document.getElementById('dashWelfareFund').innerHTML = formatAmountWithText(totalBalance);
         
         if (entries.length === 0) {
             container.innerHTML = '<div class="text-center text-gray-500 py-8"><i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>কোনো লেনদেন নেই</div>';
@@ -1930,9 +2073,9 @@ async function loadWelfareFund() {
                             ${entry.type === 'deposit' ? '+' : '-'} ${formatAmountWithText(entry.amount || 0)}
                         </p>
                         <span class="text-xs px-2 py-1 rounded-full ${entry.type === 'deposit' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}">
-                            ${entry.type === 'deposit' ? 'জমা' : 'বিতরণ'}
+                            ${entry.type === 'deposit' ? '📥 জমা' : '📤 বিতরণ'}
                         </span>
-                        ${entry.reference_type ? `<span class="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700 ml-1">${entry.reference_type === 'profit_distribution' ? 'লভ্যাংশ' : entry.reference_type === 'loan_late_fee' ? 'বিলম্ব ফি' : entry.reference_type === 'member_payment' ? 'সদস্য পেমেন্ট' : 'লোন'}</span>` : ''}
+                        ${entry.reference_type ? `<span class="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700 ml-1">${entry.reference_type === 'profit_distribution' ? '📈 লভ্যাংশ' : entry.reference_type === 'loan_late_fee' ? '⏰ বিলম্ব ফি' : entry.reference_type === 'member_payment' ? '👤 সদস্য পেমেন্ট' : '🏦 লোন'}</span>` : ''}
                     </div>
                 </div>
                 <div class="mt-2 flex gap-2">
@@ -1942,9 +2085,6 @@ async function loadWelfareFund() {
                 </div>
             </div>
         `).join('');
-        
-        // ড্যাশবোর্ড আপডেট
-        document.getElementById('dashWelfareFund').innerHTML = formatAmountWithText(totalBalance);
         
     } catch(error) {
         console.error('Welfare fund load error:', error);
@@ -2032,7 +2172,11 @@ async function loadProfitDistributions() {
         const client = initSupabaseClient();
         if (!client) throw new Error('Supabase client not initialized');
         
-        const { data, error } = await client.from('profit_distributions').select('*').order('created_at', { ascending: false });
+        const { data, error } = await client
+            .from('profit_distributions')
+            .select('*')
+            .order('created_at', { ascending: false });
+            
         if (error) throw error;
         
         const entries = data || [];
