@@ -250,7 +250,6 @@
     <div class="bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-xl p-3 text-white shadow-lg hover:shadow-xl transition">
         <div class="flex items-center justify-between"><div><p class="text-xs opacity-90"><i class="fas fa-chart-line mr-1"></i>বিনিয়োগ লভ্যাংশ</p><p id="investmentProfitFund" class="text-sm md:text-base font-bold">০ টাকা</p></div><i class="fas fa-chart-simple text-xl opacity-50"></i></div>
     </div>
-    <!-- ✅ "আপনার রেফারেল বোনাস" কার্ড - আইডি: referralBonusFund -->
     <div class="bg-gradient-to-r from-pink-500 to-pink-600 rounded-xl p-3 text-white shadow-lg hover:shadow-xl transition">
         <div class="flex items-center justify-between">
             <div>
@@ -264,7 +263,6 @@
 
 <!-- দ্বিতীয় সারি: ৪টি কার্ড -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-    <!-- ✅ "রেফারেল লভ্যাংশ" কার্ড - আইডি: referralProfitFund -->
     <div class="bg-gradient-to-r from-purple-500 to-purple-600 rounded-xl p-3 text-white shadow-lg hover:shadow-xl transition">
         <div class="flex items-center justify-between">
             <div>
@@ -755,12 +753,68 @@ function updateDigitalClock() {
     if(clockEl) clockEl.innerHTML = `${hours.toString().padStart(2,'0')}:${minutes}:${seconds} ${ampm}`;
 }
 
+// ============================================================
+// ✅ টাইমার ফাংশন - অনুমোদনের সময় থেকে কাউন্ট (Supabase থেকে)
+// ============================================================
+function startMembershipTimer(approvedAt) {
+    if (!approvedAt) {
+        document.getElementById('membershipDuration').innerHTML = 'অনুমোদিত হয়নি';
+        return;
+    }
+    
+    const startDate = new Date(approvedAt);
+    if (isNaN(startDate.getTime())) {
+        document.getElementById('membershipDuration').innerHTML = 'তারিখ ত্রুটিপূর্ণ';
+        return;
+    }
+    
+    console.log('⏰ টাইমার শুরু: অনুমোদনের সময়', startDate.toLocaleString('bn-BD'));
+    
+    function updateTimer() {
+        const now = getCurrentBangladeshTime();
+        const diff = now - startDate;
+        
+        if (diff < 0) {
+            document.getElementById('membershipDuration').innerHTML = 'শুরু হয়নি';
+            return;
+        }
+        
+        const msPerDay = 24 * 60 * 60 * 1000;
+        const msPerHour = 60 * 60 * 1000;
+        const msPerMinute = 60 * 1000;
+        const msPerSecond = 1000;
+        
+        let days = Math.floor(diff / msPerDay);
+        let remaining = diff % msPerDay;
+        let hours = Math.floor(remaining / msPerHour);
+        remaining = remaining % msPerHour;
+        let minutes = Math.floor(remaining / msPerMinute);
+        let seconds = Math.floor(remaining / msPerSecond);
+        
+        let text = '';
+        if (days > 0) text += `${days} দিন `;
+        if (hours > 0 || days > 0) text += `${hours} ঘণ্টা `;
+        if (minutes > 0 || hours > 0 || days > 0) text += `${minutes} মিনিট `;
+        text += `${seconds} সেকেন্ড`;
+        
+        document.getElementById('membershipDuration').innerHTML = text;
+    }
+    
+    updateTimer();
+    if (durationInterval) clearInterval(durationInterval);
+    durationInterval = setInterval(updateTimer, 1000);
+}
+
 async function calculateMembershipDuration() {
     if(!currentUser || (currentUser.status !== 'active' && currentUser.status !== 'approved')) {
         const el = document.getElementById('membershipDuration');
         if(el) el.innerHTML = 'অনুমোদনের অপেক্ষায়';
         return;
     }
+    
+    // ✅ Supabase থেকে approved_at আপডেট করুন
+    await refreshMemberDataFromSupabase();
+    
     let startDate = currentUser.approved_at ? new Date(currentUser.approved_at) : new Date(currentUser.joinDate);
     if(isNaN(startDate.getTime())) { document.getElementById('membershipDuration').innerHTML = 'তারিখ ত্রুটিপূর্ণ'; return; }
     const now = getCurrentBangladeshTime();
@@ -798,7 +852,6 @@ async function calculateMembershipExpiry() {
     
     let memberTerm = parseInt(currentUser.memberTerm) || 0;
     
-    // ✅ মেয়াদহীন চেক - শুধুমাত্র 0 হলে মেয়াদহীন দেখাবে
     if(memberTerm === 0) { 
         expiryElement.innerHTML = '<span class="text-green-600 font-bold">🎉 মেয়াদহীন সদস্য</span>'; 
         return; 
@@ -863,7 +916,6 @@ async function updateUI() {
     document.getElementById('cardId').innerHTML = currentUser.id;
     document.getElementById('cardReferId').innerHTML = currentUser.referId || 'N/A';
     
-    // ✅ মেয়াদ দেখানো - আপডেটেড (null/undefined চেক সহ)
     let termText = (currentUser.memberTerm === 0 || currentUser.memberTerm === null || currentUser.memberTerm === undefined) 
         ? 'মেয়াদহীন' 
         : currentUser.memberTerm + ' বছর';
@@ -880,6 +932,15 @@ async function updateUI() {
     
     document.getElementById('presentAddressDisplay').innerHTML = currentUser.presentAddress || 'যোগ করা হয়নি';
     document.getElementById('permanentAddressDisplay').innerHTML = currentUser.permanentAddress || 'যোগ করা হয়নি';
+    
+    // ✅ টাইমার শুরু করুন - অনুমোদনের সময় থেকে
+    if (currentUser.approved_at) {
+        startMembershipTimer(currentUser.approved_at);
+    } else if (currentUser.joinDate) {
+        startMembershipTimer(currentUser.joinDate);
+    } else {
+        document.getElementById('membershipDuration').innerHTML = 'তারিখ পাওয়া যায়নি';
+    }
     
     populateYearAndMonths();
     await loadPaymentHistory();
@@ -898,7 +959,7 @@ async function updateUI() {
 }
 
 // ============================================================
-// Refresh Member Data - memberTerm যোগ করা হয়েছে
+// Refresh Member Data - Supabase থেকে
 // ============================================================
 async function refreshMemberDataFromSupabase() {
     if(!currentUser || !currentUser.id) return;
@@ -906,7 +967,7 @@ async function refreshMemberDataFromSupabase() {
     if(!client) return;
     try {
         const { data, error } = await client.from('members')
-            .select('present_address, permanent_address, profile_image, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, balance, member_term, approved_at')
+            .select('present_address, permanent_address, profile_image, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, balance, member_term, approved_at, created_at')
             .eq('member_id', currentUser.id)
             .single();
         if(error) throw error;
@@ -915,7 +976,16 @@ async function refreshMemberDataFromSupabase() {
             if(data.permanent_address) currentUser.permanentAddress = data.permanent_address;
             if(data.profile_image) currentUser.profileImage = data.profile_image;
             if(data.member_term !== undefined) currentUser.memberTerm = data.member_term;
-            if(data.approved_at) currentUser.approved_at = data.approved_at;
+            
+            // ✅ approved_at Supabase থেকে আপডেট করুন
+            if(data.approved_at) {
+                currentUser.approved_at = data.approved_at;
+                console.log('✅ approved_at পাওয়া গেছে:', currentUser.approved_at);
+            } else if(data.created_at) {
+                currentUser.approved_at = data.created_at;
+                console.log('⚠️ approved_at নেই, created_at ব্যবহার করা হচ্ছে:', currentUser.approved_at);
+            }
+            
             userFunds.savingsProfit = data.profit_balance_savings || 0;
             userFunds.investmentProfit = data.profit_balance_investment || 0;
             userFunds.referralProfit = data.profit_balance_referral || 0;
@@ -989,8 +1059,8 @@ function updateFundsDisplay() {
     const monthlyElement = document.getElementById('monthlySavingsFund');
     const savingsProfitElement = document.getElementById('savingsProfitFund');
     const investmentProfitElement = document.getElementById('investmentProfitFund');
-    const referralProfitElement = document.getElementById('referralProfitFund');  // রেফারেল লভ্যাংশ (লেভেল)
-    const referralBonusElement = document.getElementById('referralBonusFund');    // রেফারেল বোনাস (ডাইরেক্ট)
+    const referralProfitElement = document.getElementById('referralProfitFund');
+    const referralBonusElement = document.getElementById('referralBonusFund');
     const totalElement = document.getElementById('totalFunds');
     const totalDividendElement = document.getElementById('totalDividendFund');
     const balanceElement = document.getElementById('totalBalanceDisplay');
@@ -998,59 +1068,30 @@ function updateFundsDisplay() {
     const monthlySavings = Number(userFunds.monthlySavings) || 0;
     const savingsProfit = Number(userFunds.savingsProfit) || 0;
     const investmentProfit = Number(userFunds.investmentProfit) || 0;
-    const referralProfit = Number(userFunds.referralProfit) || 0;   // রেফারেল লভ্যাংশ (লেভেল) - ১০
-    const referralBonus = Number(userFunds.referralBonus) || 0;     // রেফারেল বোনাস (ডাইরেক্ট) - ১,৪৪৫
+    const referralProfit = Number(userFunds.referralProfit) || 0;
+    const referralBonus = Number(userFunds.referralBonus) || 0;
     
-    // ✅ মোট লভ্যাংশ = সঞ্চয় লভ্যাংশ + বিনিয়োগ লভ্যাংশ + রেফারেল লভ্যাংশ
     const totalDividend = savingsProfit + investmentProfit + referralProfit;
-    
-    // ✅ মোট ফান্ড = সবকিছু
     const grandTotal = monthlySavings + savingsProfit + investmentProfit + referralProfit + referralBonus;
     
-    // মোট সঞ্চয়
     if(monthlyElement) monthlyElement.innerText = monthlySavings.toLocaleString() + ' টাকা';
-    
-    // সঞ্চয় লভ্যাংশ
     if(savingsProfitElement) savingsProfitElement.innerText = savingsProfit.toFixed(2) + ' টাকা';
-    
-    // বিনিয়োগ লভ্যাংশ
     if(investmentProfitElement) investmentProfitElement.innerText = investmentProfit.toFixed(2) + ' টাকা';
-    
-    // ✅ "আপনার রেফারেল বোনাস" কার্ডে referralBonus (ডাইরেক্ট বোনাস) - ১,৪৪৫
     if(referralBonusElement) referralBonusElement.innerText = referralBonus.toLocaleString() + ' টাকা';
-    
-    // ✅ "রেফারেল লভ্যাংশ" কার্ডে referralProfit (লেভেল বোনাস) - ১০
     if(referralProfitElement) referralProfitElement.innerText = referralProfit.toLocaleString() + ' টাকা';
-    
-    // ✅ মোট লভ্যাংশ (শুধু সঞ্চয় + বিনিয়োগ + রেফারেল লভ্যাংশ)
     if(totalDividendElement) totalDividendElement.innerText = totalDividend.toFixed(2) + ' টাকা';
-    
-    // ✅ মোট ফান্ড (সবকিছু)
     if(totalElement) totalElement.innerText = grandTotal.toLocaleString() + ' টাকা';
-    
-    // মোট সঞ্চয় ব্যালেন্স
     if(balanceElement) balanceElement.innerText = monthlySavings.toLocaleString() + ' টাকা';
-    
-    console.log('✅ ফান্ড ডিসপ্লে আপডেট:', { 
-        monthlySavings, 
-        savingsProfit, 
-        investmentProfit, 
-        referralProfit: referralProfit + ' (রেফারেল লভ্যাংশ - লেভেল)',
-        referralBonus: referralBonus + ' (রেফারেল বোনাস - ডাইরেক্ট)',
-        totalDividend: totalDividend + ' (শুধু লভ্যাংশ)',
-        grandTotal: grandTotal + ' (সবকিছু)'
-    });
 }
 
 // ============================================================
-// Load User Funds - সম্পূর্ণ আপডেটেড
+// Load User Funds - Supabase থেকে
 // ============================================================
 async function loadUserFunds() {
     if(!currentUser) return;
     let client = await initSupabase();
     if(!client) return;
     try {
-        // মোট সঞ্চয় বের করুন
         const { data: payments } = await client
             .from('payments')
             .select('amount')
@@ -1061,7 +1102,6 @@ async function loadUserFunds() {
             ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) 
             : 0;
         
-        // সদস্যের ডাটা নিন
         const { data: member, error } = await client
             .from('members')
             .select('profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, balance')
@@ -1073,18 +1113,11 @@ async function loadUserFunds() {
             return;
         }
         
-        // ✅ ফান্ড আপডেট করুন
         userFunds.monthlySavings = totalSavings > 0 ? totalSavings : (member?.balance || 0);
         userFunds.savingsProfit = member?.profit_balance_savings || 0;
         userFunds.investmentProfit = member?.profit_balance_investment || 0;
-        
-        // ✅ রেফারেল লভ্যাংশ (লেভেল) - ডাটাবেস থেকে profit_balance_referral
-        userFunds.referralProfit = member?.profit_balance_referral || 0;  // ১০ টাকা
-        
-        // ✅ রেফারেল বোনাস (ডাইরেক্ট) - ডাটাবেস থেকে referral_bonus
-        userFunds.referralBonus = member?.referral_bonus || 0;  // ১,৪৪৫ টাকা (ডাটাবেস থেকে)
-        
-        console.log('✅ ফান্ড লোড হয়েছে:', userFunds);
+        userFunds.referralProfit = member?.profit_balance_referral || 0;
+        userFunds.referralBonus = member?.referral_bonus || 0;
         
         updateFundsDisplay();
     } catch(error) { 
@@ -1128,7 +1161,7 @@ async function loadSavingsData() {
 }
 
 // ============================================================
-// Payment History
+// Payment History - Supabase থেকে
 // ============================================================
 async function loadPaymentHistory() {
     if(!currentUser) {
@@ -1506,7 +1539,7 @@ function closeSlipModalOnOverlay(e) {
 function printSlip() { window.print(); }
 
 // ============================================================
-// Payment Submit
+// Payment Submit - Supabase এ সেভ
 // ============================================================
 function populateYearAndMonths() {
     const yearSelect = document.getElementById('paymentYear');
@@ -1696,17 +1729,14 @@ function deselectAllMonths() {
 }
 
 // ============================================================
-// Withdraw Functions - আপডেটেড (কার্ড রিলোড ঠেকানো)
+// Withdraw Functions
 // ============================================================
 function openWithdrawModal(type) {
     let title = '', balance = 0, fieldLabel = '';
     
-    // ❌ loadUserFunds() কল করবেন না - এটা কার্ড রিলোড করে
-    // loadUserFunds();
-    
     if(type === 'bonus') { 
         title = 'রেফারেল বোনাস উত্তোলন'; 
-        balance = userFunds.referralBonus || 0;      // ✅ ১,৪৪৫ টাকা (ডাইরেক্ট বোনাস)
+        balance = userFunds.referralBonus || 0;
         fieldLabel = 'রেফারেল বোনাস';
     }
     else if(type === 'savingsProfit') { 
@@ -1721,7 +1751,7 @@ function openWithdrawModal(type) {
     }
     else if(type === 'referralProfit') { 
         title = 'রেফারেল লভ্যাংশ উত্তোলন'; 
-        balance = userFunds.referralProfit || 0;     // ✅ ১০ টাকা (লেভেল বোনাস)
+        balance = userFunds.referralProfit || 0;
         fieldLabel = 'রেফারেল লভ্যাংশ';
     }
     else if(type === 'capital') { 
@@ -1814,7 +1844,6 @@ function toggleWithdrawMethodFields() {
 // ৩. সব লভ্যাংশ একসাথে উত্তোলন
 // ============================================================
 function openWithdrawAllModal() {
-    // সব লভ্যাংশের যোগফল
     const savingsProfit = userFunds.savingsProfit || 0;
     const investmentProfit = userFunds.investmentProfit || 0;
     const referralProfit = userFunds.referralProfit || 0;
@@ -1882,7 +1911,7 @@ function openWithdrawAllModal() {
 }
 
 // ============================================================
-// উত্তোলন সাবমিট - শুধু অনুরোধ জমা দিন (ব্যালেন্স বিয়োগ করবেন না)
+// উত্তোলন সাবমিট - Supabase এ সেভ
 // ============================================================
 function submitWithdraw(type) {
     const method = document.getElementById('withdrawMethod')?.value;
@@ -1898,7 +1927,6 @@ function submitWithdraw(type) {
         return; 
     }
     
-    // ব্যালেন্স চেক
     let maxBalance = 0;
     let fundType = '';
     let typeName = '';
@@ -1939,7 +1967,6 @@ function submitWithdraw(type) {
         return;
     }
     
-    // মোবাইল বা ব্যাংক তথ্য
     let receiverInfo = '';
     let receiverDetails = {};
     
@@ -1962,16 +1989,10 @@ function submitWithdraw(type) {
         receiverDetails = { mobile, method };
     }
     
-    // ✅ কনফার্মেশন
     if(confirm(`আপনি কি ${amount.toFixed(2)} টাকা ${typeName} থেকে উত্তোলন করতে চান?\n\nগ্রহীতা: ${receiverInfo}`)) {
-        
-        // ✅ শুধু উত্তোলন রিকোয়েস্ট ডাটাবেসে সেভ করুন (ব্যালেন্স বিয়োগ করবেন না)
         saveWithdrawRequest(type, amount, method, receiverDetails, typeName);
-        
-        // ✅ সুCCESS মেসেজ (ব্যালেন্স বিয়োগের কথা বলবেন না)
         showToast(`✅ ${typeName} উত্তোলনের অনুরোধ জমা হয়েছে!\nপরিমাণ: ${amount.toFixed(2)} টাকা\nগ্রহীতা: ${receiverInfo}\n\n⏳ অনুমোদনের জন্য অপেক্ষা করুন।`, 'success');
         
-        // মডাল বন্ধ ও ফর্ম রিসেট
         closeWithdrawModal();
         document.getElementById('withdrawAmount').value = '';
         document.getElementById('withdrawMobileNumber').value = '';
@@ -1982,7 +2003,7 @@ function submitWithdraw(type) {
 }
 
 // ============================================================
-// উত্তোলন রিকোয়েস্ট ডাটাবেসে সেভ করুন
+// উত্তোলন রিকোয়েস্ট Supabase এ সেভ করুন
 // ============================================================
 async function saveWithdrawRequest(type, amount, method, receiverDetails, typeName) {
     const client = await initSupabase();
@@ -2003,7 +2024,6 @@ async function saveWithdrawRequest(type, amount, method, receiverDetails, typeNa
             requested_at: new Date().toISOString()
         };
         
-        // পেমেন্ট মাধ্যম অনুযায়ী ডেটা যোগ করুন
         if(method === 'bank') {
             withdrawData.bank_name = receiverDetails.bankName || null;
             withdrawData.account_number = receiverDetails.accountNo || null;
@@ -2021,7 +2041,6 @@ async function saveWithdrawRequest(type, amount, method, receiverDetails, typeNa
             showToast('উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ!', 'error');
         } else {
             console.log('✅ উত্তোলন রিকোয়েস্ট সেভ হয়েছে:', data);
-            // উত্তোলন ইতিহাস রিলোড করুন
             await loadWithdrawalHistory();
         }
     } catch(e) {
@@ -2039,7 +2058,7 @@ function closeWithdrawModal() {
 }
 
 // ============================================================
-// উত্তোলন ইতিহাস লোড - অ্যাডমিন অনুমোদনের পর ব্যালেন্স বিয়োগ
+// উত্তোলন ইতিহাস লোড - Supabase থেকে
 // ============================================================
 async function loadWithdrawalHistory() {
     let client = await initSupabase();
@@ -2180,7 +2199,7 @@ async function searchReceiver() {
 }
 
 // ============================================================
-// Loan Functions
+// Loan Functions - Supabase এ সেভ
 // ============================================================
 function openLoanApplicationModal() { document.getElementById('loanApplicationModal').classList.remove('hidden'); document.getElementById('loanApplicationModal').classList.add('flex'); }
 function closeLoanApplicationModal() { document.getElementById('loanApplicationModal').classList.add('hidden'); document.getElementById('loanApplicationModal').classList.remove('flex'); }
@@ -2226,7 +2245,7 @@ async function loadNotices() {
 async function loadComplaintReplies() { document.getElementById('complaintRepliesContainer').innerHTML = '<p class="text-gray-500 text-center py-4">কোনো উত্তর পাওয়া যায়নি</p>'; }
 
 // ============================================================
-// Referral Functions
+// Referral Functions - Supabase থেকে
 // ============================================================
 function updateLevelList(level, referrals, rate) {
     const container = document.getElementById(`level${level}List`);
@@ -2263,7 +2282,7 @@ function updateLevelList(level, referrals, rate) {
 }
 
 // ============================================================
-// রেফারেল ডাটা লোড - সম্পূর্ণ আপডেটেড (সঠিক)
+// রেফারেল ডাটা লোড - Supabase থেকে
 // ============================================================
 async function loadReferralData() {
     if(!currentUser || isLoadingReferral) return;
@@ -2301,9 +2320,7 @@ async function loadReferralData() {
             }
             document.getElementById('totalReferrals').innerText = '0';
             document.getElementById('totalCommission').innerText = '0';
-            // রেফারেল বোনাস 0 সেট করুন
             userFunds.referralBonus = 0;
-            // referralProfit ওভাররাইট করবেন না
             updateFundsDisplay();
             isLoadingReferral = false;
             return;
@@ -2347,7 +2364,6 @@ async function loadReferralData() {
             document.getElementById('totalReferrals').innerText = '0';
             document.getElementById('totalCommission').innerText = '0';
             userFunds.referralBonus = 0;
-            // referralProfit ওভাররাইট করবেন না
             updateFundsDisplay();
             isLoadingReferral = false;
             return;
@@ -2418,19 +2434,9 @@ async function loadReferralData() {
         document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
         document.getElementById('totalLevels').innerText = '১০';
         
-        // ============================================================
-        // ✅ রেফারেল বোনাস সেট করুন (শুধু ডাইরেক্ট বোনাস আপডেট করুন)
-        // ============================================================
         const referralBonusAmount = Math.floor(totalCommission);
-        userFunds.referralBonus = referralBonusAmount;  // ১,৪৪৫ টাকা (ক্যালকুলেটেড)
+        userFunds.referralBonus = referralBonusAmount;
         
-        // ❌ referralProfit ওভাররাইট করবেন না!
-        // এটি ডাটাবেস থেকে loadUserFunds() এ লোড করা হয়েছে (১০ টাকা)
-        // userFunds.referralProfit ইতিমধ্যে ডাটাবেস থেকে এসেছে
-        
-        // ============================================================
-        // ✅ কার্ড আপডেট করুন - ডাটাবেস থেকে আসা মান ব্যবহার করুন
-        // ============================================================
         const referralBonusCard = document.getElementById('referralBonusFund');
         if(referralBonusCard) {
             referralBonusCard.innerText = userFunds.referralBonus.toLocaleString() + ' টাকা';
@@ -2438,11 +2444,9 @@ async function loadReferralData() {
         
         const referralProfitCard = document.getElementById('referralProfitFund');
         if(referralProfitCard) {
-            // ডাটাবেস থেকে আসা মান ব্যবহার করুন (ওভাররাইট করবেন না)
             referralProfitCard.innerText = (userFunds.referralProfit || 0).toLocaleString() + ' টাকা';
         }
         
-        // ৩. রেফারেল লিংক সেট করুন
         const referralLink = document.getElementById('referralLink');
         if(referralLink && currentUser.referId) {
             let cleanRefCode = currentUser.referId;
@@ -2454,15 +2458,13 @@ async function loadReferralData() {
             referralLink.value = `${baseUrl}/signup?ref=${cleanRefCode || currentUser.referId}`;
         }
         
-        // ৪. ফান্ড ডিসপ্লে আপডেট করুন
         updateFundsDisplay();
         
-        // ৫. ডিবাগ লগ
         console.log('🎯 রেফারেল ডাটা লোড সম্পন্ন:', { 
             totalReferrals, 
             totalCommission: Math.floor(totalCommission),
-            referralBonus: userFunds.referralBonus,    // রেফারেল বোনাস (ডাইরেক্ট) - ১,৪৪৫
-            referralProfit: userFunds.referralProfit   // রেফারেল লভ্যাংশ (লেভেল) - ১০ (ডাটাবেস থেকে)
+            referralBonus: userFunds.referralBonus,
+            referralProfit: userFunds.referralProfit
         });
         
     } catch(error) { 
