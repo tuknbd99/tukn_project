@@ -900,64 +900,61 @@ async function loadRealDashboard() {
         }
         totalProfit = fixDecimal(totalProfit);
         
-        // ৬. ✅ বিতরণকৃত লভ্যাংশ - Supabase থেকে সরাসরি
-        let totalProfitDistributed = 0;
-        try {
-            console.log("📊 profit_distributions থেকে ডেটা আনছি...");
-            
-            const { data: distributions, error: distError } = await client
-                .from('profit_distributions')
-                .select('amount')
-                .eq('status', 'approved');
-            
-            if (distError) {
-                console.error('❌ Profit distributions error:', distError);
-            } else if (distributions && distributions.length > 0) {
-                console.log(`📋 পাওয়া গেছে ${distributions.length} টি অনুমোদিত লভ্যাংশ`);
-                
-                totalProfitDistributed = distributions.reduce((sum, d) => {
-                    const amount = parseFloat(d.amount) || 0;
-                    return sum + amount;
-                }, 0);
-                
-                console.log(`✅ বিতরণকৃত মোট লভ্যাংশ: ${totalProfitDistributed} টাকা`);
-            } else {
-                console.log("📭 কোনো অনুমোদিত লভ্যাংশ নেই");
-            }
-            
-        } catch(e) { 
-            console.error('⚠️ profit_distributions error:', e); 
-        }
+// ৬. ✅ বিতরণকৃত লভ্যাংশ - আপডেটেড
+let totalProfitDistributed = 0;
+try {
+    console.log("📊 profit_distributions থেকে ডেটা আনছি...");
+    
+    const { data: distributions, error: distError } = await client
+        .from('profit_distributions')
+        .select('totalprofit, total_profit, distributed_amount, status')
+        .eq('status', 'approved');
+    
+    if (distError) {
+        console.error('❌ Profit distributions error:', distError);
+    } else if (distributions && distributions.length > 0) {
+        console.log(`📋 পাওয়া গেছে ${distributions.length} টি অনুমোদিত লভ্যাংশ`);
         
-        // ৭. ✅ কল্যাণ তহবিল - Supabase থেকে সরাসরি
-        let welfareFundBalance = 0;
-        try {
-            const { data: welfareData, error: welfareError } = await client
-                .from('welfare_fund')
-                .select('amount, type');
-            
-            if (welfareError) {
-                console.error('❌ Welfare fund error:', welfareError);
-            } else if (welfareData && welfareData.length > 0) {
-                let totalDeposits = 0;
-                let totalDistributions = 0;
-                
-                welfareData.forEach(entry => {
-                    const amount = parseFloat(entry.amount) || 0;
-                    if (entry.type === 'deposit') {
-                        totalDeposits += amount;
-                    } else if (entry.type === 'distribution') {
-                        totalDistributions += amount;
-                    }
-                });
-                
-                welfareFundBalance = fixDecimal(totalDeposits - totalDistributions);
-                console.log(`💰 কল্যাণ তহবিল: ${welfareFundBalance} টাকা`);
-            }
-        } catch(e) { 
-            console.error('⚠️ Welfare fund error:', e); 
-        }
+        totalProfitDistributed = distributions.reduce((sum, d) => {
+            const amount = parseFloat(d.totalprofit || d.total_profit || d.distributed_amount || 0);
+            return sum + amount;
+        }, 0);
         
+        console.log(`✅ বিতরণকৃত মোট লভ্যাংশ: ${totalProfitDistributed} টাকা`);
+    }
+} catch(e) { 
+    console.error('⚠️ profit_distributions error:', e); 
+}
+
+// ৭. ✅ কল্যাণ তহবিল - আপডেটেড
+let welfareFundBalance = 0;
+try {
+    const { data: welfareData, error: welfareError } = await client
+        .from('welfare_fund')
+        .select('total, type');
+            
+    if (welfareError) {
+        console.error('❌ Welfare fund error:', welfareError);
+    } else if (welfareData && welfareData.length > 0) {
+        let totalDeposits = 0;
+        let totalDistributions = 0;
+        
+        welfareData.forEach(entry => {
+            const amount = parseFloat(entry.total || 0);
+            if (entry.type === 'deposit') {
+                totalDeposits += amount;
+            } else if (entry.type === 'distribution') {
+                totalDistributions += amount;
+            }
+        });
+        
+        welfareFundBalance = fixDecimal(totalDeposits - totalDistributions);
+        console.log(`💰 কল্যাণ তহবিল: ${welfareFundBalance} টাকা`);
+    }
+} catch(e) { 
+    console.error('⚠️ Welfare fund error:', e); 
+}
+          
         // ৮. বর্তমান তহবিল এবং নিট আয়
         const currentFund = fixDecimal(totalSavings - (totalWithdrawal + totalLoanGiven + totalProfitDistributed));
         const netIncome = fixDecimal(totalSavings - totalWithdrawal);
@@ -2011,7 +2008,7 @@ document.getElementById('addMemberForm')?.addEventListener('submit', async funct
 document.getElementById('searchMember')?.addEventListener('input', () => renderMembersList());
 
 // ============================================================
-// Welfare Fund Functions
+// কল্যাণ তহবিল লোড - আপডেটেড (welfare_fund টেবিল অনুযায়ী)
 // ============================================================
 async function loadWelfareFund() {
     const container = document.getElementById('welfareFundList');
@@ -2041,7 +2038,7 @@ async function loadWelfareFund() {
         let totalDistributed = 0;
         
         entries.forEach(entry => {
-            const amount = parseFloat(entry.amount) || 0;
+            const amount = parseFloat(entry.total || 0);
             if (entry.type === 'deposit') {
                 totalDeposits += amount;
                 totalBalance += amount;
@@ -2073,7 +2070,7 @@ async function loadWelfareFund() {
                     </div>
                     <div class="text-right">
                         <p class="text-xl font-bold ${entry.type === 'deposit' ? 'text-emerald-600' : 'text-red-600'}">
-                            ${entry.type === 'deposit' ? '+' : '-'} ${formatAmountWithText(entry.amount || 0)}
+                            ${entry.type === 'deposit' ? '+' : '-'} ${formatAmountWithText(entry.total || 0)}
                         </p>
                         <span class="text-xs px-2 py-1 rounded-full ${entry.type === 'deposit' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}">
                             ${entry.type === 'deposit' ? '📥 জমা' : '📤 বিতরণ'}
@@ -2110,6 +2107,9 @@ function closeWelfareModal() {
     document.getElementById('welfareModal').classList.remove('active');
 }
 
+// ============================================================
+// কল্যাণ তহবিল জমা - আপডেটেড
+// ============================================================
 document.getElementById('welfareForm')?.addEventListener('submit', async function(e) {
     e.preventDefault();
     const type = document.getElementById('welfareType').value;
@@ -2128,10 +2128,11 @@ document.getElementById('welfareForm')?.addEventListener('submit', async functio
     try {
         const { error } = await client.from('welfare_fund').insert([{
             type: type,
-            amount: amount,
+            total: amount,
             title: title || (type === 'deposit' ? 'তহবিল জমা' : 'তহবিল বিতরণ'),
             description: description || '',
             created_at: new Date().toISOString(),
+            last_updated: new Date().toISOString(),
             created_by: currentAdmin?.username || 'admin'
         }]);
         
@@ -2163,7 +2164,7 @@ async function deleteWelfareEntry(id) {
 }
 
 // ============================================================
-// Profit Distribution Functions
+// লভ্যাংশ বন্টন লোড - আপডেটেড (profit_distributions টেবিল অনুযায়ী)
 // ============================================================
 async function loadProfitDistributions() {
     const container = document.getElementById('profitDistributionsList');
@@ -2178,7 +2179,7 @@ async function loadProfitDistributions() {
         const { data, error } = await client
             .from('profit_distributions')
             .select('*')
-            .order('created_at', { ascending: false });
+            .order('id', { ascending: false });
             
         if (error) throw error;
         
@@ -2189,21 +2190,31 @@ async function loadProfitDistributions() {
             return;
         }
         
-        container.innerHTML = entries.map(entry => `
+        container.innerHTML = entries.map(entry => {
+            const profitAmount = entry.totalprofit || entry.total_profit || entry.distributed_amount || 0;
+            const displayDate = entry.distributed_at || entry.date || '-';
+            
+            return `
             <div class="border rounded-lg p-4 bg-white shadow-sm hover:shadow-md transition">
                 <div class="flex justify-between items-center">
                     <div>
-                        <p class="font-bold text-gray-800">${entry.title || 'লভ্যাংশ বন্টন'}</p>
-                        <p class="text-sm text-gray-500">${entry.description || ''}</p>
-                        <p class="text-xs text-gray-400">${entry.created_at ? new Date(entry.created_at).toLocaleString('bn-BD') : '-'}</p>
-                        ${entry.approved_at ? `<p class="text-xs text-green-600">অনুমোদিত: ${new Date(entry.approved_at).toLocaleString('bn-BD')}</p>` : ''}
+                        <p class="font-bold text-gray-800">${entry.fundtype || 'লভ্যাংশ বন্টন'}</p>
+                        <p class="text-sm text-gray-500">মাস: ${entry.month || ''} ${entry.year || ''}</p>
+                        <p class="text-xs text-gray-400">${displayDate ? new Date(displayDate).toLocaleString('bn-BD') : '-'}</p>
+                        ${entry.status === 'approved' ? `<p class="text-xs text-green-600">✅ অনুমোদিত</p>` : ''}
                     </div>
                     <div class="text-right">
-                        <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(entry.amount || 0)}</p>
+                        <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(profitAmount)}</p>
                         <span class="text-xs px-2 py-1 rounded-full ${entry.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">
                             ${entry.status === 'approved' ? 'অনুমোদিত' : 'বিচারাধীন'}
                         </span>
                     </div>
+                </div>
+                <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                    <div class="bg-gray-50 p-2 rounded"><span class="text-gray-500">মোট লাভ:</span> <span class="font-bold">${formatAmountWithText(entry.totalprofit || entry.total_profit || 0)}</span></div>
+                    <div class="bg-gray-50 p-2 rounded"><span class="text-gray-500">কর্তন (%):</span> <span class="font-bold">${entry.deductionpercent || 0}%</span></div>
+                    <div class="bg-gray-50 p-2 rounded"><span class="text-gray-500">কর্তন টাকা:</span> <span class="font-bold">${formatAmountWithText(entry.deductionamount || 0)}</span></div>
+                    <div class="bg-gray-50 p-2 rounded"><span class="text-gray-500">যোগ্য সদস্য:</span> <span class="font-bold">${entry.eligiblemembers || 0} জন</span></div>
                 </div>
                 <div class="mt-2 flex gap-2">
                     ${entry.status !== 'approved' ? `<button onclick="approveProfitDistribution('${entry.id}')" class="bg-emerald-500 text-white px-3 py-1 rounded text-sm">✅ অনুমোদন</button>` : ''}
@@ -2212,7 +2223,7 @@ async function loadProfitDistributions() {
                     </button>
                 </div>
             </div>
-        `).join('');
+        `}).join('');
         
     } catch(error) {
         console.error('Profit distributions load error:', error);
@@ -2234,8 +2245,12 @@ function closeProfitModal() {
     document.getElementById('profitModal').classList.remove('active');
 }
 
+// ============================================================
+// লভ্যাংশ বন্টন তৈরি - আপডেটেড
+// ============================================================
 document.getElementById('profitForm')?.addEventListener('submit', async function(e) {
     e.preventDefault();
+    
     const amount = parseFloat(document.getElementById('profitAmount').value);
     const title = document.getElementById('profitTitle').value.trim();
     const description = document.getElementById('profitDescription').value.trim();
@@ -2249,12 +2264,24 @@ document.getElementById('profitForm')?.addEventListener('submit', async function
     if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
     
     try {
+        const now = new Date();
+        const monthNames = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
+        
         const { error } = await client.from('profit_distributions').insert([{
-            amount: amount,
-            title: title || 'লভ্যাংশ বন্টন',
-            description: description || '',
+            date: now.toISOString().split('T')[0],
+            month: monthNames[now.getMonth()],
+            year: now.getFullYear(),
+            fundtype: title || 'লভ্যাংশ বন্টন',
+            totalprofit: amount,
+            total_profit: amount,
+            distributed_amount: amount,
+            deductionpercent: 0,
+            deductionamount: 0,
+            totaldistributed: 0,
+            eligiblemembers: 0,
+            welfarefundadded: 0,
             status: 'pending',
-            created_at: new Date().toISOString(),
+            distributed_at: now.toISOString(),
             created_by: currentAdmin?.username || 'admin'
         }]);
         
@@ -2270,6 +2297,9 @@ document.getElementById('profitForm')?.addEventListener('submit', async function
     }
 });
 
+// ============================================================
+// লভ্যাংশ বন্টন অনুমোদন - আপডেটেড
+// ============================================================
 async function approveProfitDistribution(id) {
     if (!confirm('লভ্যাংশ বন্টন অনুমোদন দেবেন?')) return;
     const client = initSupabaseClient();
@@ -2287,30 +2317,32 @@ async function approveProfitDistribution(id) {
         await client.from('profit_distributions')
             .update({ 
                 status: 'approved',
-                approved_at: new Date().toISOString(),
-                approved_by: currentAdmin?.username || 'admin'
+                distributed_at: new Date().toISOString()
             })
             .eq('id', id);
         
         const settings = getWelfareSettings();
         const welfarePercent = settings.profitPercent / 100;
-        const welfareAmount = distribution.amount * welfarePercent;
+        const profitAmount = distribution.totalprofit || distribution.total_profit || 0;
+        const welfareAmount = profitAmount * welfarePercent;
         
         if (welfareAmount > 0) {
             await client.from('welfare_fund').insert([{
                 type: 'deposit',
-                amount: welfareAmount,
+                total: welfareAmount,
                 title: `ব্যবসা/বিনিয়োগ লাভ থেকে কল্যাণ তহবিল (${settings.profitPercent}%)`,
-                description: `লভ্যাংশ বন্টন থেকে ${formatAmount(welfareAmount)} টাকা (${formatAmount(distribution.amount)} টাকার ${settings.profitPercent}%)`,
+                description: `লভ্যাংশ বন্টন থেকে ${formatAmount(welfareAmount)} টাকা`,
                 created_at: new Date().toISOString(),
+                last_updated: new Date().toISOString(),
                 created_by: 'system',
                 reference_id: id,
                 reference_type: 'profit_distribution'
             }]);
-            showToast(`✅ কল্যাণ তহবিলে ${formatAmount(welfareAmount)} টাকা জমা হয়েছে (লভ্যাংশের ${settings.profitPercent}%)`, 'success');
+            
+            showToast(`✅ কল্যাণ তহবিলে ${formatAmount(welfareAmount)} টাকা জমা হয়েছে`, 'success');
         }
         
-        const memberShare = distribution.amount * (1 - welfarePercent);
+        const memberShare = profitAmount * (1 - welfarePercent);
         await distributeProfitToMembers(memberShare, id);
         
         await loadProfitDistributions();
