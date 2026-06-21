@@ -308,7 +308,6 @@
             color: #059669;
         }
         
-        /* Toast Notification */
         .toast-notification {
             position: fixed;
             bottom: 24px;
@@ -335,7 +334,6 @@
             .login-header h1 { font-size: 22px; }
         }
         
-        /* ডিবাগ কনসোল */
         .debug-console {
             margin-top: 15px;
             padding: 12px;
@@ -371,6 +369,28 @@
         .debug-toggle button:hover {
             background: #f3f4f6;
             border-color: #9ca3af;
+        }
+        
+        /* সুপার অ্যাডমিন ব্যাজ */
+        .super-badge {
+            display: inline-block;
+            background: #7c3aed;
+            color: white;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            margin-left: 6px;
+        }
+        .admin-badge {
+            display: inline-block;
+            background: #059669;
+            color: white;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            margin-left: 6px;
         }
     </style>
 </head>
@@ -582,7 +602,40 @@
         }
         
         // ============================================================
-        // ✅ লগইন হ্যান্ডলার - একবারেই কাজ করবে, ডুপ্লিকেট হবে না
+        // পারমিশন ফাংশন (সর্বজনীন)
+        // ============================================================
+        function getCurrentAdmin() {
+            const adminData = localStorage.getItem('currentAdmin') || sessionStorage.getItem('currentAdmin');
+            if (!adminData) return null;
+            try {
+                return JSON.parse(adminData);
+            } catch(e) {
+                return null;
+            }
+        }
+        
+        function hasPermission(permissionName) {
+            const admin = getCurrentAdmin();
+            if (!admin) return false;
+            
+            // সুপার অ্যাডমিন সবকিছু করতে পারে
+            if (admin.isSuperAdmin || admin.userType === 'super_admin') {
+                return true;
+            }
+            
+            // পারমিশন চেক
+            const permissions = admin.permissions || {};
+            return permissions[permissionName] === true || permissions.all === true;
+        }
+        
+        function isSuperAdmin() {
+            const admin = getCurrentAdmin();
+            if (!admin) return false;
+            return admin.isSuperAdmin || admin.userType === 'super_admin';
+        }
+        
+        // ============================================================
+        // ✅ লগইন হ্যান্ডলার (সম্পূর্ণ আপডেটেড)
         // ============================================================
         async function handleLogin(event) {
             event.preventDefault();
@@ -626,16 +679,30 @@
                     return;
                 }
                 
-                const tableName = role === 'super' ? 'super_admins' : 'admins';
-                const roleName = role === 'super' ? 'সুপার অ্যাডমিন' : 'অ্যাডমিন';
-                
-                addDebugLog(`🔍 ${tableName} টেবিলে খোঁজা হচ্ছে: ${username}`, 'info');
-                
-                const { data, error } = await client
-                    .from(tableName)
+                // ========== প্রথমে admins টেবিলে খোঁজো ==========
+                let { data, error } = await client
+                    .from('admins')
                     .select('*')
                     .eq('username', username)
                     .maybeSingle();
+                
+                // ========== যদি admins-এ না পাওয়া যায়, তাহলে super_admins-এ খোঁজো ==========
+                if (!data) {
+                    addDebugLog(`🔍 admins-এ পাওয়া যায়নি, super_admins-এ খোঁজা হচ্ছে...`, 'info');
+                    let { data: superData, error: superError } = await client
+                        .from('super_admins')
+                        .select('*')
+                        .eq('username', username)
+                        .maybeSingle();
+                    
+                    if (superData) {
+                        data = superData;
+                        error = null;
+                        addDebugLog(`✅ super_admins-এ পাওয়া গেছে: ${superData.username}`, 'success');
+                    } else {
+                        error = superError;
+                    }
+                }
                 
                 if (error) {
                     console.error('❌ Error:', error);
@@ -650,7 +717,7 @@
                 
                 if (!data) {
                     addDebugLog(`❌ ${username} পাওয়া যায়নি`, 'error');
-                    errorText.textContent = `${roleName} ইউজারনেম বা পাসওয়ার্ড ভুল!`;
+                    errorText.textContent = `ইউজারনেম বা পাসওয়ার্ড ভুল!`;
                     errorMessage.classList.add('show');
                     document.getElementById('password').value = '';
                     loginBtn.disabled = false;
@@ -661,9 +728,10 @@
                 
                 addDebugLog(`✅ ডেটা পাওয়া গেছে: ${data.username} (${data.role})`, 'success');
                 
+                // ========== পাসওয়ার্ড চেক ==========
                 if (data.password !== password) {
                     addDebugLog(`❌ পাসওয়ার্ড মিলছে না!`, 'error');
-                    errorText.textContent = `${roleName} ইউজারনেম বা পাসওয়ার্ড ভুল!`;
+                    errorText.textContent = `ইউজারনেম বা পাসওয়ার্ড ভুল!`;
                     errorMessage.classList.add('show');
                     document.getElementById('password').value = '';
                     loginBtn.disabled = false;
@@ -672,15 +740,42 @@
                     return;
                 }
                 
-                // ========== ✅ লগইন সফল ==========
-                addDebugLog(`✅ ${roleName} লগইন সফল: ${data.username}`, 'success');
+                // ========== ✅ লগইন সফল - রোল ডিটেক্ট ==========
+                const roleName = data.role || 'অ্যাডমিন';
+                const userPermissions = data.permissions || {};
+                
+                // সুপার অ্যাডমিন কিনা চেক করুন
+                const isSuper = (roleName === 'super_admin' || 
+                                roleName === 'সুপার অ্যাডমিন' || 
+                                data.username === 'sadmin' ||
+                                data.username === 'superadmin');
+                
+                // পারমিশন সেট করুন
+                let permissions = userPermissions;
+                if (isSuper) {
+                    // সুপার অ্যাডমিন = সব পারমিশন
+                    permissions = {
+                        all: true,
+                        create: true,
+                        edit: true,
+                        delete: true,
+                        manage_users: true,
+                        manage_settings: true,
+                        manage_admins: true,
+                        view_reports: true
+                    };
+                }
+                
+                addDebugLog(`✅ রোল ডিটেক্ট: ${isSuper ? 'সুপার অ্যাডমিন' : 'সাধারণ অ্যাডমিন'}`, 'success');
                 
                 const sessionData = {
                     id: data.id,
                     username: data.username,
                     name: data.name || data.username,
-                    role: data.role || roleName,
-                    userType: role,
+                    role: roleName,
+                    userType: isSuper ? 'super_admin' : 'admin',
+                    permissions: permissions,
+                    isSuperAdmin: isSuper,
                     loginTime: Date.now(),
                     loggedIn: true
                 };
@@ -688,15 +783,12 @@
                 localStorage.setItem('currentAdmin', JSON.stringify(sessionData));
                 sessionStorage.setItem('currentAdmin', JSON.stringify(sessionData));
                 
-                loginBtn.innerHTML = '<i class="fas fa-check-circle"></i> স্বাগতম!';
+                loginBtn.innerHTML = '<i class="fas fa-check-circle"></i> স্বাগতম! ' + (isSuper ? '👑' : '');
                 
+                // ========== সবাইকে admin-dashboard.html-এ পাঠান ==========
                 setTimeout(() => {
                     isLoggingIn = false;
-                    if (role === 'super') {
-                        window.location.href = 'index.html';
-                    } else {
-                        window.location.href = 'admin-dashboard.html';
-                    }
+                    window.location.href = 'admin-dashboard.html';
                 }, 800);
                 
             } catch (err) {
@@ -723,7 +815,7 @@
         });
         
         // ============================================================
-        // ✅ পেজ লোডে - Supabase চেক করুন
+        // ✅ পেজ লোডে
         // ============================================================
         document.addEventListener('DOMContentLoaded', function() {
             addDebugLog('🚀 পেজ লোড হয়েছে', 'info');
@@ -740,13 +832,9 @@
                     const currentTime = Date.now();
                     
                     if (currentTime - loginTime < 8 * 60 * 60 * 1000) {
-                        addDebugLog(`⏩ ইতিমধ্যে লগইন করা আছে: ${admin.username}`, 'success');
+                        addDebugLog(`⏩ ইতিমধ্যে লগইন করা আছে: ${admin.username} (${admin.userType})`, 'success');
                         setTimeout(() => {
-                            if (admin.userType === 'super' || admin.role === 'সুপার অ্যাডমিন') {
-                                window.location.href = 'index.html';
-                            } else {
-                                window.location.href = 'admin-dashboard.html';
-                            }
+                            window.location.href = 'admin-dashboard.html';
                         }, 500);
                         return;
                     } else {
@@ -771,14 +859,15 @@
                     const { data: admins, error: aErr } = await client
                         .from('admins')
                         .select('id, username, name, role')
-                        .limit(5);
+                        .limit(10);
                     
                     if (aErr) {
                         addDebugLog(`❌ admins টেবিল Error: ${aErr.message}`, 'error');
                     } else {
                         addDebugLog(`✅ admins টেবিলে ${admins?.length || 0} টি ডেটা`, 'success');
                         admins?.forEach(a => {
-                            addDebugLog(`   → ${a.username} (${a.role})`, 'info');
+                            const isSuper = a.role === 'super_admin' || a.username === 'sadmin';
+                            addDebugLog(`   → ${a.username} (${a.role})${isSuper ? ' 👑' : ''}`, 'info');
                         });
                     }
                     
@@ -786,14 +875,14 @@
                     const { data: superAdmins, error: sErr } = await client
                         .from('super_admins')
                         .select('id, username, name, role')
-                        .limit(5);
+                        .limit(10);
                     
                     if (sErr) {
                         addDebugLog(`❌ super_admins টেবিল Error: ${sErr.message}`, 'error');
                     } else {
                         addDebugLog(`✅ super_admins টেবিলে ${superAdmins?.length || 0} টি ডেটা`, 'success');
                         superAdmins?.forEach(a => {
-                            addDebugLog(`   → ${a.username} (${a.role})`, 'info');
+                            addDebugLog(`   → ${a.username} (${a.role}) 👑`, 'info');
                         });
                     }
                     
@@ -804,6 +893,7 @@
             
             console.log('🔐 অ্যাডমিন লগইন পেজ লোড হয়েছে');
             console.log('💡 ডিবাগ দেখতে "ডিবাগ দেখুন" বাটনে ক্লিক করুন');
+            console.log('👑 সুপার অ্যাডমিন: sadmin / 725274');
         });
     </script>
 </body>
