@@ -334,6 +334,44 @@
             .role-option i { font-size: 22px; }
             .login-header h1 { font-size: 22px; }
         }
+        
+        /* ডিবাগ কনসোল */
+        .debug-console {
+            margin-top: 15px;
+            padding: 12px;
+            background: #1f2937;
+            border-radius: 12px;
+            color: #d1d5db;
+            font-size: 11px;
+            font-family: monospace;
+            display: none;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .debug-console.show {
+            display: block;
+        }
+        .debug-console .success { color: #34d399; }
+        .debug-console .error { color: #f87171; }
+        .debug-console .info { color: #60a5fa; }
+        .debug-toggle {
+            text-align: center;
+            margin-top: 10px;
+        }
+        .debug-toggle button {
+            background: transparent;
+            color: #6b7280;
+            border: 1px solid #e5e7eb;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .debug-toggle button:hover {
+            background: #f3f4f6;
+            border-color: #9ca3af;
+        }
     </style>
 </head>
 <body>
@@ -399,6 +437,15 @@
             </button>
         </form>
 
+        <!-- ডিবাগ কনসোল -->
+        <div class="debug-toggle">
+            <button onclick="toggleDebug()"><i class="fas fa-bug mr-1"></i>ডিবাগ দেখুন</button>
+        </div>
+        <div id="debugConsole" class="debug-console">
+            <strong>📋 ডিবাগ তথ্য:</strong>
+            <div id="debugContent"></div>
+        </div>
+
         <!-- ফুটার -->
         <div class="login-footer">
             <a href="index.html" class="forgot-link"><i class="fas fa-arrow-left mr-1"></i>হোমপেজে ফিরুন</a>
@@ -434,16 +481,42 @@
                     if (typeof window.supabase !== 'undefined' && window.supabase.createClient) {
                         _supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
                         console.log('✅ Supabase client initialized');
+                        addDebugLog('✅ Supabase client initialized', 'success');
                     } else {
                         console.error('❌ Supabase library not loaded');
+                        addDebugLog('❌ Supabase library not loaded', 'error');
                         return null;
                     }
                 } catch(e) {
                     console.error('❌ Supabase init error:', e);
+                    addDebugLog('❌ Supabase init error: ' + e.message, 'error');
                     return null;
                 }
             }
             return _supabaseClient;
+        }
+        
+        // ============================================================
+        // ডিবাগ কনসোল
+        // ============================================================
+        let debugVisible = false;
+        
+        function toggleDebug() {
+            const el = document.getElementById('debugConsole');
+            debugVisible = !debugVisible;
+            el.classList.toggle('show');
+        }
+        
+        function addDebugLog(message, type = 'info') {
+            const container = document.getElementById('debugContent');
+            if (!container) return;
+            
+            const prefix = type === 'success' ? '✅ ' : type === 'error' ? '❌ ' : '🔍 ';
+            const className = type === 'success' ? 'success' : type === 'error' ? 'error' : 'info';
+            
+            const time = new Date().toLocaleTimeString();
+            container.innerHTML += `<div class="${className}">${prefix}[${time}] ${message}</div>`;
+            container.scrollTop = container.scrollHeight;
         }
         
         // ============================================================
@@ -514,9 +587,9 @@
         async function handleLogin(event) {
             event.preventDefault();
             
-            // ✅ ইতিমধ্যে লগইন চলছে কিনা চেক করুন
             if (isLoggingIn) {
                 console.log('⏳ লগইন ইতিমধ্যে চলছে...');
+                addDebugLog('⏳ লগইন ইতিমধ্যে চলছে...', 'info');
                 return;
             }
             
@@ -532,13 +605,14 @@
             if (!username || !password) {
                 errorText.textContent = 'দয়া করে ইউজারনেম এবং পাসওয়ার্ড দিন!';
                 errorMessage.classList.add('show');
+                addDebugLog('❌ ইউজারনেম বা পাসওয়ার্ড খালি', 'error');
                 return;
             }
             
-            // ✅ লগইন শুরু - ফ্ল্যাগ সেট
             isLoggingIn = true;
             loginBtn.disabled = true;
             loginBtn.innerHTML = '<span class="spinner"></span> যাচাই করা হচ্ছে...';
+            addDebugLog(`🔍 লগইন চেষ্টা: ${username} (${role})`, 'info');
             
             try {
                 const client = initSupabase();
@@ -548,15 +622,15 @@
                     loginBtn.disabled = false;
                     loginBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> লগইন করুন';
                     isLoggingIn = false;
+                    addDebugLog('❌ সার্ভার সংযোগ ব্যর্থ', 'error');
                     return;
                 }
                 
                 const tableName = role === 'super' ? 'super_admins' : 'admins';
                 const roleName = role === 'super' ? 'সুপার অ্যাডমিন' : 'অ্যাডমিন';
                 
-                console.log(`🔍 ${tableName} টেবিলে খোঁজা হচ্ছে: ${username}`);
+                addDebugLog(`🔍 ${tableName} টেবিলে খোঁজা হচ্ছে: ${username}`, 'info');
                 
-                // ✅ ইউজার খোঁজা
                 const { data, error } = await client
                     .from(tableName)
                     .select('*')
@@ -565,6 +639,7 @@
                 
                 if (error) {
                     console.error('❌ Error:', error);
+                    addDebugLog(`❌ ডাটাবেস Error: ${error.message}`, 'error');
                     errorText.textContent = `ডাটাবেস সংযোগে সমস্যা!`;
                     errorMessage.classList.add('show');
                     loginBtn.disabled = false;
@@ -574,7 +649,7 @@
                 }
                 
                 if (!data) {
-                    console.log(`❌ ${username} পাওয়া যায়নি`);
+                    addDebugLog(`❌ ${username} পাওয়া যায়নি`, 'error');
                     errorText.textContent = `${roleName} ইউজারনেম বা পাসওয়ার্ড ভুল!`;
                     errorMessage.classList.add('show');
                     document.getElementById('password').value = '';
@@ -584,9 +659,10 @@
                     return;
                 }
                 
-                // ✅ পাসওয়ার্ড চেক
+                addDebugLog(`✅ ডেটা পাওয়া গেছে: ${data.username} (${data.role})`, 'success');
+                
                 if (data.password !== password) {
-                    console.log(`❌ পাসওয়ার্ড মিলছে না!`);
+                    addDebugLog(`❌ পাসওয়ার্ড মিলছে না!`, 'error');
                     errorText.textContent = `${roleName} ইউজারনেম বা পাসওয়ার্ড ভুল!`;
                     errorMessage.classList.add('show');
                     document.getElementById('password').value = '';
@@ -597,9 +673,8 @@
                 }
                 
                 // ========== ✅ লগইন সফল ==========
-                console.log(`✅ ${roleName} লগইন সফল: ${data.username}`);
+                addDebugLog(`✅ ${roleName} লগইন সফল: ${data.username}`, 'success');
                 
-                // ✅ সেশন ডেটা তৈরি
                 const sessionData = {
                     id: data.id,
                     username: data.username,
@@ -610,14 +685,11 @@
                     loggedIn: true
                 };
                 
-                // ✅ localStorage এবং sessionStorage এ সংরক্ষণ
                 localStorage.setItem('currentAdmin', JSON.stringify(sessionData));
                 sessionStorage.setItem('currentAdmin', JSON.stringify(sessionData));
                 
-                // ✅ সাফল্যের মেসেজ
                 loginBtn.innerHTML = '<i class="fas fa-check-circle"></i> স্বাগতম!';
                 
-                // ✅ ১ সেকেন্ড পর রিডাইরেক্ট
                 setTimeout(() => {
                     isLoggingIn = false;
                     if (role === 'super') {
@@ -629,6 +701,7 @@
                 
             } catch (err) {
                 console.error('❌ Login error:', err);
+                addDebugLog(`❌ Error: ${err.message}`, 'error');
                 errorText.textContent = 'লগইন করতে সমস্যা! পুনরায় চেষ্টা করুন।';
                 errorMessage.classList.add('show');
                 loginBtn.disabled = false;
@@ -650,13 +723,15 @@
         });
         
         // ============================================================
-        // ✅ পেজ লোডে - ইতিমধ্যে লগইন থাকলে রিডাইরেক্ট (লগইন ফর্ম দেখাবে না)
+        // ✅ পেজ লোডে - Supabase চেক করুন
         // ============================================================
         document.addEventListener('DOMContentLoaded', function() {
+            addDebugLog('🚀 পেজ লোড হয়েছে', 'info');
+            
             // Supabase ইনিশিয়ালাইজ
             initSupabase();
             
-            // ✅ ইতিমধ্যে লগইন করা থাকলে সরাসরি রিডাইরেক্ট
+            // ✅ ইতিমধ্যে লগইন থাকলে রিডাইরেক্ট
             const existingAdmin = localStorage.getItem('currentAdmin') || sessionStorage.getItem('currentAdmin');
             if (existingAdmin) {
                 try {
@@ -664,61 +739,71 @@
                     const loginTime = admin.loginTime || 0;
                     const currentTime = Date.now();
                     
-                    // 8 ঘন্টার বেশি হলে লগইন এক্সপায়ার্ড
                     if (currentTime - loginTime < 8 * 60 * 60 * 1000) {
-                        console.log('⏩ ইতিমধ্যে লগইন করা আছে, রিডাইরেক্ট করা হচ্ছে...');
-                        if (admin.userType === 'super' || admin.role === 'সুপার অ্যাডমিন') {
-                            window.location.href = 'index.html';
-                        } else {
-                            window.location.href = 'admin-dashboard.html';
-                        }
+                        addDebugLog(`⏩ ইতিমধ্যে লগইন করা আছে: ${admin.username}`, 'success');
+                        setTimeout(() => {
+                            if (admin.userType === 'super' || admin.role === 'সুপার অ্যাডমিন') {
+                                window.location.href = 'index.html';
+                            } else {
+                                window.location.href = 'admin-dashboard.html';
+                            }
+                        }, 500);
                         return;
                     } else {
-                        console.log('⏰ সেশন এক্সপায়ার্ড হয়েছে, লগইন প্রয়োজন');
+                        addDebugLog('⏰ সেশন এক্সপায়ার্ড হয়েছে', 'info');
                         localStorage.removeItem('currentAdmin');
                         sessionStorage.removeItem('currentAdmin');
                     }
                 } catch(e) {
-                    console.log('Session invalid, clearing...');
+                    addDebugLog('Session invalid, clearing...', 'info');
                     localStorage.removeItem('currentAdmin');
                     sessionStorage.removeItem('currentAdmin');
                 }
             }
             
-            console.log('🔐 অ্যাডমিন লগইন পেজ লোড হয়েছে');
-            console.log('📌 Supabase টেবিল: admins এবং super_admins');
-            
-            // ✅ ডিবাগ হেল্পার (ক্রেডেনশিয়াল দেখাবে না)
-            window.checkSupabase = async function() {
+            // Supabase টেবিল চেক
+            setTimeout(async function() {
                 const client = initSupabase();
-                if (!client) {
-                    console.log('❌ Supabase client not initialized');
-                    return;
+                if (!client) return;
+                
+                try {
+                    // admins টেবিল চেক
+                    const { data: admins, error: aErr } = await client
+                        .from('admins')
+                        .select('id, username, name, role')
+                        .limit(5);
+                    
+                    if (aErr) {
+                        addDebugLog(`❌ admins টেবিল Error: ${aErr.message}`, 'error');
+                    } else {
+                        addDebugLog(`✅ admins টেবিলে ${admins?.length || 0} টি ডেটা`, 'success');
+                        admins?.forEach(a => {
+                            addDebugLog(`   → ${a.username} (${a.role})`, 'info');
+                        });
+                    }
+                    
+                    // super_admins টেবিল চেক
+                    const { data: superAdmins, error: sErr } = await client
+                        .from('super_admins')
+                        .select('id, username, name, role')
+                        .limit(5);
+                    
+                    if (sErr) {
+                        addDebugLog(`❌ super_admins টেবিল Error: ${sErr.message}`, 'error');
+                    } else {
+                        addDebugLog(`✅ super_admins টেবিলে ${superAdmins?.length || 0} টি ডেটা`, 'success');
+                        superAdmins?.forEach(a => {
+                            addDebugLog(`   → ${a.username} (${a.role})`, 'info');
+                        });
+                    }
+                    
+                } catch(e) {
+                    addDebugLog(`❌ টেবিল চেক Error: ${e.message}`, 'error');
                 }
-                
-                console.log('📋 Supabase অ্যাডমিন চেক:');
-                
-                const { data: admins, error: adminError } = await client
-                    .from('admins')
-                    .select('id, username, name, role');
-                
-                if (adminError) {
-                    console.error('Admin error:', adminError);
-                } else {
-                    console.log('  → অ্যাডমিন:', admins);
-                }
-                
-                const { data: superAdmins, error: superError } = await client
-                    .from('super_admins')
-                    .select('id, username, name, role');
-                
-                if (superError) {
-                    console.error('Super admin error:', superError);
-                } else {
-                    console.log('  → সুপার অ্যাডমিন:', superAdmins);
-                }
-            };
-            console.log('💡 কনসোলে checkSupabase() টাইপ করে অ্যাডমিন লিস্ট দেখুন');
+            }, 1000);
+            
+            console.log('🔐 অ্যাডমিন লগইন পেজ লোড হয়েছে');
+            console.log('💡 ডিবাগ দেখতে "ডিবাগ দেখুন" বাটনে ক্লিক করুন');
         });
     </script>
 </body>
