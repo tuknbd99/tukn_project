@@ -2438,21 +2438,130 @@ async function loadStats() {
 
 // ==================== ভিজিটর কাউন্ট ====================
 async function updateVisitorCount() {
-    const sb = await initSupabase();
-    if(!sb) { document.getElementById('topVisitors').innerHTML = '০'; return; }
+// ==================== ভিজিটর কাউন্ট - Supabase লাইভ ====================
+async function updateVisitorCount() {
+    const visitorElement = document.getElementById('topVisitors');
+    if (!visitorElement) return;
+    
     try {
+        const sb = await initSupabase();
+        if (!sb) {
+            visitorElement.innerHTML = '০';
+            return;
+        }
+        
         const today = new Date().toISOString().split('T')[0];
         const sessionKey = `tukn_visited_${today}`;
+        
+        // ১. আজকের ভিজিট রেকর্ড করুন (প্রতিদিন ১ বার)
         if (!sessionStorage.getItem(sessionKey)) {
-            let { data: existing } = await sb.from('visitor_stats').select('total_count, id').eq('visit_date', today).maybeSingle();
-            if (existing) { await sb.from('visitor_stats').update({ total_count: existing.total_count + 1, updated_at: new Date() }).eq('id', existing.id); } 
-            else { await sb.from('visitor_stats').insert({ visit_date: today, total_count: 1, created_at: new Date(), updated_at: new Date() }); }
-            sessionStorage.setItem(sessionKey, 'true');
+            try {
+                // আজকের এন্ট্রি খুঁজুন
+                let { data: existing, error: findError } = await sb
+                    .from('visitor_stats')
+                    .select('id, total_count')
+                    .eq('visit_date', today)
+                    .maybeSingle();
+                
+                if (findError && findError.code !== 'PGRST116') {
+                    console.error('Find error:', findError);
+                }
+                
+                if (existing) {
+                    // আপডেট করুন
+                    const { error: updateError } = await sb
+                        .from('visitor_stats')
+                        .update({ 
+                            total_count: existing.total_count + 1,
+                            updated_at: new Date().toISOString()
+                        })
+                        .eq('id', existing.id);
+                    
+                    if (updateError) console.error('Update error:', updateError);
+                } else {
+                    // নতুন এন্ট্রি তৈরি করুন
+                    const { error: insertError } = await sb
+                        .from('visitor_stats')
+                        .insert([{ 
+                            visit_date: today, 
+                            total_count: 1,
+                            created_at: new Date().toISOString(),
+                            updated_at: new Date().toISOString()
+                        }]);
+                    
+                    if (insertError) console.error('Insert error:', insertError);
+                }
+                
+                // সেশন সেট করুন (আজকে আর কাউন্ট বাড়বে না)
+                sessionStorage.setItem(sessionKey, 'true');
+                
+            } catch(e) {
+                console.error('Visitor count update error:', e);
+            }
         }
-        const { data: allVisitors } = await sb.from('visitor_stats').select('total_count');
-        const totalVisitors = allVisitors ? allVisitors.reduce((sum, row) => sum + (row.total_count || 0), 0) : 0;
-        document.getElementById('topVisitors').innerHTML = totalVisitors.toLocaleString();
-    } catch(e) { document.getElementById('topVisitors').innerHTML = '০'; }
+        
+        // ২. মোট ভিজিটর কাউন্ট লোড করুন (সব তারিখের যোগফল)
+        try {
+            const { data: allVisitors, error: countError } = await sb
+                .from('visitor_stats')
+                .select('total_count');
+            
+            if (countError) {
+                console.error('Count error:', countError);
+                // ব্যাকআপ: লোকাল স্টোরেজ
+                const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
+                visitorElement.innerHTML = localCount.toLocaleString();
+                return;
+            }
+            
+            let totalVisitors = 0;
+            if (allVisitors && allVisitors.length > 0) {
+                totalVisitors = allVisitors.reduce((sum, row) => sum + (row.total_count || 0), 0);
+                // লোকাল স্টোরেজে ব্যাকআপ রাখুন
+                localStorage.setItem('tukn_visitor_count_total', totalVisitors);
+            } else {
+                // যদি কোনো ডেটা না থাকে, লোকাল স্টোরেজ চেক করুন
+                totalVisitors = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
+            }
+            
+            // UI আপডেট করুন
+            visitorElement.innerHTML = totalVisitors.toLocaleString();
+            console.log('✅ Visitor count updated:', totalVisitors);
+            
+        } catch(e) {
+            console.error('Load count error:', e);
+            // ব্যাকআপ: লোকাল স্টোরেজ
+            const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
+            visitorElement.innerHTML = localCount.toLocaleString();
+        }
+        
+    } catch(error) {
+        console.error('Visitor count error:', error);
+        // ব্যাকআপ: লোকাল স্টোরেজ
+        const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
+        visitorElement.innerHTML = localCount.toLocaleString();
+    }
+}
+
+// ==================== ভিজিটর কাউন্ট - ম্যানুয়াল রিফ্রেশ ====================
+async function refreshVisitorCount() {
+    const btn = document.getElementById('refreshVisitorBtn');
+    if (btn) {
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        btn.disabled = true;
+    }
+    
+    // সেশন রিসেট করুন (আবার কাউন্ট বাড়াতে)
+    const today = new Date().toISOString().split('T')[0];
+    sessionStorage.removeItem(`tukn_visited_${today}`);
+    
+    await updateVisitorCount();
+    
+    if (btn) {
+        btn.innerHTML = '<i class="fas fa-sync-alt"></i>';
+        btn.disabled = false;
+    }
+    showNotification('ভিজিটর কাউন্ট আপডেট করা হয়েছে!', 'success');
 }
 
 // ==================== অ্যাড স্লাইডার ====================
