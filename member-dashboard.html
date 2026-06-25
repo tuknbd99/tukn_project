@@ -119,6 +119,72 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+
+        /* স্টেটমেন্ট প্রিন্ট স্টাইল */
+        #statementPrintArea {
+            width: 100%;
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 20px;
+            background: white;
+        }
+        .statement-header {
+            text-align: center;
+            border-bottom: 2px solid #059669;
+            padding-bottom: 15px;
+            margin-bottom: 15px;
+        }
+        .statement-header img {
+            width: 60px;
+            height: 60px;
+            border-radius: 8px;
+        }
+        .statement-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-top: 10px;
+        }
+        .statement-table th, .statement-table td {
+            border: 1px solid #d1d5db;
+            padding: 6px 8px;
+            text-align: center;
+        }
+        .statement-table th {
+            background: #f3f4f6;
+            font-weight: 600;
+        }
+        .statement-table td {
+            white-space: nowrap;
+        }
+        .statement-table .bal {
+            font-weight: bold;
+            color: #059669;
+        }
+        .statement-member-info {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 30px;
+            margin-bottom: 15px;
+            font-size: 14px;
+            justify-content: center;
+        }
+        .statement-member-info span {
+            background: #f9fafb;
+            padding: 4px 12px;
+            border-radius: 6px;
+        }
+        @media print {
+            #statementPrintArea {
+                padding: 0;
+            }
+            .no-print {
+                display: none !important;
+            }
+            .statement-table {
+                font-size: 12px;
+            }
+        }
     </style>
 </head>
     
@@ -308,6 +374,42 @@
         <button onclick="openLoanApplicationModal()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition"><i class="fas fa-hand-holding-usd mr-1"></i>লোন আবেদন</button>
     </div>
     
+    <!-- লেনদেন স্টেটমেন্ট সেকশন (নতুন) -->
+    <div class="bg-white rounded-xl shadow-md p-4 mt-6">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold text-emerald-700"><i class="fas fa-file-invoice mr-2"></i>লেনদেন স্টেটমেন্ট</h3>
+            <div class="flex gap-2 no-print">
+                <button onclick="printStatement()" class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 transition text-sm"><i class="fas fa-print mr-1"></i>প্রিন্ট</button>
+                <button onclick="downloadStatementPDF()" class="bg-emerald-600 text-white px-3 py-1 rounded hover:bg-emerald-700 transition text-sm"><i class="fas fa-file-pdf mr-1"></i>পিডিএফ</button>
+                <button onclick="shareStatement()" class="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 transition text-sm"><i class="fas fa-share-alt mr-1"></i>শেয়ার</button>
+            </div>
+        </div>
+        <div class="flex flex-wrap items-end gap-3 mb-4 no-print">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">থেকে</label>
+                <input type="date" id="fromDate" class="border rounded-lg p-2 text-sm">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">পর্যন্ত</label>
+                <input type="date" id="toDate" class="border rounded-lg p-2 text-sm">
+            </div>
+            <div>
+                <button onclick="generateStatement()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition text-sm font-semibold">
+                    <i class="fas fa-sync-alt mr-1"></i> জেনারেট
+                </button>
+            </div>
+            <div>
+                <button onclick="resetStatementDates()" class="text-gray-500 hover:text-gray-700 text-sm">ডিফল্ট (৩০ দিন)</button>
+            </div>
+        </div>
+        <div id="statementContainer" class="overflow-x-auto">
+            <div id="statementPrintArea">
+                <!-- স্টেটমেন্ট এখানে রেন্ডার হবে -->
+                <div class="text-center text-gray-400 py-6">স্টেটমেন্ট জেনারেট করতে উপরের বাটনে ক্লিক করুন</div>
+            </div>
+        </div>
+    </div>
+
     <!-- নোটিশ সেকশন -->
     <div class="bg-white rounded-xl shadow-md p-4 mb-6">
         <h3 class="font-bold text-emerald-700 mb-2"><i class="fas fa-bullhorn mr-2"></i>নোটিশ বোর্ড</h3>
@@ -956,6 +1058,10 @@ async function updateUI() {
     await loadNotices();
     await loadComplaintReplies();
     setupTimeIntervals();
+
+    // ✅ পেজ লোডে স্বয়ংক্রিয়ভাবে স্টেটমেন্ট জেনারেট (গত ৩০ দিন)
+    setDefaultDates();
+    generateStatement();
 }
 
 // ============================================================
@@ -2515,6 +2621,293 @@ function closePasswordModal() { document.getElementById('passwordChangeModal').c
 function showMonogramModal() { document.getElementById('monogramModal').classList.remove('hidden'); document.getElementById('monogramModal').classList.add('flex'); }
 function closeMonogramModal() { document.getElementById('monogramModal').classList.add('hidden'); document.getElementById('monogramModal').classList.remove('flex'); }
 function processChangePassword() { showToast('পাসওয়ার্ড পরিবর্তন করা হয়েছে!', 'success'); closePasswordModal(); }
+
+// ============================================================
+// ====== লেনদেন স্টেটমেন্ট ফাংশন (NEW) ======
+// ============================================================
+
+// ডিফল্ট তারিখ সেট (গত ৩০ দিন)
+function setDefaultDates() {
+    const today = getCurrentBangladeshTime();
+    const from = new Date(today);
+    from.setDate(from.getDate() - 30);
+    document.getElementById('fromDate').value = from.toISOString().split('T')[0];
+    document.getElementById('toDate').value = today.toISOString().split('T')[0];
+}
+
+function resetStatementDates() {
+    setDefaultDates();
+    generateStatement();
+}
+
+// ফরম্যাট তারিখ ও সময়
+function formatDateTime(dateString) {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return '-';
+    const day = date.getDate();
+    const month = date.toLocaleString('en-US', { month: 'short' }); // Jan, Feb...
+    const year = date.getFullYear();
+    let hours = date.getHours();
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12;
+    return `${day} ${month} ${year} ${hours}:${minutes} ${ampm}`;
+}
+
+// স্টেটমেন্ট জেনারেট
+async function generateStatement() {
+    if (!currentUser) return;
+    const fromDate = document.getElementById('fromDate').value;
+    const toDate = document.getElementById('toDate').value;
+    if (!fromDate || !toDate) {
+        showToast('দয়া করে তারিখ নির্বাচন করুন!', 'error');
+        return;
+    }
+    if (fromDate > toDate) {
+        showToast('"থেকে" তারিখ "পর্যন্ত" তারিখের চেয়ে বড় হতে পারে না!', 'error');
+        return;
+    }
+
+    showToast('স্টেটমেন্ট জেনারেট হচ্ছে...', 'info');
+
+    const client = await initSupabase();
+    if (!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
+
+    try {
+        // ১. অনুমোদিত পেমেন্ট (সঞ্চয় জমা) লোড
+        const { data: payments, error: payErr } = await client
+            .from('payments')
+            .select('*')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved')
+            .order('submitted_at', { ascending: true });
+
+        // ২. অনুমোদিত উত্তোলন লোড
+        const { data: withdrawals, error: withErr } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved')
+            .order('requested_at', { ascending: true });
+
+        if (payErr || withErr) {
+            console.error('পেমেন্ট/উত্তোলন লোড এরর:', payErr, withErr);
+            showToast('তথ্য লোড করতে সমস্যা!', 'error');
+            return;
+        }
+
+        // ৩. ট্রানজেকশন লিস্ট তৈরি করুন
+        let transactions = [];
+
+        // পেমেন্ট -> ক্রেডিট
+        if (payments) {
+            payments.forEach(p => {
+                const date = p.submitted_at || p.created_at;
+                transactions.push({
+                    date: date,
+                    type: 'savings_deposit',
+                    description: `${p.payment_method} - ${p.month} ${p.year}`,
+                    amount: p.amount,
+                    credit: p.amount,
+                    debit: 0,
+                    fund: 'সঞ্চয়',
+                    distributor: 'সদস্য নিজে',
+                    raw: p
+                });
+            });
+        }
+
+        // উত্তোলন -> ডেবিট
+        if (withdrawals) {
+            withdrawals.forEach(w => {
+                const date = w.requested_at || w.created_at;
+                let fund = 'অন্যান্য';
+                if (w.type && w.type.includes('সঞ্চয়')) fund = 'সঞ্চয়';
+                else if (w.type && w.type.includes('লভ্যাংশ')) fund = 'লভ্যাংশ';
+                else if (w.type && w.type.includes('বোনাস')) fund = 'বোনাস';
+                else if (w.type && w.type.includes('মূলধন')) fund = 'মূলধন';
+                transactions.push({
+                    date: date,
+                    type: 'withdrawal',
+                    description: w.type + ' - ' + (w.payment_method || 'N/A'),
+                    amount: w.amount,
+                    credit: 0,
+                    debit: w.amount,
+                    fund: fund,
+                    distributor: 'সদস্য নিজে',
+                    raw: w
+                });
+            });
+        }
+
+        // ৪. তারিখ অনুযায়ী সাজান
+        transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+        // ৫. শুরু ব্যালেন্স (fromDate এর আগের সব ট্রানজেকশনের যোগফল)
+        const startDateObj = new Date(fromDate);
+        startDateObj.setHours(0,0,0,0);
+        let openingBalance = 0;
+        transactions.forEach(t => {
+            const tDate = new Date(t.date);
+            if (tDate < startDateObj) {
+                openingBalance += (t.credit || 0) - (t.debit || 0);
+            }
+        });
+
+        // ৬. ফিল্টার করুন date range অনুযায়ী
+        const endDateObj = new Date(toDate);
+        endDateObj.setHours(23,59,59,999);
+        const filtered = transactions.filter(t => {
+            const tDate = new Date(t.date);
+            return tDate >= startDateObj && tDate <= endDateObj;
+        });
+
+        // ৭. রানিং ব্যালেন্স দিয়ে টেবিল রেন্ডার
+        let runningBalance = openingBalance;
+        let rows = '';
+        filtered.forEach(t => {
+            runningBalance += (t.credit || 0) - (t.debit || 0);
+            const dateStr = formatDateTime(t.date);
+            rows += `<tr>
+                <td>${dateStr}</td>
+                <td>${t.credit > 0 ? t.credit.toLocaleString() + ' টাকা' : '-'}</td>
+                <td>${(t.type === 'dividend') ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
+                <td>${(t.type === 'bonus') ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
+                <td>${t.fund} / ${t.distributor}</td>
+                <td>${t.debit > 0 ? t.debit.toLocaleString() + ' টাকা' : '-'}</td>
+                <td class="bal">${runningBalance.toLocaleString()} টাকা</td>
+            </tr>`;
+        });
+
+        if (filtered.length === 0) {
+            rows = `<tr><td colspan="7" class="text-center text-gray-400 py-4">এই সময়সীমায় কোনো লেনদেন নেই</td></tr>`;
+        }
+
+        // ৮. হেডার ও মেম্বার ইনফো
+        const memberInfo = `
+            <div class="statement-member-info">
+                <span><i class="fas fa-user mr-1"></i> ${currentUser.name}</span>
+                <span><i class="fas fa-id-card mr-1"></i> ${currentUser.id}</span>
+                <span><i class="fas fa-mobile-alt mr-1"></i> ${currentUser.mobile}</span>
+                <span><i class="fas fa-calendar-alt mr-1"></i> সদস্যপদ: ${currentUser.joinDate ? new Date(currentUser.joinDate).toLocaleDateString('bn-BD') : '-'}</span>
+            </div>
+        `;
+
+        // ৯. সম্পূর্ণ HTML তৈরি
+        const statementHTML = `
+            <div class="statement-header">
+                <img src="images/logo.png" alt="TUKNBD Logo" onerror="this.src='https://placehold.co/60x60/059669/white?text=T'">
+                <h3 style="margin: 5px 0 0;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ (TUKNBD)</h3>
+                <p style="font-size: 14px; color: #555;">লেনদেন স্টেটমেন্ট</p>
+                <p style="font-size: 13px; color: #777;">তারিখ: ${formatDateTime(fromDate)} - ${formatDateTime(toDate)}</p>
+            </div>
+            ${memberInfo}
+            <table class="statement-table">
+                <thead>
+                    <tr>
+                        <th>তারিখ ও সময়</th>
+                        <th>সঞ্চয় জমা</th>
+                        <th>লভ্যাংশ</th>
+                        <th>রেফারেল বোনাস</th>
+                        <th>খাত / বিতরণকারী</th>
+                        <th>উত্তোলন</th>
+                        <th>বর্তমান ব্যালেন্স</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows}
+                </tbody>
+            </table>
+            <div style="margin-top: 10px; font-size: 12px; color: #777; text-align: right;">
+                জেনারেট করা হয়েছে: ${formatDateTime(getCurrentBangladeshTime().toISOString())}
+            </div>
+        `;
+
+        document.getElementById('statementPrintArea').innerHTML = statementHTML;
+        showToast('✅ স্টেটমেন্ট জেনারেট সম্পূর্ণ!', 'success');
+
+    } catch (e) {
+        console.error('❌ স্টেটমেন্ট জেনারেট এরর:', e);
+        showToast('স্টেটমেন্ট জেনারেট করতে ব্যর্থ!', 'error');
+    }
+}
+
+// প্রিন্ট স্টেটমেন্ট
+function printStatement() {
+    const printArea = document.getElementById('statementPrintArea');
+    if (!printArea || printArea.innerHTML.trim() === '' || printArea.innerHTML.includes('স্টেটমেন্ট জেনারেট করতে')) {
+        showToast('প্রথমে স্টেটমেন্ট জেনারেট করুন!', 'error');
+        return;
+    }
+    // আমরা একটি টেম্পোরারি প্রিন্ট উইন্ডো খুলতে পারি
+    const win = window.open('', '_blank');
+    const styles = document.querySelector('style').innerHTML;
+    win.document.write(`
+        <html><head><title>লেনদেন স্টেটমেন্ট</title>
+        <link rel="stylesheet" href="https://cdn.tailwindcss.com">
+        <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+        <style>${styles}</style>
+        </head>
+        <body style="padding: 20px; font-family: 'Noto Sans Bengali', sans-serif;">
+            ${printArea.innerHTML}
+        </body></html>
+    `);
+    win.document.close();
+    setTimeout(() => { win.print(); }, 500);
+}
+
+// পিডিএফ ডাউনলোড স্টেটমেন্ট
+function downloadStatementPDF() {
+    const printArea = document.getElementById('statementPrintArea');
+    if (!printArea || printArea.innerHTML.trim() === '' || printArea.innerHTML.includes('স্টেটমেন্ট জেনারেট করতে')) {
+        showToast('প্রথমে স্টেটমেন্ট জেনারেট করুন!', 'error');
+        return;
+    }
+    const content = printArea.innerHTML;
+    const style = `
+        <style>
+            body { font-family: 'Noto Sans Bengali', sans-serif; padding: 20px; background: white; }
+            .statement-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            .statement-table th, .statement-table td { border: 1px solid #d1d5db; padding: 6px; text-align: center; }
+            .statement-table th { background: #f3f4f6; }
+            .statement-header { text-align: center; border-bottom: 2px solid #059669; padding-bottom: 15px; margin-bottom: 15px; }
+            .statement-member-info { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 15px; }
+        </style>
+    `;
+    const element = document.createElement('div');
+    element.innerHTML = style + content;
+    element.style.background = 'white';
+    element.style.padding = '20px';
+
+    html2pdf().set({
+        margin: 0.5,
+        filename: `TUKNBD_Statement_${currentUser.id}_${Date.now()}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, logging: false },
+        jsPDF: { unit: 'in', format: 'a4', orientation: 'landscape' }
+    }).from(element).save();
+}
+
+// শেয়ার স্টেটমেন্ট (WhatsApp বা অন্যান্য)
+function shareStatement() {
+    const printArea = document.getElementById('statementPrintArea');
+    if (!printArea || printArea.innerHTML.trim() === '' || printArea.innerHTML.includes('স্টেটমেন্ট জেনারেট করতে')) {
+        showToast('প্রথমে স্টেটমেন্ট জেনারেট করুন!', 'error');
+        return;
+    }
+    // সাধারণ টেক্সট শেয়ার
+    const text = `TUKNBD লেনদেন স্টেটমেন্ট (${currentUser.name} - ${currentUser.id})\nতারিখ পরিসীমা: ${document.getElementById('fromDate').value} থেকে ${document.getElementById('toDate').value}\n\nবিস্তারিত স্টেটমেন্ট পিডিএফ ডাউনলোড করুন অথবা প্রিন্ট করুন।`;
+    if (navigator.share) {
+        navigator.share({
+            title: 'TUKNBD লেনদেন স্টেটমেন্ট',
+            text: text,
+            // আমরা পিডিএফ শেয়ার করতে পারি না তাই টেক্সটই শেয়ার করছি
+        }).catch(() => {});
+    } else {
+        // ফallback: WhatsApp
+        window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+    }
+}
 
 // ============================================================
 // DOM Ready
