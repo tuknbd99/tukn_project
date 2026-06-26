@@ -2623,7 +2623,7 @@ function closeMonogramModal() { document.getElementById('monogramModal').classLi
 function processChangePassword() { showToast('পাসওয়ার্ড পরিবর্তন করা হয়েছে!', 'success'); closePasswordModal(); }
 
 // ============================================================
-// ====== লেনদেন স্টেটমেন্ট ফাংশন (NEW) ======
+// ====== লেনদেন স্টেটমেন্ট ফাংশন (আপডেটেড) ======
 // ============================================================
 
 // ডিফল্ট তারিখ সেট (গত ৩০ দিন)
@@ -2654,7 +2654,7 @@ function formatDateTime(dateString) {
     return `${day} ${month} ${year} ${hours}:${minutes} ${ampm}`;
 }
 
-// স্টেটমেন্ট জেনারেট
+// স্টেটমেন্ট জেনারেট (আপডেটেড)
 async function generateStatement() {
     if (!currentUser) return;
     const fromDate = document.getElementById('fromDate').value;
@@ -2674,7 +2674,7 @@ async function generateStatement() {
     if (!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
 
     try {
-        // ১. অনুমোদিত পেমেন্ট (সঞ্চয় জমা) লোড - সাথে approved_by আনছি
+        // ১. অনুমোদিত পেমেন্ট (সঞ্চয় জমা)
         const { data: payments, error: payErr } = await client
             .from('payments')
             .select('*')
@@ -2682,7 +2682,7 @@ async function generateStatement() {
             .eq('status', 'approved')
             .order('submitted_at', { ascending: true });
 
-        // ২. অনুমোদিত উত্তোলন লোড - সাথে approved_by আনছি
+        // ২. অনুমোদিত উত্তোলন
         const { data: withdrawals, error: withErr } = await client
             .from('withdrawals')
             .select('*')
@@ -2690,20 +2690,26 @@ async function generateStatement() {
             .eq('status', 'approved')
             .order('requested_at', { ascending: true });
 
+        // ৩. মেম্বারের বর্তমান ব্যালেন্স (বোনাস ও লভ্যাংশসহ)
+        const { data: memberData } = await client
+            .from('members')
+            .select('referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
+            .eq('member_id', currentUser.id)
+            .single();
+
         if (payErr || withErr) {
             console.error('পেমেন্ট/উত্তোলন লোড এরর:', payErr, withErr);
             showToast('তথ্য লোড করতে সমস্যা!', 'error');
             return;
         }
 
-        // ৩. ট্রানজেকশন লিস্ট তৈরি করুন
+        // ৪. ট্রানজেকশন লিস্ট তৈরি করুন
         let transactions = [];
 
-        // পেমেন্ট -> ক্রেডিট
+        // পেমেন্ট -> ক্রেডিট (সঞ্চয় জমা)
         if (payments) {
             payments.forEach(p => {
                 const date = p.submitted_at || p.created_at;
-                // approved_by ফিল্ড থাকলে নিবেন, না থাকলে 'অ্যাডমিন' বা '-'
                 const approver = p.approved_by || 'অ্যাডমিন';
                 transactions.push({
                     date: date,
@@ -2713,13 +2719,13 @@ async function generateStatement() {
                     credit: p.amount,
                     debit: 0,
                     fund: 'সঞ্চয়',
-                    distributor: approver, // অনুমোদনকারীর নাম
+                    distributor: approver, 
                     raw: p
                 });
             });
         }
 
-        // উত্তোলন -> ডেবিট
+        // উত্তোলন -> ডেবিট (সব ধরনের উত্তোলন)
         if (withdrawals) {
             withdrawals.forEach(w => {
                 const date = w.requested_at || w.created_at;
@@ -2737,16 +2743,85 @@ async function generateStatement() {
                     credit: 0,
                     debit: w.amount,
                     fund: fund,
-                    distributor: approver, // অনুমোদনকারীর নাম
+                    distributor: approver, 
                     raw: w
                 });
             });
         }
 
-        // ৪. তারিখ অনুযায়ী সাজান
+        // ৫. বোনাস ও লভ্যাংশের লেনদেন তৈরি (members টেবিল থেকে)
+        // ধরে নিচ্ছি, এগুলো এডমিন দ্বারা ক্রেডিট করা হয়েছে। তারিখ হিসেবে current date ধরা হলো।
+        if (memberData) {
+            const bonus = memberData.referral_bonus || 0;
+            const savingsProfit = memberData.profit_balance_savings || 0;
+            const investmentProfit = memberData.profit_balance_investment || 0;
+            const referralProfit = memberData.profit_balance_referral || 0;
+
+            // রেফারেল বোনাস (যদি > 0 হয়)
+            if (bonus > 0) {
+                transactions.push({
+                    date: new Date().toISOString(), // বা আপনার কাছে bonus_credited_at থাকলে সেটা ব্যবহার করুন
+                    type: 'bonus_credit',
+                    description: 'রেফারেল বোনাস জমা (সিস্টেম ক্রেডিট)',
+                    amount: bonus,
+                    credit: bonus,
+                    debit: 0,
+                    fund: 'রেফারেল বোনাস',
+                    distributor: 'সিস্টেম',
+                    raw: null
+                });
+            }
+
+            // সঞ্চয় লভ্যাংশ
+            if (savingsProfit > 0) {
+                transactions.push({
+                    date: new Date().toISOString(),
+                    type: 'dividend_credit',
+                    description: 'সঞ্চয় লভ্যাংশ জমা (সিস্টেম ক্রেডিট)',
+                    amount: savingsProfit,
+                    credit: savingsProfit,
+                    debit: 0,
+                    fund: 'সঞ্চয় লভ্যাংশ',
+                    distributor: 'সিস্টেম',
+                    raw: null
+                });
+            }
+
+            // বিনিয়োগ লভ্যাংশ
+            if (investmentProfit > 0) {
+                transactions.push({
+                    date: new Date().toISOString(),
+                    type: 'dividend_credit',
+                    description: 'বিনিয়োগ লভ্যাংশ জমা (সিস্টেম ক্রেডিট)',
+                    amount: investmentProfit,
+                    credit: investmentProfit,
+                    debit: 0,
+                    fund: 'বিনিয়োগ লভ্যাংশ',
+                    distributor: 'সিস্টেম',
+                    raw: null
+                });
+            }
+
+            // রেফারেল লভ্যাংশ
+            if (referralProfit > 0) {
+                transactions.push({
+                    date: new Date().toISOString(),
+                    type: 'dividend_credit',
+                    description: 'রেফারেল লভ্যাংশ জমা (সিস্টেম ক্রেডিট)',
+                    amount: referralProfit,
+                    credit: referralProfit,
+                    debit: 0,
+                    fund: 'রেফারেল লভ্যাংশ',
+                    distributor: 'সিস্টেম',
+                    raw: null
+                });
+            }
+        }
+
+        // ৬. তারিখ অনুযায়ী সাজান
         transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-        // ৫. শুরু ব্যালেন্স (fromDate এর আগের সব ট্রানজেকশনের যোগফল)
+        // ৭. শুরু ব্যালেন্স (fromDate এর আগের সব ট্রানজেকশনের যোগফল)
         const startDateObj = new Date(fromDate);
         startDateObj.setHours(0,0,0,0);
         let openingBalance = 0;
@@ -2757,7 +2832,7 @@ async function generateStatement() {
             }
         });
 
-        // ৬. ফিল্টার করুন date range অনুযায়ী
+        // ৮. ফিল্টার করুন date range অনুযায়ী
         const endDateObj = new Date(toDate);
         endDateObj.setHours(23,59,59,999);
         const filtered = transactions.filter(t => {
@@ -2765,7 +2840,7 @@ async function generateStatement() {
             return tDate >= startDateObj && tDate <= endDateObj;
         });
 
-        // ৭. রানিং ব্যালেন্স দিয়ে টেবিল রেন্ডার
+        // ৯. রানিং ব্যালেন্স দিয়ে টেবিল রেন্ডার
         let runningBalance = openingBalance;
         let rows = '';
         filtered.forEach(t => {
@@ -2774,19 +2849,20 @@ async function generateStatement() {
             rows += `<tr>
                 <td>${dateStr}</td>
                 <td>${t.credit > 0 ? t.credit.toLocaleString() + ' টাকা' : '-'}</td>
-                <td>${(t.type === 'dividend') ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
-                <td>${(t.type === 'bonus') ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
-                <td>${t.fund} / ${t.distributor || '-'}</td>
+                <td>${(t.type === 'dividend_credit') ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
+                <td>${(t.type === 'bonus_credit') ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
+                <td>${t.fund || '-'}</td>
+                <td>${t.distributor || '-'}</td>
                 <td>${t.debit > 0 ? t.debit.toLocaleString() + ' টাকা' : '-'}</td>
                 <td class="bal">${runningBalance.toLocaleString()} টাকা</td>
             </tr>`;
         });
 
         if (filtered.length === 0) {
-            rows = `<tr><td colspan="7" class="text-center text-gray-400 py-4">এই সময়সীমায় কোনো লেনদেন নেই</td></tr>`;
+            rows = `<tr><td colspan="8" class="text-center text-gray-400 py-4">এই সময়সীমায় কোনো লেনদেন নেই</td></tr>`;
         }
 
-        // ৮. হেডার ও মেম্বার ইনফো
+        // ১০. হেডার ও মেম্বার ইনফো
         const memberInfo = `
             <div class="statement-member-info">
                 <span><i class="fas fa-user mr-1"></i> ${currentUser.name}</span>
@@ -2796,7 +2872,7 @@ async function generateStatement() {
             </div>
         `;
 
-        // ৯. সম্পূর্ণ HTML তৈরি
+        // ১১. সম্পূর্ণ HTML তৈরি
         const statementHTML = `
             <div class="statement-header">
                 <img src="images/logo.png" alt="TUKNBD Logo" onerror="this.src='https://placehold.co/60x60/059669/white?text=T'">
@@ -2812,7 +2888,8 @@ async function generateStatement() {
                         <th>সঞ্চয় জমা</th>
                         <th>লভ্যাংশ</th>
                         <th>রেফারেল বোনাস</th>
-                        <th>খাত / অনুমোদনকারী</th>
+                        <th>খাত</th>
+                        <th>অনুমোদনকারী</th>
                         <th>উত্তোলন</th>
                         <th>বর্তমান ব্যালেন্স</th>
                     </tr>
@@ -2842,7 +2919,6 @@ function printStatement() {
         showToast('প্রথমে স্টেটমেন্ট জেনারেট করুন!', 'error');
         return;
     }
-    // আমরা একটি টেম্পোরারি প্রিন্ট উইন্ডো খুলতে পারি
     const win = window.open('', '_blank');
     const styles = document.querySelector('style').innerHTML;
     win.document.write(`
@@ -2891,14 +2967,13 @@ function downloadStatementPDF() {
     }).from(element).save();
 }
 
-// শেয়ার স্টেটমেন্ট (WhatsApp বা অন্যান্য)
+// শেয়ার স্টেটমেন্ট (WhatsApp)
 function shareStatement() {
     const printArea = document.getElementById('statementPrintArea');
     if (!printArea || printArea.innerHTML.trim() === '' || printArea.innerHTML.includes('স্টেটমেন্ট জেনারেট করতে')) {
         showToast('প্রথমে স্টেটমেন্ট জেনারেট করুন!', 'error');
         return;
     }
-    // সাধারণ টেক্সট শেয়ার
     const text = `TUKNBD লেনদেন স্টেটমেন্ট (${currentUser.name} - ${currentUser.id})\nতারিখ পরিসীমা: ${document.getElementById('fromDate').value} থেকে ${document.getElementById('toDate').value}\n\nবিস্তারিত স্টেটমেন্ট পিডিএফ ডাউনলোড করুন অথবা প্রিন্ট করুন।`;
     if (navigator.share) {
         navigator.share({
@@ -2906,7 +2981,6 @@ function shareStatement() {
             text: text,
         }).catch(() => {});
     } else {
-        // ফallback: WhatsApp
         window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
     }
 }
