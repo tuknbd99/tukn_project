@@ -2674,7 +2674,7 @@ async function generateStatement() {
     if (!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
 
     try {
-        // ১. অনুমোদিত পেমেন্ট (সঞ্চয় জমা) লোড
+        // ১. অনুমোদিত পেমেন্ট (সঞ্চয় জমা) লোড - সাথে approved_by আনছি
         const { data: payments, error: payErr } = await client
             .from('payments')
             .select('*')
@@ -2682,7 +2682,7 @@ async function generateStatement() {
             .eq('status', 'approved')
             .order('submitted_at', { ascending: true });
 
-        // ২. অনুমোদিত উত্তোলন লোড
+        // ২. অনুমোদিত উত্তোলন লোড - সাথে approved_by আনছি
         const { data: withdrawals, error: withErr } = await client
             .from('withdrawals')
             .select('*')
@@ -2703,6 +2703,8 @@ async function generateStatement() {
         if (payments) {
             payments.forEach(p => {
                 const date = p.submitted_at || p.created_at;
+                // approved_by ফিল্ড থাকলে নিবেন, না থাকলে 'অ্যাডমিন' বা '-'
+                const approver = p.approved_by || 'অ্যাডমিন';
                 transactions.push({
                     date: date,
                     type: 'savings_deposit',
@@ -2711,7 +2713,7 @@ async function generateStatement() {
                     credit: p.amount,
                     debit: 0,
                     fund: 'সঞ্চয়',
-                    distributor: 'সদস্য নিজে',
+                    distributor: approver, // অনুমোদনকারীর নাম
                     raw: p
                 });
             });
@@ -2726,6 +2728,7 @@ async function generateStatement() {
                 else if (w.type && w.type.includes('লভ্যাংশ')) fund = 'লভ্যাংশ';
                 else if (w.type && w.type.includes('বোনাস')) fund = 'বোনাস';
                 else if (w.type && w.type.includes('মূলধন')) fund = 'মূলধন';
+                const approver = w.approved_by || 'অ্যাডমিন';
                 transactions.push({
                     date: date,
                     type: 'withdrawal',
@@ -2734,7 +2737,7 @@ async function generateStatement() {
                     credit: 0,
                     debit: w.amount,
                     fund: fund,
-                    distributor: 'সদস্য নিজে',
+                    distributor: approver, // অনুমোদনকারীর নাম
                     raw: w
                 });
             });
@@ -2773,7 +2776,7 @@ async function generateStatement() {
                 <td>${t.credit > 0 ? t.credit.toLocaleString() + ' টাকা' : '-'}</td>
                 <td>${(t.type === 'dividend') ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
                 <td>${(t.type === 'bonus') ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
-                <td>${t.fund} / ${t.distributor}</td>
+                <td>${t.fund} / ${t.distributor || '-'}</td>
                 <td>${t.debit > 0 ? t.debit.toLocaleString() + ' টাকা' : '-'}</td>
                 <td class="bal">${runningBalance.toLocaleString()} টাকা</td>
             </tr>`;
@@ -2809,7 +2812,7 @@ async function generateStatement() {
                         <th>সঞ্চয় জমা</th>
                         <th>লভ্যাংশ</th>
                         <th>রেফারেল বোনাস</th>
-                        <th>খাত / বিতরণকারী</th>
+                        <th>খাত / অনুমোদনকারী</th>
                         <th>উত্তোলন</th>
                         <th>বর্তমান ব্যালেন্স</th>
                     </tr>
@@ -2901,7 +2904,6 @@ function shareStatement() {
         navigator.share({
             title: 'TUKNBD লেনদেন স্টেটমেন্ট',
             text: text,
-            // আমরা পিডিএফ শেয়ার করতে পারি না তাই টেক্সটই শেয়ার করছি
         }).catch(() => {});
     } else {
         // ফallback: WhatsApp
