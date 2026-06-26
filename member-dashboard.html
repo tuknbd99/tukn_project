@@ -374,7 +374,7 @@
         <button onclick="openLoanApplicationModal()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition"><i class="fas fa-hand-holding-usd mr-1"></i>লোন আবেদন</button>
     </div>
     
-    <!-- লেনদেন স্টেটমেন্ট সেকশন (নতুন) -->
+    <!-- লেনদেন স্টেটমেন্ট সেকশন -->
     <div class="bg-white rounded-xl shadow-md p-4 mt-6">
         <div class="flex items-center justify-between mb-3">
             <h3 class="font-bold text-emerald-700"><i class="fas fa-file-invoice mr-2"></i>লেনদেন স্টেটমেন্ট</h3>
@@ -2622,7 +2622,7 @@ function closeMonogramModal() { document.getElementById('monogramModal').classLi
 function processChangePassword() { showToast('পাসওয়ার্ড পরিবর্তন করা হয়েছে!', 'success'); closePasswordModal(); }
 
 // ============================================================
-// ====== লেনদেন স্টেটমেন্ট ফাংশন (আপডেটেড) ======
+// ====== লেনদেন স্টেটমেন্ট ফাংশন (সঠিক সংস্করণ) ======
 // ============================================================
 
 // ডিফল্ট তারিখ সেট (গত ৩০ দিন)
@@ -2653,7 +2653,7 @@ function formatDateTime(dateString) {
     return `${day} ${month} ${year} ${hours}:${minutes} ${ampm}`;
 }
 
-// স্টেটমেন্ট জেনারেট (আপডেটেড)
+// স্টেটমেন্ট জেনারেট (সঠিক সংস্করণ – ডুপ্লিকেট মুক্ত)
 async function generateStatement() {
     if (!currentUser) return;
     const fromDate = document.getElementById('fromDate').value;
@@ -2673,7 +2673,7 @@ async function generateStatement() {
     if (!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
 
     try {
-        // ১. অনুমোদিত পেমেন্ট (সঞ্চয় জমা)
+        // ১. অনুমোদিত পেমেন্ট (সঞ্চয় জমা) – এখানে শুধু সঞ্চয় জমা থাকবে
         const { data: payments, error: payErr } = await client
             .from('payments')
             .select('*')
@@ -2705,118 +2705,26 @@ async function generateStatement() {
         // ৪. ট্রানজেকশন লিস্ট তৈরি করুন
         let transactions = [];
 
-// পেমেন্ট -> ক্রেডিট (সঞ্চয় জমা)
-if (payments) {
-    payments.forEach(p => {
-        const date = p.submitted_at || p.created_at;
-        const approver = p.approved_by || 'অ্যাডমিন';
-        transactions.push({
-            date: date,
-            type: 'savings_deposit',
-            description: `${p.payment_method} - ${p.month} ${p.year}`,
-            amount: p.amount,
-            credit: p.amount,
-            debit: 0,
-            fund: 'সঞ্চয়',
-            distributor: approver, 
-            raw: p
-        });
-    });
-}
+        // পেমেন্ট -> ক্রেডিট (সঞ্চয় জমা) – শুধু সঞ্চয় জমা
+        if (payments) {
+            payments.forEach(p => {
+                const date = p.submitted_at || p.created_at;
+                const approver = p.approved_by || 'অ্যাডমিন';
+                transactions.push({
+                    date: date,
+                    type: 'savings_deposit',
+                    description: `${p.payment_method} - ${p.month} ${p.year}`,
+                    amount: p.amount,
+                    credit: p.amount,
+                    debit: 0,
+                    fund: 'সঞ্চয়',
+                    distributor: approver, 
+                    raw: p
+                });
+            });
+        }
 
-// উত্তোলন -> ডেবিট
-if (withdrawals) {
-    withdrawals.forEach(w => {
-        const date = w.requested_at || w.created_at;
-        let fund = 'অন্যান্য';
-        if (w.type && w.type.includes('সঞ্চয়')) fund = 'সঞ্চয়';
-        else if (w.type && w.type.includes('লভ্যাংশ')) fund = 'লভ্যাংশ';
-        else if (w.type && w.type.includes('বোনাস')) fund = 'বোনাস';
-        else if (w.type && w.type.includes('মূলধন')) fund = 'মূলধন';
-        const approver = w.approved_by || 'অ্যাডমিন';
-        transactions.push({
-            date: date,
-            type: 'withdrawal',
-            description: w.type + ' - ' + (w.payment_method || 'N/A'),
-            amount: w.amount,
-            credit: 0,
-            debit: w.amount,
-            fund: fund,
-            distributor: approver, 
-            raw: w
-        });
-    });
-}
-
-// ✅ বোনাস ও লভ্যাংশের লেনদেন (members টেবিল থেকে)
-if (memberData) {
-    const bonus = memberData.referral_bonus || 0;
-    const savingsProfit = memberData.profit_balance_savings || 0;
-    const investmentProfit = memberData.profit_balance_investment || 0;
-    const referralProfit = memberData.profit_balance_referral || 0;
-
-    // রেফারেল বোনাস
-    if (bonus > 0) {
-        transactions.push({
-            date: new Date().toISOString(),
-            type: 'bonus_credit',
-            description: 'রেফারেল বোনাস জমা',
-            amount: bonus,
-            credit: bonus,
-            debit: 0,
-            fund: 'রেফারেল বোনাস',
-            distributor: 'সিস্টেম',
-            raw: null
-        });
-    }
-
-    // সঞ্চয় লভ্যাংশ
-    if (savingsProfit > 0) {
-        transactions.push({
-            date: new Date().toISOString(),
-            type: 'dividend_credit',
-            description: 'সঞ্চয় লভ্যাংশ জমা',
-            amount: savingsProfit,
-            credit: savingsProfit,
-            debit: 0,
-            fund: 'সঞ্চয় লভ্যাংশ',
-            distributor: 'সিস্টেম',
-            raw: null
-        });
-    }
-
-    // বিনিয়োগ লভ্যাংশ
-    if (investmentProfit > 0) {
-        transactions.push({
-            date: new Date().toISOString(),
-            type: 'dividend_credit',
-            description: 'বিনিয়োগ লভ্যাংশ জমা',
-            amount: investmentProfit,
-            credit: investmentProfit,
-            debit: 0,
-            fund: 'বিনিয়োগ লভ্যাংশ',
-            distributor: 'সিস্টেম',
-            raw: null
-        });
-    }
-
-    // রেফারেল লভ্যাংশ
-    if (referralProfit > 0) {
-        transactions.push({
-            date: new Date().toISOString(),
-            type: 'dividend_credit',
-            description: 'রেফারেল লভ্যাংশ জমা',
-            amount: referralProfit,
-            credit: referralProfit,
-            debit: 0,
-            fund: 'রেফারেল লভ্যাংশ',
-            distributor: 'সিস্টেম',
-            raw: null
-        });
-    }
-}
-
-        // উত্তোলন -> ডেবিট (সব ধরনের উত্তোলন)
+        // উত্তোলন -> ডেবিট
         if (withdrawals) {
             withdrawals.forEach(w => {
                 const date = w.requested_at || w.created_at;
@@ -2840,20 +2748,22 @@ if (memberData) {
             });
         }
 
-        // ৫. বোনাস ও লভ্যাংশের লেনদেন তৈরি (members টেবিল থেকে)
-        // ধরে নিচ্ছি, এগুলো এডমিন দ্বারা ক্রেডিট করা হয়েছে। তারিখ হিসেবে current date ধরা হলো।
+        // ✅ বোনাস ও লভ্যাংশ (members টেবিল থেকে) – ডুপ্লিকেট রোধ করতে
+        // আপনার payments টেবিলে বোনাস ও লভ্যাংশ থাকলে, সেগুলো আগেই savings_deposit হিসেবে যোগ হয়েছে
+        // তাই আমরা members থেকে বোনাস ও লভ্যাংশ যোগ করছি না – ডুপ্লিকেট এড়াতে।
+        // যদি আপনার payments টেবিলে বোনাস ও লভ্যাংশ না থাকে, তবে নিচের অংশটি আনকমেন্ট করুন।
+        /*
         if (memberData) {
             const bonus = memberData.referral_bonus || 0;
             const savingsProfit = memberData.profit_balance_savings || 0;
             const investmentProfit = memberData.profit_balance_investment || 0;
             const referralProfit = memberData.profit_balance_referral || 0;
 
-            // রেফারেল বোনাস (যদি > 0 হয়)
             if (bonus > 0) {
                 transactions.push({
-                    date: new Date().toISOString(), // বা আপনার কাছে bonus_credited_at থাকলে সেটা ব্যবহার করুন
+                    date: new Date().toISOString(),
                     type: 'bonus_credit',
-                    description: 'রেফারেল বোনাস জমা (সিস্টেম ক্রেডিট)',
+                    description: 'রেফারেল বোনাস জমা',
                     amount: bonus,
                     credit: bonus,
                     debit: 0,
@@ -2863,12 +2773,11 @@ if (memberData) {
                 });
             }
 
-            // সঞ্চয় লভ্যাংশ
             if (savingsProfit > 0) {
                 transactions.push({
                     date: new Date().toISOString(),
                     type: 'dividend_credit',
-                    description: 'সঞ্চয় লভ্যাংশ জমা (সিস্টেম ক্রেডিট)',
+                    description: 'সঞ্চয় লভ্যাংশ জমা',
                     amount: savingsProfit,
                     credit: savingsProfit,
                     debit: 0,
@@ -2878,12 +2787,11 @@ if (memberData) {
                 });
             }
 
-            // বিনিয়োগ লভ্যাংশ
             if (investmentProfit > 0) {
                 transactions.push({
                     date: new Date().toISOString(),
                     type: 'dividend_credit',
-                    description: 'বিনিয়োগ লভ্যাংশ জমা (সিস্টেম ক্রেডিট)',
+                    description: 'বিনিয়োগ লভ্যাংশ জমা',
                     amount: investmentProfit,
                     credit: investmentProfit,
                     debit: 0,
@@ -2893,12 +2801,11 @@ if (memberData) {
                 });
             }
 
-            // রেফারেল লভ্যাংশ
             if (referralProfit > 0) {
                 transactions.push({
                     date: new Date().toISOString(),
                     type: 'dividend_credit',
-                    description: 'রেফারেল লভ্যাংশ জমা (সিস্টেম ক্রেডিট)',
+                    description: 'রেফারেল লভ্যাংশ জমা',
                     amount: referralProfit,
                     credit: referralProfit,
                     debit: 0,
@@ -2908,11 +2815,12 @@ if (memberData) {
                 });
             }
         }
+        */
 
-        // ৬. তারিখ অনুযায়ী সাজান
+        // ৫. তারিখ অনুযায়ী সাজান
         transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-        // ৭. শুরু ব্যালেন্স (fromDate এর আগের সব ট্রানজেকশনের যোগফল)
+        // ৬. শুরু ব্যালেন্স (fromDate এর আগের সব ট্রানজেকশনের যোগফল)
         const startDateObj = new Date(fromDate);
         startDateObj.setHours(0,0,0,0);
         let openingBalance = 0;
@@ -2923,7 +2831,7 @@ if (memberData) {
             }
         });
 
-        // ৮. ফিল্টার করুন date range অনুযায়ী
+        // ৭. ফিল্টার করুন date range অনুযায়ী
         const endDateObj = new Date(toDate);
         endDateObj.setHours(23,59,59,999);
         const filtered = transactions.filter(t => {
@@ -2931,7 +2839,7 @@ if (memberData) {
             return tDate >= startDateObj && tDate <= endDateObj;
         });
 
-        // ৯. রানিং ব্যালেন্স দিয়ে টেবিল রেন্ডার
+        // ৮. রানিং ব্যালেন্স দিয়ে টেবিল রেন্ডার (সঠিক কলামে দেখানো)
         let runningBalance = openingBalance;
         let rows = '';
         filtered.forEach(t => {
@@ -2939,9 +2847,9 @@ if (memberData) {
             const dateStr = formatDateTime(t.date);
             rows += `<tr>
                 <td>${dateStr}</td>
-                <td>${t.credit > 0 ? t.credit.toLocaleString() + ' টাকা' : '-'}</td>
-                <td>${(t.type === 'dividend_credit') ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
-                <td>${(t.type === 'bonus_credit') ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
+                <td>${t.type === 'savings_deposit' ? (t.credit > 0 ? t.credit.toLocaleString() + ' টাকা' : '-') : '-'}</td>
+                <td>${t.type === 'dividend_credit' ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
+                <td>${t.type === 'bonus_credit' ? (t.amount > 0 ? t.amount.toLocaleString() + ' টাকা' : '-') : '-'}</td>
                 <td>${t.fund || '-'}</td>
                 <td>${t.distributor || '-'}</td>
                 <td>${t.debit > 0 ? t.debit.toLocaleString() + ' টাকা' : '-'}</td>
@@ -2953,7 +2861,7 @@ if (memberData) {
             rows = `<tr><td colspan="8" class="text-center text-gray-400 py-4">এই সময়সীমায় কোনো লেনদেন নেই</td></tr>`;
         }
 
-        // ১০. হেডার ও মেম্বার ইনফো
+        // ৯. হেডার ও মেম্বার ইনফো
         const memberInfo = `
             <div class="statement-member-info">
                 <span><i class="fas fa-user mr-1"></i> ${currentUser.name}</span>
@@ -2963,7 +2871,7 @@ if (memberData) {
             </div>
         `;
 
-        // ১১. সম্পূর্ণ HTML তৈরি
+        // ১০. সম্পূর্ণ HTML তৈরি
         const statementHTML = `
             <div class="statement-header">
                 <img src="images/logo.png" alt="TUKNBD Logo" onerror="this.src='https://placehold.co/60x60/059669/white?text=T'">
