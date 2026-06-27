@@ -140,6 +140,12 @@
         .profit-total-footer .print-btn { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 16px; border-radius: 8px; cursor: pointer; transition: all 0.3s ease; font-size: 13px; display: flex; align-items: center; gap: 8px; }
         .profit-total-footer .print-btn:hover { background: rgba(255,255,255,0.25); transform: scale(1.02); }
         @media print { .profit-total-footer .print-btn { display: none; } .no-print { display: none !important; } }
+        
+        /* আবেদন কার্ডের জন্য অতিরিক্ত স্টাইল */
+        .application-card { border-left: 4px solid #059669; }
+        .application-card.pending { border-left-color: #f59e0b; }
+        .application-card.approved { border-left-color: #10b981; }
+        .application-card.rejected { border-left-color: #ef4444; }
     </style>
 </head>
 <body class="watermark-container">
@@ -167,7 +173,7 @@
             <button onclick="showTab('directDeposit')" id="tabDirectDeposit" class="nav-item"><i class="fas fa-money-bill-transfer"></i> সরাসরি জমা দিন</button>
             <button onclick="showTab('memberDetails')" id="tabMemberDetails" class="nav-item"><i class="fas fa-id-card"></i> সদস্যের পূর্ণ তথ্য</button>
             <button onclick="showTab('reps')" id="tabReps" class="nav-item"><i class="fas fa-user-tie"></i> জেলা প্রতিনিধি</button>
-            <button onclick="showTab('applications')" id="tabApplications" class="nav-item"><i class="fas fa-file-alt"></i> প্রতিনিধি আবেদন</button>
+            <button onclick="showTab('applications')" id="tabApplications" class="nav-item"><i class="fas fa-file-alt"></i> প্রতিনিধি আবেদন <span id="pendingApplicationBadge" class="notification-badge" style="display:none;">0</span></button>
             <button onclick="showTab('economy')" id="tabEconomy" class="nav-item"><i class="fas fa-chart-line"></i> অর্থনীতি</button>
             <button onclick="showTab('admins')" id="tabAdmins" class="nav-item"><i class="fas fa-user-shield"></i> অ্যাডমিন ব্যবস্থাপনা</button>
             <button onclick="showTab('profitDistribution')" id="tabProfitDistribution" class="nav-item"><i class="fas fa-percent"></i> লভ্যাংশ বন্টন</button>
@@ -281,7 +287,7 @@
             </div>
         </div>
 
-        <!-- ==================== সকল ট্যাব (সম্পূর্ণ) ==================== -->
+        <!-- ==================== সকল ট্যাব ==================== -->
         
         <!-- Members Tab -->
         <div id="membersTab" class="tab-content">
@@ -554,7 +560,10 @@
         <!-- Applications Tab -->
         <div id="applicationsTab" class="tab-content">
             <div class="content-card">
-                <div class="card-header"><h3>প্রতিনিধি আবেদন</h3></div>
+                <div class="card-header flex justify-between flex-wrap gap-2">
+                    <h3 class="font-bold text-emerald-700"><i class="fas fa-file-alt mr-2"></i>প্রতিনিধি আবেদন সমূহ</h3>
+                    <button onclick="loadApplications()" class="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm"><i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ</button>
+                </div>
                 <div class="p-4"><div id="applicationsList"></div></div>
             </div>
         </div>
@@ -725,6 +734,7 @@ let membersData = [];
 let pendingPaymentsData = [];
 let pendingWithdrawalsData = [];
 let allLoansData = [];
+let applicationsData = [];
 
 function initSupabaseClient() {
     if (_supabaseClient) return _supabaseClient;
@@ -812,6 +822,8 @@ function showTab(tabName) {
     if (tabName === 'profitDistribution') loadProfitDistributions();
     if (tabName === 'welfareFund') loadWelfareFund();
     if (tabName === 'settings') loadWelfareSettings();
+    if (tabName === 'applications') loadApplications();
+    if (tabName === 'reps') loadReps();
 }
 
 // ============================================================
@@ -1731,9 +1743,325 @@ function closeAddRepModal() { document.getElementById('addRepModal').classList.r
 document.getElementById('addRepForm')?.addEventListener('submit', function(e) { e.preventDefault(); const reps = JSON.parse(localStorage.getItem('tukn_reps') || '[]'); reps.push({ id: Date.now(), name: document.getElementById('repName').value, district: document.getElementById('repDistrict').value, mobile: document.getElementById('repMobile').value }); localStorage.setItem('tukn_reps', JSON.stringify(reps)); loadReps(); closeAddRepModal(); showToast('নতুন প্রতিনিধি যোগ করা হয়েছে'); });
 
 // ============================================================
+// Application Functions (প্রতিনিধি আবেদন)
+// ============================================================
+async function loadApplications() {
+    const container = document.getElementById('applicationsList');
+    if (!container) return;
+    
+    container.innerHTML = `
+        <div class="text-center text-gray-500 py-8">
+            <div class="loading-spinner"></div>
+            <p class="mt-2">আবেদন লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    try {
+        const client = initSupabaseClient();
+        if (!client) {
+            container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ Supabase সংযোগ স্থাপন করা যায়নি!</div>';
+            return;
+        }
+        
+        const { data, error } = await client
+            .from('representative_applications')
+            .select('*')
+            .order('applied_at', { ascending: false });
+            
+        if (error) {
+            console.error('Supabase error:', error);
+            container.innerHTML = `<div class="text-red-500 p-4 text-center">❌ ডেটা লোড করতে সমস্যা: ${error.message}</div>`;
+            return;
+        }
+        
+        applicationsData = data || [];
+        
+        if (applicationsData.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                    <p>কোনো আবেদন পাওয়া যায়নি</p>
+                </div>
+            `;
+            return;
+        }
+        
+        container.innerHTML = applicationsData.map(app => {
+            const statusClass = app.status === 'pending' ? 'status-pending' : 
+                               app.status === 'approved' ? 'status-approved' : 'status-rejected';
+            const statusText = app.status === 'pending' ? '⏳ বিচারাধীন' : 
+                               app.status === 'approved' ? '✅ অনুমোদিত' : '❌ বাতিল';
+            const cardClass = app.status === 'pending' ? 'pending' : 
+                             app.status === 'approved' ? 'approved' : 'rejected';
+            
+            return `
+                <div class="application-card ${cardClass} border rounded-lg p-4 mb-3 bg-white shadow-sm hover:shadow-md transition">
+                    <div class="flex flex-wrap justify-between items-start gap-2">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="font-bold text-gray-800 text-lg">${app.full_name || '-'}</span>
+                                <span class="status-badge ${statusClass}">${statusText}</span>
+                            </div>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2 text-sm">
+                                <div>
+                                    <span class="text-gray-500">🆔 আইডি:</span>
+                                    <span class="font-mono text-xs bg-gray-100 px-2 py-1 rounded">${app.member_id || '-'}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500">📱 মোবাইল:</span>
+                                    <span>${app.mobile || '-'}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500">📍 জেলা:</span>
+                                    <span class="font-medium">${app.district || '-'}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500">📅 তারিখ:</span>
+                                    <span>${app.applied_date_bangla || (app.applied_at ? new Date(app.applied_at).toLocaleDateString('bn-BD') : '-')}</span>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2 text-sm">
+                                <div>
+                                    <span class="text-gray-500">🏛️ বিভাগ:</span>
+                                    <span>${app.division || '-'}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500">🏫 মাদ্রাসা:</span>
+                                    <span>${app.madrasa_name || 'উল্লেখ নেই'}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500">📚 অভিজ্ঞতা:</span>
+                                    <span>${app.experience || 0} বছর</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500">📧 ইমেইল:</span>
+                                    <span>${app.email || 'উল্লেখ নেই'}</span>
+                                </div>
+                            </div>
+                            ${app.reason ? `
+                                <div class="mt-2 text-sm bg-gray-50 p-2 rounded">
+                                    <span class="text-gray-500">📝 আবেদনের কারণ:</span>
+                                    <p class="mt-1 text-gray-700">${app.reason}</p>
+                                </div>
+                            ` : ''}
+                            ${app.rejection_reason ? `
+                                <div class="mt-2 text-sm bg-red-50 p-2 rounded border border-red-200">
+                                    <span class="text-red-600">❌ বাতিলের কারণ:</span>
+                                    <p class="mt-1 text-red-700">${app.rejection_reason}</p>
+                                </div>
+                            ` : ''}
+                        </div>
+                        <div class="flex gap-2 flex-wrap">
+                            ${app.status === 'pending' ? `
+                                <button onclick="approveApplication('${app.id}')" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded text-sm transition">
+                                    <i class="fas fa-check mr-1"></i> অনুমোদন
+                                </button>
+                                <button onclick="rejectApplication('${app.id}')" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded text-sm transition">
+                                    <i class="fas fa-times mr-1"></i> বাতিল
+                                </button>
+                            ` : `
+                                <button onclick="viewApplicationDetails('${app.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1.5 rounded text-sm transition">
+                                    <i class="fas fa-eye mr-1"></i> বিস্তারিত
+                                </button>
+                            `}
+                            <button onclick="deleteApplication('${app.id}')" class="bg-gray-500 hover:bg-gray-600 text-white px-3 py-1.5 rounded text-sm transition">
+                                <i class="fas fa-trash mr-1"></i> ডিলিট
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        const pendingCount = applicationsData.filter(a => a.status === 'pending').length;
+        const badge = document.getElementById('pendingApplicationBadge');
+        if (badge) {
+            badge.innerText = pendingCount > 0 ? pendingCount : '';
+            badge.style.display = pendingCount > 0 ? 'inline-block' : 'none';
+        }
+        
+        console.log(`✅ ${applicationsData.length} টি আবেদন লোড হয়েছে (পেন্ডিং: ${pendingCount})`);
+        
+    } catch(error) {
+        console.error('Load applications error:', error);
+        container.innerHTML = `<div class="text-red-500 p-4 text-center">❌ আবেদন লোড করতে সমস্যা: ${error.message}</div>`;
+    }
+}
+
+async function approveApplication(id) {
+    if (!confirm('আবেদনটি অনুমোদন দেবেন?')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: application, error: fetchError } = await client
+            .from('representative_applications')
+            .select('*')
+            .eq('id', id)
+            .single();
+            
+        if (fetchError) throw fetchError;
+        
+        await client
+            .from('representative_applications')
+            .update({ 
+                status: 'approved',
+                approved_by: currentAdmin?.username || 'system',
+                approved_at: new Date().toISOString()
+            })
+            .eq('id', id);
+        
+        if (application && application.member_id) {
+            await client
+                .from('members')
+                .update({ 
+                    role: 'district_representative',
+                    representative_district: application.district,
+                    representative_division: application.division,
+                    is_representative: true,
+                    representative_approved_at: new Date().toISOString()
+                })
+                .eq('member_id', application.member_id);
+            
+            const { error: repError } = await client
+                .from('representatives')
+                .insert([{
+                    member_id: application.member_id,
+                    full_name: application.full_name,
+                    mobile: application.mobile,
+                    email: application.email || '',
+                    division: application.division,
+                    district: application.district,
+                    madrasa_name: application.madrasa_name || '',
+                    experience: application.experience || 0,
+                    status: 'active',
+                    created_at: new Date().toISOString(),
+                    approved_by: currentAdmin?.username || 'system'
+                }]);
+                
+            if (repError) {
+                console.warn('Rep insert error:', repError);
+                showToast('প্রতিনিধি তালিকায় যোগ করতে সমস্যা!', 'error');
+            } else {
+                showToast('✅ প্রতিনিধি তালিকায় যোগ করা হয়েছে!', 'success');
+            }
+        }
+        
+        await client
+            .from('notices')
+            .insert([{
+                title: `🎉 নতুন জেলা প্রতিনিধি: ${application?.full_name || ''} (${application?.district || ''})`,
+                status: 'active',
+                created_at: new Date().toISOString()
+            }]);
+        
+        showToast(`✅ ${application?.full_name || 'সদস্য'} এর আবেদন অনুমোদিত হয়েছে!`, 'success');
+        
+        await loadApplications();
+        loadRealDashboard();
+        loadReps();
+        
+    } catch(error) {
+        console.error('Approve error:', error);
+        showToast('অনুমোদন ব্যর্থ!', 'error');
+    }
+}
+
+async function rejectApplication(id) {
+    const reason = prompt('বাতিলের কারণ লিখুন:');
+    if (reason === null) return;
+    if (!reason.trim()) {
+        showToast('বাতিলের কারণ লিখুন!', 'error');
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: application } = await client
+            .from('representative_applications')
+            .select('full_name')
+            .eq('id', id)
+            .single();
+            
+        await client
+            .from('representative_applications')
+            .update({ 
+                status: 'rejected',
+                rejection_reason: reason.trim(),
+                rejected_by: currentAdmin?.username || 'system',
+                rejected_at: new Date().toISOString()
+            })
+            .eq('id', id);
+        
+        showToast(`❌ ${application?.full_name || 'সদস্য'} এর আবেদন বাতিল করা হয়েছে`, 'success');
+        await loadApplications();
+        
+    } catch(error) {
+        console.error('Reject error:', error);
+        showToast('বাতিল করতে সমস্যা!', 'error');
+    }
+}
+
+async function viewApplicationDetails(id) {
+    const application = applicationsData.find(a => a.id == id);
+    if (!application) {
+        showToast('আবেদন পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    const details = `
+        👤 নাম: ${application.full_name || '-'}
+        🆔 সদস্য আইডি: ${application.member_id || '-'}
+        📱 মোবাইল: ${application.mobile || '-'}
+        📧 ইমেইল: ${application.email || 'উল্লেখ নেই'}
+        🏛️ বিভাগ: ${application.division || '-'}
+        📍 জেলা: ${application.district || '-'}
+        🏫 মাদ্রাসা: ${application.madrasa_name || 'উল্লেখ নেই'}
+        📚 অভিজ্ঞতা: ${application.experience || 0} বছর
+        📅 আবেদনের তারিখ: ${application.applied_date_bangla || (application.applied_at ? new Date(application.applied_at).toLocaleDateString('bn-BD') : '-')}
+        📝 কারণ: ${application.reason || 'উল্লেখ নেই'}
+        📊 স্ট্যাটাস: ${application.status === 'pending' ? 'বিচারাধীন' : (application.status === 'approved' ? 'অনুমোদিত' : 'বাতিল')}
+    `;
+    
+    showToast(details, 'info');
+}
+
+async function deleteApplication(id) {
+    if (!confirm('এই আবেদন স্থায়ীভাবে ডিলিট করবেন? (পুনরুদ্ধার করা যাবে না)')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        await client
+            .from('representative_applications')
+            .delete()
+            .eq('id', id);
+        
+        showToast('✅ আবেদন ডিলিট করা হয়েছে', 'success');
+        await loadApplications();
+        
+    } catch(error) {
+        console.error('Delete error:', error);
+        showToast('ডিলিট করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
 // Other Functions
 // ============================================================
-function loadApplications() { document.getElementById('applicationsList').innerHTML = '<div class="text-center text-gray-500 py-4">কোনো আবেদন নেই</div>'; }
 function updateEconomy() { showToast('অর্থনীতি তথ্য সংরক্ষিত হয়েছে'); }
 function submitLoanApp() { showToast('লোন আবেদন জমা হয়েছে!'); }
 function openAboutEditModal() { document.getElementById('aboutEditModal').classList.add('active'); document.getElementById('editAboutText').value = localStorage.getItem('tukn_about') || ''; }
@@ -1858,7 +2186,7 @@ async function deleteWelfareEntry(id) {
 }
 
 // ============================================================
-// লভ্যাংশ বন্টন ইতিহাস - যোগফল + প্রিন্ট সহ
+// লভ্যাংশ বন্টন ইতিহাস
 // ============================================================
 async function loadProfitDistributions() {
     const container = document.getElementById('profitDistributionsList');
@@ -1946,9 +2274,6 @@ async function loadProfitDistributions() {
     }
 }
 
-// ============================================================
-// লভ্যাংশ বিস্তারিত দেখানো
-// ============================================================
 async function viewProfitDetail(distributionId) {
     const client = initSupabaseClient();
     if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
@@ -2034,9 +2359,6 @@ function closeProfitDetailModal() {
     document.getElementById('profitDetailModal').classList.remove('active');
 }
 
-// ============================================================
-// প্রিন্ট ফাংশন (লভ্যাংশ ইতিহাস প্রিন্ট)
-// ============================================================
 function printProfitHistory() {
     const container = document.getElementById('profitHistoryContainer');
     const originalTitle = document.title;
@@ -2139,7 +2461,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadNoticesList();
     loadWelfareSettings();
     
-    setTimeout(() => { loadSliders(); loadAdmins(); loadReps(); loadApplications(); loadAllLoans(); loadPendingWithdrawals(); loadProfitDistributions(); loadWelfareFund(); }, 500);
+    setTimeout(() => { loadSliders(); loadAdmins(); loadReps(); loadAllLoans(); loadPendingWithdrawals(); loadProfitDistributions(); loadWelfareFund(); loadApplications(); }, 500);
     
     const aboutContent = document.getElementById('aboutContent');
     if (aboutContent) aboutContent.innerHTML = `<div class="about-content">${localStorage.getItem('tukn_about') || 'ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ একটি অরাজনৈতিক সংগঠন।'}</div>`;
@@ -2224,6 +2546,11 @@ window.printProfitHistory = printProfitHistory;
 window.loadWelfareSettings = loadWelfareSettings;
 window.formatAmount = formatAmount;
 window.formatAmountWithText = formatAmountWithText;
+window.loadApplications = loadApplications;
+window.approveApplication = approveApplication;
+window.rejectApplication = rejectApplication;
+window.viewApplicationDetails = viewApplicationDetails;
+window.deleteApplication = deleteApplication;
 
 console.log('✅ All functions exported to window!');
 </script>
