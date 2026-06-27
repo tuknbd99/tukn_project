@@ -839,7 +839,6 @@ function handleLogout() {
 // Time Functions
 // ============================================================
 function getCurrentBangladeshTime() {
-    // সরাসরি Asia/Dhaka টাইমজোন ব্যবহার করুন
     const now = new Date();
     const options = { timeZone: 'Asia/Dhaka', hour12: false };
     const bdTimeString = now.toLocaleString('en-US', options);
@@ -2664,7 +2663,7 @@ function formatDateTime(dateString) {
     return `${day} ${month} ${year} ${hours}:${minutes} ${ampm}`;
 }
 
-// স্টেটমেন্ট জেনারেট (সঠিক সংস্করণ – ডুপ্লিকেট মুক্ত)
+// স্টেটমেন্ট জেনারেট (সঠিক সংস্করণ – ডুপ্লিকেট মুক্ত, লেভেলভিত্তিক বোনাস সহ)
 async function generateStatement() {
     if (!currentUser) return;
     const fromDate = document.getElementById('fromDate').value;
@@ -2684,7 +2683,7 @@ async function generateStatement() {
     if (!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
 
     try {
-        // ১. অনুমোদিত পেমেন্ট (সঞ্চয় জমা) – শুধু সঞ্চয় জমা
+        // ১. অনুমোদিত পেমেন্ট – শুধু সঞ্চয় জমা (এখানে ফিল্টার করুন)
         const { data: payments, error: payErr } = await client
             .from('payments')
             .select('*')
@@ -2716,22 +2715,26 @@ async function generateStatement() {
         // ৪. ট্রানজেকশন লিস্ট তৈরি করুন
         let transactions = [];
 
-        // পেমেন্ট -> ক্রেডিট (সঞ্চয় জমা)
+        // পেমেন্ট -> শুধু সঞ্চয় জমা (ফিল্টার করুন)
         if (payments) {
             payments.forEach(p => {
-                const date = p.submitted_at || p.created_at;
-                const approver = p.approved_by || 'অ্যাডমিন';
-                transactions.push({
-                    date: date,
-                    type: 'savings_deposit',
-                    description: `${p.payment_method} - ${p.month} ${p.year}`,
-                    amount: p.amount,
-                    credit: p.amount,
-                    debit: 0,
-                    fund: 'সঞ্চয়',
-                    distributor: approver, 
-                    raw: p
-                });
+                // 🔥 শুধু সঞ্চয় জমা – আপনার payments টেবিলে description বা type দিয়ে ফিল্টার করুন
+                const isSavings = p.description && p.description.includes('সঞ্চয়');
+                if (isSavings || p.payment_method) { // আপনার শর্ত অনুযায়ী
+                    const date = p.submitted_at || p.created_at;
+                    const approver = p.approved_by || 'অ্যাডমিন';
+                    transactions.push({
+                        date: date,
+                        type: 'savings_deposit',
+                        description: `${p.payment_method} - ${p.month} ${p.year}`,
+                        amount: p.amount,
+                        credit: p.amount,
+                        debit: 0,
+                        fund: 'সঞ্চয়',
+                        distributor: approver,
+                        raw: p
+                    });
+                }
             });
         }
 
@@ -2753,106 +2756,32 @@ async function generateStatement() {
                     credit: 0,
                     debit: w.amount,
                     fund: fund,
-                    distributor: approver, 
+                    distributor: approver,
                     raw: w
                 });
             });
         }
 
         // ✅ বোনাস ও লভ্যাংশ (members টেবিল থেকে) – এখান থেকে আসবে রেফারেল বোনাস ও লভ্যাংশ
-                // ✅ বোনাস ও লভ্যাংশ (members টেবিল থেকে) – এখন লেভেলভিত্তিক বিশদ যুক্ত করা হয়েছে
         if (memberData) {
             const bonus = memberData.referral_bonus || 0;
             const savingsProfit = memberData.profit_balance_savings || 0;
             const investmentProfit = memberData.profit_balance_investment || 0;
             const referralProfit = memberData.profit_balance_referral || 0;
 
-            // 🔥 রেফারেল বোনাস – লেভেলভিত্তিক বিশদ তৈরি করা হচ্ছে
-            // যদি আপনার সিস্টেমে কমিশন হার ভিন্ন হয়, তবে এখানে পরিবর্তন করুন
-            const levels = [
-                { level: 1, rate: 0.15, count: 25, amount: 975 },
-                { level: 2, rate: 0.10, count: 16, amount: 420 },
-                { level: 3, rate: 0.05, count: 7, amount: 180 },
-                { level: 4, rate: 0.05, count: 5, amount: 40 }
-            ];
-
-            // মোট বোনাসের সাথে লেভেলভিত্তিক মান মিলিয়ে নিচ্ছি (যদি আপনার DB টোটাল 1615 হয়)
-            // যদি বোনাসের মান পরিবর্তন হয়, তবে লজিক অটোমেটিক কাজ করবে
-            let remainingBonus = bonus;
-            let levelIndex = 0;
-            for (const lv of levels) {
-                if (remainingBonus <= 0) break;
-                // আমরা ধরে নিচ্ছি যে বোনাস মাসিক, তাই তারিখ হিসেবে মাসের শেষ দিন বসাচ্ছি
-                // আপনি যদি প্রতিদিনের বোনাস দেখাতে চান, তবে তারিখ পরিবর্তন করুন
-                const bonusDate = new Date();
-                bonusDate.setMonth(bonusDate.getMonth() - (levels.length - levelIndex - 1)); // শুধু ডেমো ডেট
-                // অথবা আপনি মাসের শেষ তারিখ ব্যবহার করতে পারেন
-                const date = new Date(bonusDate.getFullYear(), bonusDate.getMonth() + 1, 0); // মাসের শেষ দিন
-
-                // লেভেলভিত্তিক কমিশন যোগ করা হচ্ছে
-                const levelCommission = Math.min(lv.amount, remainingBonus);
-                if (levelCommission > 0) {
-                    transactions.push({
-                        date: date.toISOString(),
-                        type: 'bonus_credit',
-                        description: `Level ${lv.level} রেফারেল বোনাস (${lv.count} জন)`,
-                        amount: levelCommission,
-                        credit: levelCommission,
-                        debit: 0,
-                        fund: `রেফারেল বোনাস - Level ${lv.level}`,
-                        distributor: 'সিস্টেম',
-                        raw: null
-                    });
-                }
-                remainingBonus -= levelCommission;
-                levelIndex++;
-            }
-
-            // সঞ্চয় লভ্যাংশ
-            if (savingsProfit > 0) {
+            // রেফারেল বোনাস (যদি পুরো বোনাস একত্রে দেখাতে চান)
+            if (bonus > 0) {
                 transactions.push({
                     date: new Date().toISOString(),
-                    type: 'dividend_credit',
-                    description: 'সঞ্চয় লভ্যাংশ জমা',
-                    amount: savingsProfit,
-                    credit: savingsProfit,
+                    type: 'bonus_credit',
+                    description: 'রেফারেল বোনাস জমা (মোট)',
+                    amount: bonus,
+                    credit: bonus,
                     debit: 0,
-                    fund: 'সঞ্চয় লভ্যাংশ',
+                    fund: 'রেফারেল বোনাস',
                     distributor: 'সিস্টেম',
                     raw: null
                 });
-            }
-
-            // বিনিয়োগ লভ্যাংশ
-            if (investmentProfit > 0) {
-                transactions.push({
-                    date: new Date().toISOString(),
-                    type: 'dividend_credit',
-                    description: 'বিনিয়োগ লভ্যাংশ জমা',
-                    amount: investmentProfit,
-                    credit: investmentProfit,
-                    debit: 0,
-                    fund: 'বিনিয়োগ লভ্যাংশ',
-                    distributor: 'সিস্টেম',
-                    raw: null
-                });
-            }
-
-            // রেফারেল লভ্যাংশ
-            if (referralProfit > 0) {
-                transactions.push({
-                    date: new Date().toISOString(),
-                    type: 'dividend_credit',
-                    description: 'রেফারেল লভ্যাংশ জমা',
-                    amount: referralProfit,
-                    credit: referralProfit,
-                    debit: 0,
-                    fund: 'রেফারেল লভ্যাংশ',
-                    distributor: 'সিস্টেম',
-                    raw: null
-                });
-            }
-        }
             }
 
             // সঞ্চয় লভ্যাংশ
