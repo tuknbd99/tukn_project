@@ -2663,7 +2663,7 @@ function formatDateTime(dateString) {
     return `${day} ${month} ${year} ${hours}:${minutes} ${ampm}`;
 }
 
-// স্টেটমেন্ট জেনারেট (সঠিক সংস্করণ – ডুপ্লিকেট মুক্ত, লেভেলভিত্তিক বোনাস সহ)
+// স্টেটমেন্ট জেনারেট (সঠিক সংস্করণ – কার্ডের মতো রেফারেল বোনাস গণনা)
 async function generateStatement() {
     if (!currentUser) return;
     const fromDate = document.getElementById('fromDate').value;
@@ -2683,7 +2683,7 @@ async function generateStatement() {
     if (!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
 
     try {
-        // ১. অনুমোদিত পেমেন্ট – শুধু সঞ্চয় জমা (এখানে ফিল্টার করুন)
+        // ১. অনুমোদিত পেমেন্ট (সঞ্চয় জমা)
         const { data: payments, error: payErr } = await client
             .from('payments')
             .select('*')
@@ -2699,42 +2699,115 @@ async function generateStatement() {
             .eq('status', 'approved')
             .order('requested_at', { ascending: true });
 
-        // ৩. মেম্বারের বর্তমান ব্যালেন্স (বোনাস ও লভ্যাংশসহ)
-        const { data: memberData } = await client
+        // ৩. সকল সদস্যের ডাটা নিয়ে রেফারেল বোনাস গণনা (কার্ডের মতোই)
+        const { data: allMembers, error: allErr } = await client
             .from('members')
-            .select('referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
-            .eq('member_id', currentUser.id)
-            .single();
+            .select('member_id, full_name, mobile, monthly_savings, referred_by, referral_code, status, created_at');
 
-        if (payErr || withErr) {
-            console.error('পেমেন্ট/উত্তোলন লোড এরর:', payErr, withErr);
+        if (payErr || withErr || allErr) {
+            console.error('তথ্য লোড এরর:', payErr, withErr, allErr);
             showToast('তথ্য লোড করতে সমস্যা!', 'error');
             return;
         }
 
-        // ৪. ট্রানজেকশন লিস্ট তৈরি করুন
+        // ৪. রেফারেল বোনাস গণনা (আপনার `loadReferralData()` এর মতো)
+        const commissionRates = {1:0.15, 2:0.10, 3:0.05, 4:0.05, 5:0.05, 6:0.05, 7:0.05, 8:0.05, 9:0.05, 10:0.05};
+        
+        const normalizedMembers = (allMembers || []).map(member => {
+            let refCode = member.referral_code;
+            let refBy = member.referred_by;
+            if(refCode && typeof refCode === 'string') {
+                const match = refCode.match(/\d+/);
+                if(match) refCode = match[0];
+            }
+            if(refBy && typeof refBy === 'string') {
+                const match = refBy.match(/\d+/);
+                if(match) refBy = match[0];
+            }
+            return { ...member, referral_code_normalized: refCode, referred_by_normalized: refBy };
+        });
+
+        let myReferCode = currentUser.referId;
+        if(myReferCode && typeof myReferCode === 'string') {
+            const match = myReferCode.match(/\d+/);
+            if(match) myReferCode = match[0];
+        }
+
+        let levelReferrals = {1:[], 2:[], 3:[], 4:[], 5:[], 6:[], 7:[], 8:[], 9:[], 10:[]};
+        let visited = new Set();
+
+        if (myReferCode) {
+            levelReferrals[1] = normalizedMembers.filter(m => 
+                m.referred_by_normalized === myReferCode && 
+                m.member_id !== currentUser.id &&
+                (m.status === 'active' || m.status === 'approved')
+            );
+            visited.add(myReferCode);
+            levelReferrals[1].forEach(m => {
+                if(m.member_id) visited.add(m.member_id);
+            });
+
+            let currentLevelMembers = [...levelReferrals[1]];
+            for(let level = 2; level <= 10; level++) {
+                const nextLevelMembers = [];
+                for(const member of currentLevelMembers) {
+                    let memberReferCode = member.referral_code_normalized;
+                    if(memberReferCode && !visited.has(memberReferCode) && memberReferCode !== myReferCode) {
+                        const childRefs = normalizedMembers.filter(m => 
+                            m.referred_by_normalized === memberReferCode && 
+                            !visited.has(m.member_id) && 
+                            (m.status === 'active' || m.status === 'approved') &&
+                            m.member_id !== currentUser.id
+                        );
+                        for(const child of childRefs) {
+                            if(!visited.has(child.member_id)) {
+                                visited.add(child.member_id);
+                                nextLevelMembers.push(child);
+                            }
+                        }
+                    }
+                }
+                levelReferrals[level] = nextLevelMembers;
+                currentLevelMembers = nextLevelMembers;
+            }
+        }
+
+        // ৫. লেভেলভিত্তিক বোনাস গণনা
+        let totalCommission = 0;
+        let levelWiseBonus = [];
+        for(let level = 1; level <= 10; level++) {
+            const levelCount = levelReferrals[level].length;
+            let levelCommission = 0;
+            const rate = commissionRates[level];
+            for(const ref of levelReferrals[level]) {
+                const monthlyAmount = ref.monthly_savings || 500;
+                levelCommission += monthlyAmount * rate;
+            }
+            totalCommission += levelCommission;
+            if (levelCommission > 0) {
+                levelWiseBonus.push({ level, commission: levelCommission });
+            }
+        }
+
+        // ৬. ট্রানজেকশন লিস্ট তৈরি করুন
         let transactions = [];
 
-        // পেমেন্ট -> শুধু সঞ্চয় জমা (ফিল্টার করুন)
+        // পেমেন্ট -> সঞ্চয় জমা
         if (payments) {
             payments.forEach(p => {
-                // 🔥 শুধু সঞ্চয় জমা – আপনার payments টেবিলে description বা type দিয়ে ফিল্টার করুন
-                const isSavings = p.description && p.description.includes('সঞ্চয়');
-                if (isSavings || p.payment_method) { // আপনার শর্ত অনুযায়ী
-                    const date = p.submitted_at || p.created_at;
-                    const approver = p.approved_by || 'অ্যাডমিন';
-                    transactions.push({
-                        date: date,
-                        type: 'savings_deposit',
-                        description: `${p.payment_method} - ${p.month} ${p.year}`,
-                        amount: p.amount,
-                        credit: p.amount,
-                        debit: 0,
-                        fund: 'সঞ্চয়',
-                        distributor: approver,
-                        raw: p
-                    });
-                }
+                const date = p.submitted_at || p.created_at;
+                const approver = p.approved_by || 'অ্যাডমিন';
+                transactions.push({
+                    date: date,
+                    type: 'savings_deposit',
+                    description: `${p.payment_method} - ${p.month} ${p.year}`,
+                    amount: p.amount,
+                    credit: p.amount,
+                    debit: 0,
+                    fund: 'সঞ্চয়',
+                    distributor: approver, 
+                    raw: p
+                });
             });
         }
 
@@ -2756,35 +2829,39 @@ async function generateStatement() {
                     credit: 0,
                     debit: w.amount,
                     fund: fund,
-                    distributor: approver,
+                    distributor: approver, 
                     raw: w
                 });
             });
         }
 
-        // ✅ বোনাস ও লভ্যাংশ (members টেবিল থেকে) – এখান থেকে আসবে রেফারেল বোনাস ও লভ্যাংশ
+        // ✅ রেফারেল বোনাস (লেভেলভিত্তিক) – কার্ডের মতো গণনা করা
+        levelWiseBonus.forEach(item => {
+            transactions.push({
+                date: new Date().toISOString(),
+                type: 'bonus_credit',
+                description: `রেফারেল বোনাস (Level ${item.level})`,
+                amount: item.commission,
+                credit: item.commission,
+                debit: 0,
+                fund: `রেফারেল বোনাস (Level ${item.level})`,
+                distributor: 'সিস্টেম',
+                raw: null
+            });
+        });
+
+        // ✅ লভ্যাংশ (members টেবিল থেকে)
+        const { data: memberData } = await client
+            .from('members')
+            .select('profit_balance_savings, profit_balance_investment, profit_balance_referral')
+            .eq('member_id', currentUser.id)
+            .single();
+
         if (memberData) {
-            const bonus = memberData.referral_bonus || 0;
             const savingsProfit = memberData.profit_balance_savings || 0;
             const investmentProfit = memberData.profit_balance_investment || 0;
             const referralProfit = memberData.profit_balance_referral || 0;
 
-            // রেফারেল বোনাস (যদি পুরো বোনাস একত্রে দেখাতে চান)
-            if (bonus > 0) {
-                transactions.push({
-                    date: new Date().toISOString(),
-                    type: 'bonus_credit',
-                    description: 'রেফারেল বোনাস জমা (মোট)',
-                    amount: bonus,
-                    credit: bonus,
-                    debit: 0,
-                    fund: 'রেফারেল বোনাস',
-                    distributor: 'সিস্টেম',
-                    raw: null
-                });
-            }
-
-            // সঞ্চয় লভ্যাংশ
             if (savingsProfit > 0) {
                 transactions.push({
                     date: new Date().toISOString(),
@@ -2799,7 +2876,6 @@ async function generateStatement() {
                 });
             }
 
-            // বিনিয়োগ লভ্যাংশ
             if (investmentProfit > 0) {
                 transactions.push({
                     date: new Date().toISOString(),
@@ -2814,7 +2890,6 @@ async function generateStatement() {
                 });
             }
 
-            // রেফারেল লভ্যাংশ
             if (referralProfit > 0) {
                 transactions.push({
                     date: new Date().toISOString(),
@@ -2830,10 +2905,10 @@ async function generateStatement() {
             }
         }
 
-        // ৫. তারিখ অনুযায়ী সাজান
+        // ৭. তারিখ অনুযায়ী সাজান
         transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-        // ৬. শুরু ব্যালেন্স (fromDate এর আগের সব ট্রানজেকশনের যোগফল)
+        // ৮. শুরু ব্যালেন্স (fromDate এর আগের সব ট্রানজেকশনের যোগফল)
         const startDateObj = new Date(fromDate);
         startDateObj.setHours(0,0,0,0);
         let openingBalance = 0;
@@ -2844,7 +2919,7 @@ async function generateStatement() {
             }
         });
 
-        // ৭. ফিল্টার করুন date range অনুযায়ী
+        // ৯. ফিল্টার করুন date range অনুযায়ী
         const endDateObj = new Date(toDate);
         endDateObj.setHours(23,59,59,999);
         const filtered = transactions.filter(t => {
@@ -2852,7 +2927,7 @@ async function generateStatement() {
             return tDate >= startDateObj && tDate <= endDateObj;
         });
 
-        // ৮. রানিং ব্যালেন্স দিয়ে টেবিল রেন্ডার (সঠিক কলামে দেখানো)
+        // ১০. রানিং ব্যালেন্স দিয়ে টেবিল রেন্ডার
         let runningBalance = openingBalance;
         let rows = '';
         filtered.forEach(t => {
@@ -2874,7 +2949,7 @@ async function generateStatement() {
             rows = `<tr><td colspan="8" class="text-center text-gray-400 py-4">এই সময়সীমায় কোনো লেনদেন নেই</td></tr>`;
         }
 
-        // ৯. হেডার ও মেম্বার ইনফো
+        // ১১. হেডার ও মেম্বার ইনফো
         const memberInfo = `
             <div class="statement-member-info">
                 <span><i class="fas fa-user mr-1"></i> ${currentUser.name}</span>
@@ -2884,7 +2959,7 @@ async function generateStatement() {
             </div>
         `;
 
-        // ১০. সম্পূর্ণ HTML তৈরি
+        // ১২. সম্পূর্ণ HTML তৈরি
         const statementHTML = `
             <div class="statement-header">
                 <img src="images/logo.png" alt="TUKNBD Logo" onerror="this.src='https://placehold.co/60x60/059669/white?text=T'">
