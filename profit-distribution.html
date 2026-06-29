@@ -702,34 +702,60 @@ async function loadDistributionHistory() {
     }
 }
 
-// ============================================================
-// বন্টন বিস্তারিত দেখানো
-// ============================================================
 async function viewDistributionDetail(id) {
     const client = initSupabase();
     if (!client) { showToast('Supabase সংযোগ সমস্যা!', 'error'); return; }
     
     try {
-        const { data, error } = await client
+        // প্রথমে মাস্টার এন্ট্রি চেক করুন
+        const { data: masterData, error: masterError } = await client
+            .from('profit_distributions')
+            .select('*')
+            .eq('id', id)
+            .single();
+        
+        if (masterError) {
+            console.error('Master error:', masterError);
+            showToast('বিতরণ তথ্য পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        // ইতিহাস ডেটা আনুন
+        const { data: historyData, error: historyError } = await client
             .from('profit_distribution_history')
             .select('*')
             .eq('distribution_id', id)
             .order('total_received', { ascending: false });
         
-        if (error) throw error;
+        if (historyError) {
+            console.error('History error:', historyError);
+            showToast('ইতিহাস লোড করতে সমস্যা!', 'error');
+            return;
+        }
         
         const modal = document.getElementById('detailModal');
         const content = document.getElementById('detailContent');
         
-        if (!data || data.length === 0) {
-            content.innerHTML = '<div class="text-center text-gray-500 py-4">কোনো বিস্তারিত নেই</div>';
+        if (!historyData || historyData.length === 0) {
+            content.innerHTML = `
+                <div class="text-center py-4">
+                    <div class="text-amber-600 mb-2">
+                        <i class="fas fa-exclamation-triangle text-2xl"></i>
+                    </div>
+                    <p class="text-gray-500">এই বিতরণে কোনো সদস্যের ডেটা নেই</p>
+                    <p class="text-xs text-gray-400 mt-2">মাস্টার ID: ${id}</p>
+                </div>
+            `;
         } else {
             let total = 0;
             let html = `
-                <div class="mb-3 text-sm text-gray-500">মোট ${data.length} জন সদস্য</div>
+                <div class="mb-3 flex justify-between items-center">
+                    <span class="text-sm text-gray-500">মোট ${historyData.length} জন সদস্য</span>
+                    <span class="text-sm text-gray-500">মাস্টার ID: ${id}</span>
+                </div>
                 <div class="max-h-96 overflow-y-auto">
             `;
-            data.forEach((d, i) => {
+            historyData.forEach((d) => {
                 total += d.total_received || 0;
                 html += `
                     <div class="profit-detail">
