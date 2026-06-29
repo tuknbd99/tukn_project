@@ -251,38 +251,43 @@ function formatAmountText(amount) {
     return formatAmount(amount) + ' টাকা';
 }
 
-// মাসের নাম থেকে ইনডেক্স বের করা
-function getMonthIndex(monthName) {
-    const months = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
-    return months.indexOf(monthName);
-}
-
-// মাসের শেষ তারিখ বের করা
-function getLastDayOfMonth(monthName, year) {
-    const monthIndex = getMonthIndex(monthName);
-    return new Date(year, monthIndex + 1, 0).getDate();
+// মাসের নাম থেকে ইংরেজি মাসের নাম পাওয়া
+function getEnglishMonth(monthName) {
+    const months = {
+        'জানুয়ারি': 'January',
+        'ফেব্রুয়ারি': 'February',
+        'মার্চ': 'March',
+        'এপ্রিল': 'April',
+        'মে': 'May',
+        'জুন': 'June',
+        'জুলাই': 'July',
+        'আগস্ট': 'August',
+        'সেপ্টেম্বর': 'September',
+        'অক্টোবর': 'October',
+        'নভেম্বর': 'November',
+        'ডিসেম্বর': 'December'
+    };
+    return months[monthName] || monthName;
 }
 
 // ============================================================
-// নির্দিষ্ট মাস পর্যন্ত সদস্যের মোট ফান্ড বের করা
+// নির্দিষ্ট মাস পর্যন্ত সদস্যের মোট ফান্ড বের করা (শুধু মাস ও বছর মিলিয়ে)
 // ============================================================
 async function getMemberFundsUpToMonth(memberId, targetMonth, targetYear) {
     const client = initSupabase();
     if (!client) return null;
     
     try {
-        const monthIndex = getMonthIndex(targetMonth);
-        const lastDay = getLastDayOfMonth(targetMonth, targetYear);
-        const cutoffDate = new Date(targetYear, monthIndex, lastDay, 23, 59, 59);
-        const cutoffISO = cutoffDate.toISOString();
+        const englishMonth = getEnglishMonth(targetMonth);
         
-        // ১. ঐ মাস পর্যন্ত অনুমোদিত পেমেন্টের যোগফল (সঞ্চয়)
+        // ১. ঐ মাস পর্যন্ত অনুমোদিত পেমেন্টের যোগফল (সঞ্চয়) - শুধু মাস ও বছর মিলিয়ে
         const { data: payments } = await client
             .from('payments')
             .select('amount')
             .eq('member_id', memberId)
             .eq('status', 'approved')
-            .lte('submitted_at', cutoffISO);
+            .eq('month', englishMonth)
+            .eq('year', targetYear);
         
         const totalSavings = payments ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) : 0;
         
@@ -293,12 +298,13 @@ async function getMemberFundsUpToMonth(memberId, targetMonth, targetYear) {
             .eq('member_id', memberId)
             .single();
         
-        // ৩. ঐ মাস পর্যন্ত লভ্যাংশ ইতিহাস (যে লভ্যাংশ ইতিমধ্যে পেয়েছে)
+        // ৩. ঐ মাস পর্যন্ত লভ্যাংশ ইতিহাস (যে লভ্যাংশ ইতিমধ্যে পেয়েছে) - শুধু মাস ও বছর মিলিয়ে
         const { data: history } = await client
             .from('profit_distribution_history')
             .select('total_received')
             .eq('member_id', memberId)
-            .lte('distributed_at', cutoffISO);
+            .eq('month', targetMonth)
+            .eq('year', targetYear);
         
         const totalProfitReceived = history ? history.reduce((sum, h) => sum + (h.total_received || 0), 0) : 0;
         
@@ -364,6 +370,9 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
                 ...funds
             });
             totalFund += funds.totalFund;
+        } else {
+            // ডিবাগ: দেখুন কেন ফান্ড ০ হচ্ছে
+            console.log(`⚠️ ${member.member_id} (${member.full_name}) এর ফান্ড ০:`, funds);
         }
     }
     
