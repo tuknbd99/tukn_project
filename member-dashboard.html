@@ -2396,9 +2396,6 @@ function updateLevelList(level, referrals, rate) {
     container.innerHTML = html;
 }
 
-// ============================================================
-// রেফারেল ডাটা লোড - Supabase থেকে
-// ============================================================
 async function loadReferralData() {
     if(!currentUser || isLoadingReferral) return;
     let client = await initSupabase();
@@ -2527,6 +2524,9 @@ async function loadReferralData() {
         let totalCommission = 0;
         let totalReferrals = 0;
         
+        // 🔥 প্রতিটি সদস্যের রেফারেল বোনাস যোগফল বের করুন
+        const referralBonusMap = {};
+        
         for(let level = 1; level <= 10; level++) {
             const levelCount = levelReferrals[level].length;
             totalReferrals += levelCount;
@@ -2534,7 +2534,14 @@ async function loadReferralData() {
             const rate = commissionRates[level];
             for(const ref of levelReferrals[level]) {
                 const monthlyAmount = ref.monthly_savings || 500;
-                levelCommission += monthlyAmount * rate;
+                const commission = monthlyAmount * rate;
+                levelCommission += commission;
+                
+                // এই সদস্যের রেফারেল বোনাস যোগ করুন
+                if(!referralBonusMap[ref.member_id]) {
+                    referralBonusMap[ref.member_id] = 0;
+                }
+                referralBonusMap[ref.member_id] += commission;
             }
             totalCommission += levelCommission;
             
@@ -2543,6 +2550,34 @@ async function loadReferralData() {
             if(countEl) countEl.innerText = levelCount;
             if(commissionEl) commissionEl.innerText = Math.floor(levelCommission).toLocaleString();
             updateLevelList(level, levelReferrals[level], rate * 100);
+        }
+        
+        // 🔥 প্রতিটি সদস্যের referral_bonus আপডেট করুন (যাদের রেফারেল আছে)
+        for(const [memberId, bonus] of Object.entries(referralBonusMap)) {
+            const { error: updateError } = await client
+                .from('members')
+                .update({ referral_bonus: Math.round(bonus) })
+                .eq('member_id', memberId);
+            
+            if(updateError) {
+                console.error(`❌ ${memberId} আপডেট ব্যর্থ:`, updateError);
+            } else {
+                console.log(`✅ ${memberId} এর referral_bonus আপডেট: ${Math.round(bonus)}`);
+            }
+        }
+        
+        // 🔥 বর্তমান ব্যবহারকারীর রেফারেল বোনাসও আপডেট করুন
+        const myTotalBonus = totalCommission;
+        const { error: myUpdateError } = await client
+            .from('members')
+            .update({ referral_bonus: Math.round(myTotalBonus) })
+            .eq('member_id', currentUser.id);
+        
+        if(myUpdateError) {
+            console.error('❌ আপনার referral_bonus আপডেট ব্যর্থ:', myUpdateError);
+        } else {
+            console.log(`✅ আপনার referral_bonus আপডেট: ${Math.round(myTotalBonus)}`);
+            userFunds.referralBonus = Math.round(myTotalBonus);
         }
         
         document.getElementById('totalReferrals').innerText = totalReferrals;
@@ -2581,6 +2616,8 @@ async function loadReferralData() {
             referralBonus: userFunds.referralBonus,
             referralProfit: userFunds.referralProfit
         });
+        
+        showToast('✅ রেফারেল বোনাস আপডেট সম্পন্ন!', 'success');
         
     } catch(error) { 
         console.error('❌ রেফারেল error:', error);
