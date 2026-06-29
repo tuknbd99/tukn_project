@@ -276,13 +276,12 @@ async function loadMembers() {
 }
 
 // ============================================================
-// 🔥 লভ্যাংশ গণনা (শুধু যাদের ব্যালেন্স > 0 তাদের জন্য)
+// লভ্যাংশ গণনা (শুধু যাদের ব্যালেন্স > 0 তাদের জন্য)
 // ============================================================
 function calculateProfitDistribution(totalProfit, welfarePercent, month, year) {
     const welfareAmount = totalProfit * (welfarePercent / 100);
     const distributableAmount = totalProfit - welfareAmount;
     
-    // ফিল্টার: শুধু যাদের মোট ফান্ড > 0
     const eligibleMembers = membersData.filter(m => {
         const totalFund = (m.balance || 0) + (m.referral_bonus || 0) + 
                          (m.profit_balance_savings || 0) + (m.profit_balance_investment || 0) + 
@@ -295,7 +294,6 @@ function calculateProfitDistribution(totalProfit, welfarePercent, month, year) {
         return null;
     }
     
-    // প্রতিটি যোগ্য সদস্যের মোট ফান্ড গণনা
     let totalFund = 0;
     const memberFunds = eligibleMembers.map(m => {
         const balance = m.balance || 0;
@@ -305,21 +303,10 @@ function calculateProfitDistribution(totalProfit, welfarePercent, month, year) {
         const profitReferral = m.profit_balance_referral || 0;
         const fund = balance + referralBonus + profitSavings + profitInvestment + profitReferral;
         totalFund += fund;
-        return { 
-            ...m, 
-            balance,
-            referralBonus,
-            profitSavings,
-            profitInvestment,
-            profitReferral,
-            fund 
-        };
+        return { ...m, balance, referralBonus, profitSavings, profitInvestment, profitReferral, fund };
     });
     
-    // প্রতি টাকার লভ্যাংশ
     const perTakaProfit = totalFund > 0 ? distributableAmount / totalFund : 0;
-    
-    // প্রতিটি সদস্যের লভ্যাংশ গণনা
     let totalDistributed = 0;
     const results = memberFunds.map(m => {
         const savingsProfit = perTakaProfit * m.balance;
@@ -334,14 +321,12 @@ function calculateProfitDistribution(totalProfit, welfarePercent, month, year) {
             member_id: m.member_id,
             full_name: m.full_name,
             mobile: m.mobile,
-            // পূর্বের তথ্য
             balance: m.balance,
             referralBonus: m.referralBonus,
             profitSavings: m.profitSavings,
             profitInvestment: m.profitInvestment,
             profitReferral: m.profitReferral,
             totalFund: m.fund,
-            // এবারের লাভ
             savingsProfit,
             referralBonusProfit,
             savingsBalanceProfit,
@@ -411,9 +396,6 @@ async function calculateAndPreview() {
         
         previewData = result;
         
-        // ============================================================
-        // সারাংশ দেখানো
-        // ============================================================
         document.getElementById('summarySection').style.display = 'block';
         document.getElementById('sumTotalProfit').innerHTML = formatAmountText(result.totalProfit);
         document.getElementById('sumWelfare').innerHTML = formatAmountText(result.welfareAmount);
@@ -424,9 +406,6 @@ async function calculateAndPreview() {
         document.getElementById('sumEligibleMembers').innerHTML = result.memberCount + ' জন';
         document.getElementById('sumExcludedMembers').innerHTML = result.excludedCount + ' জন';
         
-        // ============================================================
-        // সদস্য তালিকা (সব তথ্য সহ)
-        // ============================================================
         document.getElementById('membersSection').style.display = 'block';
         document.getElementById('memberCount').innerHTML = `
             ✅ ${result.memberCount} জন সদস্য পাবেন 
@@ -453,9 +432,6 @@ async function calculateAndPreview() {
             `).join('');
         }
         
-        // ============================================================
-        // কনফর্ম বাটন সক্রিয়
-        // ============================================================
         confirmBtn.disabled = false;
         document.getElementById('previewMessage').innerHTML = `
             <div class="bg-green-50 p-3 rounded-lg border border-green-200 text-green-700">
@@ -478,7 +454,7 @@ async function calculateAndPreview() {
 }
 
 // ============================================================
-// 🔥 লভ্যাংশ বন্টন নিশ্চিতকরণ
+// ✅ আপডেটেড: লভ্যাংশ বন্টন নিশ্চিতকরণ
 // ============================================================
 async function confirmDistribution() {
     if (!previewData) {
@@ -535,24 +511,27 @@ async function confirmDistribution() {
             }])
             .select();
         
-        if (masterError) throw masterError;
+        if (masterError) {
+            console.error('Master error:', masterError);
+            throw masterError;
+        }
         const distributionId = masterData[0].id;
         console.log('✅ মাস্টার এন্ট্রি তৈরি:', distributionId);
         
         // ============================================================
-        // ২. কল্যাণ তহবিলে জমা দিন (welfare_fund)
+        // ২. কল্যাণ তহবিলে জমা দিন (welfare_fund) - 🔥 description বাদ দেয়া হলো
         // ============================================================
         if (previewData.welfareAmount > 0) {
             const { error: welfareError } = await client
                 .from('welfare_fund')
                 .insert([{
                     total: previewData.welfareAmount,
-                    description: `${month} ${year} মাসের লাভ ${formatAmountText(totalProfit)} থেকে ${welfarePercent}% (${formatAmountText(previewData.welfareAmount)}) কল্যাণ তহবিলে জমা`,
                     created_at: new Date().toISOString(),
                     last_updated: new Date().toISOString()
                 }]);
             if (welfareError) {
                 console.error('Welfare insert error:', welfareError);
+                throw welfareError;
             } else {
                 console.log('✅ কল্যাণ তহবিলে জমা:', previewData.welfareAmount);
             }
@@ -566,7 +545,6 @@ async function confirmDistribution() {
         
         for (const m of previewData.results) {
             if (m.totalProfit > 0) {
-                // অ্যাকাউন্ট আপডেট করুন (members টেবিল)
                 const updates = {};
                 if (m.savingsProfit > 0) {
                     updates.profit_balance_savings = (m.profitSavings || 0) + m.savingsProfit;
@@ -593,7 +571,6 @@ async function confirmDistribution() {
                 
                 successCount++;
                 
-                // ইতিহাস এন্ট্রি তৈরি করুন
                 historyEntries.push({
                     distribution_id: distributionId,
                     member_id: m.member_id,
@@ -630,6 +607,7 @@ async function confirmDistribution() {
             
             if (historyError) {
                 console.error('History insert error:', historyError);
+                throw historyError;
             } else {
                 console.log(`✅ ${historyEntries.length} টি ইতিহাস এন্ট্রি তৈরি`);
             }
@@ -637,15 +615,11 @@ async function confirmDistribution() {
         
         showToast(`✅ ${successCount} জন সদস্যের মধ্যে লভ্যাংশ বিতরণ সম্পন্ন!`, 'success');
         
-        // রিসেট
         confirmBtn.disabled = false;
         confirmBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i> বন্টন নিশ্চিত করুন';
         isProcessing = false;
         
-        // ইতিহাস লোড
         await loadDistributionHistory();
-        
-        // ফর্ম রিসেট
         resetForm();
         
     } catch(e) {
@@ -702,12 +676,14 @@ async function loadDistributionHistory() {
     }
 }
 
+// ============================================================
+// বন্টন বিস্তারিত দেখানো
+// ============================================================
 async function viewDistributionDetail(id) {
     const client = initSupabase();
     if (!client) { showToast('Supabase সংযোগ সমস্যা!', 'error'); return; }
     
     try {
-        // প্রথমে মাস্টার এন্ট্রি চেক করুন
         const { data: masterData, error: masterError } = await client
             .from('profit_distributions')
             .select('*')
@@ -720,7 +696,6 @@ async function viewDistributionDetail(id) {
             return;
         }
         
-        // ইতিহাস ডেটা আনুন
         const { data: historyData, error: historyError } = await client
             .from('profit_distribution_history')
             .select('*')
@@ -814,7 +789,6 @@ document.addEventListener('DOMContentLoaded', function() {
     loadMembers();
     loadDistributionHistory();
     
-    // Enter কী প্রিভিউ ট্রিগার
     document.getElementById('totalProfit').addEventListener('keypress', function(e) {
         if (e.key === 'Enter') {
             document.getElementById('previewBtn').click();
@@ -824,7 +798,6 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('✅ Profit Distribution System Loaded');
 });
 
-// গ্লোবাল ফাংশন
 window.calculateAndPreview = calculateAndPreview;
 window.confirmDistribution = confirmDistribution;
 window.loadDistributionHistory = loadDistributionHistory;
