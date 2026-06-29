@@ -272,15 +272,27 @@ async function loadMembers() {
 }
 
 // ============================================================
-// লভ্যাংশ গণনা
+// লভ্যাংশ গণনা (শুধু যাদের ব্যালেন্স > 0 তাদের জন্য)
 // ============================================================
-function calculateProfitDistribution(totalProfit, welfarePercent) {
+function calculateProfitDistribution(totalProfit, welfarePercent, month, year) {
     const welfareAmount = totalProfit * (welfarePercent / 100);
     const distributableAmount = totalProfit - welfareAmount;
     
-    // প্রতিটি সদস্যের মোট ফান্ড গণনা
+    // 🔥 ফিল্টার: শুধু যাদের ব্যালেন্স > 0 অথবা রেফারেল বোনাস > 0 অথবা পূর্বের লভ্যাংশ > 0
+    const eligibleMembers = membersData.filter(m => {
+        const totalFund = (m.balance || 0) + (m.referral_bonus || 0) + 
+                         (m.profit_balance_savings || 0) + (m.profit_balance_referral || 0);
+        return totalFund > 0;  // যাদের মোট ফান্ড > 0 তারাই পাবে
+    });
+    
+    if (eligibleMembers.length === 0) {
+        showToast('কোনো যোগ্য সদস্য নেই! (সবার ব্যালেন্স ০)', 'error');
+        return null;
+    }
+    
+    // প্রতিটি যোগ্য সদস্যের মোট ফান্ড গণনা
     let totalFund = 0;
-    const memberFunds = membersData.map(m => {
+    const memberFunds = eligibleMembers.map(m => {
         const fund = (m.balance || 0) + (m.referral_bonus || 0) + 
                      (m.profit_balance_savings || 0) + (m.profit_balance_referral || 0);
         totalFund += fund;
@@ -319,13 +331,12 @@ function calculateProfitDistribution(totalProfit, welfarePercent) {
         perTakaProfit,
         totalDistributed,
         results,
-        memberCount: membersData.length
+        memberCount: eligibleMembers.length,
+        totalMembers: membersData.length,
+        excludedCount: membersData.length - eligibleMembers.length
     };
 }
 
-// ============================================================
-// প্রিভিউ দেখানো
-// ============================================================
 async function calculateAndPreview() {
     const month = document.getElementById('profitMonth').value;
     const year = parseInt(document.getElementById('profitYear').value);
@@ -355,7 +366,16 @@ async function calculateAndPreview() {
             return;
         }
         
-        const result = calculateProfitDistribution(totalProfit, welfarePercent);
+        const result = calculateProfitDistribution(totalProfit, welfarePercent, month, year);
+        
+        // যদি কোনো যোগ্য সদস্য না থাকে
+        if (!result || result.memberCount === 0) {
+            showToast('কোনো যোগ্য সদস্য নেই! (সবার ব্যালেন্স ০)', 'error');
+            previewBtn.disabled = false;
+            previewBtn.innerHTML = '<i class="fas fa-calculator mr-2"></i> প্রিভিউ দেখুন';
+            return;
+        }
+        
         previewData = result;
         
         // সারাংশ দেখানো
@@ -369,7 +389,7 @@ async function calculateAndPreview() {
         
         // সদস্য তালিকা
         document.getElementById('membersSection').style.display = 'block';
-        document.getElementById('memberCount').innerHTML = `মোট ${result.memberCount} জন সদস্য`;
+        document.getElementById('memberCount').innerHTML = `মোট ${result.memberCount} জন সদস্য পাবেন (${result.excludedCount} জন বাদ পড়েছেন)`;
         
         const tbody = document.getElementById('membersTableBody');
         tbody.innerHTML = result.results.map((m, i) => `
@@ -393,6 +413,7 @@ async function calculateAndPreview() {
                 <i class="fas fa-check-circle mr-2"></i> 
                 <strong>${result.memberCount}</strong> জন সদস্যের মধ্যে <strong>${formatAmountText(result.distributableAmount)}</strong> বিতরণ করা হবে। 
                 প্রতি টাকার লভ্যাংশ: <strong>${result.perTakaProfit.toFixed(4)}</strong> টাকা
+                ${result.excludedCount > 0 ? `<br><span class="text-amber-600">⚠️ ${result.excludedCount} জন সদস্য বাদ পড়েছেন (ব্যালেন্স ০)</span>` : ''}
             </div>
         `;
         
