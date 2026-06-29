@@ -408,7 +408,7 @@ async function calculateAndPreview() {
 }
 
 // ============================================================
-// লভ্যাংশ বন্টন নিশ্চিতকরণ
+// 🔥 আপডেটেড: লভ্যাংশ বন্টন নিশ্চিতকরণ
 // ============================================================
 async function confirmDistribution() {
     if (!previewData) {
@@ -445,74 +445,83 @@ async function confirmDistribution() {
         
         isProcessing = true;
         
-        // ১. কল্যাণ তহবিলে জমা
+        // ============================================================
+        // ১. মাস্টার এন্ট্রি তৈরি করুন (profit_distributions)
+        // ============================================================
+        const { data: masterData, error: masterError } = await client
+            .from('profit_distributions')
+            .insert([{
+                month: month,
+                year: year,
+                totalprofit: totalProfit,
+                deductionpercent: welfarePercent,
+                deductionamount: previewData.welfareAmount,
+                totaldistributed: previewData.distributableAmount,
+                eligiblemembers: previewData.memberCount,
+                welfarefundadded: previewData.welfareAmount,
+                status: 'approved',
+                distributed_at: new Date().toISOString()
+            }])
+            .select();
+        
+        if (masterError) throw masterError;
+        const distributionId = masterData[0].id;
+        console.log('✅ মাস্টার এন্ট্রি তৈরি:', distributionId);
+        
+        // ============================================================
+        // ২. কল্যাণ তহবিলে জমা দিন (welfare_fund)
+        // ============================================================
         if (previewData.welfareAmount > 0) {
             const { error: welfareError } = await client
                 .from('welfare_fund')
                 .insert([{
                     total: previewData.welfareAmount,
-                    title: `লভ্যাংশ বন্টন থেকে কল্যাণ তহবিল (${month} ${year})`,
                     description: `${month} ${year} মাসের লাভ ${formatAmountText(totalProfit)} থেকে ${welfarePercent}% (${formatAmountText(previewData.welfareAmount)}) কল্যাণ তহবিলে জমা`,
                     created_at: new Date().toISOString(),
-                    last_updated: new Date().toISOString(),
-                    created_by: 'system',
-                    reference_type: 'profit_distribution',
-                    reference_id: `profit_${month}_${year}`
+                    last_updated: new Date().toISOString()
                 }]);
-            if (welfareError) console.error('Welfare insert error:', welfareError);
+            if (welfareError) {
+                console.error('Welfare insert error:', welfareError);
+            } else {
+                console.log('✅ কল্যাণ তহবিলে জমা:', previewData.welfareAmount);
+            }
         }
         
-        // ২. প্রতিটি সদস্যের লভ্যাংশ আপডেট ও ইতিহাস সংরক্ষণ
+        // ============================================================
+        // ৩. প্রতিটি সদস্যের ইতিহাস ও অ্যাকাউন্ট আপডেট করুন
+        // ============================================================
         let successCount = 0;
         const historyEntries = [];
         
         for (const m of previewData.results) {
             if (m.totalProfit > 0) {
-                // সঞ্চয় লভ্যাংশ আপডেট
+                // অ্যাকাউন্ট আপডেট করুন (members টেবিল)
+                const updates = {};
                 if (m.savingsProfit > 0) {
-                    await client
-                        .from('members')
-                        .update({ 
-                            profit_balance_savings: (m.profit_balance_savings || 0) + m.savingsProfit 
-                        })
-                        .eq('member_id', m.member_id);
+                    updates.profit_balance_savings = (m.profit_balance_savings || 0) + m.savingsProfit;
                 }
-                
-                // রেফারেল লভ্যাংশ আপডেট
                 if (m.referralBonusProfit > 0) {
-                    await client
-                        .from('members')
-                        .update({ 
-                            referral_bonus: (m.referral_bonus || 0) + m.referralBonusProfit 
-                        })
-                        .eq('member_id', m.member_id);
+                    updates.referral_bonus = (m.referral_bonus || 0) + m.referralBonusProfit;
                 }
-                
-                // সঞ্চয় ব্যালেন্স লভ্যাংশ আপডেট
                 if (m.savingsBalanceProfit > 0) {
-                    await client
-                        .from('members')
-                        .update({ 
-                            balance: (m.balance || 0) + m.savingsBalanceProfit 
-                        })
-                        .eq('member_id', m.member_id);
+                    updates.balance = (m.balance || 0) + m.savingsBalanceProfit;
+                }
+                if (m.referralBalanceProfit > 0) {
+                    updates.profit_balance_referral = (m.profit_balance_referral || 0) + m.referralBalanceProfit;
                 }
                 
-                // রেফারেল ব্যালেন্স লভ্যাংশ আপডেট
-                if (m.referralBalanceProfit > 0) {
-                    // referral_bonus হিসেবে যোগ করা হচ্ছে
+                if (Object.keys(updates).length > 0) {
                     await client
                         .from('members')
-                        .update({ 
-                            referral_bonus: (m.referral_bonus || 0) + m.referralBalanceProfit 
-                        })
+                        .update(updates)
                         .eq('member_id', m.member_id);
                 }
                 
                 successCount++;
                 
-                // ইতিহাস এন্ট্রি
+                // ইতিহাস এন্ট্রি তৈরি করুন
                 historyEntries.push({
+                    distribution_id: distributionId,
                     member_id: m.member_id,
                     member_name: m.full_name,
                     month: month,
@@ -536,7 +545,9 @@ async function confirmDistribution() {
             }
         }
         
-        // ৩. বন্টন ইতিহাস সংরক্ষণ
+        // ============================================================
+        // ৪. ইতিহাস সংরক্ষণ করুন (profit_distribution_history)
+        // ============================================================
         if (historyEntries.length > 0) {
             const { error: historyError } = await client
                 .from('profit_distribution_history')
@@ -544,30 +555,10 @@ async function confirmDistribution() {
             
             if (historyError) {
                 console.error('History insert error:', historyError);
-                // কিন্তু লভ্যাংশ তো দেওয়া হয়ে গেছে, তাই error দেখালেও চলবে
+            } else {
+                console.log(`✅ ${historyEntries.length} টি ইতিহাস এন্ট্রি তৈরি`);
             }
         }
-        
-        // ৪. মাস্টার এন্ট্রি সংরক্ষণ
-        const { error: masterError } = await client
-            .from('profit_distributions')
-            .insert([{
-                month: month,
-                year: year,
-                totalprofit: totalProfit,
-                total_profit: totalProfit,
-                distributed_amount: previewData.distributableAmount,
-                deductionpercent: welfarePercent,
-                deductionamount: previewData.welfareAmount,
-                totaldistributed: previewData.totalDistributed,
-                eligiblemembers: previewData.memberCount,
-                welfarefundadded: previewData.welfareAmount,
-                status: 'approved',
-                distributed_at: new Date().toISOString(),
-                created_by: 'system'
-            }]);
-        
-        if (masterError) console.error('Master insert error:', masterError);
         
         showToast(`✅ ${successCount} জন সদস্যের মধ্যে লভ্যাংশ বিতরণ সম্পন্ন!`, 'success');
         
@@ -584,7 +575,7 @@ async function confirmDistribution() {
         
     } catch(e) {
         console.error('Distribution error:', e);
-        showToast('লভ্যাংশ বন্টন ব্যর্থ!', 'error');
+        showToast('লভ্যাংশ বন্টন ব্যর্থ: ' + e.message, 'error');
         confirmBtn.disabled = false;
         confirmBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i> বন্টন নিশ্চিত করুন';
         isProcessing = false;
