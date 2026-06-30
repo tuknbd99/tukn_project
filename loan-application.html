@@ -2206,180 +2206,196 @@
             }
         });
 
-        // ===== 🔥 আপডেটেড লোন আবেদন জমা (Success Modal সহ) =====
-        window.submitLoanApplication = async function() {
-            if (!currentMember) {
-                showAlert('❌ প্রথমে সদস্য যাচাই করুন!', 'error');
-                return;
-            }
+// ============================================================
+// 🔥 লোন আবেদন জমা (সঠিক কলামের নাম সহ)
+// ============================================================
+window.submitLoanApplication = async function() {
+    console.log("🔍 submitLoanApplication() কল হয়েছে");
+    
+    if (!currentMember) {
+        showAlert('❌ প্রথমে সদস্য যাচাই করুন!', 'error');
+        return;
+    }
 
-            const loanType = document.getElementById('loanType').value;
-            const amount = parseFloat(document.getElementById('loanAmount').value) || 0;
-            const months = parseInt(document.getElementById('duration').value) || 0;
-            const financeType = document.getElementById('financeType').value;
-            const lateFeePercent = 2;
-            const gracePeriod = 5;
+    const loanType = document.getElementById('loanType').value;
+    const amount = parseFloat(document.getElementById('loanAmount').value) || 0;
+    const months = parseInt(document.getElementById('duration').value) || 0;
+    const financeType = document.getElementById('financeType').value;
+    const lateFeePercent = 2;
+    const gracePeriod = 5;
 
-            let loanStartDate = document.getElementById('loanStartDate').value;
-            if (!loanStartDate) {
-                loanStartDate = new Date().toISOString().split('T')[0];
-            }
+    let loanStartDate = document.getElementById('loanStartDate').value;
+    if (!loanStartDate) {
+        loanStartDate = new Date().toISOString().split('T')[0];
+    }
 
-            const guarantor1Name = document.getElementById('guarantor1Name')?.value.trim();
-            const guarantor2Name = document.getElementById('guarantor2Name')?.value.trim();
+    const guarantor1Name = document.getElementById('guarantor1Name')?.value.trim();
+    const guarantor2Name = document.getElementById('guarantor2Name')?.value.trim();
 
-            if (!guarantor1Name) {
-                showAlert('❌ প্রথম জামিনদারের নাম দিন!', 'error');
-                return;
-            }
-            if (!guarantor2Name) {
-                showAlert('❌ দ্বিতীয় জামিনদারের নাম দিন!', 'error');
-                return;
-            }
+    // ভ্যালিডেশন
+    if (!guarantor1Name) {
+        showAlert('❌ প্রথম জামিনদারের নাম দিন!', 'error');
+        return;
+    }
+    if (!guarantor2Name) {
+        showAlert('❌ দ্বিতীয় জামিনদারের নাম দিন!', 'error');
+        return;
+    }
+    if (!loanType) {
+        showAlert('❌ লোনের ধরন নির্বাচন করুন!', 'error');
+        return;
+    }
+    if (amount <= 0) {
+        showAlert('❌ লোনের পরিমাণ দিন!', 'error');
+        return;
+    }
+    if (months <= 0) {
+        showAlert('❌ লোনের মেয়াদ দিন!', 'error');
+        return;
+    }
 
-            if (!loanType) {
-                showAlert('❌ লোনের ধরন নির্বাচন করুন!', 'error');
-                return;
-            }
-            if (amount <= 0) {
-                showAlert('❌ লোনের পরিমাণ দিন!', 'error');
-                return;
-            }
-            if (months <= 0) {
-                showAlert('❌ লোনের মেয়াদ দিন!', 'error');
-                return;
-            }
+    const client = initSupabaseClient();
+    if (!client) {
+        showAlert('সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
 
-            const client = initSupabaseClient();
-            if (!client) {
-                showAlert('সার্ভার সংযোগ সমস্যা!', 'error');
-                return;
-            }
+    const profitRate = getProfitRate(months);
+    const profit = (amount * profitRate * (months / 12)) / 100;
+    const total = amount + profit;
+    const installmentType = document.getElementById('installmentType').value;
+    let emi = total / months;
+    if (installmentType === 'weekly') emi = total / (months * 4);
 
-            const profitRate = getProfitRate(months);
-            const profit = (amount * profitRate * (months / 12)) / 100;
-            const total = amount + profit;
-            const installmentType = document.getElementById('installmentType').value;
-            let emi = total / months;
-            if (installmentType === 'weekly') emi = total / (months * 4);
+    // অতিরিক্ত ডেটা
+    let additionalData = {};
+    const loanTypeValue = document.getElementById('loanType').value;
 
-            let additionalData = {};
-            const loanTypeValue = document.getElementById('loanType').value;
-
-            if (loanTypeValue === 'ব্যবসায়ী লোন') {
-                additionalData = {
-                    business_name: document.getElementById('businessName')?.value || '',
-                    business_type: document.getElementById('businessType')?.value || '',
-                    turnover: document.getElementById('turnover')?.value || '',
-                    annual_profit: document.getElementById('annualProfit')?.value || '',
-                    business_address: document.getElementById('businessAddress')?.value || '',
-                    trade_license: document.getElementById('tradeLicense')?.value || '',
-                    business_start_date: document.getElementById('businessStartDate')?.value || '',
-                    business_details: document.getElementById('businessDetails')?.value || ''
-                };
-            } else if (loanTypeValue === 'শিক্ষা লোন') {
-                additionalData = {
-                    institute_name: document.getElementById('instituteName')?.value || '',
-                    student_class: document.getElementById('studentClass')?.value || '',
-                    academic_year: document.getElementById('academicYear')?.value || '',
-                    roll_number: document.getElementById('rollNumber')?.value || '',
-                    registration_no: document.getElementById('registrationNo')?.value || '',
-                    institute_address: document.getElementById('instituteAddress')?.value || ''
-                };
-            } else if (loanTypeValue === 'গৃহ নির্মাণ' || loanTypeValue === 'গৃহ সংস্কার') {
-                additionalData = {
-                    work_type: document.getElementById('workType')?.value || '',
-                    home_location: document.getElementById('homeLocation')?.value || '',
-                    home_area: document.getElementById('homeArea')?.value || '',
-                    construction_cost: document.getElementById('constructionCost')?.value || '',
-                    contractor: document.getElementById('contractor')?.value || '',
-                    project_details: document.getElementById('projectDetails')?.value || ''
-                };
-            } else if (loanTypeValue === 'জমি ক্রয়') {
-                additionalData = {
-                    land_location: document.getElementById('landLocation')?.value || '',
-                    land_area: document.getElementById('landArea')?.value || '',
-                    dag_no: document.getElementById('dagNo')?.value || '',
-                    khatian_no: document.getElementById('khatianNo')?.value || '',
-                    owner_name: document.getElementById('ownerName')?.value || '',
-                    owner_mobile: document.getElementById('ownerMobile')?.value || '',
-                    land_details: document.getElementById('landDetails')?.value || ''
-                };
-            } else if (loanTypeValue === 'জরুরি লোন') {
-                additionalData = {
-                    emergency_reason: document.getElementById('emergencyReason')?.value || '',
-                    emergency_doc: document.getElementById('emergencyDoc')?.value || '',
-                    hospital_name: document.getElementById('hospitalName')?.value || ''
-                };
-            }
-
-            const guarantorData = getGuarantorData();
-
-            const loanData = {
-                application_no: document.getElementById('applicationNo').innerText,
-                member_id: currentMember.member_id,
-                member_name: currentMember.full_name || currentMember.name,
-                member_mobile: currentMember.mobile,
-                member_address: currentMember.address || '',
-                monthly_savings: currentMember.monthly_savings || 500,
-                loan_type: loanType,
-                finance_type: financeType,
-                loan_amount: amount,
-                duration_months: months,
-                profit_rate: profitRate,
-                profit_amount: profit,
-                total_payable: total,
-                installment_type: installmentType,
-                emi_amount: emi,
-                loan_start_date: loanStartDate,
-                late_fee_percent: lateFeePercent,
-                grace_period_days: gracePeriod,
-                additional_data: additionalData,
-                guarantors: guarantorData,
-                status: 'pending',
-                submitted_at: new Date().toISOString()
-            };
-
-            const submitBtn = document.querySelector('.btn-blue');
-            if (!submitBtn) return;
-            const originalText = submitBtn.innerHTML;
-            submitBtn.innerHTML = '<span class="loading"></span> জমা হচ্ছে...';
-            submitBtn.disabled = true;
-
-            try {
-                const { error } = await client.from('loan_applications').insert([loanData]);
-                if (error) {
-                    console.error('❌ Insert Error:', error);
-                    showAlert('❌ আবেদন জমা দিতে ব্যর্থ! ' + (error.message || 'আবার চেষ্টা করুন'), 'error');
-                    submitBtn.innerHTML = originalText;
-                    submitBtn.disabled = false;
-                    return;
-                }
-
-                // Success Modal দেখান
-                showSuccessModal(loanData);
-
-                document.getElementById('statusBadge').innerHTML = '✅ আবেদন জমা হয়েছে';
-                document.getElementById('statusBadge').style.background = '#0d7c38';
-
-                // ফর্ম রিসেট
-                document.getElementById('loanMemberId').value = '';
-                document.getElementById('loanMemberName').value = '';
-                document.getElementById('loanType').value = '';
-                document.getElementById('loanAmount').value = '';
-                document.getElementById('duration').value = '';
-                document.getElementById('loanStartDate').value = new Date().toISOString().split('T')[0];
-                document.getElementById('dynamicFields').innerHTML = '';
-                document.getElementById('dynamicFields').classList.remove('show');
-
-            } catch (e) {
-                console.error('Submit error:', e);
-                showAlert('❌ আবেদন জমা দিতে ব্যর্থ! ' + (e.message || 'আবার চেষ্টা করুন'), 'error');
-            } finally {
-                submitBtn.innerHTML = originalText;
-                submitBtn.disabled = false;
-            }
+    if (loanTypeValue === 'ব্যবসায়ী লোন') {
+        additionalData = {
+            business_name: document.getElementById('businessName')?.value || '',
+            business_type: document.getElementById('businessType')?.value || '',
+            turnover: document.getElementById('turnover')?.value || '',
+            annual_profit: document.getElementById('annualProfit')?.value || '',
+            business_address: document.getElementById('businessAddress')?.value || '',
+            trade_license: document.getElementById('tradeLicense')?.value || '',
+            business_start_date: document.getElementById('businessStartDate')?.value || '',
+            business_details: document.getElementById('businessDetails')?.value || ''
         };
+    } else if (loanTypeValue === 'শিক্ষা লোন') {
+        additionalData = {
+            institute_name: document.getElementById('instituteName')?.value || '',
+            student_class: document.getElementById('studentClass')?.value || '',
+            academic_year: document.getElementById('academicYear')?.value || '',
+            roll_number: document.getElementById('rollNumber')?.value || '',
+            registration_no: document.getElementById('registrationNo')?.value || '',
+            institute_address: document.getElementById('instituteAddress')?.value || ''
+        };
+    } else if (loanTypeValue === 'গৃহ নির্মাণ' || loanTypeValue === 'গৃহ সংস্কার') {
+        additionalData = {
+            work_type: document.getElementById('workType')?.value || '',
+            home_location: document.getElementById('homeLocation')?.value || '',
+            home_area: document.getElementById('homeArea')?.value || '',
+            construction_cost: document.getElementById('constructionCost')?.value || '',
+            contractor: document.getElementById('contractor')?.value || '',
+            project_details: document.getElementById('projectDetails')?.value || ''
+        };
+    } else if (loanTypeValue === 'জমি ক্রয়') {
+        additionalData = {
+            land_location: document.getElementById('landLocation')?.value || '',
+            land_area: document.getElementById('landArea')?.value || '',
+            dag_no: document.getElementById('dagNo')?.value || '',
+            khatian_no: document.getElementById('khatianNo')?.value || '',
+            owner_name: document.getElementById('ownerName')?.value || '',
+            owner_mobile: document.getElementById('ownerMobile')?.value || '',
+            land_details: document.getElementById('landDetails')?.value || ''
+        };
+    } else if (loanTypeValue === 'জরুরি লোন') {
+        additionalData = {
+            emergency_reason: document.getElementById('emergencyReason')?.value || '',
+            emergency_doc: document.getElementById('emergencyDoc')?.value || '',
+            hospital_name: document.getElementById('hospitalName')?.value || ''
+        };
+    }
+
+    const guarantorData = getGuarantorData();
+
+    // ============================================================
+    // 🔥 সঠিক কলামের নাম ব্যবহার করুন
+    // ============================================================
+    const loanData = {
+        application_no: document.getElementById('applicationNo').innerText,
+        member_id: currentMember.member_id,
+        member_name: currentMember.full_name || currentMember.name,
+        member_mobile: currentMember.mobile || '',
+        member_address: currentMember.address || '',
+        monthly_savings: currentMember.monthly_savings || 500,
+        loan_type: loanType,
+        finance_type: financeType,
+        amount: amount,  // ← loan_amount নয়, amount
+        duration: months, // ← duration_months নয়, duration
+        profit_rate: profitRate,
+        profit_amount: profit,
+        total_payable: total,
+        installment_type: installmentType,
+        emi_amount: emi,
+        loan_start_date: loanStartDate,
+        late_fee_percent: lateFeePercent,
+        grace_period_days: gracePeriod,
+        additional_data: additionalData,
+        guarantors: guarantorData,
+        status: 'pending',
+        submitted_at: new Date().toISOString()
+    };
+
+    console.log("📤 লোন ডেটা (সঠিক কলাম):", loanData);
+
+    const submitBtn = document.querySelector('.btn-blue');
+    if (!submitBtn) return;
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<span class="loading"></span> জমা হচ্ছে...';
+    submitBtn.disabled = true;
+
+    try {
+        const { data, error } = await client
+            .from('loan_applications')
+            .insert([loanData])
+            .select();
+
+        if (error) {
+            console.error('❌ Insert Error:', error);
+            showAlert('❌ আবেদন জমা দিতে ব্যর্থ! ' + (error.message || 'আবার চেষ্টা করুন'), 'error');
+            submitBtn.innerHTML = originalText;
+            submitBtn.disabled = false;
+            return;
+        }
+
+        console.log('✅ লোন জমা হয়েছে:', data);
+
+        // Success Modal দেখান
+        showSuccessModal(loanData);
+
+        document.getElementById('statusBadge').innerHTML = '✅ আবেদন জমা হয়েছে';
+        document.getElementById('statusBadge').style.background = '#0d7c38';
+
+        // ফর্ম রিসেট
+        document.getElementById('loanMemberId').value = '';
+        document.getElementById('loanMemberName').value = '';
+        document.getElementById('loanType').value = '';
+        document.getElementById('loanAmount').value = '';
+        document.getElementById('duration').value = '';
+        document.getElementById('loanStartDate').value = new Date().toISOString().split('T')[0];
+        document.getElementById('dynamicFields').innerHTML = '';
+        document.getElementById('dynamicFields').classList.remove('show');
+
+    } catch (e) {
+        console.error('Submit error:', e);
+        showAlert('❌ আবেদন জমা দিতে ব্যর্থ! ' + (e.message || 'আবার চেষ্টা করুন'), 'error');
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
+};
 
         document.getElementById('memberSearchInput').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
