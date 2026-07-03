@@ -332,7 +332,7 @@ async function getMemberFundsUpToMonth(memberId, targetMonth, targetYear) {
 }
 
 // ============================================================
-// লভ্যাংশ গণনা (ঐ মাস পর্যন্ত জমা হওয়া সবকিছুর উপর ভিত্তি করে)
+// লভ্যাংশ গণনা (সঠিক balance ব্যবহার করে)
 // ============================================================
 async function calculateProfitDistribution(totalProfit, welfarePercent, month, year) {
     const welfareAmount = totalProfit * (welfarePercent / 100);
@@ -341,11 +341,12 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
     const client = initSupabase();
     if (!client) return null;
     
-    // সকল সক্রিয় সদস্যের ডেটা নিন
+    // ১. সকল সক্রিয় সদস্যের ডেটা নিন (balance সহ)
     const { data: allMembers, error } = await client
         .from('members')
-        .select('member_id, full_name, mobile, status')
-        .eq('status', 'active');
+        .select('member_id, full_name, mobile, balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral, status')
+        .eq('status', 'active')
+        .order('balance', { ascending: false });  // সবচেয়ে বেশি ব্যালেন্স যাদের তারা আগে
     
     if (error) {
         console.error('Error loading members:', error);
@@ -358,33 +359,47 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
         return null;
     }
     
-    // প্রতিটি সদস্যের ঐ মাস পর্যন্ত ফান্ড বের করুন
+    console.log(`✅ ${allMembers.length} জন সক্রিয় সদস্য পাওয়া গেছে`);
+    
+    // ২. প্রতিটি সদস্যের মোট ফান্ড গণনা করুন
     const memberFunds = [];
     let totalFund = 0;
     
     for (const member of allMembers) {
-        const funds = await getMemberFundsUpToMonth(member.member_id, month, year);
-        if (funds && funds.totalFund > 0) {
+        const balance = member.balance || 0;
+        const referralBonus = member.referral_bonus || 0;
+        const profitSavings = member.profit_balance_savings || 0;
+        const profitInvestment = member.profit_balance_investment || 0;
+        const profitReferral = member.profit_balance_referral || 0;
+        const fund = balance + referralBonus + profitSavings + profitInvestment + profitReferral;
+        
+        console.log(`🔍 ${member.member_id} (${member.full_name}): সঞ্চয়=${balance}, রেফারেল=${referralBonus}, ফান্ড=${fund}`);
+        
+        if (fund > 0) {
             memberFunds.push({
                 ...member,
-                ...funds
+                balance: balance,
+                referralBonus: referralBonus,
+                profitSavings: profitSavings,
+                profitInvestment: profitInvestment,
+                profitReferral: profitReferral,
+                totalFund: fund
             });
-            totalFund += funds.totalFund;
-        } else {
-            // ডিবাগ: দেখুন কেন ফান্ড ০ হচ্ছে
-            console.log(`⚠️ ${member.member_id} (${member.full_name}) এর ফান্ড ০:`, funds);
+            totalFund += fund;
         }
     }
+    
+    console.log(`✅ ${memberFunds.length} জন যোগ্য সদস্য, মোট ফান্ড: ${totalFund}`);
     
     if (memberFunds.length === 0) {
         showToast('কোনো যোগ্য সদস্য নেই! (সবার ফান্ড ০)', 'error');
         return null;
     }
     
-    // প্রতি টাকার লভ্যাংশ
+    // ৩. প্রতি টাকার লভ্যাংশ
     const perTakaProfit = totalFund > 0 ? distributableAmount / totalFund : 0;
     
-    // প্রতিটি সদস্যের লভ্যাংশ গণনা
+    // ৪. প্রতিটি সদস্যের লভ্যাংশ গণনা
     let totalDistributed = 0;
     const results = memberFunds.map(m => {
         const profitShare = perTakaProfit * m.totalFund;
@@ -394,18 +409,18 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
             member_id: m.member_id,
             full_name: m.full_name,
             mobile: m.mobile,
-            totalSavings: m.totalSavings,
+            totalSavings: m.balance,
             referralBonus: m.referralBonus,
             profitSavings: m.profitSavings,
             profitInvestment: m.profitInvestment,
             profitReferral: m.profitReferral,
-            totalProfitReceived: m.totalProfitReceived,
             totalFund: m.totalFund,
             profitShare: profitShare,
             perTaka: perTakaProfit
         };
     });
     
+    // ৫. ফলাফল রিটার্ন
     return {
         totalProfit,
         welfareAmount,
