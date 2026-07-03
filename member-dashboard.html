@@ -3607,7 +3607,7 @@ function formatDateTime(dateString) {
 }
 
 // ============================================================
-// generateStatement - আপডেটেড (সুন্দর ফরম্যাটে)
+// generateStatement - সম্পূর্ণ আপডেটেড (সব টেবিল সহ)
 // ============================================================
 async function generateStatement() {
     if (!currentUser) return;
@@ -3629,10 +3629,8 @@ async function generateStatement() {
 
     try {
         // ============================================
-        // ১. সকল লেনদেন ডাটা সংগ্রহ
+        // ১. সঞ্চয় জমা (payments)
         // ============================================
-        
-        // ১.১ পেমেন্ট (সঞ্চয় জমা)
         const { data: payments, error: payErr } = await client
             .from('payments')
             .select('*')
@@ -3640,7 +3638,9 @@ async function generateStatement() {
             .eq('status', 'approved')
             .order('submitted_at', { ascending: true });
 
-        // ১.২ উত্তোলন
+        // ============================================
+        // ২. উত্তোলন (withdrawals)
+        // ============================================
         const { data: withdrawals, error: withErr } = await client
             .from('withdrawals')
             .select('*')
@@ -3648,7 +3648,9 @@ async function generateStatement() {
             .eq('status', 'approved')
             .order('requested_at', { ascending: true });
 
-        // ১.৩ ট্রান্সফার (প্রেরক)
+        // ============================================
+        // ৩. ট্রান্সফার - প্রেরক (transfer_requests)
+        // ============================================
         const { data: sentTransfers, error: sentErr } = await client
             .from('transfer_requests')
             .select('*')
@@ -3656,7 +3658,9 @@ async function generateStatement() {
             .eq('status', 'approved')
             .order('requested_at', { ascending: true });
 
-        // ১.৪ ট্রান্সফার (গ্রহীতা)
+        // ============================================
+        // ৪. ট্রান্সফার - গ্রহীতা (transfer_requests)
+        // ============================================
         const { data: receivedTransfers, error: recvErr } = await client
             .from('transfer_requests')
             .select('*')
@@ -3664,7 +3668,9 @@ async function generateStatement() {
             .eq('status', 'approved')
             .order('requested_at', { ascending: true });
 
-        // ১.৫ লোন (নেওয়া)
+        // ============================================
+        // ৫. লোন প্রাপ্তি (loan_applications)
+        // ============================================
         const { data: loansTaken, error: loanErr } = await client
             .from('loan_applications')
             .select('*')
@@ -3672,31 +3678,87 @@ async function generateStatement() {
             .eq('status', 'approved')
             .order('approved_at', { ascending: true });
 
-        // ১.৬ লোন পরিশোধ (ইএমআই)
-        const { data: loanPayments, error: loanPayErr } = await client
-            .from('loan_payments')
-            .select('*, loan_applications!inner(member_id)')
-            .eq('loan_applications.member_id', currentUser.id)
-            .eq('status', 'approved')
-            .order('payment_date', { ascending: true });
+        // ============================================
+        // ৬. লোন পরিশোধ (loan_payments) - নতুন টেবিল
+        // ============================================
+        let loanPayments = [];
+        try {
+            const { data: lpData, error: lpErr } = await client
+                .from('loan_payments')
+                .select('*, loan_applications!inner(member_id)')
+                .eq('loan_applications.member_id', currentUser.id)
+                .eq('status', 'approved')
+                .order('payment_date', { ascending: true });
+            
+            if (!lpErr && lpData) {
+                loanPayments = lpData;
+            }
+        } catch(e) {
+            console.log('loan_payments টেবিল নেই বা ডাটা নেই');
+            loanPayments = [];
+        }
 
-        if (payErr || withErr || sentErr || recvErr || loanErr || loanPayErr) {
-            console.error('তথ্য লোড এরর:', payErr, withErr, sentErr, recvErr, loanErr, loanPayErr);
+        // ============================================
+        // ৭. রেফারেল বোনাস (referral_bonus_log)
+        // ============================================
+        let bonusLogs = [];
+        try {
+            const { data: bData, error: bErr } = await client
+                .from('referral_bonus_log')
+                .select('*')
+                .eq('member_id', currentUser.id)
+                .order('created_at', { ascending: true });
+            
+            if (!bErr && bData) {
+                bonusLogs = bData;
+            }
+        } catch(e) {
+            console.log('referral_bonus_log টেবিল নেই বা ডাটা নেই');
+            bonusLogs = [];
+        }
+
+        // ============================================
+        // ৮. লভ্যাংশ (profit_distribution_history)
+        // ============================================
+        let profitHistory = [];
+        try {
+            const { data: pData, error: pErr } = await client
+                .from('profit_distribution_history')
+                .select('*')
+                .eq('member_id', currentUser.id)
+                .order('distributed_at', { ascending: true });
+            
+            if (!pErr && pData) {
+                profitHistory = pData;
+            }
+        } catch(e) {
+            console.log('profit_distribution_history টেবিল নেই বা ডাটা নেই');
+            profitHistory = [];
+        }
+
+        // ============================================
+        // ৯. রেফারেল কমিশন (স্টেটমেন্টের জন্য)
+        // ============================================
+        const { data: allMembers, error: allErr } = await client
+            .from('members')
+            .select('member_id, full_name, mobile, monthly_savings, referred_by, referral_code, status, created_at');
+
+        if (payErr || withErr || sentErr || recvErr || loanErr || allErr) {
+            console.error('তথ্য লোড এরর:', payErr, withErr, sentErr, recvErr, loanErr, allErr);
             showToast('তথ্য লোড করতে সমস্যা!', 'error');
             return;
         }
 
         // ============================================
-        // ২. লেনদেন একত্রে জমা করা
+        // ১০. সব লেনদেন একত্রে জমা করা
         // ============================================
         let transactions = [];
 
-        // ২.১ পেমেন্ট (সঞ্চয় জমা) - জমা
+        // ১০.১ পেমেন্ট (সঞ্চয় জমা) - জমা
         if (payments) {
             payments.forEach(p => {
                 const date = p.submitted_at || p.created_at;
                 const approver = p.approved_by || 'অ্যাডমিন';
-                const memberIdLast4 = currentUser.id.slice(-4);
                 transactions.push({
                     date: date,
                     description: `মাসিক সঞ্চয় (${p.month || ''} ${p.year || ''})`,
@@ -3709,24 +3771,24 @@ async function generateStatement() {
             });
         }
 
-        // ২.২ ট্রান্সফার প্রাপ্তি (গ্রহীতা) - জমা
+        // ১০.২ ট্রান্সফার প্রাপ্তি (গ্রহীতা) - জমা
         if (receivedTransfers) {
             receivedTransfers.forEach(t => {
                 const date = t.requested_at || t.created_at;
                 const senderIdLast4 = t.sender_id ? t.sender_id.slice(-4) : '----';
                 transactions.push({
                     date: date,
-                    description: `সঞ্চয় প্রাপ্তি (প্রেরক: ${t.sender_name || t.sender_id})`,
+                    description: `📥 সঞ্চয় প্রাপ্তি (প্রেরক: ${t.sender_name || t.sender_id})`,
                     deposit: t.amount,
                     withdrawal: 0,
-                    note: `প্রেরকের আইডি শেষ ৪ ডিজিট: ${senderIdLast4}`,
+                    note: `প্রেরকের আইডি শেষ ৪ ডিজিট: ${senderIdLast4} | ${t.fund_type || 'সঞ্চয়'}`,
                     approver: t.approved_by || 'অ্যাডমিন',
                     type: 'transfer_received'
                 });
             });
         }
 
-        // ২.৩ ট্রান্সফার প্রেরণ (প্রেরক) - উত্তোলন
+        // ১০.৩ ট্রান্সফার প্রেরণ (প্রেরক) - উত্তোলন
         if (sentTransfers) {
             sentTransfers.forEach(t => {
                 const date = t.requested_at || t.created_at;
@@ -3734,7 +3796,7 @@ async function generateStatement() {
                 const fundType = t.fund_type || 'সঞ্চয়';
                 transactions.push({
                     date: date,
-                    description: `ট্রান্সফার (${fundType}) → ${t.receiver_name || t.receiver_id}`,
+                    description: `📤 ট্রান্সফার (${fundType}) → ${t.receiver_name || t.receiver_id}`,
                     deposit: 0,
                     withdrawal: t.amount,
                     note: `গ্রহীতার আইডি শেষ ৪ ডিজিট: ${receiverIdLast4}`,
@@ -3744,14 +3806,14 @@ async function generateStatement() {
             });
         }
 
-        // ২.৪ লোন গ্রহণ - জমা (লোনের টাকা পেয়েছি)
+        // ১০.৪ লোন গ্রহণ - জমা
         if (loansTaken) {
             loansTaken.forEach(l => {
                 const date = l.approved_at || l.submitted_at;
                 const loanIdLast4 = l.id ? String(l.id).slice(-4) : '----';
                 transactions.push({
                     date: date,
-                    description: `লোন প্রাপ্তি (${l.loan_type || 'লোন'})`,
+                    description: `💰 লোন প্রাপ্তি (${l.loan_type || 'লোন'})`,
                     deposit: l.amount,
                     withdrawal: 0,
                     note: `লোন আইডি শেষ ৪ ডিজিট: ${loanIdLast4} | মেয়াদ: ${l.duration_months || 0} মাস`,
@@ -3761,24 +3823,28 @@ async function generateStatement() {
             });
         }
 
-        // ২.৫ লোন পরিশোধ (ইএমআই) - উত্তোলন
+        // ১০.৫ লোন পরিশোধ - উত্তোলন
         if (loanPayments) {
             loanPayments.forEach(lp => {
                 const date = lp.payment_date || lp.created_at;
                 const emiNo = lp.installment_no || '---';
+                let note = '';
+                if (lp.late_fee && lp.late_fee > 0) {
+                    note = `বিলম্ব ফি: ${lp.late_fee} টাকা`;
+                }
                 transactions.push({
                     date: date,
-                    description: `লোন পরিশোধ (কিস্তি #${emiNo})`,
+                    description: `💳 লোন পরিশোধ (কিস্তি #${emiNo})`,
                     deposit: 0,
                     withdrawal: lp.total_amount || lp.emi_amount || 0,
-                    note: lp.late_fee && lp.late_fee > 0 ? `বিলম্ব ফি: ${lp.late_fee} টাকা` : '',
+                    note: note,
                     approver: lp.approved_by || 'অ্যাডমিন',
                     type: 'loan_payment'
                 });
             });
         }
 
-        // ২.৬ উত্তোলন - উত্তোলন
+        // ১০.৬ উত্তোলন - উত্তোলন
         if (withdrawals) {
             withdrawals.forEach(w => {
                 const date = w.requested_at || w.created_at;
@@ -3799,60 +3865,50 @@ async function generateStatement() {
             });
         }
 
-        // ২.৭ রেফারেল বোনাস (যদি থাকে) - জমা
-        // রেফারেল বোনাসের জন্য আলাদা ডাটা নিতে হবে
-        const { data: memberData } = await client
-            .from('members')
-            .select('referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
-            .eq('member_id', currentUser.id)
-            .single();
-
-        if (memberData) {
-            // রেফারেল বোনাস (যদি > 0 থাকে)
-            if (memberData.referral_bonus > 0) {
-                // এখানে ধরে নিচ্ছি বোনাস একটি নির্দিষ্ট তারিখে যোগ হয়েছে
-                // 실제로는 bonus_history টেবিল থেকে তারিখ নিয়ে আসা ভালো
+        // ১০.৭ রেফারেল বোনাস - জমা
+        if (bonusLogs) {
+            bonusLogs.forEach(b => {
+                const date = b.created_at || b.date;
                 transactions.push({
-                    date: new Date().toISOString(),
-                    description: 'রেফারেল বোনাস',
-                    deposit: memberData.referral_bonus,
+                    date: date,
+                    description: `🎁 রেফারেল বোনাস`,
+                    deposit: b.amount || 0,
                     withdrawal: 0,
-                    note: 'রেফারেল কমিশন',
+                    note: b.note || `Level ${b.level || ''} কমিশন`,
                     approver: 'সিস্টেম',
                     type: 'bonus_credit'
                 });
-            }
+            });
+        }
 
-            // লভ্যাংশ (যদি > 0 থাকে)
-            const totalProfit = (memberData.profit_balance_savings || 0) + 
-                               (memberData.profit_balance_investment || 0) + 
-                               (memberData.profit_balance_referral || 0);
-            if (totalProfit > 0) {
+        // ১০.৮ লভ্যাংশ - জমা
+        if (profitHistory) {
+            profitHistory.forEach(p => {
+                const date = p.distributed_at || p.created_at;
                 transactions.push({
-                    date: new Date().toISOString(),
-                    description: 'লভ্যাংশ প্রাপ্তি',
-                    deposit: totalProfit,
+                    date: date,
+                    description: `📈 লভ্যাংশ প্রাপ্তি`,
+                    deposit: p.total_received || 0,
                     withdrawal: 0,
-                    note: 'সঞ্চয় + বিনিয়োগ + রেফারেল লভ্যাংশ',
+                    note: p.note || `${p.month || ''} ${p.year || ''} লভ্যাংশ`,
                     approver: 'সিস্টেম',
                     type: 'dividend_credit'
                 });
-            }
+            });
         }
 
         // ============================================
-        // ৩. তারিখ অনুযায়ী সাজানো
+        // ১১. তারিখ অনুযায়ী সাজানো
         // ============================================
         transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
 
         // ============================================
-        // ৪. তারিখ ফিল্টার
+        // ১২. তারিখ ফিল্টার
         // ============================================
         const startDateObj = new Date(fromDate);
         startDateObj.setHours(0,0,0,0);
         let openingBalance = 0;
         
-        // শুরুতে ওপেনিং ব্যালেন্স গণনা
         transactions.forEach(t => {
             const tDate = new Date(t.date);
             if (tDate < startDateObj) {
@@ -3868,7 +3924,7 @@ async function generateStatement() {
         });
 
         // ============================================
-        // ৫. স্টেটমেন্ট HTML তৈরি (আপনার ফরম্যাটে)
+        // ১৩. স্টেটমেন্ট HTML তৈরি
         // ============================================
         let runningBalance = openingBalance;
         let totalDeposit = 0;
@@ -3886,7 +3942,8 @@ async function generateStatement() {
             let rowClass = '';
             if (t.type === 'transfer_sent' || t.type === 'withdrawal' || t.type === 'loan_payment') {
                 rowClass = 'bg-amber-50';
-            } else if (t.type === 'transfer_received' || t.type === 'loan_received' || t.type === 'bonus_credit' || t.type === 'dividend_credit') {
+            } else if (t.type === 'transfer_received' || t.type === 'loan_received' || 
+                       t.type === 'bonus_credit' || t.type === 'dividend_credit') {
                 rowClass = 'bg-emerald-50';
             }
             
@@ -3958,7 +4015,7 @@ async function generateStatement() {
                 🔒 স্বয়ংক্রিয় জেনারেটেড রিপোর্ট | TUKNBD লেনদেন স্টেটমেন্ট
             </div>
             <div style="font-size: 10px; color: #9ca3af; text-align: center; margin-top: 4px;">
-                📌 ট্রান্সফার: 📤 (প্রেরক) / 📥 (গ্রহীতা) | লোন: 💰 প্রাপ্তি / 💳 পরিশোধ
+                📌 ট্রান্সফার: 📤 (প্রেরক) / 📥 (গ্রহীতা) | লোন: 💰 প্রাপ্তি / 💳 পরিশোধ | 🎁 বোনাস | 📈 লভ্যাংশ
             </div>
         `;
 
