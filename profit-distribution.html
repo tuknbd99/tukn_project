@@ -251,7 +251,9 @@ function formatAmountText(amount) {
     return formatAmount(amount) + ' টাকা';
 }
 
-// মাসের নাম থেকে ইংরেজি মাসের নাম পাওয়া
+// ============================================================
+// বাংলা মাস থেকে ইংরেজি মাসে রূপান্তর
+// ============================================================
 function getEnglishMonth(monthName) {
     const months = {
         'জানুয়ারি': 'January',
@@ -271,68 +273,92 @@ function getEnglishMonth(monthName) {
 }
 
 // ============================================================
-// নির্দিষ্ট মাস পর্যন্ত সদস্যের মোট ফান্ড বের করা (শুধু মাস ও বছর মিলিয়ে)
+// ইংরেজি মাস থেকে বাংলা মাসে রূপান্তর
 // ============================================================
-async function getMemberFundsUpToMonth(memberId, targetMonth, targetYear) {
+function getBengaliMonth(monthName) {
+    const months = {
+        'January': 'জানুয়ারি',
+        'February': 'ফেব্রুয়ারি',
+        'March': 'মার্চ',
+        'April': 'এপ্রিল',
+        'May': 'মে',
+        'June': 'জুন',
+        'July': 'জুলাই',
+        'August': 'আগস্ট',
+        'September': 'সেপ্টেম্বর',
+        'October': 'অক্টোবর',
+        'November': 'নভেম্বর',
+        'December': 'ডিসেম্বর'
+    };
+    return months[monthName] || monthName;
+}
+
+// ============================================================
+// নির্দিষ্ট মাস পর্যন্ত সদস্যের মোট সঞ্চয় বের করা
+// ============================================================
+async function getMemberSavingsUpToMonth(memberId, targetMonth, targetYear) {
     const client = initSupabase();
-    if (!client) return null;
+    if (!client) return 0;
     
     try {
-        const englishMonth = getEnglishMonth(targetMonth);
-        
-        // ১. ঐ মাস পর্যন্ত অনুমোদিত পেমেন্টের যোগফল (সঞ্চয়) - শুধু মাস ও বছর মিলিয়ে
-        const { data: payments } = await client
+        // সব অনুমোদিত পেমেন্ট আনা
+        const { data: payments, error } = await client
             .from('payments')
-            .select('amount')
+            .select('amount, year, month')
             .eq('member_id', memberId)
-            .eq('status', 'approved')
-            .eq('month', englishMonth)
-            .eq('year', targetYear);
+            .eq('status', 'approved');
         
-        const totalSavings = payments ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) : 0;
+        if (error) {
+            console.error('Payment error:', error);
+            return 0;
+        }
         
-        // ২. সদস্যের বর্তমান ডেটা (রেফারেল বোনাস, লভ্যাংশ ব্যালেন্স)
-        const { data: member } = await client
-            .from('members')
-            .select('referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral, balance')
-            .eq('member_id', memberId)
-            .single();
+        if (!payments || payments.length === 0) return 0;
         
-        // ৩. ঐ মাস পর্যন্ত লভ্যাংশ ইতিহাস (যে লভ্যাংশ ইতিমধ্যে পেয়েছে) - শুধু মাস ও বছর মিলিয়ে
-        const { data: history } = await client
-            .from('profit_distribution_history')
-            .select('total_received')
-            .eq('member_id', memberId)
-            .eq('month', targetMonth)
-            .eq('year', targetYear);
+        // মাসের ইনডেক্স তালিকা
+        const monthList = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
+        const targetIdx = monthList.indexOf(targetMonth);
         
-        const totalProfitReceived = history ? history.reduce((sum, h) => sum + (h.total_received || 0), 0) : 0;
+        let total = 0;
+        for (const p of payments) {
+            const pYear = parseInt(p.year);
+            // পেমেন্টের মাসকে বাংলায় রূপান্তর
+            let pMonth = p.month;
+            // যদি ইংরেজি হয় তাহলে বাংলায় রূপান্তর
+            const engToBeng = {
+                'January': 'জানুয়ারি',
+                'February': 'ফেব্রুয়ারি',
+                'March': 'মার্চ',
+                'April': 'এপ্রিল',
+                'May': 'মে',
+                'June': 'জুন',
+                'July': 'জুলাই',
+                'August': 'আগস্ট',
+                'September': 'সেপ্টেম্বর',
+                'October': 'অক্টোবর',
+                'November': 'নভেম্বর',
+                'December': 'ডিসেম্বর'
+            };
+            pMonth = engToBeng[pMonth] || pMonth;
+            
+            const paymentIdx = monthList.indexOf(pMonth);
+            
+            // শুধু ঐ মাস ও বছর পর্যন্ত যোগ করুন
+            if (pYear < targetYear || (pYear === targetYear && paymentIdx <= targetIdx)) {
+                total += p.amount || 0;
+            }
+        }
         
-        // মোট ফান্ড = সঞ্চয় + রেফারেল বোনাস + লভ্যাংশ ব্যালেন্স + ইতিহাসের লভ্যাংশ
-        const referralBonus = member?.referral_bonus || 0;
-        const profitSavings = member?.profit_balance_savings || 0;
-        const profitInvestment = member?.profit_balance_investment || 0;
-        const profitReferral = member?.profit_balance_referral || 0;
-        
-        const totalFund = totalSavings + referralBonus + profitSavings + profitInvestment + profitReferral + totalProfitReceived;
-        
-        return {
-            totalSavings: totalSavings,
-            referralBonus: referralBonus,
-            profitSavings: profitSavings,
-            profitInvestment: profitInvestment,
-            profitReferral: profitReferral,
-            totalProfitReceived: totalProfitReceived,
-            totalFund: totalFund
-        };
+        console.log(`💰 ${memberId}: ${targetMonth} ${targetYear} পর্যন্ত সঞ্চয় = ${total}`);
+        return total;
     } catch(e) {
-        console.error('Error getting member funds:', e);
-        return null;
+        console.error('Error getting member savings:', e);
+        return 0;
     }
 }
 
 // ============================================================
-// লভ্যাংশ গণনা (সঠিক balance ব্যবহার করে)
+// লভ্যাংশ গণনা (মাসভিত্তিক)
 // ============================================================
 async function calculateProfitDistribution(totalProfit, welfarePercent, month, year) {
     const welfareAmount = totalProfit * (welfarePercent / 100);
@@ -341,12 +367,11 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
     const client = initSupabase();
     if (!client) return null;
     
-    // ১. সকল সক্রিয় সদস্যের ডেটা নিন (balance সহ)
+    // ১. সকল সক্রিয় সদস্যের ডেটা নিন
     const { data: allMembers, error } = await client
         .from('members')
-        .select('member_id, full_name, mobile, balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral, status')
-        .eq('status', 'active')
-        .order('balance', { ascending: false });  // সবচেয়ে বেশি ব্যালেন্স যাদের তারা আগে
+        .select('member_id, full_name, mobile, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral, status')
+        .eq('status', 'active');
     
     if (error) {
         console.error('Error loading members:', error);
@@ -361,24 +386,26 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
     
     console.log(`✅ ${allMembers.length} জন সক্রিয় সদস্য পাওয়া গেছে`);
     
-    // ২. প্রতিটি সদস্যের মোট ফান্ড গণনা করুন
+    // ২. প্রতিটি সদস্যের ঐ মাস পর্যন্ত সঞ্চয় বের করুন
     const memberFunds = [];
     let totalFund = 0;
     
     for (const member of allMembers) {
-        const balance = member.balance || 0;
+        // ঐ মাস পর্যন্ত সঞ্চয়
+        const savingsUpToMonth = await getMemberSavingsUpToMonth(member.member_id, month, year);
+        
         const referralBonus = member.referral_bonus || 0;
         const profitSavings = member.profit_balance_savings || 0;
         const profitInvestment = member.profit_balance_investment || 0;
         const profitReferral = member.profit_balance_referral || 0;
-        const fund = balance + referralBonus + profitSavings + profitInvestment + profitReferral;
+        const fund = savingsUpToMonth + referralBonus + profitSavings + profitInvestment + profitReferral;
         
-        console.log(`🔍 ${member.member_id} (${member.full_name}): সঞ্চয়=${balance}, রেফারেল=${referralBonus}, ফান্ড=${fund}`);
+        console.log(`🔍 ${member.member_id} (${member.full_name}): সঞ্চয়(${month} পর্যন্ত)=${savingsUpToMonth}, রেফারেল=${referralBonus}, ফান্ড=${fund}`);
         
         if (fund > 0) {
             memberFunds.push({
                 ...member,
-                balance: balance,
+                totalSavings: savingsUpToMonth,
                 referralBonus: referralBonus,
                 profitSavings: profitSavings,
                 profitInvestment: profitInvestment,
@@ -392,7 +419,7 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
     console.log(`✅ ${memberFunds.length} জন যোগ্য সদস্য, মোট ফান্ড: ${totalFund}`);
     
     if (memberFunds.length === 0) {
-        showToast('কোনো যোগ্য সদস্য নেই! (সবার ফান্ড ০)', 'error');
+        showToast(`কোনো যোগ্য সদস্য নেই! (${month} ${year} পর্যন্ত ফান্ড ০)`, 'error');
         return null;
     }
     
@@ -409,7 +436,7 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
             member_id: m.member_id,
             full_name: m.full_name,
             mobile: m.mobile,
-            totalSavings: m.balance,
+            totalSavings: m.totalSavings,
             referralBonus: m.referralBonus,
             profitSavings: m.profitSavings,
             profitInvestment: m.profitInvestment,
@@ -420,7 +447,6 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
         };
     });
     
-    // ৫. ফলাফল রিটার্ন
     return {
         totalProfit,
         welfareAmount,
@@ -464,7 +490,7 @@ async function calculateAndPreview() {
         const result = await calculateProfitDistribution(totalProfit, welfarePercent, month, year);
         
         if (!result || result.memberCount === 0) {
-            showToast('কোনো যোগ্য সদস্য নেই! (সবার ফান্ড ০)', 'error');
+            showToast(`কোনো যোগ্য সদস্য নেই! (${month} ${year} পর্যন্ত ফান্ড ০)`, 'error');
             previewBtn.disabled = false;
             previewBtn.innerHTML = '<i class="fas fa-calculator mr-2"></i> প্রিভিউ দেখুন';
             return;
