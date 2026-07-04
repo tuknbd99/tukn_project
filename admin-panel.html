@@ -2392,46 +2392,460 @@ async function deleteLoan(loanId) {
 }
 
 // ============================================================
-// লোন প্রিন্ট ফাংশন
+// লোন প্রিন্ট ফাংশন (সম্পূর্ণ আপডেট)
 // ============================================================
 function printLoanDetails(loanId) {
     const loan = allLoansData.find(l => l.id == loanId);
     if (!loan) { showToast('লোন পাওয়া যায়নি!', 'error'); return; }
-    const printWindow = window.open('', '_blank', 'width=800,height=600,scrollbars=yes');
-    if (!printWindow) { showToast('পপ-আপ ব্লক করা হয়েছে!', 'error'); return; }
-    const statusMap = { 'pending': '⏳ বিচারাধীন', 'approved': '✅ অনুমোদিত', 'rejected': '❌ বাতিল' };
+    
+    const printWindow = window.open('', '_blank', 'width=900,height=700,scrollbars=yes');
+    if (!printWindow) {
+        showToast('পপ-আপ ব্লক করা হয়েছে!', 'error');
+        return;
+    }
+    
+    const statusMap = { 
+        'pending': '⏳ বিচারাধীন', 
+        'approved': '✅ অনুমোদিত', 
+        'rejected': '❌ বাতিল',
+        'active': '✅ সক্রিয়',
+        'completed': '✅ সম্পন্ন',
+        'defaulted': '❌ খেলাপি'
+    };
+    
+    const statusColor = {
+        'pending': '#f59e0b',
+        'approved': '#10b981',
+        'rejected': '#ef4444',
+        'active': '#10b981',
+        'completed': '#059669',
+        'defaulted': '#dc2626'
+    };
+    
+    // জামিনদার তথ্য পার্স করা
+    let guarantorHtml = '';
+    if (loan.guarantors) {
+        try {
+            const guarantors = typeof loan.guarantors === 'string' ? JSON.parse(loan.guarantors) : loan.guarantors;
+            let gList = [];
+            if (guarantors.guarantor1?.name) {
+                gList.push(`
+                    <div class="info-grid">
+                        <div class="info-item"><div class="label">জামিনদার ১ এর নাম</div><div class="value">${guarantors.guarantor1.name || '-'}</div></div>
+                        <div class="info-item"><div class="label">মোবাইল</div><div class="value">${guarantors.guarantor1.mobile || '-'}</div></div>
+                        <div class="info-item"><div class="label">এনআইডি</div><div class="value">${guarantors.guarantor1.nid || '-'}</div></div>
+                        <div class="info-item"><div class="label">পেশা</div><div class="value">${guarantors.guarantor1.profession || '-'}</div></div>
+                        <div class="info-item"><div class="label">সম্পর্ক</div><div class="value">${guarantors.guarantor1.relation || '-'}</div></div>
+                        <div class="info-item"><div class="label">ঠিকানা</div><div class="value">${guarantors.guarantor1.address || '-'}</div></div>
+                    </div>
+                `);
+            }
+            if (guarantors.guarantor2?.name) {
+                gList.push(`
+                    <div class="info-grid" style="margin-top:10px;">
+                        <div class="info-item"><div class="label">জামিনদার ২ এর নাম</div><div class="value">${guarantors.guarantor2.name || '-'}</div></div>
+                        <div class="info-item"><div class="label">মোবাইল</div><div class="value">${guarantors.guarantor2.mobile || '-'}</div></div>
+                        <div class="info-item"><div class="label">এনআইডি</div><div class="value">${guarantors.guarantor2.nid || '-'}</div></div>
+                        <div class="info-item"><div class="label">পেশা</div><div class="value">${guarantors.guarantor2.profession || '-'}</div></div>
+                        <div class="info-item"><div class="label">সম্পর্ক</div><div class="value">${guarantors.guarantor2.relation || '-'}</div></div>
+                        <div class="info-item"><div class="label">ঠিকানা</div><div class="value">${guarantors.guarantor2.address || '-'}</div></div>
+                    </div>
+                `);
+            }
+            if (guarantors.guarantor3?.name) {
+                gList.push(`
+                    <div class="info-grid" style="margin-top:10px;">
+                        <div class="info-item"><div class="label">জামিনদার ৩ এর নাম</div><div class="value">${guarantors.guarantor3.name || '-'}</div></div>
+                        <div class="info-item"><div class="label">মোবাইল</div><div class="value">${guarantors.guarantor3.mobile || '-'}</div></div>
+                        <div class="info-item"><div class="label">এনআইডি</div><div class="value">${guarantors.guarantor3.nid || '-'}</div></div>
+                        <div class="info-item"><div class="label">পেশা</div><div class="value">${guarantors.guarantor3.profession || '-'}</div></div>
+                        <div class="info-item"><div class="label">সম্পর্ক</div><div class="value">${guarantors.guarantor3.relation || '-'}</div></div>
+                        <div class="info-item"><div class="label">ঠিকানা</div><div class="value">${guarantors.guarantor3.address || '-'}</div></div>
+                    </div>
+                `);
+            }
+            if (gList.length > 0) {
+                guarantorHtml = `
+                    <div class="section-title">👥 জামিনদারের তথ্য</div>
+                    ${gList.join('')}
+                `;
+            }
+        } catch(e) {}
+    }
+    
+    // অতিরিক্ত তথ্য পার্স করা
+    let additionalHtml = '';
+    if (loan.additional_data) {
+        try {
+            const extra = typeof loan.additional_data === 'string' ? JSON.parse(loan.additional_data) : loan.additional_data;
+            const fields = [];
+            const labelMap = {
+                'business_name': 'ব্যবসার নাম',
+                'business_type': 'ব্যবসার ধরন',
+                'turnover': 'বার্ষিক টার্নওভার',
+                'annual_profit': 'বার্ষিক মুনাফা',
+                'business_address': 'ব্যবসার ঠিকানা',
+                'trade_license': 'ট্রেড লাইসেন্স',
+                'business_start_date': 'ব্যবসা শুরুর তারিখ',
+                'business_details': 'ব্যবসার বিবরণ',
+                'institute_name': 'প্রতিষ্ঠানের নাম',
+                'student_class': 'শ্রেণী/বিভাগ',
+                'academic_year': 'শিক্ষাবর্ষ',
+                'roll_number': 'রোল নম্বর',
+                'registration_no': 'রেজিস্ট্রেশন নম্বর',
+                'institute_address': 'প্রতিষ্ঠানের ঠিকানা',
+                'work_type': 'কাজের ধরন',
+                'home_location': 'গৃহের অবস্থান',
+                'home_area': 'মোট আয়তন',
+                'construction_cost': 'নির্মাণ/সংস্কার ব্যয়',
+                'contractor': 'ঠিকাদারের নাম',
+                'project_details': 'প্রকল্পের বিবরণ',
+                'land_location': 'জমির অবস্থান',
+                'land_area': 'জমির পরিমাণ',
+                'dag_no': 'দাগ নম্বর',
+                'khatian_no': 'খতিয়ান নম্বর',
+                'owner_name': 'মালিকের নাম',
+                'owner_mobile': 'মালিকের মোবাইল',
+                'land_details': 'জমির বিবরণ',
+                'emergency_reason': 'জরুরি অবস্থার বিবরণ',
+                'emergency_doc': 'প্রয়োজনীয় ডকুমেন্ট',
+                'hospital_name': 'হাসপাতালের নাম'
+            };
+            for (const [key, value] of Object.entries(extra)) {
+                if (value) {
+                    const label = labelMap[key] || key;
+                    fields.push(`<div class="info-item"><div class="label">${label}</div><div class="value">${value}</div></div>`);
+                }
+            }
+            if (fields.length > 0) {
+                let title = '📝 অতিরিক্ত তথ্য';
+                if (loan.loan_type === 'ব্যবসায়ী লোন') title = '📊 ব্যবসায়িক তথ্য';
+                else if (loan.loan_type === 'শিক্ষা লোন') title = '📚 শিক্ষা সংক্রান্ত তথ্য';
+                else if (loan.loan_type === 'গৃহ নির্মাণ' || loan.loan_type === 'গৃহ সংস্কার') title = '🏠 গৃহ সংক্রান্ত তথ্য';
+                else if (loan.loan_type === 'জমি ক্রয়') title = '🌾 জমি সংক্রান্ত তথ্য';
+                else if (loan.loan_type === 'জরুরি লোন') title = '⚠️ জরুরি লোনের তথ্য';
+                additionalHtml = `
+                    <div class="section-title">${title}</div>
+                    <div class="info-grid">${fields.join('')}</div>
+                `;
+            }
+        } catch(e) {}
+    }
+    
+    // EMI পরিশোধের ইতিহাস (যদি থাকে)
+    let emiHistoryHtml = '';
+    if (loan.emi_history && loan.emi_history.length > 0) {
+        const emiList = typeof loan.emi_history === 'string' ? JSON.parse(loan.emi_history) : loan.emi_history;
+        if (emiList.length > 0) {
+            emiHistoryHtml = `
+                <div class="section-title">💳 ইএমআই পরিশোধের ইতিহাস</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ক্রম</th>
+                            <th>তারিখ</th>
+                            <th>পরিমাণ</th>
+                            <th>স্ট্যাটাস</th>
+                            <th>পরিশোধের তারিখ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${emiList.map((emi, i) => `
+                            <tr>
+                                <td>${i + 1}</td>
+                                <td>${emi.due_date || '-'}</td>
+                                <td>${formatAmountWithText(emi.amount || 0)}</td>
+                                <td>${emi.status === 'paid' ? '✅ পরিশোধিত' : emi.status === 'pending' ? '⏳ বকেয়া' : '❌ বিলম্বিত'}</td>
+                                <td>${emi.paid_date ? new Date(emi.paid_date).toLocaleDateString('bn-BD') : '-'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+    }
+    
+    // বকেয়া EMI গণনা
+    let pendingEmiCount = 0;
+    let totalPendingAmount = 0;
+    if (loan.emi_history) {
+        try {
+            const emiList = typeof loan.emi_history === 'string' ? JSON.parse(loan.emi_history) : loan.emi_history;
+            emiList.forEach(emi => {
+                if (emi.status === 'pending' || emi.status === 'overdue') {
+                    pendingEmiCount++;
+                    totalPendingAmount += emi.amount || 0;
+                }
+            });
+        } catch(e) {}
+    }
+    
     printWindow.document.write(`
         <!DOCTYPE html>
         <html>
-        <head><title>লোন আবেদন বিস্তারিত</title>
-        <style>body{font-family:Noto Sans Bengali,sans-serif;padding:30px;max-width:800px;margin:0 auto;}
-        .header{text-align:center;border-bottom:2px solid #059669;padding-bottom:15px;margin-bottom:20px;}
-        .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0;}
-        .info-item{padding:8px 12px;background:#f9fafb;border-radius:6px;}
-        .info-item .label{color:#6b7280;font-size:12px;}
-        .info-item .value{font-weight:600;}
-        .section-title{background:#059669;color:white;padding:8px 12px;border-radius:6px;margin:15px 0 10px;}
-        .footer{margin-top:30px;text-align:center;font-size:11px;color:#6b7280;border-top:1px solid #e5e7eb;padding-top:15px;}
-</style></head>
-<body>
-<div class="header"><h2>ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h2><p>লোন আবেদন বিস্তারিত</p></div>
-<div class="section-title">👤 সদস্য তথ্য</div>
-<div class="info-grid">
-<div class="info-item"><div class="label">নাম</div><div class="value">${loan.member_name || '-'}</div></div>
-<div class="info-item"><div class="label">সদস্য আইডি</div><div class="value">${loan.member_id || '-'}</div></div>
-</div>
-<div class="section-title">💰 লোন তথ্য</div>
-<div class="info-grid">
-<div class="info-item"><div class="label">লোনের ধরন</div><div class="value">${loan.loan_type || '-'}</div></div>
-<div class="info-item"><div class="label">পরিমাণ</div><div class="value">${formatAmountWithText(loan.amount)}</div></div>
-<div class="info-item"><div class="label">মেয়াদ</div><div class="value">${loan.duration_months || 0} মাস</div></div>
-<div class="info-item"><div class="label">কিস্তি</div><div class="value">${formatAmountWithText(loan.emi_amount)}</div></div>
-<div class="info-item"><div class="label">স্ট্যাটাস</div><div class="value">${statusMap[loan.status] || loan.status}</div></div>
-</div>
-<div class="footer">🔒 স্বয়ংক্রিয় জেনারেটেড রিপোর্ট | TUKNBD লোন আবেদন</div>
-</body></html>`);
-printWindow.document.close();
-setTimeout(() => { printWindow.print(); }, 500);
+        <head>
+            <title>লোন আবেদন বিস্তারিত | TUKNBD</title>
+            <style>
+                * { font-family: 'Noto Sans Bengali', sans-serif; }
+                body { padding: 30px; max-width: 1000px; margin: 0 auto; background: white; }
+                .header { 
+                    text-align: center; 
+                    border-bottom: 3px solid #059669; 
+                    padding-bottom: 20px; 
+                    margin-bottom: 25px;
+                }
+                .header .logo { 
+                    width: 70px; 
+                    height: 70px; 
+                    border-radius: 50%; 
+                    object-fit: cover;
+                    margin-bottom: 10px;
+                }
+                .header h1 { 
+                    color: #064e3b; 
+                    margin: 5px 0; 
+                    font-size: 24px;
+                }
+                .header p { 
+                    color: #6b7280; 
+                    margin: 5px 0;
+                    font-size: 14px;
+                }
+                .status-badge {
+                    display: inline-block;
+                    padding: 5px 15px;
+                    border-radius: 20px;
+                    font-weight: 600;
+                    font-size: 14px;
+                    color: white;
+                    background: ${statusColor[loan.status] || '#6b7280'};
+                }
+                .info-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 8px 20px;
+                    margin: 5px 0;
+                }
+                .info-item {
+                    padding: 6px 10px;
+                    background: #f9fafb;
+                    border-radius: 6px;
+                    border-left: 3px solid #059669;
+                }
+                .info-item .label {
+                    color: #6b7280;
+                    font-size: 11px;
+                    font-weight: 500;
+                    display: block;
+                }
+                .info-item .value {
+                    font-weight: 600;
+                    font-size: 14px;
+                    color: #1f2937;
+                    margin-top: 2px;
+                }
+                .section-title {
+                    background: linear-gradient(135deg, #059669, #10b981);
+                    color: white;
+                    padding: 10px 15px;
+                    border-radius: 8px;
+                    margin: 20px 0 12px 0;
+                    font-weight: 600;
+                    font-size: 16px;
+                }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 13px;
+                    margin: 10px 0;
+                }
+                table th {
+                    background: #064e3b;
+                    color: white;
+                    padding: 8px 12px;
+                    text-align: left;
+                    font-weight: 600;
+                }
+                table td {
+                    padding: 6px 12px;
+                    border-bottom: 1px solid #e5e7eb;
+                }
+                table tr:nth-child(even) { background: #f8fafc; }
+                table tr:hover { background: #ecfdf5; }
+                .footer {
+                    margin-top: 30px;
+                    text-align: center;
+                    font-size: 11px;
+                    color: #6b7280;
+                    border-top: 2px solid #e5e7eb;
+                    padding-top: 15px;
+                }
+                .highlight-box {
+                    background: #fef3c7;
+                    border: 1px solid #f59e0b;
+                    border-radius: 8px;
+                    padding: 12px 15px;
+                    margin: 10px 0;
+                }
+                .highlight-box .label { color: #92400e; font-weight: 600; }
+                .highlight-box .value { color: #78350f; font-weight: 700; font-size: 16px; }
+                .flex-between {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    gap: 10px;
+                }
+                .print-date { font-size: 12px; color: #9ca3af; }
+                .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+                @media (max-width: 768px) {
+                    .two-column { grid-template-columns: 1fr; }
+                    .info-grid { grid-template-columns: 1fr; }
+                }
+                @media print {
+                    .no-print { display: none !important; }
+                    body { padding: 0.2in; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <img src="images/logo.png" alt="TUKNBD" class="logo" onerror="this.src='https://placehold.co/70x70/059669/white?text=T'">
+                <h1>ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h1>
+                <p>🏦 লোন আবেদন বিস্তারিত রিপোর্ট</p>
+                <div class="flex-between" style="margin-top:10px;">
+                    <span class="print-date">📅 প্রিন্টের তারিখ: ${new Date().toLocaleString('bn-BD')}</span>
+                    <span class="status-badge">${statusMap[loan.status] || loan.status}</span>
+                </div>
+            </div>
+
+            <!-- 👤 সদস্য তথ্য -->
+            <div class="section-title">👤 সদস্য তথ্য</div>
+            <div class="info-grid">
+                <div class="info-item"><span class="label">পূর্ণ নাম</span><span class="value">${loan.member_name || '-'}</span></div>
+                <div class="info-item"><span class="label">সদস্য আইডি</span><span class="value">${loan.member_id || '-'}</span></div>
+                <div class="info-item"><span class="label">মোবাইল</span><span class="value">${loan.member_mobile || '-'}</span></div>
+                <div class="info-item"><span class="label">ঠিকানা</span><span class="value">${loan.member_address || '-'}</span></div>
+                <div class="info-item"><span class="label">মাসিক সঞ্চয়</span><span class="value">${formatAmountWithText(loan.monthly_savings || 0)}</span></div>
+                <div class="info-item"><span class="label">সদস্য ধরন</span><span class="value">${loan.member_type || 'সাধারণ সদস্য'}</span></div>
+            </div>
+
+            <!-- 💰 লোন তথ্য -->
+            <div class="section-title">💰 লোন তথ্য</div>
+            <div class="two-column">
+                <div class="info-grid">
+                    <div class="info-item"><span class="label">লোনের ধরন</span><span class="value">${loan.loan_type || '-'}</span></div>
+                    <div class="info-item"><span class="label">ফাইন্যান্স ধরন</span><span class="value">${loan.finance_type || 'সাধারণ'}</span></div>
+                    <div class="info-item"><span class="label">অনুমোদিত পরিমাণ</span><span class="value" style="color:#059669;">${formatAmountWithText(loan.amount)}</span></div>
+                    <div class="info-item"><span class="label">মুনাফা হার</span><span class="value">${loan.profit_rate || 0}%</span></div>
+                    <div class="info-item"><span class="label">মুনাফার পরিমাণ</span><span class="value">${formatAmountWithText(loan.profit_amount)}</span></div>
+                    <div class="info-item"><span class="label">মোট পরিশোধ্য</span><span class="value" style="color:#dc2626;">${formatAmountWithText(loan.total_payable)}</span></div>
+                </div>
+                <div class="info-grid">
+                    <div class="info-item"><span class="label">মেয়াদ</span><span class="value">${loan.duration_months || 0} মাস</span></div>
+                    <div class="info-item"><span class="label">কিস্তির ধরন</span><span class="value">${loan.installment_type === 'weekly' ? 'সাপ্তাহিক' : 'মাসিক'}</span></div>
+                    <div class="info-item"><span class="label">প্রতি কিস্তি</span><span class="value" style="color:#7c3aed;">${formatAmountWithText(loan.emi_amount)}</span></div>
+                    <div class="info-item"><span class="label">লোন শুরু</span><span class="value">${loan.loan_start_date ? new Date(loan.loan_start_date).toLocaleDateString('bn-BD') : '-'}</span></div>
+                    <div class="info-item"><span class="label">বিলম্ব ফি</span><span class="value">${loan.late_fee_percent || 0}%</span></div>
+                    <div class="info-item"><span class="label">গ্রেস পিরিয়ড</span><span class="value">${loan.grace_period_days || 0} দিন</span></div>
+                </div>
+            </div>
+
+            <!-- 📊 লোন অবস্থা -->
+            <div class="section-title">📊 লোন অবস্থা</div>
+            <div class="info-grid">
+                <div class="info-item"><span class="label">সিরিয়াল নম্বর</span><span class="value" style="color:#059669; font-weight:bold;">${loan.application_no || 'জেনারেট হয়নি'}</span></div>
+                <div class="info-item"><span class="label">বর্তমান স্ট্যাটাস</span><span class="value"><span class="status-badge" style="font-size:12px; padding:3px 12px;">${statusMap[loan.status] || loan.status}</span></span></div>
+                <div class="info-item"><span class="label">বাকি ব্যালেন্স</span><span class="value" style="color:#dc2626; font-weight:bold;">${formatAmountWithText(loan.remaining_balance || 0)}</span></div>
+                <div class="info-item"><span class="label">পরিশোধিত পরিমাণ</span><span class="value" style="color:#059669; font-weight:bold;">${formatAmountWithText((loan.amount || 0) - (loan.remaining_balance || 0))}</span></div>
+            </div>
+
+            <!-- ⏳ বকেয়া ইএমআই -->
+            ${pendingEmiCount > 0 ? `
+                <div class="highlight-box">
+                    <div class="flex-between">
+                        <div>
+                            <span class="label">⏳ বকেয়া ইএমআই</span>
+                            <div style="font-size:13px; color:#92400e; margin-top:3px;">
+                                ${pendingEmiCount} টি কিস্তি বকেয়া আছে
+                            </div>
+                        </div>
+                        <div>
+                            <span class="label">মোট বকেয়া পরিমাণ</span>
+                            <div class="value">${formatAmountWithText(totalPendingAmount)}</div>
+                        </div>
+                    </div>
+                </div>
+            ` : `
+                <div class="highlight-box" style="background:#d1fae5; border-color:#10b981;">
+                    <div class="flex-between">
+                        <div>
+                            <span class="label" style="color:#065f46;">✅ সব ইএমআই পরিশোধিত</span>
+                            <div style="font-size:13px; color:#065f46;">কোনো বকেয়া নেই</div>
+                        </div>
+                    </div>
+                </div>
+            `}
+
+            <!-- 💳 ইএমআই পরিশোধের ইতিহাস -->
+            ${emiHistoryHtml}
+
+            <!-- 📅 অনুমোদন ও বাতিল তথ্য -->
+            <div class="section-title">📅 অনুমোদন ও বাতিল তথ্য</div>
+            <div class="info-grid">
+                <div class="info-item"><span class="label">আবেদনের তারিখ</span><span class="value">${loan.submitted_at ? new Date(loan.submitted_at).toLocaleString('bn-BD') : '-'}</span></div>
+                <div class="info-item"><span class="label">আবেদনকারী</span><span class="value">${loan.submitted_by || '-'}</span></div>
+                ${loan.approved_by ? `
+                    <div class="info-item"><span class="label">✅ অনুমোদনকারী</span><span class="value" style="color:#059669;">${loan.approved_by}</span></div>
+                    <div class="info-item"><span class="label">অনুমোদের তারিখ</span><span class="value">${loan.approved_at ? new Date(loan.approved_at).toLocaleString('bn-BD') : '-'}</span></div>
+                ` : ''}
+                ${loan.rejected_by ? `
+                    <div class="info-item"><span class="label">❌ বাতিলকারী</span><span class="value" style="color:#dc2626;">${loan.rejected_by}</span></div>
+                    <div class="info-item"><span class="label">বাতিলের তারিখ</span><span class="value">${loan.rejected_at ? new Date(loan.rejected_at).toLocaleString('bn-BD') : '-'}</span></div>
+                    <div class="info-item" style="grid-column: 1 / -1; border-left-color:#dc2626;">
+                        <span class="label">❌ বাতিলের কারণ</span>
+                        <span class="value" style="color:#dc2626;">${loan.reject_reason || '-'}</span>
+                    </div>
+                ` : ''}
+                ${loan.special_note ? `
+                    <div class="info-item" style="grid-column: 1 / -1; border-left-color:#3b82f6;">
+                        <span class="label">📝 বিশেষ নোট</span>
+                        <span class="value" style="color:#1e40af;">${loan.special_note}</span>
+                    </div>
+                ` : ''}
+            </div>
+
+            <!-- 👥 জামিনদারের তথ্য -->
+            ${guarantorHtml}
+
+            <!-- 📝 অতিরিক্ত তথ্য -->
+            ${additionalHtml}
+
+            <!-- 🔒 ফুটার -->
+            <div class="footer">
+                <p>🔒 স্বয়ংক্রিয় জেনারেটেড রিপোর্ট | TUKNBD লোন আবেদন</p>
+                <p style="margin-top:5px; font-size:10px; color:#9ca3af;">
+                    এই রিপোর্টটি TUKNBD সিস্টেম থেকে স্বয়ংক্রিয়ভাবে তৈরি করা হয়েছে। 
+                    কোনো ভুল-ত্রুটি পাওয়া গেলে প্রশাসনকে জানান।
+                </p>
+                <div style="margin-top:10px; display:flex; justify-content:center; gap:20px; flex-wrap:wrap;">
+                    <span style="font-size:11px; color:#6b7280;">📱 TUKNBD - ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</span>
+                </div>
+            </div>
+
+            <div style="text-align:center; margin-top:20px;" class="no-print">
+                <button onclick="window.print()" style="background:#059669; color:white; padding:10px 30px; border:none; border-radius:8px; font-weight:600; cursor:pointer;">
+                    🖨️ প্রিন্ট করুন
+                </button>
+                <button onclick="window.close()" style="background:#6b7280; color:white; padding:10px 30px; border:none; border-radius:8px; font-weight:600; cursor:pointer; margin-left:10px;">
+                    ✕ বন্ধ করুন
+                </button>
+            </div>
+        </body>
+        </html>
+    `);
+    printWindow.document.close();
+    setTimeout(() => { printWindow.print(); }, 800);
 }
 
 // ============================================================
