@@ -3936,7 +3936,9 @@ async function searchReceiverForTransfer() {
     }
 }
 
-// 🆕 RPC-ভিত্তিক সঞ্চয় ট্রান্সফার
+// ============================================================
+// সঞ্চয় ট্রান্সফার (RPC-ভিত্তিক - আপডেটেড)
+// ============================================================
 async function submitTransferSavings() {
     const senderTerm = parseInt(currentUser.memberTerm) || 0;
     const isTermMember = senderTerm > 0;
@@ -4019,9 +4021,10 @@ async function submitTransferSavings() {
         const transactionId = `TFR-${Date.now()}-${Math.floor(Math.random()*1000)}`;
         const note = `${selectedMonths.length} মাসের সঞ্চয় ট্রান্সফার (${selectedMonths.join(', ')})`;
         
+        // ✅ RPC কল (আপডেটেড প্যারামিটার নাম)
         const { data, error } = await client.rpc('transfer_funds', {
-            p_sender_id: currentUser.id,
-            p_receiver_id: receiverId,
+            p_from_member_id: currentUser.id,
+            p_to_member_id: receiverId,
             p_amount: totalAmount,
             p_note: note,
             p_transaction_id: transactionId
@@ -4057,7 +4060,7 @@ async function submitTransferSavings() {
 }
 
 // ============================================================
-// 🆕 ট্রান্সফার ইতিহাস (fund_transfers থেকে) - FIXED
+// ট্রান্সফার ইতিহাস (আপনার কলাম অনুযায়ী আপডেটেড)
 // ============================================================
 async function loadTransferHistory() {
     const tbody = document.getElementById('transferHistoryBody');
@@ -4072,81 +4075,58 @@ async function loadTransferHistory() {
     }
     
     try {
-        // ✅ সমস্যা সমাধান: member_id ট্রিম করে এবং URL এনকোড করে নিচ্ছি
         const memberId = currentUser.id.trim();
         
-        // ✅ Supabase RPC ব্যবহার করে ডেটা আনার পরিবর্তে সরাসরি কুয়েরি
-        // কিন্তু এখানে or() ব্যবহার না করে আলাদা আলাদা কুয়েরি করছি
-        const { data: sentData, error: sentError } = await client
-            .from('fund_transfers')
-            .select('*')
-            .eq('sender_id', memberId)
-            .order('requested_at', { ascending: false })
-            .limit(50);
-            
-        const { data: receivedData, error: receivedError } = await client
-            .from('fund_transfers')
-            .select('*')
-            .eq('receiver_id', memberId)
-            .order('requested_at', { ascending: false })
-            .limit(50);
+        // ✅ RPC ফাংশন কল
+        const { data, error } = await client.rpc('get_user_transfers', {
+            p_member_id: memberId
+        });
         
-        if (sentError && receivedError) {
-            console.error('Transfer history error:', sentError || receivedError);
-            throw sentError || receivedError;
+        if (error) {
+            console.error('RPC error:', error);
+            throw error;
         }
         
-        // দুটি ডেটা একত্রিত করা
-        let allData = [];
-        if (sentData && sentData.length > 0) {
-            allData = allData.concat(sentData);
-        }
-        if (receivedData && receivedData.length > 0) {
-            allData = allData.concat(receivedData);
-        }
+        const transfers = data || [];
         
-        // ইউনিক ID অনুযায়ী ডুপ্লিকেট রিমুভ
-        const uniqueData = [];
-        const seenIds = new Set();
-        for (const item of allData) {
-            if (!seenIds.has(item.id)) {
-                seenIds.add(item.id);
-                uniqueData.push(item);
-            }
-        }
-        
-        // তারিখ অনুযায়ী সাজানো
-        uniqueData.sort((a, b) => new Date(b.requested_at) - new Date(a.requested_at));
-        
-        if (uniqueData.length === 0) {
+        if (transfers.length === 0) {
             tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-gray-400">📭 কোনো ট্রান্সফার ইতিহাস নেই</td></tr>';
             return;
         }
         
-        tbody.innerHTML = uniqueData.map(t => {
-            const isSender = t.sender_id === memberId;
+        tbody.innerHTML = transfers.map(t => {
+            // ⚠️ আপনার কলাম: from_member_id, to_member_id
+            const isSender = t.sender_id === memberId || t.from_member_id === memberId;
+            
             const statusBadge = {
                 'pending': 'badge-pending',
                 'completed': 'badge-completed',
+                'approved': 'badge-completed',
                 'failed': 'badge-failed',
-                'cancelled': 'badge-cancelled'
+                'cancelled': 'badge-cancelled',
+                'rejected': 'badge-failed'
             }[t.status] || 'badge-pending';
             
             const statusText = {
                 'pending': '⏳ বিচারাধীন',
                 'completed': '✅ সম্পন্ন',
+                'approved': '✅ অনুমোদিত',
                 'failed': '❌ ব্যর্থ',
-                'cancelled': '⏸️ বাতিল'
+                'cancelled': '⏸️ বাতিল',
+                'rejected': '❌ বাতিল'
             }[t.status] || t.status;
+            
+            const senderName = t.sender_name || t.from_member_name || t.sender_id || t.from_member_id;
+            const receiverName = t.receiver_name || t.to_member_name || t.receiver_id || t.to_member_id;
             
             return `
                 <tr>
                     <td class="p-2 text-sm">${formatDate(t.requested_at)}</td>
-                    <td class="p-2 text-sm">${isSender ? '👤 আপনি' : t.sender_name || t.sender_id}</td>
-                    <td class="p-2 text-sm">${!isSender ? '👤 আপনি' : t.receiver_name || t.receiver_id}</td>
+                    <td class="p-2 text-sm">${isSender ? '👤 আপনি' : senderName}</td>
+                    <td class="p-2 text-sm">${!isSender ? '👤 আপনি' : receiverName}</td>
                     <td class="p-2 text-sm font-bold ${isSender ? 'text-red-600' : 'text-emerald-600'}">${isSender ? '-' : '+'}${Number(t.amount).toLocaleString()} টাকা</td>
                     <td class="p-2 text-sm"><span class="badge ${statusBadge}">${statusText}</span></td>
-                    <td class="p-2 text-sm text-gray-400">${t.note || 'সঞ্চয় ট্রান্সফার'}</td>
+                    <td class="p-2 text-sm text-gray-400">${t.note || t.transfer_type || 'সঞ্চয় ট্রান্সফার'}</td>
                 </tr>
             `;
         }).join('');
