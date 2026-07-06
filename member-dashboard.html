@@ -2070,32 +2070,45 @@ async function loadPaymentHistory() {
     }
 }
 
-// ============================================================
-// 🆕 viewPaymentSlip - তারিখ/সময় যথাযথ দেখানোর জন্য আপডেটেড
-// ============================================================
 async function viewPaymentSlip(paymentId) {
-    if (!paymentId) { showToast('স্লিপ আইডি পাওয়া যায়নি!', 'error'); return; }
+    if (!paymentId) { 
+        showToast('স্লিপ আইডি পাওয়া যায়নি!', 'error'); 
+        return; 
+    }
     showToast('স্লিপ লোড হচ্ছে...', 'info');
     
     try {
         const client = await initSupabase();
-        if (!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
+        if (!client) { 
+            showToast('সার্ভার সংযোগ সমস্যা!', 'error'); 
+            return; 
+        }
         
-        const { data: payment, error } = await client.from('payments').select('*').eq('id', paymentId).single();
-        if (error || !payment) { showToast('স্লিপ ডাটা পাওয়া যায়নি!', 'error'); return; }
+        const { data: payment, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('id', paymentId)
+            .single();
+            
+        if (error || !payment) { 
+            showToast('স্লিপ ডাটা পাওয়া যায়নি!', 'error'); 
+            return; 
+        }
         
         // 🔥 বাংলাদেশ সময়ে তারিখ/সময় দেখানো হবে
         const bdTime = getCurrentBangladeshTime();
         const submittedDate = new Date(payment.submitted_at);
         
-        // জমা দেওয়ার তারিখ (বাংলাদেশ সময়ে)
+        // ✅ জমা দেওয়ার তারিখ (বাংলাদেশ সময়ে)
         const paymentDate = submittedDate.toLocaleDateString('bn-BD', { 
             year: 'numeric', 
             month: 'long', 
             day: 'numeric',
             timeZone: 'Asia/Dhaka'
         });
-        const paymentTime = submittedDate.toLocaleTimeString('bn-BD', { 
+        
+        // ✅ জমা দেওয়ার সময় (বাংলাদেশ সময়ে) - ফিক্সড
+        const paymentTime = new Date(payment.submitted_at).toLocaleTimeString('bn-BD', { 
             hour: '2-digit', 
             minute: '2-digit',
             second: '2-digit',
@@ -2103,13 +2116,15 @@ async function viewPaymentSlip(paymentId) {
             timeZone: 'Asia/Dhaka'
         });
         
-        // স্লিপ জেনারেটের তারিখ (বর্তমান বাংলাদেশ সময়)
+        // ✅ স্লিপ জেনারেটের তারিখ (বর্তমান বাংলাদেশ সময়)
         const generateDate = bdTime.toLocaleDateString('bn-BD', { 
             year: 'numeric', 
             month: 'long', 
             day: 'numeric',
             timeZone: 'Asia/Dhaka'
         });
+        
+        // ✅ স্লিপ জেনারেটের সময় (বর্তমান বাংলাদেশ সময়)
         const generateTime = bdTime.toLocaleTimeString('bn-BD', { 
             hour: '2-digit', 
             minute: '2-digit',
@@ -2118,8 +2133,11 @@ async function viewPaymentSlip(paymentId) {
             timeZone: 'Asia/Dhaka'
         });
         
-        const slipNumber = payment.voucher_slip_no || `TUK${String(Date.now()).slice(-6)}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
+        // স্লিপ নম্বর তৈরি
+        const slipNumber = payment.voucher_slip_no || 
+                          `TUK${String(Date.now()).slice(-6)}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
         
+        // কুরেন্ট স্লিপ ডাটা সেভ করুন (শেয়ার/ডাউনলোডের জন্য)
         currentSlipData = { 
             slipNumber: slipNumber,
             amount: payment.amount,
@@ -2132,6 +2150,7 @@ async function viewPaymentSlip(paymentId) {
             method: payment.payment_method
         };
         
+        // স্ট্যাটাস নির্ধারণ
         let statusText = 'বিচারাধীন';
         let statusIcon = '⏳';
         let statusBg = '#fed7aa';
@@ -2151,27 +2170,56 @@ async function viewPaymentSlip(paymentId) {
             rejectReason = payment.reject_reason || 'কারণ উল্লেখ নেই';
         }
         
+        // পেমেন্ট মাধ্যম অনুযায়ী বিস্তারিত তথ্য
         let paymentDetailsHtml = '';
-        if(payment.payment_method === 'bKash' || payment.payment_method === 'Nagad' || payment.payment_method === 'Rocket') {
+        if (payment.payment_method === 'bKash' || payment.payment_method === 'Nagad' || payment.payment_method === 'Rocket') {
             paymentDetailsHtml = `
-                <div class="slip-detail-row"><span class="slip-detail-label">সেন্ডার মোবাইল</span><span class="slip-detail-value">${payment.sender_mobile || '-'}</span></div>
-                <div class="slip-detail-row"><span class="slip-detail-label">ট্রানজেকশন আইডি</span><span class="slip-detail-value">${payment.transaction_id || '-'}</span></div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">সেন্ডার মোবাইল</span>
+                    <span class="slip-detail-value">${payment.sender_mobile || '-'}</span>
+                </div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">ট্রানজেকশন আইডি</span>
+                    <span class="slip-detail-value">${payment.transaction_id || '-'}</span>
+                </div>
             `;
-        } else if(payment.payment_method === 'bank') {
+        } else if (payment.payment_method === 'bank') {
             paymentDetailsHtml = `
-                <div class="slip-detail-row"><span class="slip-detail-label">ব্যাংকের নাম</span><span class="slip-detail-value">${payment.bank_name || '-'}</span></div>
-                <div class="slip-detail-row"><span class="slip-detail-label">শাখার নাম</span><span class="slip-detail-value">${payment.branch_name || '-'}</span></div>
-                <div class="slip-detail-row"><span class="slip-detail-label">একাউন্ট নম্বর</span><span class="slip-detail-value">${payment.account_number || '-'}</span></div>
-                <div class="slip-detail-row"><span class="slip-detail-label">একাউন্টের নাম</span><span class="slip-detail-value">${payment.account_name || '-'}</span></div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">ব্যাংকের নাম</span>
+                    <span class="slip-detail-value">${payment.bank_name || '-'}</span>
+                </div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">শাখার নাম</span>
+                    <span class="slip-detail-value">${payment.branch_name || '-'}</span>
+                </div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">একাউন্ট নম্বর</span>
+                    <span class="slip-detail-value">${payment.account_number || '-'}</span>
+                </div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">একাউন্টের নাম</span>
+                    <span class="slip-detail-value">${payment.account_name || '-'}</span>
+                </div>
             `;
-        } else if(payment.payment_method === 'cash') {
+        } else if (payment.payment_method === 'cash') {
             paymentDetailsHtml = `
-                <div class="slip-detail-row"><span class="slip-detail-label">গ্রহীতার নাম</span><span class="slip-detail-value">${payment.receiver_name || '-'}</span></div>
-                <div class="slip-detail-row"><span class="slip-detail-label">গ্রহীতার আইডি</span><span class="slip-detail-value">${payment.receiver_id || '-'}</span></div>
-                <div class="slip-detail-row"><span class="slip-detail-label">গ্রহীতার মোবাইল</span><span class="slip-detail-value">${payment.receiver_mobile || '-'}</span></div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">গ্রহীতার নাম</span>
+                    <span class="slip-detail-value">${payment.receiver_name || '-'}</span>
+                </div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">গ্রহীতার আইডি</span>
+                    <span class="slip-detail-value">${payment.receiver_id || '-'}</span>
+                </div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">গ্রহীতার মোবাইল</span>
+                    <span class="slip-detail-value">${payment.receiver_mobile || '-'}</span>
+                </div>
             `;
         }
         
+        // স্লিপ HTML তৈরি
         const slipHTML = `
         <div style="max-width:550px; margin:0 auto; background:white; border:1px solid #e5e7eb; position:relative; overflow:hidden; font-family:'Noto Sans Bengali', sans-serif;">
             <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%) rotate(-30deg); font-size:80px; font-weight:800; color:rgba(5,150,105,0.04); white-space:nowrap; pointer-events:none; z-index:0; font-family:Arial,sans-serif;">TUKNBD</div>
@@ -2213,7 +2261,10 @@ async function viewPaymentSlip(paymentId) {
                     ${paymentDetailsHtml}
                     ${payment.status === 'rejected' ? `
                     <div style="background:#fee2e2; padding:5px 8px; margin-top:5px; border-radius:6px;">
-                        <div class="slip-detail-row"><span class="slip-detail-label" style="color:#dc2626;">বাতিলের কারণ</span><span style="color:#991b1b; font-weight:500;">${rejectReason}</span></div>
+                        <div class="slip-detail-row">
+                            <span class="slip-detail-label" style="color:#dc2626;">বাতিলের কারণ</span>
+                            <span style="color:#991b1b; font-weight:500;">${rejectReason}</span>
+                        </div>
                     </div>
                     ` : ''}
                 </div>
@@ -2235,6 +2286,7 @@ async function viewPaymentSlip(paymentId) {
         </div>
         `;
         
+        // স্টাইল যোগ করুন
         const styleTag = document.createElement('style');
         styleTag.id = 'slipStyle';
         styleTag.innerHTML = `
@@ -2296,7 +2348,7 @@ async function viewPaymentSlip(paymentId) {
         showToast('✅ স্লিপ লোড সম্পূর্ণ!', 'success');
         
     } catch(e) { 
-        console.error(e); 
+        console.error('❌ viewPaymentSlip error:', e); 
         showToast('স্লিপ লোড করতে ব্যর্থ!', 'error'); 
     }
 }
