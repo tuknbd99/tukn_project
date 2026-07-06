@@ -322,59 +322,6 @@ async function getMemberSavingsUpToMonth(memberId, targetMonth, targetYear) {
 }
 
 // ============================================================
-// নির্দিষ্ট মাস পর্যন্ত সদস্যের রেফারেল বোনাস (উত্তোলন বাদ দিয়ে)
-// 🔥 শুধু যাদের রেফারেল বোনাস আছে তারাই দেখাবে
-// ============================================================
-async function getMemberReferralBonusUpToMonth(memberId, targetMonth, targetYear) {
-    const client = initSupabase();
-    if (!client) return 0;
-    
-    try {
-        // ১. সদস্যের মোট রেফারেল বোনাস
-        const { data: member } = await client
-            .from('members')
-            .select('referral_bonus')
-            .eq('member_id', memberId)
-            .single();
-        
-        let totalReferralBonus = member?.referral_bonus || 0;
-        
-        // 🔥 যদি ০ এর কম বা ০ হয়, তাহলে ০ রিটার্ন করুন (রেফারেল বোনাস নেই)
-        if (totalReferralBonus <= 0) {
-            return 0;
-        }
-        
-        const monthIdx = getMonthIndex(targetMonth);
-        
-        // ২. ঐ মাস পর্যন্ত রেফারেল বোনাস উত্তোলন
-        const { data: withdrawals } = await client
-            .from('withdrawals')
-            .select('amount, requested_at')
-            .eq('member_id', memberId)
-            .eq('type', 'রেফারেল বোনাস উত্তোলন')
-            .eq('status', 'approved');
-        
-        let totalWithdrawn = 0;
-        if (withdrawals && withdrawals.length > 0) {
-            for (const w of withdrawals) {
-                const wDate = new Date(w.requested_at);
-                const wMonth = wDate.getMonth();
-                const wYear = wDate.getFullYear();
-                if (wYear < targetYear || (wYear === targetYear && wMonth <= monthIdx)) {
-                    totalWithdrawn += w.amount || 0;
-                }
-            }
-        }
-        
-        const currentBalance = totalReferralBonus - totalWithdrawn;
-        return Math.max(0, currentBalance);
-    } catch(e) {
-        console.error('Error getting referral bonus:', e);
-        return 0;
-    }
-}
-
-// ============================================================
 // নির্দিষ্ট মাস পর্যন্ত সদস্যের লভ্যাংশ ব্যালেন্স
 // ============================================================
 async function getMemberProfitBalanceUpToMonth(memberId, targetMonth, targetYear) {
@@ -400,7 +347,7 @@ async function getMemberProfitBalanceUpToMonth(memberId, targetMonth, targetYear
 }
 
 // ============================================================
-// লভ্যাংশ গণনা
+// লভ্যাংশ গণনা (রেফারেল বোনাস বাদ)
 // ============================================================
 async function calculateProfitDistribution(totalProfit, welfarePercent, month, year) {
     const welfareAmount = totalProfit * (welfarePercent / 100);
@@ -411,7 +358,7 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
     
     const { data: allMembers, error } = await client
         .from('members')
-        .select('member_id, full_name, mobile, status')
+        .select('member_id, full_name, mobile, status, referral_bonus')
         .eq('status', 'active');
     
     if (error) {
@@ -430,16 +377,18 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
     
     for (const member of allMembers) {
         const savings = await getMemberSavingsUpToMonth(member.member_id, month, year);
-        const referralBonus = await getMemberReferralBonusUpToMonth(member.member_id, month, year);
+        // 🔥 রেফারেল বোনাস বাদ - সবসময় ০
+        const referralBonus = 0;
         const profitBalances = await getMemberProfitBalanceUpToMonth(member.member_id, month, year);
         
-        const fund = savings + referralBonus + profitBalances.savings + profitBalances.investment + profitBalances.referral;
+        // 🔥 মোট ফান্ড = সঞ্চয় + পূর্বের লভ্যাংশ (রেফারেল বোনাস বাদ)
+        const fund = savings + profitBalances.savings + profitBalances.investment + profitBalances.referral;
         
         if (fund > 0) {
             memberFunds.push({
                 ...member,
                 totalSavings: savings,
-                referralBonus: referralBonus,
+                referralBonus: 0, // সবসময় ০
                 profitSavings: profitBalances.savings,
                 profitInvestment: profitBalances.investment,
                 profitReferral: profitBalances.referral,
@@ -464,7 +413,7 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
             full_name: m.full_name,
             mobile: m.mobile,
             totalSavings: m.totalSavings,
-            referralBonus: m.referralBonus,
+            referralBonus: 0, // সবসময় ০
             profitSavings: m.profitSavings,
             profitInvestment: m.profitInvestment,
             profitReferral: m.profitReferral,
@@ -538,7 +487,7 @@ async function calculateAndPreview() {
         document.getElementById('membersSection').style.display = 'block';
         document.getElementById('memberCount').innerHTML = `
             ✅ ${result.memberCount} জন সদস্য পাবেন (${month} ${year} পর্যন্ত জমা অনুযায়ী)
-            <span class="text-red-500">| 🚫 ${result.excludedCount} জন বাদ পড়েছেন</span>
+            <span class="text-red-500">| 🚫 ${result.excludedCount} জন বাদ পড়েছেন (ফান্ড ০)</span>
         `;
         
         const tbody = document.getElementById('membersTableBody');
@@ -546,16 +495,14 @@ async function calculateAndPreview() {
             tbody.innerHTML = '<tr><td colspan="10" class="text-center py-4 text-gray-500">কোনো যোগ্য সদস্য নেই</td></tr>';
         } else {
             tbody.innerHTML = result.results.map((m, i) => {
-                // 🔥 শুধু রেফারেল বোনাস > 0 থাকলেই দেখান, নাহলে ০ দেখান
-                const referralDisplay = m.referralBonus > 0 ? formatAmountText(m.referralBonus) : '০.০০ টাকা';
-                
+                // 🔥 রেফারেল বোনাস সবসময় ০ দেখাবে
                 return `
                     <tr>
                         <td>${i + 1}</td>
                         <td>${m.member_id || '-'}</td>
                         <td>${m.full_name || '-'}</td>
                         <td><strong>${formatAmountText(m.totalSavings)}</strong></td>
-                        <td>${referralDisplay}</td>
+                        <td>০.০০ টাকা</td>
                         <td>${formatAmountText(m.profitSavings)}</td>
                         <td>${formatAmountText(m.profitInvestment)}</td>
                         <td>${formatAmountText(m.profitReferral)}</td>
@@ -690,7 +637,7 @@ async function confirmDistribution() {
                     welfare_amount: previewData.welfareAmount,
                     per_taka_profit: previewData.perTakaProfit,
                     savings_amount: m.totalSavings || 0,
-                    referral_bonus: m.referralBonus || 0,
+                    referral_bonus: 0,
                     savings_profit_balance: m.profitSavings || 0,
                     referral_profit_balance: m.profitReferral || 0,
                     savings_profit: 0,
@@ -892,7 +839,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    console.log('✅ মাসভিত্তিক লভ্যাংশ বন্টন সিস্টেম লোড হয়েছে (উত্তোলন বাদ)');
+    console.log('✅ মাসভিত্তিক লভ্যাংশ বন্টন সিস্টেম লোড হয়েছে (রেফারেল বোনাস বাদ)');
 });
 
 window.calculateAndPreview = calculateAndPreview;
