@@ -2783,128 +2783,134 @@
         }
     }
 
-    // ==================== জেলা রোলিং স্ট্যাটস ====================
-    let districtData = [];
-    let currentIndex = 0;
-    let rollInterval = null;
-    let isAnimating = false;
+// ==================== জেলা রোলিং স্ট্যাটস ====================
+let districtData = [];
+let currentIndex = 0;
+let rollInterval = null;
+let isAnimating = false;
 
-    async function loadDistrictRollingStats() {
-        const sb = await initSupabase();
-        if (!sb) {
-            document.getElementById('rollingDistrict').textContent = 'সংযোগ নেই';
+async function loadDistrictRollingStats() {
+    const sb = await initSupabase();
+    if (!sb) {
+        document.getElementById('rollingDistrict').textContent = 'সংযোগ নেই';
+        document.getElementById('rollingCount').textContent = '০';
+        return;
+    }
+    
+    try {
+        const { data: members, error } = await sb.from('members').select('present_district, status');
+        if (error) throw error;
+        
+        const districtCount = {};
+        members.forEach(m => {
+            if (m.status === 'deleted') return;
+            const district = m.present_district || 'অজানা';
+            districtCount[district] = (districtCount[district] || 0) + 1;
+        });
+        
+        districtData = Object.entries(districtCount).sort((a, b) => b[1] - a[1]);
+        const total = districtData.reduce((sum, [_, count]) => sum + count, 0);
+        document.getElementById('totalMembersDisplay').innerHTML = `<i class="fas fa-users"></i> মোট: ${total} জন`;
+        
+        if (districtData.length === 0) {
+            document.getElementById('rollingDistrict').textContent = 'কোন ডেটা নেই';
             document.getElementById('rollingCount').textContent = '০';
+            document.getElementById('rollIndicator').textContent = '০/০';
             return;
         }
         
-        try {
-            const { data: members, error } = await sb.from('members').select('present_district, status');
-            if (error) throw error;
-            
-            const districtCount = {};
-            members.forEach(m => {
-                if (m.status === 'deleted') return;
-                const district = m.present_district || 'অজানা';
-                districtCount[district] = (districtCount[district] || 0) + 1;
-            });
-            
-            districtData = Object.entries(districtCount).sort((a, b) => b[1] - a[1]);
-            const total = districtData.reduce((sum, [_, count]) => sum + count, 0);
-            document.getElementById('totalMembersDisplay').innerHTML = `<i class="fas fa-users"></i> মোট: ${total} জন`;
-            
-            if (districtData.length === 0) {
-                document.getElementById('rollingDistrict').textContent = 'কোন ডেটা নেই';
-                document.getElementById('rollingCount').textContent = '০';
-                document.getElementById('rollIndicator').textContent = '০/০';
-                return;
-            }
-            
-            currentIndex = 0;
-            updateRollingDisplay();
-            startRolling();
-        } catch(e) {
-            console.error('District rolling error:', e);
-            document.getElementById('rollingDistrict').textContent = 'ত্রুটি!';
-        }
+        currentIndex = 0;
+        // প্রথমবার সরাসরি টেক্সট সেট করুন
+        const [firstDistrict, firstCount] = districtData[0];
+        document.getElementById('rollingDistrict').textContent = firstDistrict;
+        document.getElementById('rollingCount').textContent = firstCount;
+        document.getElementById('rollingDistrict').classList.add('active');
+        document.getElementById('rollingCount').classList.add('active');
+        document.getElementById('rollIndicator').textContent = `১/${districtData.length}`;
+        
+        startRolling();
+    } catch(e) {
+        console.error('District rolling error:', e);
+        document.getElementById('rollingDistrict').textContent = 'ত্রুটি!';
     }
+}
 
-    function updateRollingDisplay() {
-        if (districtData.length === 0 || isAnimating) return;
+function updateRollingDisplay() {
+    if (districtData.length === 0 || isAnimating) return;
+    
+    const [district, count] = districtData[currentIndex];
+    const districtEl = document.getElementById('rollingDistrict');
+    const countEl = document.getElementById('rollingCount');
+    const indicator = document.getElementById('rollIndicator');
+    
+    // exit অ্যানিমেশন ট্রিগার
+    districtEl.classList.remove('active');
+    districtEl.classList.add('exit');
+    countEl.classList.remove('active');
+    countEl.classList.add('exit');
+    
+    // 800ms পরে নতুন টেক্সট সেট করুন
+    setTimeout(() => {
+        districtEl.classList.remove('exit');
+        countEl.classList.remove('exit');
         
-        const [district, count] = districtData[currentIndex];
-        const districtEl = document.getElementById('rollingDistrict');
-        const countEl = document.getElementById('rollingCount');
-        const indicator = document.getElementById('rollIndicator');
+        districtEl.textContent = district;
+        countEl.textContent = count;
         
-        // পুরানো টেক্সটকে উপরে স্লাইড আউট করুন
-        if (districtEl.textContent !== 'লোড হচ্ছে...' && 
-            districtEl.textContent !== 'কোন ডেটা নেই' && 
-            districtEl.textContent !== 'সংযোগ নেই' &&
-            districtEl.textContent !== 'ত্রুটি!') {
-            
-            districtEl.classList.remove('active');
-            districtEl.classList.add('exit');
-            countEl.classList.remove('active');
-            countEl.classList.add('exit');
-            
-            setTimeout(() => {
-                districtEl.classList.remove('exit');
-                countEl.classList.remove('exit');
-                
-                districtEl.textContent = district;
-                countEl.textContent = count;
-                
-                districtEl.classList.add('active');
-                countEl.classList.add('active');
-                isAnimating = false;
-            }, 800);
-        } else {
-            districtEl.textContent = district;
-            countEl.textContent = count;
-            districtEl.classList.add('active');
-            countEl.classList.add('active');
-            isAnimating = false;
-        }
-        
-        indicator.textContent = `${currentIndex + 1}/${districtData.length}`;
-        const progressFill = document.getElementById('progressFill');
-        progressFill.style.width = '0%';
-    }
-
-    function startRolling() {
-        if (rollInterval) clearInterval(rollInterval);
+        districtEl.classList.add('active');
+        countEl.classList.add('active');
         isAnimating = false;
-        
-        let progress = 0;
-        const totalTime = 4000;
-        const intervalTime = 50;
-        
-        rollInterval = setInterval(() => {
-            progress += (intervalTime / totalTime) * 100;
-            const progressFill = document.getElementById('progressFill');
-            progressFill.style.width = Math.min(progress, 100) + '%';
-            
-            if (progress >= 100 && !isAnimating) {
-                isAnimating = true;
-                currentIndex = (currentIndex + 1) % districtData.length;
-                setTimeout(() => {
-                    updateRollingDisplay();
-                }, 100);
-                progress = 0;
-            }
-        }, intervalTime);
-    }
+    }, 800);
+    
+    indicator.textContent = `${currentIndex + 1}/${districtData.length}`;
+    document.getElementById('progressFill').style.width = '0%';
+}
 
-    function nextDistrict() {
-        if (districtData.length === 0 || isAnimating) return;
-        clearInterval(rollInterval);
-        isAnimating = true;
-        currentIndex = (currentIndex + 1) % districtData.length;
-        setTimeout(() => {
-            updateRollingDisplay();
-            startRolling();
-        }, 100);
-    }
+function startRolling() {
+    if (rollInterval) clearInterval(rollInterval);
+    isAnimating = false;
+    
+    let progress = 0;
+    const totalTime = 4000;
+    const intervalTime = 50;
+    
+    rollInterval = setInterval(() => {
+        progress += (intervalTime / totalTime) * 100;
+        const progressFill = document.getElementById('progressFill');
+        progressFill.style.width = Math.min(progress, 100) + '%';
+        
+        if (progress >= 100 && !isAnimating) {
+            isAnimating = true;
+            currentIndex = (currentIndex + 1) % districtData.length;
+            setTimeout(() => {
+                updateRollingDisplay();
+            }, 100);
+            progress = 0;
+        }
+    }, intervalTime);
+}
+
+function nextDistrict() {
+    if (districtData.length === 0 || isAnimating) return;
+    clearInterval(rollInterval);
+    isAnimating = true;
+    currentIndex = (currentIndex + 1) % districtData.length;
+    setTimeout(() => {
+        updateRollingDisplay();
+        startRolling();
+    }, 100);
+}
+
+function prevDistrict() {
+    if (districtData.length === 0 || isAnimating) return;
+    clearInterval(rollInterval);
+    isAnimating = true;
+    currentIndex = (currentIndex - 1 + districtData.length) % districtData.length;
+    setTimeout(() => {
+        updateRollingDisplay();
+        startRolling();
+    }, 100);
+}
 
     function prevDistrict() {
         if (districtData.length === 0 || isAnimating) return;
