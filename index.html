@@ -471,13 +471,11 @@
             position: relative;
         }
         
-        /* জেলার নামের বক্স - প্রস্থ বাড়ানো হয়েছে */
         .district-box {
             background: linear-gradient(135deg, #059669, #10b981);
-            padding: 16px 25px;
+            padding: 16px 35px;
             border-radius: var(--radius-lg) 0 0 var(--radius-lg);
-            min-width: 220px;
-            max-width: 280px;
+            min-width: 180px;
             text-align: center;
             box-shadow: 0 6px 25px rgba(5,150,105,0.3);
             position: relative;
@@ -507,15 +505,13 @@
             position: absolute;
             width: 100%;
             text-align: center;
-            font-size: 24px;
+            font-size: 28px;
             font-weight: 800;
             color: white;
-            letter-spacing: 0.5px;
+            letter-spacing: 1px;
             opacity: 0;
             transform: translateY(100%);
             transition: all 0.8s ease;
-            padding: 0 5px;
-            word-break: break-word;
         }
         .district-text.active {
             opacity: 1;
@@ -536,12 +532,11 @@
             color: rgba(255,255,255,0.7);
         }
         
-        /* সদস্য সংখ্যার বক্স */
         .count-box {
             background: linear-gradient(135deg, #fcd34d, #fbbf24);
             padding: 16px 30px;
             border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
-            min-width: 120px;
+            min-width: 110px;
             text-align: center;
             box-shadow: 0 6px 25px rgba(252,211,77,0.3);
             position: relative;
@@ -600,36 +595,19 @@
         @media (max-width: 768px) {
             .rolling-item { gap: 0px; flex-wrap: wrap; justify-content: center; }
             .district-box { 
-                padding: 12px 16px; 
-                min-width: 160px;
-                max-width: 200px;
+                padding: 12px 20px; 
+                min-width: 130px; 
                 height: 65px;
                 border-radius: var(--radius-lg) 0 0 var(--radius-lg);
             }
-            .district-text { font-size: 18px; }
+            .district-text { font-size: 20px; }
             .count-box { 
-                padding: 12px 18px; 
+                padding: 12px 20px; 
                 min-width: 85px; 
                 height: 65px;
                 border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
             }
-            .count-text { font-size: 22px; }
-        }
-        
-        @media (max-width: 480px) {
-            .district-box { 
-                min-width: 130px;
-                max-width: 160px;
-                padding: 10px 12px;
-                height: 58px;
-            }
-            .district-text { font-size: 16px; }
-            .count-box {
-                min-width: 70px;
-                padding: 10px 14px;
-                height: 58px;
-            }
-            .count-text { font-size: 18px; }
+            .count-text { font-size: 24px; }
         }
         
         .rolling-progress {
@@ -2668,86 +2646,93 @@
         } catch(e) {}
     }
 
-    // ==================== ভিজিটর কাউন্ট (সকল ভিজিটর) ====================
-    async function updateVisitorCount() {
-        const visitorElement = document.getElementById('topVisitors');
-        if (!visitorElement) return;
+  // ==================== ভিজিটর কাউন্ট (সকল ভিজিটর) ====================
+async function updateVisitorCount() {
+    const visitorElement = document.getElementById('topVisitors');
+    if (!visitorElement) return;
+    
+    try {
+        const sb = await initSupabase();
+        if (!sb) {
+            const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
+            visitorElement.innerHTML = localCount.toLocaleString();
+            return;
+        }
         
-        try {
-            const sb = await initSupabase();
-            if (!sb) {
-                const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
-                visitorElement.innerHTML = localCount.toLocaleString();
-                return;
-            }
-            
-            const today = new Date().toISOString().split('T')[0];
-            const sessionKey = `tukn_visited_${today}`;
-            
-            if (!sessionStorage.getItem(sessionKey)) {
-                try {
-                    let { data: existing, error: findError } = await sb
-                        .from('visitor_stats')
-                        .select('id, today_count, total_count')
-                        .eq('visit_date', today)
-                        .maybeSingle();
-                    
-                    if (findError && findError.code !== 'PGRST116') {
-                        console.error('Find error:', findError);
-                    }
-                    
-                    if (existing) {
-                        const { error: updateError } = await sb
-                            .from('visitor_stats')
-                            .update({ 
-                                today_count: existing.today_count + 1,
-                                total_count: existing.total_count + 1
-                            })
-                            .eq('id', existing.id);
-                        
-                        if (updateError) console.error('Update error:', updateError);
-                    } else {
-                        const { error: insertError } = await sb
-                            .from('visitor_stats')
-                            .insert([{ 
-                                visit_date: today, 
-                                today_count: 1,
-                                total_count: 1
-                            }]);
-                        
-                        if (insertError) console.error('Insert error:', insertError);
-                    }
-                    
-                    sessionStorage.setItem(sessionKey, 'true');
-                } catch(e) {
-                    console.error('Visitor count update error:', e);
-                }
-            }
-            
+        const today = new Date().toISOString().split('T')[0];
+        const sessionKey = `tukn_visited_${today}`;
+        
+        // ১. আজকের ভিজিট রেকর্ড করুন (প্রতিদিন ১ বার)
+        if (!sessionStorage.getItem(sessionKey)) {
             try {
-                const { data: allVisitors, error: countError } = await sb
+                // আজকের এন্ট্রি খুঁজুন
+                let { data: existing, error: findError } = await sb
                     .from('visitor_stats')
-                    .select('total_count');
+                    .select('id, today_count, total_count')
+                    .eq('visit_date', today)
+                    .maybeSingle();
                 
-                if (countError) throw countError;
-                
-                let totalVisitors = 0;
-                if (allVisitors && allVisitors.length > 0) {
-                    totalVisitors = allVisitors.reduce((sum, row) => sum + (row.total_count || 0), 0);
-                    localStorage.setItem('tukn_visitor_count_total', totalVisitors);
-                } else {
-                    totalVisitors = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
+                if (findError && findError.code !== 'PGRST116') {
+                    console.error('Find error:', findError);
                 }
-                visitorElement.innerHTML = totalVisitors.toLocaleString();
+                
+                if (existing) {
+                    // আপডেট করুন (today_count +1, total_count +1)
+                    const { error: updateError } = await sb
+                        .from('visitor_stats')
+                        .update({ 
+                            today_count: existing.today_count + 1,
+                            total_count: existing.total_count + 1
+                        })
+                        .eq('id', existing.id);
+                    
+                    if (updateError) console.error('Update error:', updateError);
+                } else {
+                    // নতুন এন্ট্রি তৈরি করুন
+                    const { error: insertError } = await sb
+                        .from('visitor_stats')
+                        .insert([{ 
+                            visit_date: today, 
+                            today_count: 1,
+                            total_count: 1
+                        }]);
+                    
+                    if (insertError) console.error('Insert error:', insertError);
+                }
+                
+                sessionStorage.setItem(sessionKey, 'true');
+                
             } catch(e) {
-                const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
-                visitorElement.innerHTML = localCount.toLocaleString();
+                console.error('Visitor count update error:', e);
             }
-        } catch(error) {
+        }
+        
+        // ২. মোট ভিজিটর কাউন্ট লোড করুন (সব তারিখের total_count যোগফল)
+        try {
+            const { data: allVisitors, error: countError } = await sb
+                .from('visitor_stats')
+                .select('total_count');
+            
+            if (countError) throw countError;
+            
+            let totalVisitors = 0;
+            if (allVisitors && allVisitors.length > 0) {
+                // সব total_count যোগ করুন
+                totalVisitors = allVisitors.reduce((sum, row) => sum + (row.total_count || 0), 0);
+                localStorage.setItem('tukn_visitor_count_total', totalVisitors);
+            } else {
+                totalVisitors = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
+            }
+            visitorElement.innerHTML = totalVisitors.toLocaleString();
+        } catch(e) {
             const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
             visitorElement.innerHTML = localCount.toLocaleString();
         }
+    } catch(error) {
+        const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
+        visitorElement.innerHTML = localCount.toLocaleString();
     }
+}
 
     async function refreshVisitorCount() {
         const btn = document.getElementById('refreshVisitorBtn');
@@ -2828,135 +2813,136 @@
         }
     }
 
-// ==================== জেলা রোলিং স্ট্যাটস ====================
-let districtData = [];
-let currentIndex = 0;
-let rollInterval = null;
-let isAnimating = false;
+    // ==================== জেলা রোলিং স্ট্যাটস ====================
+    let districtData = [];
+    let currentIndex = 0;
+    let rollInterval = null;
+    let isAnimating = false;
 
-async function loadDistrictRollingStats() {
-    const sb = await initSupabase();
-    if (!sb) {
-        document.getElementById('rollingDistrict').textContent = 'সংযোগ নেই';
-        document.getElementById('rollingCount').textContent = '০';
-        return;
-    }
-    
-    try {
-        const { data: members, error } = await sb.from('members').select('present_district, status');
-        if (error) throw error;
-        
-        const districtCount = {};
-        members.forEach(m => {
-            if (m.status === 'deleted') return;
-            const district = m.present_district || 'অজানা';
-            districtCount[district] = (districtCount[district] || 0) + 1;
-        });
-        
-        districtData = Object.entries(districtCount).sort((a, b) => b[1] - a[1]);
-        const total = districtData.reduce((sum, [_, count]) => sum + count, 0);
-        document.getElementById('totalMembersDisplay').innerHTML = `<i class="fas fa-users"></i> মোট: ${total} জন`;
-        
-        if (districtData.length === 0) {
-            document.getElementById('rollingDistrict').textContent = 'কোন ডেটা নেই';
+    async function loadDistrictRollingStats() {
+        const sb = await initSupabase();
+        if (!sb) {
+            document.getElementById('rollingDistrict').textContent = 'সংযোগ নেই';
             document.getElementById('rollingCount').textContent = '০';
-            document.getElementById('rollIndicator').textContent = '০/০';
             return;
         }
         
-        currentIndex = 0;
-        const [firstDistrict, firstCount] = districtData[0];
-        document.getElementById('rollingDistrict').textContent = firstDistrict;
-        document.getElementById('rollingCount').textContent = firstCount;
-        document.getElementById('rollingDistrict').classList.add('active');
-        document.getElementById('rollingCount').classList.add('active');
-        document.getElementById('rollIndicator').textContent = `১/${districtData.length}`;
-        
-        startRolling();
-    } catch(e) {
-        console.error('District rolling error:', e);
-        document.getElementById('rollingDistrict').textContent = 'ত্রুটি!';
-    }
-}
-
-function updateRollingDisplay() {
-    if (districtData.length === 0 || isAnimating) return;
-    
-    const [district, count] = districtData[currentIndex];
-    const districtEl = document.getElementById('rollingDistrict');
-    const countEl = document.getElementById('rollingCount');
-    const indicator = document.getElementById('rollIndicator');
-    
-    // exit অ্যানিমেশন শুরু - টেক্সট উপরে স্লাইড আউট
-    districtEl.classList.remove('active');
-    districtEl.classList.add('exit');
-    countEl.classList.remove('active');
-    countEl.classList.add('exit');
-    
-    // 800ms পরে নতুন টেক্সট সেট করুন (নিচ থেকে উপরে আসবে)
-    setTimeout(() => {
-        districtEl.classList.remove('exit');
-        countEl.classList.remove('exit');
-        
-        districtEl.textContent = district;
-        countEl.textContent = count;
-        
-        districtEl.classList.add('active');
-        countEl.classList.add('active');
-        isAnimating = false;
-    }, 800);
-    
-    indicator.textContent = `${currentIndex + 1}/${districtData.length}`;
-    document.getElementById('progressFill').style.width = '0%';
-}
-
-function startRolling() {
-    if (rollInterval) clearInterval(rollInterval);
-    isAnimating = false;
-    
-    let progress = 0;
-    const totalTime = 4000;
-    const intervalTime = 50;
-    
-    rollInterval = setInterval(() => {
-        progress += (intervalTime / totalTime) * 100;
-        const progressFill = document.getElementById('progressFill');
-        progressFill.style.width = Math.min(progress, 100) + '%';
-        
-        if (progress >= 100 && !isAnimating) {
-            isAnimating = true;
-            currentIndex = (currentIndex + 1) % districtData.length;
-            setTimeout(() => {
-                updateRollingDisplay();
-            }, 100);
-            progress = 0;
+        try {
+            const { data: members, error } = await sb.from('members').select('present_district, status');
+            if (error) throw error;
+            
+            const districtCount = {};
+            members.forEach(m => {
+                if (m.status === 'deleted') return;
+                const district = m.present_district || 'অজানা';
+                districtCount[district] = (districtCount[district] || 0) + 1;
+            });
+            
+            districtData = Object.entries(districtCount).sort((a, b) => b[1] - a[1]);
+            const total = districtData.reduce((sum, [_, count]) => sum + count, 0);
+            document.getElementById('totalMembersDisplay').innerHTML = `<i class="fas fa-users"></i> মোট: ${total} জন`;
+            
+            if (districtData.length === 0) {
+                document.getElementById('rollingDistrict').textContent = 'কোন ডেটা নেই';
+                document.getElementById('rollingCount').textContent = '০';
+                document.getElementById('rollIndicator').textContent = '০/০';
+                return;
+            }
+            
+            // প্রথম ডেটা সেট করুন
+            currentIndex = 0;
+            const [firstDistrict, firstCount] = districtData[0];
+            document.getElementById('rollingDistrict').textContent = firstDistrict;
+            document.getElementById('rollingCount').textContent = firstCount;
+            document.getElementById('rollingDistrict').classList.add('active');
+            document.getElementById('rollingCount').classList.add('active');
+            document.getElementById('rollIndicator').textContent = `১/${districtData.length}`;
+            
+            startRolling();
+        } catch(e) {
+            console.error('District rolling error:', e);
+            document.getElementById('rollingDistrict').textContent = 'ত্রুটি!';
         }
-    }, intervalTime);
-}
+    }
 
-function nextDistrict() {
-    if (districtData.length === 0 || isAnimating) return;
-    clearInterval(rollInterval);
-    isAnimating = true;
-    currentIndex = (currentIndex + 1) % districtData.length;
-    setTimeout(() => {
-        updateRollingDisplay();
-        startRolling();
-    }, 100);
-}
+    function updateRollingDisplay() {
+        if (districtData.length === 0 || isAnimating) return;
+        
+        const [district, count] = districtData[currentIndex];
+        const districtEl = document.getElementById('rollingDistrict');
+        const countEl = document.getElementById('rollingCount');
+        const indicator = document.getElementById('rollIndicator');
+        
+        // exit অ্যানিমেশন শুরু
+        districtEl.classList.remove('active');
+        districtEl.classList.add('exit');
+        countEl.classList.remove('active');
+        countEl.classList.add('exit');
+        
+        // 800ms পরে নতুন টেক্সট সেট করুন
+        setTimeout(() => {
+            districtEl.classList.remove('exit');
+            countEl.classList.remove('exit');
+            
+            districtEl.textContent = district;
+            countEl.textContent = count;
+            
+            districtEl.classList.add('active');
+            countEl.classList.add('active');
+            isAnimating = false;
+        }, 800);
+        
+        indicator.textContent = `${currentIndex + 1}/${districtData.length}`;
+        document.getElementById('progressFill').style.width = '0%';
+    }
 
-function prevDistrict() {
-    if (districtData.length === 0 || isAnimating) return;
-    clearInterval(rollInterval);
-    isAnimating = true;
-    currentIndex = (currentIndex - 1 + districtData.length) % districtData.length;
-    setTimeout(() => {
-        updateRollingDisplay();
-        startRolling();
-    }, 100);
-}
+    function startRolling() {
+        if (rollInterval) clearInterval(rollInterval);
+        isAnimating = false;
+        
+        let progress = 0;
+        const totalTime = 4000;
+        const intervalTime = 50;
+        
+        rollInterval = setInterval(() => {
+            progress += (intervalTime / totalTime) * 100;
+            const progressFill = document.getElementById('progressFill');
+            progressFill.style.width = Math.min(progress, 100) + '%';
+            
+            if (progress >= 100 && !isAnimating) {
+                isAnimating = true;
+                currentIndex = (currentIndex + 1) % districtData.length;
+                setTimeout(() => {
+                    updateRollingDisplay();
+                }, 100);
+                progress = 0;
+            }
+        }, intervalTime);
+    }
 
-      // ==================== নিউজলেটার ====================
+    function nextDistrict() {
+        if (districtData.length === 0 || isAnimating) return;
+        clearInterval(rollInterval);
+        isAnimating = true;
+        currentIndex = (currentIndex + 1) % districtData.length;
+        setTimeout(() => {
+            updateRollingDisplay();
+            startRolling();
+        }, 100);
+    }
+
+    function prevDistrict() {
+        if (districtData.length === 0 || isAnimating) return;
+        clearInterval(rollInterval);
+        isAnimating = true;
+        currentIndex = (currentIndex - 1 + districtData.length) % districtData.length;
+        setTimeout(() => {
+            updateRollingDisplay();
+            startRolling();
+        }, 100);
+    }
+
+    // ==================== নিউজলেটার ====================
     async function subscribeNewsletter() {
         const email = document.getElementById('newsletterEmail').value;
         if(!email || !email.includes('@')) { showNotification('সঠিক ইমেইল দিন!', 'error'); return; }
@@ -2993,4 +2979,4 @@ function prevDistrict() {
     });
     </script>
 </body>
-</html>
+</html> 
