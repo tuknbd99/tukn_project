@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
-        /* ===== সমস্ত CSS আগের মতো ===== */
+        /* ===== সমস্ত CSS ===== */
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Noto Sans Bengali', sans-serif; }
         
         :root {
@@ -2460,6 +2460,7 @@
     async function updateVisitorCount() {
         const visitorElement = document.getElementById('topVisitors');
         if (!visitorElement) return;
+        
         try {
             const sb = await initSupabase();
             if (!sb) {
@@ -2467,25 +2468,64 @@
                 visitorElement.innerHTML = localCount.toLocaleString();
                 return;
             }
+            
             const today = new Date().toISOString().split('T')[0];
             const sessionKey = `tukn_visited_${today}`;
+            
             if (!sessionStorage.getItem(sessionKey)) {
                 try {
-                    let { data: existing, error: findError } = await sb.from('visitor_stats').select('id, today_count, total_count').eq('visit_date', today).maybeSingle();
-                    if (findError && findError.code !== 'PGRST116') { console.error('Find error:', findError); }
+                    // First try to get existing record
+                    let { data: existing, error: findError } = await sb
+                        .from('visitor_stats')
+                        .select('id, today_count, total_count')
+                        .eq('visit_date', today)
+                        .maybeSingle();
+                    
+                    if (findError && findError.code !== 'PGRST116') {
+                        console.error('Find error:', findError);
+                    }
+                    
                     if (existing) {
-                        const { error: updateError } = await sb.from('visitor_stats').update({ today_count: (existing.today_count || 0) + 1, total_count: (existing.total_count || 0) + 1 }).eq('id', existing.id);
+                        // Update existing record
+                        const { error: updateError } = await sb
+                            .from('visitor_stats')
+                            .update({ 
+                                today_count: (existing.today_count || 0) + 1,
+                                total_count: (existing.total_count || 0) + 1,
+                                updated_at: new Date().toISOString()
+                            })
+                            .eq('id', existing.id);
+                        
                         if (updateError) console.error('Update error:', updateError);
                     } else {
-                        const { error: insertError } = await sb.from('visitor_stats').insert([{ visit_date: today, today_count: 1, total_count: 1 }]);
+                        // Insert new record
+                        const { error: insertError } = await sb
+                            .from('visitor_stats')
+                            .insert([{ 
+                                visit_date: today, 
+                                today_count: 1,
+                                total_count: 1,
+                                created_at: new Date().toISOString(),
+                                updated_at: new Date().toISOString()
+                            }]);
+                        
                         if (insertError) console.error('Insert error:', insertError);
                     }
+                    
                     sessionStorage.setItem(sessionKey, 'true');
-                } catch(e) { console.error('Visitor count update error:', e); }
+                } catch(e) {
+                    console.error('Visitor count update error:', e);
+                }
             }
+            
+            // Get total visitor count
             try {
-                const { data: allVisitors, error: countError } = await sb.from('visitor_stats').select('total_count');
+                const { data: allVisitors, error: countError } = await sb
+                    .from('visitor_stats')
+                    .select('total_count');
+                
                 if (countError) throw countError;
+                
                 let totalVisitors = 0;
                 if (allVisitors && allVisitors.length > 0) {
                     totalVisitors = allVisitors.reduce((sum, row) => sum + (row.total_count || 0), 0);
@@ -2495,6 +2535,7 @@
                 }
                 visitorElement.innerHTML = totalVisitors.toLocaleString();
             } catch(e) {
+                console.error('Count error:', e);
                 const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
                 visitorElement.innerHTML = localCount.toLocaleString();
             }
