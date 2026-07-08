@@ -612,7 +612,7 @@
             text-align: center;
         }
         
-        /* ===== বাকি CSS (সংক্ষিপ্ত) ===== */
+        /* ===== বাকি CSS ===== */
         .quick-links-section {
             background: white;
             border-radius: var(--radius-lg);
@@ -2368,6 +2368,7 @@
         } catch(e) { console.error('Login error:', e); showNotification('লগইন ব্যর্থ!', 'error'); }
     }
 
+    // ===== Admin Login (FIXED) =====
     async function handleAdminLogin() {
         const username = document.getElementById('adminUsername').value.trim();
         const password = document.getElementById('adminPassword').value;
@@ -2375,11 +2376,16 @@
         const sb = await initSupabase();
         if(!sb) { showNotification('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
         try {
-            const { data, error } = await sb.from('admins').select('*').eq('username', username).eq('password', password).maybeSingle();
+            const { data, error } = await sb
+                .from('admins')
+                .select('*')
+                .eq('username', username)
+                .eq('password', password)
+                .maybeSingle();
             if(error) throw error;
             if(data) {
                 localStorage.setItem('tukn_admin', JSON.stringify(data));
-                showNotification('অ্যাডমিন লগইন সফল!', 'success');
+                showNotification(`স্বাগতম ${data.full_name || 'অ্যাডমিন'}!`, 'success');
                 setTimeout(() => window.location.href = 'super-admin.html', 1000);
             } else { showNotification('ইউজারনেম বা পাসওয়ার্ড ভুল!', 'error'); }
         } catch(e) { console.error('Admin login error:', e); showNotification('লগইন ব্যর্থ!', 'error'); }
@@ -2456,14 +2462,18 @@
         } catch(e) { console.error('Stats load error:', e); }
     }
 
-    // ===== Visitor Count =====
+    // ===== Visitor Count (COMPLETELY FIXED) =====
     async function updateVisitorCount() {
         const visitorElement = document.getElementById('topVisitors');
-        if (!visitorElement) return;
+        if (!visitorElement) {
+            console.error('❌ topVisitors element not found!');
+            return;
+        }
         
         try {
             const sb = await initSupabase();
             if (!sb) {
+                console.warn('⚠️ Supabase not initialized, using local storage');
                 const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
                 visitorElement.innerHTML = localCount.toLocaleString();
                 return;
@@ -2472,77 +2482,99 @@
             const today = new Date().toISOString().split('T')[0];
             const sessionKey = `tukn_visited_${today}`;
             
+            // New visitor today
             if (!sessionStorage.getItem(sessionKey)) {
-                try {
-                    // First try to get existing record
-                    let { data: existing, error: findError } = await sb
-                        .from('visitor_stats')
-                        .select('id, today_count, total_count')
-                        .eq('visit_date', today)
-                        .maybeSingle();
-                    
-                    if (findError && findError.code !== 'PGRST116') {
-                        console.error('Find error:', findError);
-                    }
-                    
-                    if (existing) {
-                        // Update existing record
-                        const { error: updateError } = await sb
-                            .from('visitor_stats')
-                            .update({ 
-                                today_count: (existing.today_count || 0) + 1,
-                                total_count: (existing.total_count || 0) + 1,
-                                updated_at: new Date().toISOString()
-                            })
-                            .eq('id', existing.id);
-                        
-                        if (updateError) console.error('Update error:', updateError);
-                    } else {
-                        // Insert new record
-                        const { error: insertError } = await sb
-                            .from('visitor_stats')
-                            .insert([{ 
-                                visit_date: today, 
-                                today_count: 1,
-                                total_count: 1,
-                                created_at: new Date().toISOString(),
-                                updated_at: new Date().toISOString()
-                            }]);
-                        
-                        if (insertError) console.error('Insert error:', insertError);
-                    }
-                    
-                    sessionStorage.setItem(sessionKey, 'true');
-                } catch(e) {
-                    console.error('Visitor count update error:', e);
+                console.log('🆕 New visitor today!');
+                
+                // 1. Find today's record
+                const { data: existing, error: findError } = await sb
+                    .from('visitor_stats')
+                    .select('id, today_count, total_count')
+                    .eq('visit_date', today)
+                    .maybeSingle();
+                
+                if (findError) {
+                    console.error('❌ Find error:', findError);
                 }
+                
+                if (existing) {
+                    // 2. Update existing record
+                    console.log('📝 Updating existing record:', existing);
+                    const { error: updateError } = await sb
+                        .from('visitor_stats')
+                        .update({ 
+                            today_count: (existing.today_count || 0) + 1,
+                            total_count: (existing.total_count || 0) + 1,
+                            updated_at: new Date().toISOString()
+                        })
+                        .eq('id', existing.id);
+                    
+                    if (updateError) {
+                        console.error('❌ Update error:', updateError);
+                    } else {
+                        console.log('✅ Visitor count updated!');
+                    }
+                } else {
+                    // 3. Create new record
+                    console.log('📝 Creating new record for today');
+                    const { error: insertError } = await sb
+                        .from('visitor_stats')
+                        .insert([{ 
+                            visit_date: today, 
+                            today_count: 1,
+                            total_count: 1,
+                            created_at: new Date().toISOString(),
+                            updated_at: new Date().toISOString()
+                        }]);
+                    
+                    if (insertError) {
+                        console.error('❌ Insert error:', insertError);
+                    } else {
+                        console.log('✅ New visitor record created!');
+                    }
+                }
+                
+                sessionStorage.setItem(sessionKey, 'true');
+            } else {
+                console.log('👋 Returning visitor today');
             }
             
-            // Get total visitor count
-            try {
-                const { data: allVisitors, error: countError } = await sb
-                    .from('visitor_stats')
-                    .select('total_count');
-                
-                if (countError) throw countError;
-                
-                let totalVisitors = 0;
-                if (allVisitors && allVisitors.length > 0) {
-                    totalVisitors = allVisitors.reduce((sum, row) => sum + (row.total_count || 0), 0);
-                    localStorage.setItem('tukn_visitor_count_total', totalVisitors);
-                } else {
-                    totalVisitors = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
-                }
-                visitorElement.innerHTML = totalVisitors.toLocaleString();
-            } catch(e) {
-                console.error('Count error:', e);
-                const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
-                visitorElement.innerHTML = localCount.toLocaleString();
+            // 4. Get total visitor count
+            console.log('📊 Fetching total visitors...');
+            const { data: allVisitors, error: countError } = await sb
+                .from('visitor_stats')
+                .select('total_count');
+            
+            if (countError) {
+                console.error('❌ Count error:', countError);
+                throw countError;
             }
+            
+            console.log('📊 Raw visitor data:', allVisitors);
+            
+            let totalVisitors = 0;
+            if (allVisitors && allVisitors.length > 0) {
+                totalVisitors = allVisitors.reduce((sum, row) => {
+                    const count = row.total_count || 0;
+                    console.log(`📊 Row: ${JSON.stringify(row)}, count: ${count}`);
+                    return sum + count;
+                }, 0);
+                
+                console.log(`📊 Total visitors calculated: ${totalVisitors}`);
+                localStorage.setItem('tukn_visitor_count_total', totalVisitors.toString());
+            } else {
+                console.warn('⚠️ No visitor data found, using localStorage');
+                totalVisitors = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
+            }
+            
+            visitorElement.innerHTML = totalVisitors.toLocaleString();
+            console.log(`✅ Displaying ${totalVisitors.toLocaleString()} visitors`);
+            
         } catch(error) {
-            console.error('Visitor update error:', error);
+            console.error('❌ Visitor update error:', error);
             const localCount = parseInt(localStorage.getItem('tukn_visitor_count_total') || '0');
             visitorElement.innerHTML = localCount.toLocaleString();
+            console.log(`📊 Fallback display: ${localCount}`);
         }
     }
 
@@ -2688,7 +2720,7 @@
         container.innerHTML = images.map(img => `<div class="gallery-item" onclick="window.location.href='gallery.html'"><img src="${img}" onerror="this.src='https://placehold.co/200x150/e5e7eb/6b7280?text=ছবি'"><div class="gallery-overlay">ইভেন্টের ছবি</div></div>`).join('');
     }
 
-    // ===== জেলা রোলিং স্ট্যাটস (সম্পূর্ণ ফিক্সড) =====
+    // ===== জেলা রোলিং স্ট্যাটস (COMPLETELY FIXED) =====
     let districtData = [];
     let currentIndex = 0;
     let rollInterval = null;
@@ -2705,25 +2737,36 @@
             return;
         }
         try {
-            const { data: members, error } = await sb.from('members').select('present_district, status');
+            const { data: members, error } = await sb
+                .from('members')
+                .select('present_district, status');
+            
             if (error) throw error;
-            console.log('📊 মোট সদস্য:', members.length);
+            
+            console.log('📊 মোট সদস্য:', members?.length || 0);
+            
+            // জেলা অনুযায়ী কাউন্ট
             const districtCount = {};
             members.forEach(m => {
-                if (m.status === 'deleted') return;
-                const district = m.present_district || 'অজানা';
+                if (m.status === 'deleted' || m.status === 'rejected') return;
+                const district = m.present_district || 'অন্যান্য';
                 districtCount[district] = (districtCount[district] || 0) + 1;
             });
+            
             districtData = Object.entries(districtCount).sort((a, b) => b[1] - a[1]);
             console.log('🏙️ জেলা সমূহ:', districtData);
+            
             const total = districtData.reduce((sum, [_, count]) => sum + count, 0);
             document.getElementById('totalMembersDisplay').innerHTML = `<i class="fas fa-users"></i> মোট: ${total} জন`;
+            
             if (districtData.length === 0) {
                 document.getElementById('rollingDistrict').textContent = 'কোন ডেটা নেই';
                 document.getElementById('rollingCount').textContent = '০';
                 document.getElementById('rollIndicator').textContent = '০/০';
                 return;
             }
+            
+            // প্রথম জেলা দেখান
             currentIndex = 0;
             const [firstDistrict, firstCount] = districtData[0];
             const districtEl = document.getElementById('rollingDistrict');
@@ -2736,7 +2779,9 @@
             currentCountText = countEl;
             document.getElementById('rollIndicator').textContent = `1/${districtData.length}`;
             document.getElementById('progressFill').style.width = '0%';
+            
             console.log('✅ রোলিং প্রস্তুত! জেলা:', districtData.length);
+            
             if (districtData.length > 1) {
                 if (rollInterval) clearInterval(rollInterval);
                 startRolling();
