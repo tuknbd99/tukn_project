@@ -1315,12 +1315,13 @@ function showTab(tabName) {
 }
 
 // ============================================================
-// ড্যাশবোর্ড
+// ড্যাশবোর্ড (FIXED - null check added)
 // ============================================================
 async function loadRealDashboard() {
-    const client = initSupabaseClient();
-    if (!client) return;
     try {
+        const client = initSupabaseClient();
+        if (!client) return;
+        
         const now = new Date();
         const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
         const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
@@ -1341,12 +1342,53 @@ async function loadRealDashboard() {
         let totalSavings = 0;
         if (allPayments && allPayments.length > 0) totalSavings = allPayments.reduce((s, p) => s + (p.amount || 0), 0);
         
+        // Counts
         const { count: totalMembers } = await client.from('members').select('*', { count: 'exact', head: true });
         const { count: pendingMembers } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
         const { count: pendingPayments } = await client.from('payments').select('*', { count: 'exact', head: true }).eq('status', 'pending');
         const { count: pendingWithdrawals } = await client.from('withdrawals').select('*', { count: 'exact', head: true }).eq('status', 'pending');
         const { count: pendingLoans } = await client.from('loan_applications').select('*', { count: 'exact', head: true }).eq('status', 'pending');
         
+        // ✅ SAFE SETTERS - null check for every element
+        const setText = (id, value) => { 
+            const el = document.getElementById(id); 
+            if (el) el.innerHTML = value; 
+        };
+        const setInnerText = (id, value) => { 
+            const el = document.getElementById(id); 
+            if (el) el.innerText = value; 
+        };
+        
+        setText('dashMonthlyCollection', formatAmountWithText(monthlyCollection));
+        setText('dashTotalLoanGiven', formatAmountWithText(totalLoanGiven));
+        setText('dashTotalWithdrawal', formatAmountWithText(totalWithdrawal));
+        setText('dashCurrentFund', formatAmountWithText(Math.max(0, totalSavings - totalWithdrawal - totalLoanGiven)));
+        setText('dashWelfareFund', formatAmountWithText(0));
+        
+        setInnerText('totalMembersStat', totalMembers || 0);
+        setInnerText('newMembersStat', 0);
+        setInnerText('totalCollectionStat', formatAmount(monthlyCollection));
+        setInnerText('pendingMembersStat', pendingMembers || 0);
+        setInnerText('pendingPaymentsStat', pendingPayments || 0);
+        setInnerText('pendingWithdrawalsStat', pendingWithdrawals || 0);
+        setInnerText('pendingLoansStat', pendingLoans || 0);
+        
+        setInnerText('statTotalMembers', totalMembers || 0);
+        setInnerText('statMonthlyCollection', formatAmount(monthlyCollection));
+        setInnerText('statPendingMembers', pendingMembers || 0);
+        setInnerText('statPendingPayments', pendingPayments || 0);
+        setInnerText('statPendingWithdrawals', pendingWithdrawals || 0);
+        setInnerText('statPendingLoans', pendingLoans || 0);
+        
+        setInnerText('statActiveMembers', totalMembers - pendingMembers || 0);
+        setInnerText('statPendingMembers2', pendingMembers || 0);
+        setInnerText('statInactiveMembers', 0);
+        setInnerText('statTotalMembers2', totalMembers || 0);
+        
+        const updateTime = document.getElementById('lastUpdateTime');
+        if (updateTime) updateTime.innerHTML = new Date().toLocaleTimeString('bn-BD');
+        
+        // District stats
         const { data: districtData } = await client.from('members').select('present_district, status');
         const districtStats = {};
         if (districtData) {
@@ -1356,25 +1398,6 @@ async function loadRealDashboard() {
                 if (m.status !== 'deleted') districtStats[district]++;
             });
         }
-        
-        document.getElementById('dashMonthlyCollection').innerHTML = formatAmountWithText(monthlyCollection);
-        document.getElementById('dashTotalLoanGiven').innerHTML = formatAmountWithText(totalLoanGiven);
-        document.getElementById('dashTotalWithdrawal').innerHTML = formatAmountWithText(totalWithdrawal);
-        document.getElementById('dashCurrentFund').innerHTML = formatAmountWithText(Math.max(0, totalSavings - totalWithdrawal - totalLoanGiven));
-        
-        document.getElementById('totalMembersStat').innerText = totalMembers || 0;
-        document.getElementById('pendingMembersStat').innerText = pendingMembers || 0;
-        document.getElementById('pendingPaymentsStat').innerText = pendingPayments || 0;
-        document.getElementById('pendingWithdrawalsStat').innerText = pendingWithdrawals || 0;
-        document.getElementById('pendingLoansStat').innerText = pendingLoans || 0;
-        
-        document.getElementById('statTotalMembers').innerText = totalMembers || 0;
-        document.getElementById('statMonthlyCollection').innerText = formatAmount(monthlyCollection);
-        document.getElementById('statPendingMembers').innerText = pendingMembers || 0;
-        document.getElementById('statPendingPayments').innerText = pendingPayments || 0;
-        document.getElementById('statPendingWithdrawals').innerText = pendingWithdrawals || 0;
-        document.getElementById('statPendingLoans').innerText = pendingLoans || 0;
-        
         const sorted = Object.entries(districtStats).sort((a, b) => b[1] - a[1]);
         const districtContainer = document.getElementById('districtStats');
         if (districtContainer) {
@@ -1383,8 +1406,7 @@ async function loadRealDashboard() {
             ).join('') || '<div class="text-gray-500 text-center py-4">কোনো ডেটা নেই</div>';
         }
         
-        document.getElementById('lastUpdateTime').innerHTML = new Date().toLocaleTimeString('bn-BD');
-        
+        // Recent members
         const { data: recentMembers } = await client.from('members').select('full_name, member_id, created_at, status').order('created_at', { ascending: false }).limit(5);
         const recentList = document.getElementById('recentMembersList');
         if (recentList && recentMembers) {
@@ -1393,6 +1415,7 @@ async function loadRealDashboard() {
             ).join('');
         }
         
+        // Recent payments
         const { data: recentPayments } = await client.from('payments').select('member_name, amount, status, submitted_at').order('submitted_at', { ascending: false }).limit(5);
         const paymentList = document.getElementById('recentPaymentsList');
         if (paymentList && recentPayments) {
@@ -1400,7 +1423,9 @@ async function loadRealDashboard() {
                 `<div class="flex justify-between border-b py-2"><div><p class="font-medium">${p.member_name || '-'}</p><p class="text-xs text-gray-500">${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</p></div><div class="text-right"><p class="font-bold text-emerald-600">${formatAmountWithText(p.amount)}</p></div></div>`
             ).join('');
         }
-    } catch(e) { console.error('Dashboard error:', e); }
+    } catch(e) { 
+        console.error('Dashboard error:', e); 
+    }
 }
 
 // ============================================================
