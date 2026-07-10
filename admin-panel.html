@@ -618,47 +618,155 @@ async function loadRealDashboard() {
 }
 
 // ============================================================
-// চার্ট ফাংশন
+// চার্ট ফাংশন - রিয়েল ডেটা সহ
 // ============================================================
-function updateCharts() {
-    const ctx1 = document.getElementById('monthlyChart');
-    if (ctx1) {
-        if (chartInstances.monthly) chartInstances.monthly.destroy();
-        chartInstances.monthly = new Chart(ctx1, {
-            type: 'bar',
-            data: {
-                labels: ['জানু', 'ফেব্রু', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টে', 'অক্টো', 'নভে', 'ডিসে'],
-                datasets: [
-                    { label: 'আয়', data: [12000, 15000, 18000, 14000, 20000, 22000, 18000, 25000, 21000, 23000, 26000, 28000], backgroundColor: 'rgba(16, 185, 129, 0.6)' },
-                    { label: 'ব্যয়', data: [8000, 9000, 11000, 10000, 12000, 14000, 13000, 15000, 14000, 16000, 17000, 18000], backgroundColor: 'rgba(239, 68, 68, 0.6)' }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'top' } }
-            }
-        });
-    }
-    
-    const ctx2 = document.getElementById('districtChart');
-    if (ctx2) {
-        if (chartInstances.district) chartInstances.district.destroy();
-        chartInstances.district = new Chart(ctx2, {
-            type: 'pie',
-            data: {
-                labels: ['ঢাকা', 'চট্টগ্রাম', 'রাজশাহী', 'খুলনা', 'বরিশাল', 'সিলেট', 'রংপুর', 'ময়মনসিংহ'],
-                datasets: [{
-                    data: [45, 30, 25, 20, 15, 12, 18, 10],
-                    backgroundColor: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316']
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'right' } }
-            }
-        });
+async function updateCharts() {
+    const client = initSupabaseClient();
+    if (!client) return;
+
+    try {
+        // --- ১. জেলা ভিত্তিক সদস্য সংখ্যা (পাই চার্টের জন্য) ---
+        const { data: districtData, error: districtError } = await client
+            .from('members')
+            .select('present_district, status')
+            .eq('status', 'active'); // শুধুমাত্র সক্রিয় সদস্য
+
+        if (districtError) throw districtError;
+
+        const districtCounts = {};
+        if (districtData) {
+            districtData.forEach(m => {
+                const district = m.present_district || 'অজানা';
+                districtCounts[district] = (districtCounts[district] || 0) + 1;
+            });
+        }
+
+        const districtLabels = Object.keys(districtCounts);
+        const districtValues = Object.values(districtCounts);
+        const colors = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'];
+
+        // পাই চার্ট আপডেট
+        const ctx2 = document.getElementById('districtChart');
+        if (ctx2) {
+            if (chartInstances.district) chartInstances.district.destroy();
+            chartInstances.district = new Chart(ctx2, {
+                type: 'pie',
+                data: {
+                    labels: districtLabels.length ? districtLabels : ['কোনো ডেটা নেই'],
+                    datasets: [{
+                        data: districtValues.length ? districtValues : [1],
+                        backgroundColor: districtValues.length ? colors.slice(0, districtLabels.length) : ['#e5e7eb']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { 
+                            position: 'right',
+                            labels: { boxWidth: 12, padding: 10 }
+                        }
+                    }
+                }
+            });
+        }
+
+        // --- ২. মাসিক আয়-ব্যয় (বার চার্ট) ---
+        // বর্তমান বছর ধরে নিচ্ছি
+        const currentYear = new Date().getFullYear();
+        const startDate = `${currentYear}-01-01T00:00:00Z`;
+        const endDate = `${currentYear}-12-31T23:59:59Z`;
+
+        // মাসিক আয় (payments থেকে)
+        const { data: incomeData } = await client
+            .from('payments')
+            .select('amount, submitted_at')
+            .eq('status', 'approved')
+            .gte('submitted_at', startDate)
+            .lte('submitted_at', endDate);
+
+        // মাসিক ব্যয় (ledger_transactions থেকে expense)
+        const { data: expenseData } = await client
+            .from('ledger_transactions')
+            .select('amount, date')
+            .eq('type', 'expense')
+            .gte('date', startDate)
+            .lte('date', endDate);
+
+        // মাস অনুযায়ী ডেটা প্রস্তুত করা
+        const monthlyIncome = new Array(12).fill(0);
+        const monthlyExpense = new Array(12).fill(0);
+        const monthNames = ['জানু', 'ফেব্রু', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টে', 'অক্টো', 'নভে', 'ডিসে'];
+
+        if (incomeData) {
+            incomeData.forEach(p => {
+                const month = new Date(p.submitted_at).getMonth();
+                monthlyIncome[month] += p.amount || 0;
+            });
+        }
+
+        if (expenseData) {
+            expenseData.forEach(e => {
+                const month = new Date(e.date).getMonth();
+                monthlyExpense[month] += e.amount || 0;
+            });
+        }
+
+        // বার চার্ট আপডেট
+        const ctx1 = document.getElementById('monthlyChart');
+        if (ctx1) {
+            if (chartInstances.monthly) chartInstances.monthly.destroy();
+            chartInstances.monthly = new Chart(ctx1, {
+                type: 'bar',
+                data: {
+                    labels: monthNames,
+                    datasets: [
+                        { 
+                            label: 'আয়', 
+                            data: monthlyIncome, 
+                            backgroundColor: 'rgba(16, 185, 129, 0.7)',
+                            borderColor: 'rgba(16, 185, 129, 1)',
+                            borderWidth: 1
+                        },
+                        { 
+                            label: 'ব্যয়', 
+                            data: monthlyExpense, 
+                            backgroundColor: 'rgba(239, 68, 68, 0.7)',
+                            borderColor: 'rgba(239, 68, 68, 1)',
+                            borderWidth: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { 
+                        legend: { position: 'top' },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return context.dataset.label + ': ' + formatAmountWithText(context.parsed.y);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: function(value) {
+                                    return formatAmount(value);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+    } catch (error) {
+        console.error('Chart update error:', error);
+        showToast('চার্ট আপডেট করতে সমস্যা হয়েছে', 'error');
     }
 }
 
