@@ -1075,419 +1075,15 @@
     
 <script>
     // ============================================================
-// 🆕 লোন পরিশোধ (EMI) ফাংশনসমূহ
+// Supabase কনফিগারেশন
 // ============================================================
-
-// লোন পরিশোধ মডাল খোলা
-async function openLoanRepaymentModal() {
-    const modal = document.getElementById('loanRepaymentModal');
-    const loading = document.getElementById('loanRepaymentLoading');
-    const info = document.getElementById('loanRepaymentInfo');
-    
-    modal.classList.remove('hidden');
-    modal.classList.add('flex');
-    loading.classList.remove('hidden');
-    info.classList.add('hidden');
-    document.getElementById('repaySubmitBtn').disabled = true;
-    document.getElementById('repaySummary').classList.add('hidden');
-    document.getElementById('repayBalanceCheck').classList.add('hidden');
-    
-    await loadLoanRepaymentData();
-}
-
-// লোন পরিশোধ ডাটা লোড
-async function loadLoanRepaymentData() {
-    const client = await initSupabase();
-    if (!client) {
-        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
-        return;
-    }
-    
-    try {
-        const { data: loans, error: loanError } = await client
-            .from('loan_applications')
-            .select('*')
-            .eq('member_id', currentUser.id)
-            .eq('status', 'approved')
-            .order('approved_at', { ascending: false });
-        
-        if (loanError) throw loanError;
-        
-        if (!loans || loans.length === 0) {
-            showToast('❌ আপনার কোনো অনুমোদিত লোন নেই!', 'error');
-            closeLoanRepaymentModal();
-            return;
-        }
-        
-        const loan = loans[0];
-        
-        let loanPayments = [];
-        try {
-            const { data: payments, error: payError } = await client
-                .from('loan_payments')
-                .select('*')
-                .eq('loan_id', loan.id)
-                .order('due_date', { ascending: true });
-            
-            if (!payError && payments) {
-                loanPayments = payments;
-            }
-        } catch(e) {
-            console.log('loan_payments টেবিল নেই বা ডাটা নেই');
-        }
-        
-        document.getElementById('repayLoanType').innerHTML = loan.loan_type || 'সাধারণ লোন';
-        document.getElementById('repayTotalLoan').innerHTML = Number(loan.amount).toLocaleString() + ' টাকা';
-        
-        const paidAmount = loanPayments
-            .filter(p => p.status === 'approved' || p.status === 'paid')
-            .reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0);
-        
-        const remainingBalance = (loan.amount || 0) - paidAmount;
-        
-        document.getElementById('repayPaidAmount').innerHTML = paidAmount.toLocaleString() + ' টাকা';
-        document.getElementById('repayRemainingBalance').innerHTML = remainingBalance.toLocaleString() + ' টাকা';
-        document.getElementById('repayDuration').innerHTML = (loan.duration_months || loan.duration || 0) + ' মাস';
-        document.getElementById('repayEmiAmount').innerHTML = (loan.emi_amount || 0).toFixed(2) + ' টাকা';
-        document.getElementById('repayLateFeePercent').innerHTML = (loan.late_fee_percent || 0) + '%';
-        document.getElementById('repayStartDate').innerHTML = loan.approved_at ? new Date(loan.approved_at).toLocaleDateString('bn-BD') : '-';
-        
-        const container = document.getElementById('repayMonthsContainer');
-        container.innerHTML = '';
-        
-        const totalEmi = loan.duration_months || 12;
-        const emiAmount = loan.emi_amount || 0;
-        const startDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
-        const lateFeePercent = loan.late_fee_percent || 0;
-        const gracePeriod = loan.grace_period_days || 5;
-        const today = new Date();
-        today.setHours(0,0,0,0);
-        
-        const paidInstallments = new Set();
-        loanPayments.forEach(p => {
-            if (p.status === 'approved' || p.status === 'paid') {
-                paidInstallments.add(p.installment_no);
-            }
-        });
-        
-        for (let i = 1; i <= totalEmi; i++) {
-            let dueDate = new Date(startDate);
-            dueDate.setMonth(startDate.getMonth() + i);
-            dueDate.setHours(0,0,0,0);
-            
-            const dueDateStr = dueDate.toLocaleDateString('bn-BD');
-            const isPaid = paidInstallments.has(i);
-            const isOverdue = !isPaid && today > dueDate;
-            
-            let lateFee = 0;
-            if (!isPaid && today > dueDate) {
-                const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
-                const monthsOverdue = Math.ceil(daysOverdue / 30);
-                lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
-            }
-            
-            const totalWithLateFee = emiAmount + lateFee;
-            
-            let statusText = '';
-            let statusColor = '';
-            if (isPaid) {
-                statusText = '✅ পরিশোধিত';
-                statusColor = 'text-green-600 bg-green-50';
-            } else if (isOverdue) {
-                statusText = '⚠️ বিলম্বিত';
-                statusColor = 'text-red-600 bg-red-50';
-            } else {
-                statusText = '⏳ pending';
-                statusColor = 'text-amber-600 bg-amber-50';
-            }
-            
-            const isDisabled = isPaid || remainingBalance <= 0;
-            
-            container.innerHTML += `
-                <label class="flex items-center gap-2 p-2 border rounded-lg hover:bg-gray-50 cursor-pointer transition ${isDisabled ? 'opacity-50 cursor-not-allowed bg-gray-100' : ''}">
-                    <input type="checkbox" 
-                           value="${i}" 
-                           class="repay-month-cb" 
-                           data-emi="${emiAmount}" 
-                           data-latefee="${lateFee}" 
-                           data-total="${totalWithLateFee}"
-                           ${isDisabled ? 'disabled' : ''}
-                           onchange="updateRepaymentSummary()">
-                    <div class="flex-1">
-                        <div class="flex justify-between items-center">
-                            <span class="font-medium text-sm">কিস্তি #${i}</span>
-                            <span class="text-xs px-2 py-0.5 rounded-full ${statusColor}">${statusText}</span>
-                        </div>
-                        <div class="flex justify-between text-xs text-gray-500">
-                            <span>নির্ধারিত: ${dueDateStr}</span>
-                            <span>${emiAmount.toFixed(2)} টাকা ${lateFee > 0 ? '+ ' + lateFee.toFixed(2) + ' টাকা (বিলম্ব ফি)' : ''}</span>
-                        </div>
-                    </div>
-                </label>
-            `;
-        }
-        
-        document.getElementById('loanRepaymentLoading').classList.add('hidden');
-        document.getElementById('loanRepaymentInfo').classList.remove('hidden');
-        
-        window._currentLoanForRepayment = {
-            loan: loan,
-            loanPayments: loanPayments,
-            remainingBalance: remainingBalance,
-            emiAmount: emiAmount
-        };
-        
-        updateRepaymentSummary();
-        
-    } catch(e) {
-        console.error('লোন ডাটা লোড error:', e);
-        showToast('লোন তথ্য লোড করতে ব্যর্থ!', 'error');
-        document.getElementById('loanRepaymentLoading').innerHTML = `
-            <div class="text-red-500 py-4">
-                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
-                <p>লোন তথ্য লোড করতে সমস্যা!</p>
-                <button onclick="loadLoanRepaymentData()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg mt-3">পুনরায় চেষ্টা করুন</button>
-            </div>
-        `;
-    }
-}
-
-// কিস্তি নির্বাচনের সারাংশ আপডেট
-function updateRepaymentSummary() {
-    const selected = document.querySelectorAll('.repay-month-cb:checked');
-    const summary = document.getElementById('repaySummary');
-    const submitBtn = document.getElementById('repaySubmitBtn');
-    const balanceCheck = document.getElementById('repayBalanceCheck');
-    
-    if (selected.length === 0) {
-        summary.classList.add('hidden');
-        submitBtn.disabled = true;
-        balanceCheck.classList.add('hidden');
-        return;
-    }
-    
-    summary.classList.remove('hidden');
-    
-    let totalEmi = 0;
-    let totalLateFee = 0;
-    let totalAmount = 0;
-    
-    selected.forEach(cb => {
-        const emi = parseFloat(cb.dataset.emi) || 0;
-        const lateFee = parseFloat(cb.dataset.latefee) || 0;
-        totalEmi += emi;
-        totalLateFee += lateFee;
-        totalAmount += parseFloat(cb.dataset.total) || 0;
-    });
-    
-    document.getElementById('repaySelectedCount').innerHTML = selected.length + 'টি';
-    document.getElementById('repayTotalEmi').innerHTML = totalEmi.toFixed(2) + ' টাকা';
-    document.getElementById('repayTotalLateFee').innerHTML = totalLateFee.toFixed(2) + ' টাকা';
-    document.getElementById('repayTotalAmount').innerHTML = totalAmount.toFixed(2) + ' টাকা';
-    
-    const remainingBalance = window._currentLoanForRepayment?.remainingBalance || 0;
-    const loanData = window._currentLoanForRepayment;
-    
-    if (totalAmount > remainingBalance) {
-        balanceCheck.className = 'p-3 rounded-lg mb-4 bg-red-50 border border-red-200';
-        balanceCheck.innerHTML = `
-            <p class="text-red-600 font-semibold">
-                <i class="fas fa-exclamation-triangle mr-2"></i>
-                ⚠️ পরিশোধের পরিমাণ (${totalAmount.toFixed(2)} টাকা) আপনার বাকি ব্যালেন্স (${remainingBalance.toFixed(2)} টাকা) থেকে বেশি!
-            </p>
-        `;
-        balanceCheck.classList.remove('hidden');
-        submitBtn.disabled = true;
-    } else if (totalAmount === 0) {
-        balanceCheck.className = 'p-3 rounded-lg mb-4 bg-gray-50 border border-gray-200';
-        balanceCheck.innerHTML = `<p class="text-gray-500">কোনো পরিশোধের পরিমাণ নির্বাচন করা হয়নি</p>`;
-        balanceCheck.classList.remove('hidden');
-        submitBtn.disabled = true;
-    } else {
-        balanceCheck.className = 'p-3 rounded-lg mb-4 bg-emerald-50 border border-emerald-200';
-        balanceCheck.innerHTML = `
-            <p class="text-emerald-600 font-semibold">
-                <i class="fas fa-check-circle mr-2"></i>
-                ✅ পরিশোধের পরিমাণ ${totalAmount.toFixed(2)} টাকা। পরিশোধের পর বাকি থাকবে ${(remainingBalance - totalAmount).toFixed(2)} টাকা।
-            </p>
-        `;
-        balanceCheck.classList.remove('hidden');
-        submitBtn.disabled = false;
-    }
-}
-
-// লোন পরিশোধ সাবমিট
-async function submitLoanRepayment() {
-    const selected = document.querySelectorAll('.repay-month-cb:checked');
-    if (selected.length === 0) {
-        showToast('কমপক্ষে একটি কিস্তি নির্বাচন করুন!', 'error');
-        return;
-    }
-    
-    const loanData = window._currentLoanForRepayment;
-    if (!loanData) {
-        showToast('লোন তথ্য পাওয়া যায়নি!', 'error');
-        return;
-    }
-    
-    let totalAmount = 0;
-    let selectedInstallments = [];
-    let totalLateFee = 0;
-    let totalEmi = 0;
-    
-    selected.forEach(cb => {
-        const installmentNo = parseInt(cb.value);
-        const emi = parseFloat(cb.dataset.emi) || 0;
-        const lateFee = parseFloat(cb.dataset.latefee) || 0;
-        const total = parseFloat(cb.dataset.total) || 0;
-        
-        totalAmount += total;
-        totalEmi += emi;
-        totalLateFee += lateFee;
-        selectedInstallments.push(installmentNo);
-    });
-    
-    const confirmMsg = `আপনি কি ${selectedInstallments.length}টি কিস্তি পরিশোধ করতে চান?\n\n` +
-        `📊 কিস্তি নম্বর: ${selectedInstallments.join(', ')}\n` +
-        `💰 মূল কিস্তি: ${totalEmi.toFixed(2)} টাকা\n` +
-        `⚠️ বিলম্ব ফি: ${totalLateFee.toFixed(2)} টাকা\n` +
-        `💳 মোট পরিশোধ: ${totalAmount.toFixed(2)} টাকা\n` +
-        `📉 পরিশোধের পর বাকি থাকবে: ${(loanData.remainingBalance - totalAmount).toFixed(2)} টাকা\n\n` +
-        `এই পরিশোধ কি আপনি নিশ্চিত করতে চান?`;
-    
-    if (!confirm(confirmMsg)) return;
-    
-    const btn = document.getElementById('repaySubmitBtn');
-    const originalText = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="loading-spinner"></span> প্রক্রিয়াকরণ...';
-    
-    const client = await initSupabase();
-    if (!client) {
-        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
-        btn.disabled = false;
-        btn.innerHTML = originalText;
-        return;
-    }
-    
-    try {
-        for (const installmentNo of selectedInstallments) {
-            const emiAmount = loanData.emiAmount || 0;
-            const dueDate = new Date(loanData.loan.approved_at || Date.now());
-            dueDate.setMonth(dueDate.getMonth() + installmentNo);
-            
-            const today = new Date();
-            today.setHours(0,0,0,0);
-            let lateFee = 0;
-            if (today > dueDate) {
-                const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
-                const monthsOverdue = Math.ceil(daysOverdue / 30);
-                const lateFeePercent = loanData.loan.late_fee_percent || 0;
-                lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
-            }
-            
-            const totalAmountPerInstallment = emiAmount + lateFee;
-            
-            const { data: existing } = await client
-                .from('loan_payments')
-                .select('id')
-                .eq('loan_id', loanData.loan.id)
-                .eq('installment_no', installmentNo)
-                .maybeSingle();
-            
-            if (existing) {
-                await client
-                    .from('loan_payments')
-                    .update({
-                        status: 'approved',
-                        payment_date: new Date().toISOString(),
-                        total_amount: totalAmountPerInstallment,
-                        late_fee: lateFee,
-                        approved_by: currentUser.name || 'সিস্টেম (অনলাইন পেমেন্ট)',
-                        approved_at: new Date().toISOString()
-                    })
-                    .eq('id', existing.id);
-            } else {
-                await client
-                    .from('loan_payments')
-                    .insert([{
-                        loan_id: loanData.loan.id,
-                        installment_no: installmentNo,
-                        emi_amount: emiAmount,
-                        late_fee: lateFee,
-                        total_amount: totalAmountPerInstallment,
-                        due_date: dueDate.toISOString().split('T')[0],
-                        payment_date: new Date().toISOString(),
-                        status: 'approved',
-                        approved_by: currentUser.name || 'সিস্টেম (অনলাইন পেমেন্ট)',
-                        approved_at: new Date().toISOString()
-                    }]);
-            }
-        }
-        
-        const newRemainingBalance = loanData.remainingBalance - totalAmount;
-        await client
-            .from('loan_applications')
-            .update({ remaining_balance: newRemainingBalance })
-            .eq('id', loanData.loan.id);
-        
-        showToast(`✅ ${selectedInstallments.length}টি কিস্তি সফলভাবে পরিশোধ করা হয়েছে!\nমোট পরিশোধ: ${totalAmount.toFixed(2)} টাকা`, 'success');
-        
-        closeLoanRepaymentModal();
-        await loadLoanHistory();
-        await loadUserFunds();
-        
-        setTimeout(() => {
-            openLoanRepaymentModal();
-        }, 1000);
-        
-    } catch(e) {
-        console.error('লোন পরিশোধ error:', e);
-        showToast('❌ লোন পরিশোধ করতে ব্যর্থ!', 'error');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = originalText;
-    }
-}
-
-// লোন পরিশোধ মডাল বন্ধ
-function closeLoanRepaymentModal() {
-    const modal = document.getElementById('loanRepaymentModal');
-    modal.classList.add('hidden');
-    modal.classList.remove('flex');
-    document.getElementById('loanRepaymentInfo').classList.add('hidden');
-    document.getElementById('loanRepaymentLoading').classList.remove('hidden');
-    document.getElementById('repaySummary').classList.add('hidden');
-    document.getElementById('repayBalanceCheck').classList.add('hidden');
-    window._currentLoanForRepayment = null;
-}
-
-function closeLoanRepaymentModalOnOverlay(e) {
-    if (e.target.id === 'loanRepaymentModal') {
-        closeLoanRepaymentModal();
-    }
-}
-// ============================================================
-// Supabase কনফিগারেশন// ============================================================
 const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
 let supabaseClient = null;
 let currentUser = null;
 let currentSlipData = null;
-    // ============================================================
-// ইউটিলিটি ফাংশন
-// ============================================================
-function formatDate(dateString) {
-    if (!dateString) return '-';
-    const date = new Date(dateString);
-    if (isNaN(date.getTime())) return '-';
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
-}
-let durationInterval = null, clockInterval = null, expiryInterval = null;
 let isLoadingReferral = false;
+let durationInterval = null, clockInterval = null, expiryInterval = null;
 const banglaMonths = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
 
 let userFunds = {
@@ -1499,22 +1095,29 @@ let userFunds = {
 };
 
 // ============================================================
-// Supabase Client
+// ইউটিলিটি ফাংশন
 // ============================================================
-async function initSupabase() {
-    if(supabaseClient) return supabaseClient;
-    try {
-        if (typeof supabase === 'undefined') {
-            console.error('❌ Supabase library not loaded!');
-            return null;
-        }
-        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        console.log('✅ Supabase client initialized');
-        return supabaseClient;
-    } catch(e) {
-        console.error('❌ Supabase init error:', e);
-        return null;
-    }
+function formatDate(dateString) {
+    if (!dateString) return '-';
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return '-';
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+}
+
+function formatDateTime(dateString) {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return '-';
+    const day = date.getDate();
+    const month = date.toLocaleString('en-US', { month: 'short' });
+    const year = date.getFullYear();
+    let hours = date.getHours();
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12;
+    return `${day} ${month} ${year} ${hours}:${minutes} ${ampm}`;
 }
 
 function showToast(message, type) { 
@@ -1523,6 +1126,13 @@ function showToast(message, type) {
     toast.innerHTML = message; 
     document.body.appendChild(toast); 
     setTimeout(() => toast.remove(), 3000); 
+}
+
+function getCurrentBangladeshTime() {
+    const now = new Date();
+    const options = { timeZone: 'Asia/Dhaka', hour12: false };
+    const bdTimeString = now.toLocaleString('en-US', options);
+    return new Date(bdTimeString);
 }
 
 function copyPaymentNumber() {
@@ -1550,6 +1160,25 @@ function fallbackCopyPayment(text) {
         showToast('❌ কপি করতে ব্যর্থ!', 'error');
     }
     document.body.removeChild(textarea);
+}
+
+// ============================================================
+// Supabase Client
+// ============================================================
+async function initSupabase() {
+    if(supabaseClient) return supabaseClient;
+    try {
+        if (typeof supabase === 'undefined') {
+            console.error('❌ Supabase library not loaded!');
+            return null;
+        }
+        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        console.log('✅ Supabase client initialized');
+        return supabaseClient;
+    } catch(e) {
+        console.error('❌ Supabase init error:', e);
+        return null;
+    }
 }
 
 // ============================================================
@@ -1592,13 +1221,6 @@ function handleLogout() {
 // ============================================================
 // Time Functions
 // ============================================================
-function getCurrentBangladeshTime() {
-    const now = new Date();
-    const options = { timeZone: 'Asia/Dhaka', hour12: false };
-    const bdTimeString = now.toLocaleString('en-US', options);
-    return new Date(bdTimeString);
-}
-
 function updateDigitalClock() {
     const now = getCurrentBangladeshTime();
     let hours = now.getHours();
@@ -1610,9 +1232,6 @@ function updateDigitalClock() {
     if(clockEl) clockEl.innerHTML = `${hours.toString().padStart(2,'0')}:${minutes}:${seconds} ${ampm}`;
 }
 
-// ============================================================
-// Timer Functions
-// ============================================================
 function startMembershipTimer(approvedAt) {
     if (!approvedAt) {
         document.getElementById('membershipDuration').innerHTML = 'অনুমোদিত হয়নি';
@@ -1787,7 +1406,7 @@ async function updateUI() {
     await loadWithdrawalHistory();
     await loadBonusHistory();
     await loadLoanHistory();
-    await loadTransferHistory(); // 🆕 ট্রান্সফার ইতিহাস লোড
+    await loadTransferHistory();
     
     setTimeout(() => {
         loadReferralData();
@@ -1998,16 +1617,9 @@ async function loadSavingsData() {
 // Payment History
 // ============================================================
 async function loadPaymentHistory() {
-    if(!currentUser) {
-        console.log('❌ currentUser নেই');
-        return;
-    }
+    if(!currentUser) return;
     let client = await initSupabase();
-    if(!client) {
-        console.log('❌ Supabase client নেই');
-        return;
-    }
-    console.log('🔄 পেমেন্ট হিস্ট্রি লোড হচ্ছে...');
+    if(!client) return;
     try {
         const { data: payments, error } = await client
             .from('payments')
@@ -2017,7 +1629,6 @@ async function loadPaymentHistory() {
         
         if (error) {
             console.error('❌ পেমেন্ট লোড এরর:', error);
-            showToast('পেমেন্ট লোড করতে সমস্যা!', 'error');
             return;
         }
         
@@ -2064,18 +1675,17 @@ async function loadPaymentHistory() {
         } else {
             historyBody.innerHTML = '<tr><td colspan="6" class="text-center p-4">📭 কোনো পেমেন্ট ইতিহাস নেই</td></tr>';
         }
-        console.log('✅ পেমেন্ট হিস্ট্রি লোড সম্পূর্ণ');
-    } catch(e) { 
-        console.error('❌ loadPaymentHistory error:', e); 
-    }
+    } catch(e) { console.error('❌ loadPaymentHistory error:', e); }
 }
 
+// ============================================================
+// Payment Slip Functions
+// ============================================================
 async function viewPaymentSlip(paymentId) {
     if (!paymentId) { 
         showToast('স্লিপ আইডি পাওয়া যায়নি!', 'error'); 
         return; 
     }
-    showToast('স্লিপ লোড হচ্ছে...', 'info');
     
     try {
         const client = await initSupabase();
@@ -2095,19 +1705,14 @@ async function viewPaymentSlip(paymentId) {
             return; 
         }
         
-        // 🔥 বাংলাদেশ সময়ে তারিখ/সময় দেখানো হবে
         const bdTime = getCurrentBangladeshTime();
         const submittedDate = new Date(payment.submitted_at);
-        
-        // ✅ জমা দেওয়ার তারিখ (বাংলাদেশ সময়ে)
         const paymentDate = submittedDate.toLocaleDateString('bn-BD', { 
             year: 'numeric', 
             month: 'long', 
             day: 'numeric',
             timeZone: 'Asia/Dhaka'
         });
-        
-        // ✅ জমা দেওয়ার সময় (বাংলাদেশ সময়ে) - 🔥 ফিক্সড
         const paymentTime = new Date(payment.submitted_at).toLocaleTimeString('bn-BD', { 
             hour: '2-digit', 
             minute: '2-digit',
@@ -2115,16 +1720,12 @@ async function viewPaymentSlip(paymentId) {
             hour12: true,
             timeZone: 'Asia/Dhaka'
         });
-        
-        // ✅ স্লিপ জেনারেটের তারিখ (বর্তমান বাংলাদেশ সময়)
         const generateDate = bdTime.toLocaleDateString('bn-BD', { 
             year: 'numeric', 
             month: 'long', 
             day: 'numeric',
             timeZone: 'Asia/Dhaka'
         });
-        
-        // ✅ স্লিপ জেনারেটের সময় (বর্তমান বাংলাদেশ সময়)
         const generateTime = bdTime.toLocaleTimeString('bn-BD', { 
             hour: '2-digit', 
             minute: '2-digit',
@@ -2132,12 +1733,9 @@ async function viewPaymentSlip(paymentId) {
             hour12: true,
             timeZone: 'Asia/Dhaka'
         });
-        
-        // স্লিপ নম্বর তৈরি (ডাটাবেস থেকে নয়, ফ্যালব্যাক)
         const slipNumber = payment.voucher_slip_no || 
                           `TUK${String(Date.now()).slice(-6)}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
         
-        // কুরেন্ট স্লিপ ডাটা সেভ করুন (শেয়ার/ডাউনলোডের জন্য)
         currentSlipData = { 
             slipNumber: slipNumber,
             amount: payment.amount,
@@ -2150,7 +1748,6 @@ async function viewPaymentSlip(paymentId) {
             method: payment.payment_method
         };
         
-        // স্ট্যাটাস নির্ধারণ
         let statusText = 'বিচারাধীন';
         let statusIcon = '⏳';
         let statusBg = '#fed7aa';
@@ -2170,7 +1767,6 @@ async function viewPaymentSlip(paymentId) {
             rejectReason = payment.reject_reason || 'কারণ উল্লেখ নেই';
         }
         
-        // পেমেন্ট মাধ্যম অনুযায়ী বিস্তারিত তথ্য
         let paymentDetailsHtml = '';
         if (payment.payment_method === 'bKash' || payment.payment_method === 'Nagad' || payment.payment_method === 'Rocket') {
             paymentDetailsHtml = `
@@ -2219,12 +1815,10 @@ async function viewPaymentSlip(paymentId) {
             `;
         }
         
-        // স্লিপ HTML তৈরি
         const slipHTML = `
         <div style="max-width:550px; margin:0 auto; background:white; border:1px solid #e5e7eb; position:relative; overflow:hidden; font-family:'Noto Sans Bengali', sans-serif;">
             <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%) rotate(-30deg); font-size:80px; font-weight:800; color:rgba(5,150,105,0.04); white-space:nowrap; pointer-events:none; z-index:0; font-family:Arial,sans-serif;">TUKNBD</div>
             
-            <!-- হেডার -->
             <div style="background:linear-gradient(135deg, #064e3b, #059669); padding:14px 18px; text-align:center; color:white; position:relative; border-bottom:3px solid #fcd34d;">
                 <div style="display:flex; flex-direction:column; align-items:center; justify-content:center;">
                     <img src="images/logo.png" style="width:55px; height:55px; margin-bottom:6px; border:2px solid rgba(255,255,255,0.3); border-radius:50%; object-fit:cover;" onerror="this.src='https://placehold.co/55x55/059669/white?text=T'">
@@ -2233,7 +1827,6 @@ async function viewPaymentSlip(paymentId) {
                 </div>
             </div>
             
-            <!-- স্লিপ তথ্য -->
             <div style="background:#f8fafc; padding:8px 14px; font-size:11px; border-bottom:1px solid #e5e7eb; display:grid; grid-template-columns:1fr 1fr; gap:3px 12px;">
                 <div><span style="font-weight:600;">স্লিপ নং</span> <span style="color:#059669; font-weight:bold;">${slipNumber}</span></div>
                 <div><span style="font-weight:600;">জমার তারিখ</span> <span>${paymentDate}</span></div>
@@ -2242,9 +1835,7 @@ async function viewPaymentSlip(paymentId) {
                 <div><span style="font-weight:600;">জেনারেটের সময়</span> <span>${generateTime}</span></div>
             </div>
             
-            <!-- মূল কন্টেন্ট -->
             <div style="padding:12px; font-size:14px;">
-                <!-- সদস্য তথ্য -->
                 <div style="background:#f8fafc; padding:10px; margin-bottom:8px; border:1px solid #e5e7eb; border-radius:8px;">
                     <div style="font-size:13px; font-weight:700; color:#064e3b; border-bottom:2px solid #fcd34d; display:inline-block; padding-bottom:2px; margin-bottom:6px;">👤 সদস্য তথ্য</div>
                     <div class="slip-detail-row"><span class="slip-detail-label">সদস্য আইডি</span><span class="slip-detail-value">${payment.member_id}</span></div>
@@ -2252,7 +1843,6 @@ async function viewPaymentSlip(paymentId) {
                     <div class="slip-detail-row"><span class="slip-detail-label">মোবাইল</span><span class="slip-detail-value">${payment.mobile || payment.member_id}</span></div>
                 </div>
                 
-                <!-- পেমেন্ট তথ্য -->
                 <div style="background:#f8fafc; padding:10px; margin-bottom:8px; border:1px solid #e5e7eb; border-radius:8px;">
                     <div style="font-size:13px; font-weight:700; color:#064e3b; border-bottom:2px solid #fcd34d; display:inline-block; padding-bottom:2px; margin-bottom:6px;">💳 পেমেন্ট তথ্য</div>
                     <div class="slip-detail-row"><span class="slip-detail-label">মাস</span><span class="slip-detail-value">${payment.month} ${payment.year}</span></div>
@@ -2269,7 +1859,6 @@ async function viewPaymentSlip(paymentId) {
                     ` : ''}
                 </div>
                 
-                <!-- স্ট্যাটাস -->
                 <div style="background:#eef2ff; padding:10px; border:1px solid #c7d2fe; border-radius:8px;">
                     <div style="font-size:13px; font-weight:700; color:#1e40af; border-bottom:2px solid #fcd34d; display:inline-block; padding-bottom:2px; margin-bottom:6px;">📋 স্ট্যাটাস</div>
                     <div class="slip-detail-row">
@@ -2279,14 +1868,12 @@ async function viewPaymentSlip(paymentId) {
                 </div>
             </div>
             
-            <!-- ফুটার -->
             <div style="background:#f9fafb; padding:8px 14px; text-align:center; font-size:9px; border-top:1px solid #e5e7eb; color:#6b7280;">
                 <i class="fas fa-robot"></i> স্বয়ংক্রিয় জেনারেটেড স্লিপ | <i class="fas fa-check-circle" style="color:#059669;"></i> পেমেন্টের রেকর্ড
             </div>
         </div>
         `;
         
-        // স্টাইল যোগ করুন
         const styleTag = document.createElement('style');
         styleTag.id = 'slipStyle';
         styleTag.innerHTML = `
@@ -2353,31 +1940,6 @@ async function viewPaymentSlip(paymentId) {
     }
 }
 
-function shareSlipWhatsApp() {
-    if(!currentSlipData) { showToast('স্লিপ ডাটা নেই!', 'error'); return; }
-    const text = `📄 TUKNBD পেমেন্ট স্লিপ\n━━━━━━━━━━━━━━━━━━━\n🆔 স্লিপ নং: ${currentSlipData.slipNumber}\n👤 সদস্য: ${currentSlipData.member}\n💰 পরিমাণ: ${currentSlipData.amount.toLocaleString()} টাকা\n📆 মাস: ${currentSlipData.month} ${currentSlipData.year}\n📅 জমার তারিখ: ${currentSlipData.paymentDate}\n⏰ জমার সময়: ${currentSlipData.paymentTime}\n🏧 মাধ্যম: ${currentSlipData.method}\n━━━━━━━━━━━━━━━━━━━\n🔗 ভিজিট করুন: www.tuknarif.com.bd\n📱 TUKNBD - ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ`;
-    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-}
-
-function downloadSlipPDF() { 
-    const el = document.getElementById('slipPrintArea'); 
-    if(el) {
-        const printContent = el.innerHTML;
-        const style = `<style>body { font-family: 'Noto Sans Bengali', sans-serif; padding: 20px; background: white; } @media print { body * { visibility: visible; } }</style>`;
-        const element = document.createElement('div');
-        element.innerHTML = style + printContent;
-        element.style.padding = '20px';
-        element.style.background = 'white';
-        html2pdf().set({ 
-            margin: 0.5, 
-            filename: `TUKNBD_Slip_${currentSlipData?.slipNumber || Date.now()}.pdf`,
-            image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: { scale: 2, useCORS: true, logging: false },
-            jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
-        }).from(element).save(); 
-    }
-}
-
 function closePaymentSlipModal() { 
     const modal = document.getElementById('paymentSlipModal');
     if(modal) {
@@ -2399,7 +1961,32 @@ function closeSlipModalOnOverlay(e) {
     }
 }
 
+function downloadSlipPDF() { 
+    const el = document.getElementById('slipPrintArea'); 
+    if(el) {
+        const printContent = el.innerHTML;
+        const style = `<style>body { font-family: 'Noto Sans Bengali', sans-serif; padding: 20px; background: white; } @media print { body * { visibility: visible; } }</style>`;
+        const element = document.createElement('div');
+        element.innerHTML = style + printContent;
+        element.style.padding = '20px';
+        element.style.background = 'white';
+        html2pdf().set({ 
+            margin: 0.5, 
+            filename: `TUKNBD_Slip_${currentSlipData?.slipNumber || Date.now()}.pdf`,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2, useCORS: true, logging: false },
+            jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
+        }).from(element).save(); 
+    }
+}
+
 function printSlip() { window.print(); }
+
+function shareSlipWhatsApp() {
+    if(!currentSlipData) { showToast('স্লিপ ডাটা নেই!', 'error'); return; }
+    const text = `📄 TUKNBD পেমেন্ট স্লিপ\n━━━━━━━━━━━━━━━━━━━\n🆔 স্লিপ নং: ${currentSlipData.slipNumber}\n👤 সদস্য: ${currentSlipData.member}\n💰 পরিমাণ: ${currentSlipData.amount.toLocaleString()} টাকা\n📆 মাস: ${currentSlipData.month} ${currentSlipData.year}\n📅 জমার তারিখ: ${currentSlipData.paymentDate}\n⏰ জমার সময়: ${currentSlipData.paymentTime}\n🏧 মাধ্যম: ${currentSlipData.method}\n━━━━━━━━━━━━━━━━━━━\n🔗 ভিজিট করুন: www.tuknarif.com.bd\n📱 TUKNBD - ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+}
 
 // ============================================================
 // Payment Submit
@@ -2454,13 +2041,12 @@ function togglePaymentFields() {
 }
 
 async function submitPayment() {
-    console.log('🔄 submitPayment() কল হয়েছে');
     const paymentMethod = document.getElementById('paymentMethod').value;
     const senderMobile = document.getElementById('senderMobile').value;
     const transactionId = document.getElementById('transactionId').value;
     const year = document.getElementById('paymentYear').value;
     const selectedMonths = Array.from(document.querySelectorAll('.month-cb:checked')).map(cb => cb.value);
-    console.log('📝 ফর্ম ডেটা:', { paymentMethod, senderMobile, transactionId, year, selectedMonths });
+    
     if(!paymentMethod || !year || selectedMonths.length === 0) {
         showToast('সব তথ্য সঠিকভাবে পূরণ করুন!', 'error');
         return;
@@ -2484,7 +2070,6 @@ async function submitPayment() {
         let successCount = 0;
         let errorMessages = [];
         for(const month of selectedMonths) {
-            // 🆕 স্লিপ নম্বর জেনারেট করুন
             const slipNumber = `TUK${String(Date.now()).slice(-6)}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
             
             const paymentData = {
@@ -2499,7 +2084,7 @@ async function submitPayment() {
                 transaction_id: transactionId || null,
                 status: 'pending',
                 submitted_at: new Date().toISOString(),
-                voucher_slip_no: slipNumber  // 🔥 স্লিপ নম্বর যোগ করুন
+                voucher_slip_no: slipNumber
             };
             if(paymentMethod === 'bank') {
                 paymentData.bank_name = document.getElementById('bankName')?.value || null;
@@ -2512,17 +2097,14 @@ async function submitPayment() {
                 paymentData.receiver_name = document.getElementById('receiverName')?.value || null;
                 paymentData.receiver_mobile = document.getElementById('receiverMobile')?.value || null;
             }
-            console.log('📤 পেমেন্ট ডেটা পাঠানো হচ্ছে:', paymentData);
             const { data, error } = await client
                 .from('payments')
                 .insert([paymentData])
                 .select();
             if (error) {
-                console.error('❌ ইনসার্ট এরর:', error);
                 errorMessages.push(`${month}: ${error.message}`);
                 continue;
             }
-            console.log('✅ পেমেন্ট সেভ হয়েছে:', data);
             successCount++;
         }
         if (errorMessages.length > 0) {
@@ -3319,9 +2901,6 @@ async function viewLoanDetail(loanId) {
     }
 }
 
-// ============================================================
-// closeLoanDetailModal
-// ============================================================
 function closeLoanDetailModal() {
     const modal = document.getElementById('loanDetailModal');
     modal.classList.add('hidden');
@@ -3330,9 +2909,6 @@ function closeLoanDetailModal() {
     window._currentLoanDetail = null;
 }
 
-// ============================================================
-// প্রিন্ট লোন ডিটেইল
-// ============================================================
 function printLoanDetail() {
     const content = document.getElementById('loanDetailContent');
     if(!content) return;
@@ -3393,9 +2969,6 @@ function printLoanDetail() {
     setTimeout(() => { win.print(); }, 500);
 }
 
-// ============================================================
-// পিডিএফ ডাউনলোড লোন ডিটেইল
-// ============================================================
 function downloadLoanDetailPDF() {
     const content = document.getElementById('loanDetailContent');
     if(!content) return;
@@ -3469,42 +3042,79 @@ async function loadNotices() {
 async function loadComplaintReplies() { document.getElementById('complaintRepliesContainer').innerHTML = '<p class="text-gray-500 text-center py-4">কোনো উত্তর পাওয়া যায়নি</p>'; }
 
 // ============================================================
-// 🆕 আপডেটেড রেফারেল ফাংশন (স্বয়ংক্রিয় বোনাস লগ সহ)
+// 🆕 ফিক্সড: ডুপ্লিকেট চেক সহ বোনাস লগ ইনসার্ট
 // ============================================================
-function updateLevelList(level, referrals, rate) {
-    const container = document.getElementById(`level${level}List`);
-    if(!container) return;
-    if(!referrals || referrals.length === 0) {
-        container.innerHTML = `<div class="text-center text-gray-400 py-3 text-sm">📭 Level ${level} - কোনো রেফারেল নেই</div>`;
-        return;
+async function insertReferralBonusLog(memberId, amount, level, note) {
+    const client = await initSupabase();
+    if (!client) return false;
+    
+    try {
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
+        
+        const { data: existing, error: checkError } = await client
+            .from('referral_bonus_log')
+            .select('id, amount')
+            .eq('member_id', memberId)
+            .eq('level', level)
+            .gte('created_at', startOfMonth)
+            .lt('created_at', endOfMonth);
+        
+        if (checkError) {
+            console.error('❌ লগ চেক error:', checkError);
+            return false;
+        }
+        
+        if (existing && existing.length > 0) {
+            const totalExisting = existing.reduce((sum, e) => sum + (e.amount || 0), 0);
+            const newTotal = totalExisting + amount;
+            
+            const { error: updateError } = await client
+                .from('referral_bonus_log')
+                .update({ 
+                    amount: newTotal,
+                    note: `${note} (আপডেটেড)`,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', existing[0].id);
+            
+            if (updateError) {
+                console.error('❌ লগ আপডেট error:', updateError);
+                return false;
+            }
+            
+            console.log(`✅ ${memberId} এর বোনাস লগ আপডেট: ${amount} যোগ, নতুন মোট: ${newTotal}`);
+            return true;
+        }
+        
+        const { error: insertError } = await client
+            .from('referral_bonus_log')
+            .insert([{
+                member_id: memberId,
+                amount: amount,
+                level: level,
+                note: note,
+                created_at: new Date().toISOString()
+            }]);
+        
+        if (insertError) {
+            console.error('❌ লগ ইনসার্ট error:', insertError);
+            return false;
+        }
+        
+        console.log(`✅ ${memberId} এর নতুন বোনাস লগ ইনসার্ট: ${amount} টাকা (Level ${level})`);
+        return true;
+        
+    } catch(e) {
+        console.error('❌ insertReferralBonusLog error:', e);
+        return false;
     }
-    const colors = {1:'emerald',2:'blue',3:'amber',4:'purple',5:'pink',6:'indigo',7:'red',8:'teal',9:'orange',10:'cyan'};
-    const color = colors[level] || 'gray';
-    let html = '';
-    for(const ref of referrals) {
-        const joinDate = ref.created_at ? new Date(ref.created_at).toLocaleDateString('bn-BD', { year:'numeric', month:'long', day:'numeric' }) : '-';
-        const monthlyAmount = ref.monthly_savings || 500;
-        const commission = monthlyAmount * (rate / 100);
-        html += `
-            <div class="bg-white p-3 rounded-lg border hover:shadow-md transition mb-2">
-                <div class="flex justify-between items-start flex-wrap gap-2">
-                    <div>
-                        <p class="font-semibold text-gray-800">${ref.full_name || 'নাম নেই'}</p>
-                        <p class="text-xs text-gray-500"><i class="fas fa-mobile-alt"></i> ${ref.mobile || 'মোবাইল নেই'}</p>
-                        <p class="text-xs text-${color}-600"><i class="fas fa-id-card"></i> ${ref.member_id}</p>
-                        <p class="text-xs text-gray-400"><i class="fas fa-calendar-alt"></i> সদস্য: ${joinDate}</p>
-                    </div>
-                    <div class="text-right bg-amber-50 px-3 py-2 rounded-lg">
-                        <p class="text-sm font-semibold text-amber-700">💰 মাসিক সঞ্চয়: ${monthlyAmount.toLocaleString()} টাকা</p>
-                        <p class="text-xs font-semibold text-emerald-600">🎁 কমিশন: ${Math.floor(commission)} টাকা (${rate}%)</p>
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-    container.innerHTML = html;
 }
 
+// ============================================================
+// 🆕 ফিক্সড: রেফারেল ফাংশন (ডুপ্লিকেট বোনাস লগ প্রতিরোধ)
+// ============================================================
 async function loadReferralData() {
     if(!currentUser || isLoadingReferral) return;
     let client = await initSupabase();
@@ -3659,74 +3269,53 @@ async function loadReferralData() {
             updateLevelList(level, levelReferrals[level], rate * 100);
         }
         
-        // ============================================================
-        // 🆕 রেফারেল বোনাস লগ ইনসার্ট করুন (মে ২০২৬)
-        // ============================================================
-        const startOfMonth = new Date('2026-05-01T00:00:00Z');
-        const endOfMonth = new Date('2026-06-01T00:00:00Z');
+        // 🆕 ডুপ্লিকেট চেক সহ বোনাস লগ ইনসার্ট
+        const now = new Date();
+        const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         
         for(const [memberId, bonus] of Object.entries(referralBonusMap)) {
-            // চেক করুন ইতিমধ্যে এই মাসের লগ আছে কি না
-            const { data: existing, error: existingError } = await client
-                .from('referral_bonus_log')
-                .select('id')
-                .eq('member_id', memberId)
-                .gte('created_at', startOfMonth.toISOString())
-                .lt('created_at', endOfMonth.toISOString())
-                .maybeSingle();
-            
-            if (existingError) {
-                console.error('❌ লগ চেক error:', existingError);
-                continue;
-            }
-            
-            // যদি লগ না থাকে, তাহলে ইনসার্ট করুন
-            if (!existing) {
-                const level = referralLevelMap[memberId] || 0;
-                const note = `Level ${level} রেফারেল বোনাস (মে ২০২৬)`;
-                
-                const { error: insertError } = await client
-                    .from('referral_bonus_log')
-                    .insert([{
-                        member_id: memberId,
-                        amount: Math.round(bonus),
-                        level: level,
-                        note: note,
-                        created_at: new Date().toISOString()
-                    }]);
-                
-                if (insertError) {
-                    console.error(`❌ ${memberId} লগ ইনসার্ট ব্যর্থ:`, insertError);
-                } else {
-                    console.log(`✅ ${memberId} এর বোনাস লগ ইনসার্ট: ${Math.round(bonus)} টাকা (Level ${level})`);
-                }
-            } else {
-                console.log(`ℹ️ ${memberId} এর মে মাসের লগ ইতিমধ্যে আছে`);
+            const level = referralLevelMap[memberId] || 0;
+            const roundedBonus = Math.round(bonus);
+            if (roundedBonus > 0) {
+                await insertReferralBonusLog(
+                    memberId, 
+                    roundedBonus, 
+                    level, 
+                    `Level ${level} রেফারেল বোনাস (${currentMonthKey})`
+                );
             }
         }
         
-        // ============================================================
         // আপনার নিজের referral_bonus আপডেট করুন
-        // ============================================================
         const myTotalBonus = totalCommission;
-        const { error: myUpdateError } = await client
-            .from('members')
-            .update({ referral_bonus: Math.round(myTotalBonus) })
-            .eq('member_id', currentUser.id);
+        const roundedMyBonus = Math.round(myTotalBonus);
         
-        if(myUpdateError) {
-            console.error('❌ আপনার referral_bonus আপডেট ব্যর্থ:', myUpdateError);
+        const { data: currentMember } = await client
+            .from('members')
+            .select('referral_bonus')
+            .eq('member_id', currentUser.id)
+            .single();
+        
+        if (currentMember && Math.round(currentMember.referral_bonus || 0) !== roundedMyBonus) {
+            const { error: myUpdateError } = await client
+                .from('members')
+                .update({ referral_bonus: roundedMyBonus })
+                .eq('member_id', currentUser.id);
+            
+            if(myUpdateError) {
+                console.error('❌ আপনার referral_bonus আপডেট ব্যর্থ:', myUpdateError);
+            } else {
+                console.log(`✅ আপনার referral_bonus আপডেট: ${roundedMyBonus}`);
+                userFunds.referralBonus = roundedMyBonus;
+            }
         } else {
-            console.log(`✅ আপনার referral_bonus আপডেট: ${Math.round(myTotalBonus)}`);
-            userFunds.referralBonus = Math.round(myTotalBonus);
+            console.log(`ℹ️ আপনার referral_bonus ইতিমধ্যে আপডেটেড: ${roundedMyBonus}`);
+            userFunds.referralBonus = roundedMyBonus;
         }
         
         document.getElementById('totalReferrals').innerText = totalReferrals;
         document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
         document.getElementById('totalLevels').innerText = '১০';
-        
-        const referralBonusAmount = Math.floor(totalCommission);
-        userFunds.referralBonus = referralBonusAmount;
         
         const referralBonusCard = document.getElementById('referralBonusFund');
         if(referralBonusCard) {
@@ -3754,11 +3343,14 @@ async function loadReferralData() {
         console.log('🎯 রেফারেল ডাটা লোড সম্পন্ন:', { 
             totalReferrals, 
             totalCommission: Math.floor(totalCommission),
-            referralBonus: userFunds.referralBonus,
-            referralProfit: userFunds.referralProfit
+            referralBonus: userFunds.referralBonus
         });
         
-        showToast('✅ রেফারেল বোনাস এবং লগ আপডেট সম্পন্ন!', 'success');
+        // 🆕 সক্রিয় রেফারেল কাউন্ট আপডেট
+        const activeReferrals = levelReferrals[1].filter(r => r.status === 'active' || r.status === 'approved').length;
+        document.getElementById('activeReferrals').innerText = activeReferrals;
+        
+        showToast('✅ রেফারেল বোনাস আপডেট সম্পন্ন!', 'success');
         
     } catch(error) { 
         console.error('❌ রেফারেল error:', error);
@@ -3769,6 +3361,40 @@ async function loadReferralData() {
     } finally { 
         isLoadingReferral = false; 
     }
+}
+
+function updateLevelList(level, referrals, rate) {
+    const container = document.getElementById(`level${level}List`);
+    if(!container) return;
+    if(!referrals || referrals.length === 0) {
+        container.innerHTML = `<div class="text-center text-gray-400 py-3 text-sm">📭 Level ${level} - কোনো রেফারেল নেই</div>`;
+        return;
+    }
+    const colors = {1:'emerald',2:'blue',3:'amber',4:'purple',5:'pink',6:'indigo',7:'red',8:'teal',9:'orange',10:'cyan'};
+    const color = colors[level] || 'gray';
+    let html = '';
+    for(const ref of referrals) {
+        const joinDate = ref.created_at ? new Date(ref.created_at).toLocaleDateString('bn-BD', { year:'numeric', month:'long', day:'numeric' }) : '-';
+        const monthlyAmount = ref.monthly_savings || 500;
+        const commission = monthlyAmount * (rate / 100);
+        html += `
+            <div class="bg-white p-3 rounded-lg border hover:shadow-md transition mb-2">
+                <div class="flex justify-between items-start flex-wrap gap-2">
+                    <div>
+                        <p class="font-semibold text-gray-800">${ref.full_name || 'নাম নেই'}</p>
+                        <p class="text-xs text-gray-500"><i class="fas fa-mobile-alt"></i> ${ref.mobile || 'মোবাইল নেই'}</p>
+                        <p class="text-xs text-${color}-600"><i class="fas fa-id-card"></i> ${ref.member_id}</p>
+                        <p class="text-xs text-gray-400"><i class="fas fa-calendar-alt"></i> সদস্য: ${joinDate}</p>
+                    </div>
+                    <div class="text-right bg-amber-50 px-3 py-2 rounded-lg">
+                        <p class="text-sm font-semibold text-amber-700">💰 মাসিক সঞ্চয়: ${monthlyAmount.toLocaleString()} টাকা</p>
+                        <p class="text-xs font-semibold text-emerald-600">🎁 কমিশন: ${Math.floor(commission)} টাকা (${rate}%)</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    container.innerHTML = html;
 }
 
 function toggleLevel(level) { 
@@ -3799,10 +3425,8 @@ function copyReferId() {
 }
 
 // ============================================================
-// ====== 🆕 সঞ্চয় ট্রান্সফার ফাংশন (RPC-ভিত্তিক) ======
+// 🆕 সঞ্চয় ট্রান্সফার ফাংশন
 // ============================================================
-
-// ট্রান্সফার মডালের জন্য মাস লোড
 function populateTransferMonths() {
     const container = document.getElementById('transferMonthsContainer');
     if(container) {
@@ -3990,7 +3614,6 @@ function deselectAllTransferMonths() {
     updateTransferTotalAmount();
 }
 
-// গ্রহীতা সার্চ - ট্রান্সফার জন্য
 async function searchReceiverForTransfer() {
     const searchQuery = document.getElementById('transferReceiverSearch').value.trim();
     if (!searchQuery) {
@@ -4160,7 +3783,6 @@ async function submitTransferSavings() {
         const transactionId = `TFR-${Date.now()}-${Math.floor(Math.random()*1000)}`;
         const note = `${selectedMonths.length} মাসের সঞ্চয় ট্রান্সফার (${selectedMonths.join(', ')})`;
         
-        // ✅ RPC কল - ট্রান্সফার ফাংশন
         const { data, error } = await client.rpc('transfer_funds', {
             p_from_member_id: currentUser.id,
             p_to_member_id: receiverId,
@@ -4178,16 +3800,11 @@ async function submitTransferSavings() {
         if (data && data.success) {
             showToast(`✅ ${totalAmount.toLocaleString()} টাকা সফলভাবে ট্রান্সফার হয়েছে!`, 'success');
             
-            // ✅ উভয় পক্ষের ব্যালেন্স আপডেট করুন
-            // প্রেরকের ব্যালেন্স আপডেট
             if (fromSavings) {
                 userFunds.monthlySavings = data.new_sender_balance || (userFunds.monthlySavings - totalAmount);
             } else if (fromBonus) {
                 userFunds.referralBonus = data.new_sender_balance || (userFunds.referralBonus - totalAmount);
             }
-            
-            // গ্রহীতার ব্যালেন্স আপডেট (RPC থেকে ফেরত আসা ডাটা)
-            // RPC ফাংশনটি receiver এর ব্যালেন্সও আপডেট করবে
             
             updateFundsDisplay();
             
@@ -4209,7 +3826,7 @@ async function submitTransferSavings() {
 }
 
 // ============================================================
-// ট্রান্সফার ইতিহাস (আপনার কলাম অনুযায়ী আপডেটেড)
+// ট্রান্সফার ইতিহাস
 // ============================================================
 async function loadTransferHistory() {
     const tbody = document.getElementById('transferHistoryBody');
@@ -4226,7 +3843,6 @@ async function loadTransferHistory() {
     try {
         const memberId = currentUser.id.trim();
         
-        // ✅ RPC ফাংশন কল
         const { data, error } = await client.rpc('get_user_transfers', {
             p_member_id: memberId
         });
@@ -4295,9 +3911,8 @@ function closePasswordModal() { document.getElementById('passwordChangeModal').c
 function processChangePassword() { showToast('পাসওয়ার্ড পরিবর্তন করা হয়েছে!', 'success'); closePasswordModal(); }
 
 // ============================================================
-// ====== লেনদেন স্টেটমেন্ট ফাংশন ======
+// স্টেটমেন্ট ফাংশন (সম্পূর্ণ আপডেটেড - বোনাস ফিক্স সহ)
 // ============================================================
-
 function setDefaultDates() {
     const today = getCurrentBangladeshTime();
     const from = new Date(today);
@@ -4311,20 +3926,6 @@ function resetStatementDates() {
     generateStatement();
 }
 
-function formatDateTime(dateString) {
-    const date = new Date(dateString);
-    if (isNaN(date.getTime())) return '-';
-    const day = date.getDate();
-    const month = date.toLocaleString('en-US', { month: 'short' });
-    const year = date.getFullYear();
-    let hours = date.getHours();
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12 || 12;
-    return `${day} ${month} ${year} ${hours}:${minutes} ${ampm}`;
-}
-
-// ====== সম্পূর্ণ আপডেটেড জেনারেট স্টেটমেন্ট ফাংশন (বাগ ফিক্স) ======
 async function generateStatement() {
     if (!currentUser) return;
     const fromDate = document.getElementById('fromDate').value;
@@ -4344,7 +3945,7 @@ async function generateStatement() {
     if (!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
 
     try {
-        // 🔥 স্টেপ 1: আসল রেফারেল কাউন্ট চেক করুন (শুধু মেম্বার টেবিল থেকেই)
+        // স্টেপ 1: আসল রেফারেল কাউন্ট চেক করুন
         const { data: memberData, error: memberErr } = await client
             .from('members')
             .select('member_id, referral_code')
@@ -4355,7 +3956,6 @@ async function generateStatement() {
             console.error('মেম্বার ডাটা লোড error:', memberErr);
         }
         
-        // 🔥 স্টেপ 2: এই সদস্যকে কতজন রেফার করেছে তা গণনা করুন
         let actualReferralCount = 0;
         let actualReferralIds = [];
         
@@ -4369,14 +3969,14 @@ async function generateStatement() {
             if (!refErr && referrals) {
                 actualReferralCount = referrals.length;
                 actualReferralIds = referrals.map(r => r.member_id);
-                console.log('✅ আসল রেফারেল কাউন্ট:', actualReferralCount, 'আইডি:', actualReferralIds);
+                console.log('✅ আসল রেফারেল কাউন্ট:', actualReferralCount);
             }
         }
         
         const hasRealReferrals = actualReferralCount > 0;
         console.log('🔍 রেফারেল চেক:', { hasRealReferrals, count: actualReferralCount });
 
-        // 🔥 স্টেপ 3: সব ট্রানজেকশন লোড করুন
+        // স্টেপ 2: সব ট্রানজেকশন লোড করুন
         const { data: payments, error: payErr } = await client
             .from('payments')
             .select('*')
@@ -4426,10 +4026,9 @@ async function generateStatement() {
             }
         } catch(e) {
             console.log('loan_payments টেবিল নেই বা ডাটা নেই');
-            loanPayments = [];
         }
 
-        // 🔥 স্টেপ 4: বোনাস লগ - শুধুমাত্র তখনই আনুন যদি সদস্যের আসল রেফারেল থাকে
+        // স্টেপ 3: বোনাস লগ - শুধুমাত্র যদি আসল রেফারেল থাকে
         let bonusLogs = [];
         if (hasRealReferrals) {
             try {
@@ -4440,27 +4039,41 @@ async function generateStatement() {
                     .order('created_at', { ascending: true });
                 
                 if (!bErr && bData) {
-                    // শুধুমাত্র বোনাস > 0 থাকা এবং ডুপ্লিকেট বাদ দিন
-                    const uniqueBonuses = {};
-                    bonusLogs = bData.filter(b => {
+                    // মাস অনুযায়ী গ্রুপিং - ডুপ্লিকেট বাদ
+                    const monthlyBonusMap = {};
+                    bData.forEach(b => {
                         const amount = b.amount || 0;
-                        if (amount <= 0) return false;
-                        const key = `${b.created_at}_${b.level}_${b.amount}`;
-                        if (uniqueBonuses[key]) return false;
-                        uniqueBonuses[key] = true;
-                        return true;
+                        if (amount <= 0) return;
+                        
+                        const date = new Date(b.created_at || b.date);
+                        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                        const level = b.level || 0;
+                        const key = `${monthKey}_${level}`;
+                        
+                        if (!monthlyBonusMap[key]) {
+                            monthlyBonusMap[key] = {
+                                totalAmount: 0,
+                                count: 0,
+                                level: level,
+                                date: b.created_at || b.date,
+                                note: `Level ${level} রেফারেল বোনাস (${monthKey})`
+                            };
+                        }
+                        monthlyBonusMap[key].totalAmount += amount;
+                        monthlyBonusMap[key].count += 1;
                     });
+                    
+                    bonusLogs = Object.values(monthlyBonusMap);
+                    console.log('📊 গ্রুপকৃত বোনাস লগ:', bonusLogs);
                 }
-                console.log('📊 বোনাস লগ পাওয়া গেছে:', bonusLogs.length);
             } catch(e) {
                 console.log('referral_bonus_log টেবিল নেই বা ডাটা নেই');
-                bonusLogs = [];
             }
         } else {
             console.log('ℹ️ সদস্যের কোনো রেফারেল নেই, বোনাস লগ স্কিপ করা হলো');
         }
 
-        // 🔥 স্টেপ 5: লভ্যাংশ লোড
+        // স্টেপ 4: লভ্যাংশ লোড
         let profitHistory = [];
         try {
             const { data: pData, error: pErr } = await client
@@ -4474,7 +4087,6 @@ async function generateStatement() {
             }
         } catch(e) {
             console.log('profit_distribution_history টেবিল নেই বা ডাটা নেই');
-            profitHistory = [];
         }
 
         if (payErr || withErr || sentErr || recvErr || loanErr) {
@@ -4483,7 +4095,7 @@ async function generateStatement() {
             return;
         }
 
-        // 🔥 স্টেপ 6: ট্রানজ্যাকশন তৈরি
+        // স্টেপ 5: ট্রানজ্যাকশন তৈরি
         let transactions = [];
 
         // পেমেন্ট
@@ -4582,46 +4194,22 @@ async function generateStatement() {
             });
         }
 
-        // 🔥 বোনাস লগ - শুধুমাত্র যোগ করুন যদি:
-        // 1. সদস্যের আসল রেফারেল থাকে
-        // 2. বোনাস লগ এন্ট্রি থাকে
-        // 3. বোনাসের পরিমাণ > 0 হয়
+        // 🆕 বোনাস লগ - শুধুমাত্র যদি আসল রেফারেল থাকে এবং বোনাস থাকে
         if (hasRealReferrals && bonusLogs && bonusLogs.length > 0) {
-            // বোনাস এন্ট্রিগুলো গ্রুপ করে একীভূত করুন (ডুপ্লিকেট বাদ)
-            const groupedBonuses = {};
-            bonusLogs.forEach(b => {
-                const amount = b.amount || 0;
-                if (amount > 0) {
-                    const dateKey = b.created_at ? b.created_at.split('T')[0] : 'unknown';
-                    const levelKey = b.level || 0;
-                    const key = `${dateKey}_${levelKey}`;
-                    if (!groupedBonuses[key]) {
-                        groupedBonuses[key] = {
-                            totalAmount: 0,
-                            count: 0,
-                            level: b.level || 0,
-                            date: b.created_at || b.date,
-                            note: b.note || `Level ${b.level || ''} রেফারেল বোনাস`
-                        };
-                    }
-                    groupedBonuses[key].totalAmount += amount;
-                    groupedBonuses[key].count += 1;
+            bonusLogs.forEach(g => {
+                const totalAmount = g.totalAmount || 0;
+                if (totalAmount > 0) {
+                    transactions.push({
+                        date: g.date || new Date().toISOString(),
+                        description: `🎁 রেফারেল বোনাস (${g.count}টি রেফারেল একীভূত)`,
+                        deposit: totalAmount,
+                        withdrawal: 0,
+                        note: g.note || `Level ${g.level || ''} রেফারেল বোনাস`,
+                        approver: 'সিস্টেম',
+                        type: 'bonus_credit'
+                    });
                 }
             });
-            
-            // গ্রুপ করা বোনাস ট্রানজ্যাকশনে যোগ করুন (একীভূত)
-            for (const key in groupedBonuses) {
-                const g = groupedBonuses[key];
-                transactions.push({
-                    date: g.date || new Date().toISOString(),
-                    description: `🎁 রেফারেল বোনাস (${g.count}টি এন্ট্রি একীভূত)`,
-                    deposit: g.totalAmount,
-                    withdrawal: 0,
-                    note: g.note || `Level ${g.level || ''} বোনাস`,
-                    approver: 'সিস্টেম',
-                    type: 'bonus_credit'
-                });
-            }
         }
 
         // লভ্যাংশ
@@ -4640,10 +4228,10 @@ async function generateStatement() {
             });
         }
 
-        // 🔥 স্টেপ 7: তারিখ অনুযায়ী সাজান
+        // তারিখ অনুযায়ী সাজান
         transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-        // 🔥 স্টেপ 8: ওপেনিং ব্যালেন্স
+        // ওপেনিং ব্যালেন্স
         const startDateObj = new Date(fromDate);
         startDateObj.setHours(0,0,0,0);
         let openingBalance = 0;
@@ -4655,7 +4243,7 @@ async function generateStatement() {
             }
         });
 
-        // 🔥 স্টেপ 9: ডেট রেঞ্জ ফিল্টার
+        // ডেট রেঞ্জ ফিল্টার
         const endDateObj = new Date(toDate);
         endDateObj.setHours(23,59,59,999);
         const filtered = transactions.filter(t => {
@@ -4663,7 +4251,7 @@ async function generateStatement() {
             return tDate >= startDateObj && tDate <= endDateObj;
         });
 
-        // 🔥 স্টেপ 10: টেবিল রো তৈরি
+        // টেবিল রো তৈরি
         let runningBalance = openingBalance;
         let totalDeposit = 0;
         let totalWithdrawal = 0;
@@ -4710,7 +4298,7 @@ async function generateStatement() {
             </tr>
         `;
 
-        // 🔥 স্টেপ 11: স্টেটমেন্ট HTML তৈরি
+        // স্টেটমেন্ট HTML তৈরি
         const statementHTML = `
             <div style="text-align: center; border-bottom: 2px solid #059669; padding-bottom: 12px; margin-bottom: 15px;">
                 <img src="images/logo.png" alt="TUKNBD Logo" style="width: 60px; height: 60px; border-radius: 8px; margin: 0 auto 5px;" onerror="this.src='https://placehold.co/60x60/059669/white?text=T'">
@@ -4974,6 +4562,394 @@ function shareStatement() {
         });
     } else {
         window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+    }
+}
+
+// ============================================================
+// 🆕 লোন পরিশোধ (EMI) ফাংশনসমূহ
+// ============================================================
+async function openLoanRepaymentModal() {
+    const modal = document.getElementById('loanRepaymentModal');
+    const loading = document.getElementById('loanRepaymentLoading');
+    const info = document.getElementById('loanRepaymentInfo');
+    
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    loading.classList.remove('hidden');
+    info.classList.add('hidden');
+    document.getElementById('repaySubmitBtn').disabled = true;
+    document.getElementById('repaySummary').classList.add('hidden');
+    document.getElementById('repayBalanceCheck').classList.add('hidden');
+    
+    await loadLoanRepaymentData();
+}
+
+async function loadLoanRepaymentData() {
+    const client = await initSupabase();
+    if (!client) {
+        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: loans, error: loanError } = await client
+            .from('loan_applications')
+            .select('*')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved')
+            .order('approved_at', { ascending: false });
+        
+        if (loanError) throw loanError;
+        
+        if (!loans || loans.length === 0) {
+            showToast('❌ আপনার কোনো অনুমোদিত লোন নেই!', 'error');
+            closeLoanRepaymentModal();
+            return;
+        }
+        
+        const loan = loans[0];
+        
+        let loanPayments = [];
+        try {
+            const { data: payments, error: payError } = await client
+                .from('loan_payments')
+                .select('*')
+                .eq('loan_id', loan.id)
+                .order('due_date', { ascending: true });
+            
+            if (!payError && payments) {
+                loanPayments = payments;
+            }
+        } catch(e) {
+            console.log('loan_payments টেবিল নেই বা ডাটা নেই');
+        }
+        
+        document.getElementById('repayLoanType').innerHTML = loan.loan_type || 'সাধারণ লোন';
+        document.getElementById('repayTotalLoan').innerHTML = Number(loan.amount).toLocaleString() + ' টাকা';
+        
+        const paidAmount = loanPayments
+            .filter(p => p.status === 'approved' || p.status === 'paid')
+            .reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0);
+        
+        const remainingBalance = (loan.amount || 0) - paidAmount;
+        
+        document.getElementById('repayPaidAmount').innerHTML = paidAmount.toLocaleString() + ' টাকা';
+        document.getElementById('repayRemainingBalance').innerHTML = remainingBalance.toLocaleString() + ' টাকা';
+        document.getElementById('repayDuration').innerHTML = (loan.duration_months || loan.duration || 0) + ' মাস';
+        document.getElementById('repayEmiAmount').innerHTML = (loan.emi_amount || 0).toFixed(2) + ' টাকা';
+        document.getElementById('repayLateFeePercent').innerHTML = (loan.late_fee_percent || 0) + '%';
+        document.getElementById('repayStartDate').innerHTML = loan.approved_at ? new Date(loan.approved_at).toLocaleDateString('bn-BD') : '-';
+        
+        const container = document.getElementById('repayMonthsContainer');
+        container.innerHTML = '';
+        
+        const totalEmi = loan.duration_months || 12;
+        const emiAmount = loan.emi_amount || 0;
+        const startDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
+        const lateFeePercent = loan.late_fee_percent || 0;
+        const gracePeriod = loan.grace_period_days || 5;
+        const today = new Date();
+        today.setHours(0,0,0,0);
+        
+        const paidInstallments = new Set();
+        loanPayments.forEach(p => {
+            if (p.status === 'approved' || p.status === 'paid') {
+                paidInstallments.add(p.installment_no);
+            }
+        });
+        
+        for (let i = 1; i <= totalEmi; i++) {
+            let dueDate = new Date(startDate);
+            dueDate.setMonth(startDate.getMonth() + i);
+            dueDate.setHours(0,0,0,0);
+            
+            const dueDateStr = dueDate.toLocaleDateString('bn-BD');
+            const isPaid = paidInstallments.has(i);
+            const isOverdue = !isPaid && today > dueDate;
+            
+            let lateFee = 0;
+            if (!isPaid && today > dueDate) {
+                const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+                const monthsOverdue = Math.ceil(daysOverdue / 30);
+                lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
+            }
+            
+            const totalWithLateFee = emiAmount + lateFee;
+            
+            let statusText = '';
+            let statusColor = '';
+            if (isPaid) {
+                statusText = '✅ পরিশোধিত';
+                statusColor = 'text-green-600 bg-green-50';
+            } else if (isOverdue) {
+                statusText = '⚠️ বিলম্বিত';
+                statusColor = 'text-red-600 bg-red-50';
+            } else {
+                statusText = '⏳ pending';
+                statusColor = 'text-amber-600 bg-amber-50';
+            }
+            
+            const isDisabled = isPaid || remainingBalance <= 0;
+            
+            container.innerHTML += `
+                <label class="flex items-center gap-2 p-2 border rounded-lg hover:bg-gray-50 cursor-pointer transition ${isDisabled ? 'opacity-50 cursor-not-allowed bg-gray-100' : ''}">
+                    <input type="checkbox" 
+                           value="${i}" 
+                           class="repay-month-cb" 
+                           data-emi="${emiAmount}" 
+                           data-latefee="${lateFee}" 
+                           data-total="${totalWithLateFee}"
+                           ${isDisabled ? 'disabled' : ''}
+                           onchange="updateRepaymentSummary()">
+                    <div class="flex-1">
+                        <div class="flex justify-between items-center">
+                            <span class="font-medium text-sm">কিস্তি #${i}</span>
+                            <span class="text-xs px-2 py-0.5 rounded-full ${statusColor}">${statusText}</span>
+                        </div>
+                        <div class="flex justify-between text-xs text-gray-500">
+                            <span>নির্ধারিত: ${dueDateStr}</span>
+                            <span>${emiAmount.toFixed(2)} টাকা ${lateFee > 0 ? '+ ' + lateFee.toFixed(2) + ' টাকা (বিলম্ব ফি)' : ''}</span>
+                        </div>
+                    </div>
+                </label>
+            `;
+        }
+        
+        document.getElementById('loanRepaymentLoading').classList.add('hidden');
+        document.getElementById('loanRepaymentInfo').classList.remove('hidden');
+        
+        window._currentLoanForRepayment = {
+            loan: loan,
+            loanPayments: loanPayments,
+            remainingBalance: remainingBalance,
+            emiAmount: emiAmount
+        };
+        
+        updateRepaymentSummary();
+        
+    } catch(e) {
+        console.error('লোন ডাটা লোড error:', e);
+        showToast('লোন তথ্য লোড করতে ব্যর্থ!', 'error');
+        document.getElementById('loanRepaymentLoading').innerHTML = `
+            <div class="text-red-500 py-4">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>লোন তথ্য লোড করতে সমস্যা!</p>
+                <button onclick="loadLoanRepaymentData()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+    }
+}
+
+function updateRepaymentSummary() {
+    const selected = document.querySelectorAll('.repay-month-cb:checked');
+    const summary = document.getElementById('repaySummary');
+    const submitBtn = document.getElementById('repaySubmitBtn');
+    const balanceCheck = document.getElementById('repayBalanceCheck');
+    
+    if (selected.length === 0) {
+        summary.classList.add('hidden');
+        submitBtn.disabled = true;
+        balanceCheck.classList.add('hidden');
+        return;
+    }
+    
+    summary.classList.remove('hidden');
+    
+    let totalEmi = 0;
+    let totalLateFee = 0;
+    let totalAmount = 0;
+    
+    selected.forEach(cb => {
+        const emi = parseFloat(cb.dataset.emi) || 0;
+        const lateFee = parseFloat(cb.dataset.latefee) || 0;
+        totalEmi += emi;
+        totalLateFee += lateFee;
+        totalAmount += parseFloat(cb.dataset.total) || 0;
+    });
+    
+    document.getElementById('repaySelectedCount').innerHTML = selected.length + 'টি';
+    document.getElementById('repayTotalEmi').innerHTML = totalEmi.toFixed(2) + ' টাকা';
+    document.getElementById('repayTotalLateFee').innerHTML = totalLateFee.toFixed(2) + ' টাকা';
+    document.getElementById('repayTotalAmount').innerHTML = totalAmount.toFixed(2) + ' টাকা';
+    
+    const remainingBalance = window._currentLoanForRepayment?.remainingBalance || 0;
+    const loanData = window._currentLoanForRepayment;
+    
+    if (totalAmount > remainingBalance) {
+        balanceCheck.className = 'p-3 rounded-lg mb-4 bg-red-50 border border-red-200';
+        balanceCheck.innerHTML = `
+            <p class="text-red-600 font-semibold">
+                <i class="fas fa-exclamation-triangle mr-2"></i>
+                ⚠️ পরিশোধের পরিমাণ (${totalAmount.toFixed(2)} টাকা) আপনার বাকি ব্যালেন্স (${remainingBalance.toFixed(2)} টাকা) থেকে বেশি!
+            </p>
+        `;
+        balanceCheck.classList.remove('hidden');
+        submitBtn.disabled = true;
+    } else if (totalAmount === 0) {
+        balanceCheck.className = 'p-3 rounded-lg mb-4 bg-gray-50 border border-gray-200';
+        balanceCheck.innerHTML = `<p class="text-gray-500">কোনো পরিশোধের পরিমাণ নির্বাচন করা হয়নি</p>`;
+        balanceCheck.classList.remove('hidden');
+        submitBtn.disabled = true;
+    } else {
+        balanceCheck.className = 'p-3 rounded-lg mb-4 bg-emerald-50 border border-emerald-200';
+        balanceCheck.innerHTML = `
+            <p class="text-emerald-600 font-semibold">
+                <i class="fas fa-check-circle mr-2"></i>
+                ✅ পরিশোধের পরিমাণ ${totalAmount.toFixed(2)} টাকা। পরিশোধের পর বাকি থাকবে ${(remainingBalance - totalAmount).toFixed(2)} টাকা।
+            </p>
+        `;
+        balanceCheck.classList.remove('hidden');
+        submitBtn.disabled = false;
+    }
+}
+
+async function submitLoanRepayment() {
+    const selected = document.querySelectorAll('.repay-month-cb:checked');
+    if (selected.length === 0) {
+        showToast('কমপক্ষে একটি কিস্তি নির্বাচন করুন!', 'error');
+        return;
+    }
+    
+    const loanData = window._currentLoanForRepayment;
+    if (!loanData) {
+        showToast('লোন তথ্য পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    let totalAmount = 0;
+    let selectedInstallments = [];
+    let totalLateFee = 0;
+    let totalEmi = 0;
+    
+    selected.forEach(cb => {
+        const installmentNo = parseInt(cb.value);
+        const emi = parseFloat(cb.dataset.emi) || 0;
+        const lateFee = parseFloat(cb.dataset.latefee) || 0;
+        const total = parseFloat(cb.dataset.total) || 0;
+        
+        totalAmount += total;
+        totalEmi += emi;
+        totalLateFee += lateFee;
+        selectedInstallments.push(installmentNo);
+    });
+    
+    const confirmMsg = `আপনি কি ${selectedInstallments.length}টি কিস্তি পরিশোধ করতে চান?\n\n` +
+        `📊 কিস্তি নম্বর: ${selectedInstallments.join(', ')}\n` +
+        `💰 মূল কিস্তি: ${totalEmi.toFixed(2)} টাকা\n` +
+        `⚠️ বিলম্ব ফি: ${totalLateFee.toFixed(2)} টাকা\n` +
+        `💳 মোট পরিশোধ: ${totalAmount.toFixed(2)} টাকা\n` +
+        `📉 পরিশোধের পর বাকি থাকবে: ${(loanData.remainingBalance - totalAmount).toFixed(2)} টাকা\n\n` +
+        `এই পরিশোধ কি আপনি নিশ্চিত করতে চান?`;
+    
+    if (!confirm(confirmMsg)) return;
+    
+    const btn = document.getElementById('repaySubmitBtn');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> প্রক্রিয়াকরণ...';
+    
+    const client = await initSupabase();
+    if (!client) {
+        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        return;
+    }
+    
+    try {
+        for (const installmentNo of selectedInstallments) {
+            const emiAmount = loanData.emiAmount || 0;
+            const dueDate = new Date(loanData.loan.approved_at || Date.now());
+            dueDate.setMonth(dueDate.getMonth() + installmentNo);
+            
+            const today = new Date();
+            today.setHours(0,0,0,0);
+            let lateFee = 0;
+            if (today > dueDate) {
+                const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+                const monthsOverdue = Math.ceil(daysOverdue / 30);
+                const lateFeePercent = loanData.loan.late_fee_percent || 0;
+                lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
+            }
+            
+            const totalAmountPerInstallment = emiAmount + lateFee;
+            
+            const { data: existing } = await client
+                .from('loan_payments')
+                .select('id')
+                .eq('loan_id', loanData.loan.id)
+                .eq('installment_no', installmentNo)
+                .maybeSingle();
+            
+            if (existing) {
+                await client
+                    .from('loan_payments')
+                    .update({
+                        status: 'approved',
+                        payment_date: new Date().toISOString(),
+                        total_amount: totalAmountPerInstallment,
+                        late_fee: lateFee,
+                        approved_by: currentUser.name || 'সিস্টেম (অনলাইন পেমেন্ট)',
+                        approved_at: new Date().toISOString()
+                    })
+                    .eq('id', existing.id);
+            } else {
+                await client
+                    .from('loan_payments')
+                    .insert([{
+                        loan_id: loanData.loan.id,
+                        installment_no: installmentNo,
+                        emi_amount: emiAmount,
+                        late_fee: lateFee,
+                        total_amount: totalAmountPerInstallment,
+                        due_date: dueDate.toISOString().split('T')[0],
+                        payment_date: new Date().toISOString(),
+                        status: 'approved',
+                        approved_by: currentUser.name || 'সিস্টেম (অনলাইন পেমেন্ট)',
+                        approved_at: new Date().toISOString()
+                    }]);
+            }
+        }
+        
+        const newRemainingBalance = loanData.remainingBalance - totalAmount;
+        await client
+            .from('loan_applications')
+            .update({ remaining_balance: newRemainingBalance })
+            .eq('id', loanData.loan.id);
+        
+        showToast(`✅ ${selectedInstallments.length}টি কিস্তি সফলভাবে পরিশোধ করা হয়েছে!\nমোট পরিশোধ: ${totalAmount.toFixed(2)} টাকা`, 'success');
+        
+        closeLoanRepaymentModal();
+        await loadLoanHistory();
+        await loadUserFunds();
+        
+        setTimeout(() => {
+            openLoanRepaymentModal();
+        }, 1000);
+        
+    } catch(e) {
+        console.error('লোন পরিশোধ error:', e);
+        showToast('❌ লোন পরিশোধ করতে ব্যর্থ!', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
+}
+
+function closeLoanRepaymentModal() {
+    const modal = document.getElementById('loanRepaymentModal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    document.getElementById('loanRepaymentInfo').classList.add('hidden');
+    document.getElementById('loanRepaymentLoading').classList.remove('hidden');
+    document.getElementById('repaySummary').classList.add('hidden');
+    document.getElementById('repayBalanceCheck').classList.add('hidden');
+    window._currentLoanForRepayment = null;
+}
+
+function closeLoanRepaymentModalOnOverlay(e) {
+    if (e.target.id === 'loanRepaymentModal') {
+        closeLoanRepaymentModal();
     }
 }
 
