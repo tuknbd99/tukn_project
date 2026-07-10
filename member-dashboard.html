@@ -4324,6 +4324,7 @@ function formatDateTime(dateString) {
     return `${day} ${month} ${year} ${hours}:${minutes} ${ampm}`;
 }
 
+// ====== আপডেটেড জেনারেট স্টেটমেন্ট ফাংশন ======
 async function generateStatement() {
     if (!currentUser) return;
     const fromDate = document.getElementById('fromDate').value;
@@ -4343,6 +4344,16 @@ async function generateStatement() {
     if (!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
 
     try {
+        // প্রথমে চেক করুন সদস্যের কোনো রেফারেল আছে কিনা
+        const { data: referralCheck, error: refCheckErr } = await client
+            .from('members')
+            .select('referred_by, referral_code')
+            .eq('member_id', currentUser.id)
+            .single();
+        
+        const hasReferrals = referralCheck && (referralCheck.referred_by || referralCheck.referral_code);
+        console.log('🔍 রেফারেল চেক:', { hasReferrals, data: referralCheck });
+
         const { data: payments, error: payErr } = await client
             .from('payments')
             .select('*')
@@ -4395,20 +4406,27 @@ async function generateStatement() {
             loanPayments = [];
         }
 
+        // 🔥 বোনাস লগ - শুধুমাত্র তখনই আনুন যদি সদস্যের রেফারেল থাকে
         let bonusLogs = [];
-        try {
-            const { data: bData, error: bErr } = await client
-                .from('referral_bonus_log')
-                .select('*')
-                .eq('member_id', currentUser.id)
-                .order('created_at', { ascending: true });
-            
-            if (!bErr && bData) {
-                bonusLogs = bData;
+        if (hasReferrals) {
+            try {
+                const { data: bData, error: bErr } = await client
+                    .from('referral_bonus_log')
+                    .select('*')
+                    .eq('member_id', currentUser.id)
+                    .order('created_at', { ascending: true });
+                
+                if (!bErr && bData && bData.length > 0) {
+                    // শুধুমাত্র বোনাস > 0 থাকলে নিন
+                    bonusLogs = bData.filter(b => (b.amount || 0) > 0);
+                }
+                console.log('📊 বোনাস লগ পাওয়া গেছে:', bonusLogs.length);
+            } catch(e) {
+                console.log('referral_bonus_log টেবিল নেই বা ডাটা নেই');
+                bonusLogs = [];
             }
-        } catch(e) {
-            console.log('referral_bonus_log টেবিল নেই বা ডাটা নেই');
-            bonusLogs = [];
+        } else {
+            console.log('ℹ️ সদস্যের কোনো রেফারেল নেই, বোনাস লগ স্কিপ করা হলো');
         }
 
         let profitHistory = [];
@@ -4525,18 +4543,22 @@ async function generateStatement() {
             });
         }
 
-        if (bonusLogs) {
+        // 🔥 বোনাস লগ - শুধুমাত্র যোগ করুন যদি বোনাস লগ থাকে এবং পরিমাণ > 0 হয়
+        if (bonusLogs && bonusLogs.length > 0) {
             bonusLogs.forEach(b => {
-                const date = b.created_at || b.date;
-                transactions.push({
-                    date: date,
-                    description: `🎁 রেফারেল বোনাস`,
-                    deposit: b.amount || 0,
-                    withdrawal: 0,
-                    note: b.note || `Level ${b.level || ''} কমিশন`,
-                    approver: 'সিস্টেম',
-                    type: 'bonus_credit'
-                });
+                const amount = b.amount || 0;
+                if (amount > 0) {
+                    const date = b.created_at || b.date;
+                    transactions.push({
+                        date: date,
+                        description: `🎁 রেফারেল বোনাস`,
+                        deposit: amount,
+                        withdrawal: 0,
+                        note: b.note || `Level ${b.level || ''} কমিশন`,
+                        approver: 'সিস্টেম',
+                        type: 'bonus_credit'
+                    });
+                }
             });
         }
 
@@ -4628,6 +4650,7 @@ async function generateStatement() {
                 <p style="margin: 0; padding: 0; font-size: 18px; color: #059669; text-align: center; font-weight: 700; line-height: 1;">লেনদেন স্টেটমেন্ট</p>
                 <p style="margin: 0; padding: 0; font-size: 14px; color: #555; text-align: center; line-height: 1;">তারিখ: ${formatDateTime(fromDate)} - ${formatDateTime(toDate)}</p>
                 <p style="margin: 0; padding: 0; font-size: 13px; color: #888; text-align: center; line-height: 1; margin-top: 3px;">ওপেনিং ব্যালেন্স: ${openingBalance.toLocaleString()} টাকা</p>
+                ${!hasReferrals ? `<p style="margin: 0; padding: 0; font-size: 12px; color: #f59e0b; text-align: center; line-height: 1; margin-top: 2px;">ℹ️ কোনো রেফারেল নেই, তাই বোনাস দেখানো হচ্ছে না</p>` : ''}
             </div>
 
             <div style="display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 12px; font-size: 13px; justify-content: center; background: #f9fafb; padding: 8px 15px; border-radius: 8px; border: 1px solid #e5e7eb;">
@@ -4636,6 +4659,7 @@ async function generateStatement() {
                 <span><i class="fas fa-mobile-alt mr-1" style="color: #059669;"></i> ${currentUser.mobile}</span>
                 <span><i class="fas fa-calendar-alt mr-1" style="color: #059669;"></i> সদস্যপদ: ${currentUser.joinDate ? new Date(currentUser.joinDate).toLocaleDateString('bn-BD') : '-'}</span>
                 <span><i class="fas fa-clock mr-1" style="color: #059669;"></i> প্রিন্ট: ${new Date().toLocaleString('bn-BD')}</span>
+                <span><i class="fas fa-users mr-1" style="color: #059669;"></i> রেফারেল: ${hasReferrals ? '✅ আছে' : '❌ নেই'}</span>
             </div>
 
             <div style="overflow-x: auto;">
@@ -4662,7 +4686,7 @@ async function generateStatement() {
                 🔒 স্বয়ংক্রিয় জেনারেটেড রিপোর্ট | TUKNBD লেনদেন স্টেটমেন্ট
             </div>
             <div style="font-size: 10px; color: #9ca3af; text-align: center; margin-top: 4px;">
-                📌 ট্রান্সফার: 📤 (প্রেরক) / 📥 (গ্রহীতা) | লোন: 💰 প্রাপ্তি / 💳 পরিশোধ | 🎁 বোনাস | 📈 লভ্যাংশ
+                📌 ট্রান্সফার: 📤 (প্রেরক) / 📥 (গ্রহীতা) | লোন: 💰 প্রাপ্তি / 💳 পরিশোধ | ${hasReferrals ? '🎁 বোনাস' : 'ℹ️ কোনো বোনাস নেই'} | 📈 লভ্যাংশ
             </div>
         `;
 
