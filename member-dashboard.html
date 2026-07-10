@@ -4324,7 +4324,7 @@ function formatDateTime(dateString) {
     return `${day} ${month} ${year} ${hours}:${minutes} ${ampm}`;
 }
 
-// ====== আপডেটেড জেনারেট স্টেটমেন্ট ফাংশন ======
+// ====== সম্পূর্ণ আপডেটেড জেনারেট স্টেটমেন্ট ফাংশন (বাগ ফিক্স) ======
 async function generateStatement() {
     if (!currentUser) return;
     const fromDate = document.getElementById('fromDate').value;
@@ -4344,16 +4344,39 @@ async function generateStatement() {
     if (!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
 
     try {
-        // প্রথমে চেক করুন সদস্যের কোনো রেফারেল আছে কিনা
-        const { data: referralCheck, error: refCheckErr } = await client
+        // 🔥 স্টেপ 1: আসল রেফারেল কাউন্ট চেক করুন (শুধু মেম্বার টেবিল থেকেই)
+        const { data: memberData, error: memberErr } = await client
             .from('members')
-            .select('referred_by, referral_code')
+            .select('member_id, referral_code')
             .eq('member_id', currentUser.id)
             .single();
         
-        const hasReferrals = referralCheck && (referralCheck.referred_by || referralCheck.referral_code);
-        console.log('🔍 রেফারেল চেক:', { hasReferrals, data: referralCheck });
+        if (memberErr) {
+            console.error('মেম্বার ডাটা লোড error:', memberErr);
+        }
+        
+        // 🔥 স্টেপ 2: এই সদস্যকে কতজন রেফার করেছে তা গণনা করুন
+        let actualReferralCount = 0;
+        let actualReferralIds = [];
+        
+        if (memberData && memberData.referral_code) {
+            const { data: referrals, error: refErr } = await client
+                .from('members')
+                .select('member_id, full_name, mobile')
+                .eq('referred_by', memberData.referral_code)
+                .eq('status', 'active');
+            
+            if (!refErr && referrals) {
+                actualReferralCount = referrals.length;
+                actualReferralIds = referrals.map(r => r.member_id);
+                console.log('✅ আসল রেফারেল কাউন্ট:', actualReferralCount, 'আইডি:', actualReferralIds);
+            }
+        }
+        
+        const hasRealReferrals = actualReferralCount > 0;
+        console.log('🔍 রেফারেল চেক:', { hasRealReferrals, count: actualReferralCount });
 
+        // 🔥 স্টেপ 3: সব ট্রানজেকশন লোড করুন
         const { data: payments, error: payErr } = await client
             .from('payments')
             .select('*')
@@ -4406,19 +4429,29 @@ async function generateStatement() {
             loanPayments = [];
         }
 
-        // 🔥 বোনাস লগ - শুধুমাত্র তখনই আনুন যদি সদস্যের রেফারেল থাকে
+        // 🔥 স্টেপ 4: বোনাস লগ - শুধুমাত্র তখনই আনুন যদি সদস্যের আসল রেফারেল থাকে
         let bonusLogs = [];
-        if (hasReferrals) {
+        if (hasRealReferrals) {
             try {
+                // সঠিকভাবে বোনাস লগ আনুন - শুধুমাত্র এই সদস্যের আইডি মিলে
                 const { data: bData, error: bErr } = await client
                     .from('referral_bonus_log')
                     .select('*')
                     .eq('member_id', currentUser.id)
                     .order('created_at', { ascending: true });
                 
-                if (!bErr && bData && bData.length > 0) {
-                    // শুধুমাত্র বোনাস > 0 থাকলে নিন
-                    bonusLogs = bData.filter(b => (b.amount || 0) > 0);
+                if (!bErr && bData) {
+                    // শুধুমাত্র বোনাস > 0 থাকা এবং ডুপ্লিকেট বাদ দিন
+                    const uniqueBonuses = {};
+                    bonusLogs = bData.filter(b => {
+                        const amount = b.amount || 0;
+                        if (amount <= 0) return false;
+                        // ডুপ্লিকেট চেক - একই টাইমস্ট্যাম্প এবং লেভেল থাকলে বাদ
+                        const key = `${b.created_at}_${b.level}_${b.amount}`;
+                        if (uniqueBonuses[key]) return false;
+                        uniqueBonuses[key] = true;
+                        return true;
+                    });
                 }
                 console.log('📊 বোনাস লগ পাওয়া গেছে:', bonusLogs.length);
             } catch(e) {
@@ -4429,6 +4462,7 @@ async function generateStatement() {
             console.log('ℹ️ সদস্যের কোনো রেফারেল নেই, বোনাস লগ স্কিপ করা হলো');
         }
 
+        // 🔥 স্টেপ 5: লভ্যাংশ লোড
         let profitHistory = [];
         try {
             const { data: pData, error: pErr } = await client
@@ -4451,8 +4485,10 @@ async function generateStatement() {
             return;
         }
 
+        // 🔥 স্টেপ 6: ট্রানজ্যাকশন তৈরি
         let transactions = [];
 
+        // পেমেন্ট
         if (payments) {
             payments.forEach(p => {
                 const date = p.submitted_at || p.created_at;
@@ -4468,6 +4504,7 @@ async function generateStatement() {
             });
         }
 
+        // প্রাপ্ত ট্রান্সফার
         if (receivedTransfers) {
             receivedTransfers.forEach(t => {
                 const date = t.requested_at || t.created_at;
@@ -4483,6 +4520,7 @@ async function generateStatement() {
             });
         }
 
+        // প্রেরিত ট্রান্সফার
         if (sentTransfers) {
             sentTransfers.forEach(t => {
                 const date = t.requested_at || t.created_at;
@@ -4498,6 +4536,7 @@ async function generateStatement() {
             });
         }
 
+        // লোন প্রাপ্তি
         if (loansTaken) {
             loansTaken.forEach(l => {
                 const date = l.approved_at || l.submitted_at;
@@ -4513,6 +4552,7 @@ async function generateStatement() {
             });
         }
 
+        // লোন পরিশোধ
         if (loanPayments) {
             loanPayments.forEach(lp => {
                 const date = lp.payment_date || lp.created_at;
@@ -4528,6 +4568,7 @@ async function generateStatement() {
             });
         }
 
+        // উত্তোলন
         if (withdrawals) {
             withdrawals.forEach(w => {
                 const date = w.requested_at || w.created_at;
@@ -4543,25 +4584,50 @@ async function generateStatement() {
             });
         }
 
-        // 🔥 বোনাস লগ - শুধুমাত্র যোগ করুন যদি বোনাস লগ থাকে এবং পরিমাণ > 0 হয়
-        if (bonusLogs && bonusLogs.length > 0) {
+        // 🔥 বোনাস লগ - শুধুমাত্র যোগ করুন যদি:
+        // 1. সদস্যের আসল রেফারেল থাকে
+        // 2. বোনাস লগ এন্ট্রি থাকে
+        // 3. বোনাসের পরিমাণ > 0 হয়
+        if (hasRealReferrals && bonusLogs && bonusLogs.length > 0) {
+            // বোনাস এন্ট্রিগুলো গ্রুপ করে একীভূত করুন (ডুপ্লিকেট বাদ)
+            const groupedBonuses = {};
             bonusLogs.forEach(b => {
                 const amount = b.amount || 0;
                 if (amount > 0) {
-                    const date = b.created_at || b.date;
-                    transactions.push({
-                        date: date,
-                        description: `🎁 রেফারেল বোনাস`,
-                        deposit: amount,
-                        withdrawal: 0,
-                        note: b.note || `Level ${b.level || ''} কমিশন`,
-                        approver: 'সিস্টেম',
-                        type: 'bonus_credit'
-                    });
+                    // একই লেভেল এবং তারিখের বোনাস গ্রুপ করুন
+                    const dateKey = b.created_at ? b.created_at.split('T')[0] : 'unknown';
+                    const levelKey = b.level || 0;
+                    const key = `${dateKey}_${levelKey}`;
+                    if (!groupedBonuses[key]) {
+                        groupedBonuses[key] = {
+                            totalAmount: 0,
+                            count: 0,
+                            level: b.level || 0,
+                            date: b.created_at || b.date,
+                            note: b.note || `Level ${b.level || ''} রেফারেল বোনাস`
+                        };
+                    }
+                    groupedBonuses[key].totalAmount += amount;
+                    groupedBonuses[key].count += 1;
                 }
             });
+            
+            // গ্রুপ করা বোনাস ট্রানজ্যাকশনে যোগ করুন (একীভূত)
+            for (const key in groupedBonuses) {
+                const g = groupedBonuses[key];
+                transactions.push({
+                    date: g.date || new Date().toISOString(),
+                    description: `🎁 রেফারেল বোনাস (${g.count}টি এন্ট্রি একীভূত)`,
+                    deposit: g.totalAmount,
+                    withdrawal: 0,
+                    note: g.note || `Level ${g.level || ''} বোনাস`,
+                    approver: 'সিস্টেম',
+                    type: 'bonus_credit'
+                });
+            }
         }
 
+        // লভ্যাংশ
         if (profitHistory) {
             profitHistory.forEach(p => {
                 const date = p.distributed_at || p.created_at;
@@ -4577,8 +4643,10 @@ async function generateStatement() {
             });
         }
 
+        // 🔥 স্টেপ 7: তারিখ অনুযায়ী সাজান
         transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
 
+        // 🔥 স্টেপ 8: ওপেনিং ব্যালেন্স
         const startDateObj = new Date(fromDate);
         startDateObj.setHours(0,0,0,0);
         let openingBalance = 0;
@@ -4590,6 +4658,7 @@ async function generateStatement() {
             }
         });
 
+        // 🔥 স্টেপ 9: ডেট রেঞ্জ ফিল্টার
         const endDateObj = new Date(toDate);
         endDateObj.setHours(23,59,59,999);
         const filtered = transactions.filter(t => {
@@ -4597,6 +4666,7 @@ async function generateStatement() {
             return tDate >= startDateObj && tDate <= endDateObj;
         });
 
+        // 🔥 স্টেপ 10: টেবিল রো তৈরি
         let runningBalance = openingBalance;
         let totalDeposit = 0;
         let totalWithdrawal = 0;
@@ -4643,6 +4713,7 @@ async function generateStatement() {
             </tr>
         `;
 
+        // 🔥 স্টেপ 11: স্টেটমেন্ট HTML তৈরি
         const statementHTML = `
             <div style="text-align: center; border-bottom: 2px solid #059669; padding-bottom: 12px; margin-bottom: 15px;">
                 <img src="images/logo.png" alt="TUKNBD Logo" style="width: 60px; height: 60px; border-radius: 8px; margin: 0 auto 5px;" onerror="this.src='https://placehold.co/60x60/059669/white?text=T'">
@@ -4650,7 +4721,7 @@ async function generateStatement() {
                 <p style="margin: 0; padding: 0; font-size: 18px; color: #059669; text-align: center; font-weight: 700; line-height: 1;">লেনদেন স্টেটমেন্ট</p>
                 <p style="margin: 0; padding: 0; font-size: 14px; color: #555; text-align: center; line-height: 1;">তারিখ: ${formatDateTime(fromDate)} - ${formatDateTime(toDate)}</p>
                 <p style="margin: 0; padding: 0; font-size: 13px; color: #888; text-align: center; line-height: 1; margin-top: 3px;">ওপেনিং ব্যালেন্স: ${openingBalance.toLocaleString()} টাকা</p>
-                ${!hasReferrals ? `<p style="margin: 0; padding: 0; font-size: 12px; color: #f59e0b; text-align: center; line-height: 1; margin-top: 2px;">ℹ️ কোনো রেফারেল নেই, তাই বোনাস দেখানো হচ্ছে না</p>` : ''}
+                ${!hasRealReferrals ? `<p style="margin: 0; padding: 0; font-size: 14px; color: #dc2626; text-align: center; line-height: 1; margin-top: 4px; font-weight: 700;">⚠️ সতর্কতা: এই সদস্যের কোনো রেফারেল নেই, তাই বোনাস দেখানো হচ্ছে না!</p>` : `<p style="margin: 0; padding: 0; font-size: 13px; color: #059669; text-align: center; line-height: 1; margin-top: 3px;">✅ রেফারেল সদস্য: ${actualReferralCount} জন</p>`}
             </div>
 
             <div style="display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 12px; font-size: 13px; justify-content: center; background: #f9fafb; padding: 8px 15px; border-radius: 8px; border: 1px solid #e5e7eb;">
@@ -4659,7 +4730,7 @@ async function generateStatement() {
                 <span><i class="fas fa-mobile-alt mr-1" style="color: #059669;"></i> ${currentUser.mobile}</span>
                 <span><i class="fas fa-calendar-alt mr-1" style="color: #059669;"></i> সদস্যপদ: ${currentUser.joinDate ? new Date(currentUser.joinDate).toLocaleDateString('bn-BD') : '-'}</span>
                 <span><i class="fas fa-clock mr-1" style="color: #059669;"></i> প্রিন্ট: ${new Date().toLocaleString('bn-BD')}</span>
-                <span><i class="fas fa-users mr-1" style="color: #059669;"></i> রেফারেল: ${hasReferrals ? '✅ আছে' : '❌ নেই'}</span>
+                <span><i class="fas fa-users mr-1" style="color: ${hasRealReferrals ? '#059669' : '#dc2626'};"></i> রেফারেল: ${hasRealReferrals ? `✅ ${actualReferralCount} জন` : '❌ নেই'}</span>
             </div>
 
             <div style="overflow-x: auto;">
@@ -4686,7 +4757,7 @@ async function generateStatement() {
                 🔒 স্বয়ংক্রিয় জেনারেটেড রিপোর্ট | TUKNBD লেনদেন স্টেটমেন্ট
             </div>
             <div style="font-size: 10px; color: #9ca3af; text-align: center; margin-top: 4px;">
-                📌 ট্রান্সফার: 📤 (প্রেরক) / 📥 (গ্রহীতা) | লোন: 💰 প্রাপ্তি / 💳 পরিশোধ | ${hasReferrals ? '🎁 বোনাস' : 'ℹ️ কোনো বোনাস নেই'} | 📈 লভ্যাংশ
+                📌 ট্রান্সফার: 📤 (প্রেরক) / 📥 (গ্রহীতা) | লোন: 💰 প্রাপ্তি / 💳 পরিশোধ | ${hasRealReferrals ? '🎁 বোনাস' : 'ℹ️ কোনো বোনাস নেই'} | 📈 লভ্যাংশ
             </div>
         `;
 
