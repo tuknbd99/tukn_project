@@ -3190,113 +3190,301 @@
         window.open('https://wa.me/8801531912499?text=আমি%20${encodeURIComponent(productName)}%20পন্যটি%20কিনতে%20চাই।%20দাম:%20${price}%20টাকা', '_blank');
     }
 
-    // ============================================================
-    // ===== জেলা রোলিং স্ট্যাটস (স্লট মেশিন - সম্পূর্ণ ফিক্সড) =====
-    // ============================================================
-    let districtData = [];
-    let currentIndex = 0;
-    let rollInterval = null;
-    let isAnimating = false;
-    let isPaused = false;
+// ============================================================
+// ===== জেলা রোলিং স্ট্যাটস (স্লট মেশিন - ফিক্সড) =====
+// ============================================================
+let districtData = [];
+let currentIndex = 0;
+let rollInterval = null;
+let isAnimating = false;
+let isPaused = false;
 
-    async function loadDistrictRollingStats() {
-        console.log('🔄 জেলা ডেটা লোড হচ্ছে...');
-        
-        const districtEl = document.getElementById('rollingDistrict');
-        const countEl = document.getElementById('rollingCount');
-        const totalDisplay = document.getElementById('totalMembersDisplay');
-        const indicator = document.getElementById('rollIndicator');
-        const progressFill = document.getElementById('progressFill');
-        
-        if (!districtEl || !countEl) {
-            console.warn('⚠️ রোলিং এলিমেন্ট পাওয়া যায়নি');
-            return;
-        }
-        
+// ডিফল্ট ডেটা (যখন ডাটাবেস থেকে কিছু আসে না)
+const DEFAULT_DISTRICTS = [
+    ['ঢাকা', 1250],
+    ['চট্টগ্রাম', 980],
+    ['রাজশাহী', 750],
+    ['খুলনা', 620],
+    ['বরিশাল', 480],
+    ['সিলেট', 390],
+    ['রংপুর', 350],
+    ['ময়মনসিংহ', 280]
+];
+
+async function loadDistrictRollingStats() {
+    console.log('🔄 জেলা ডেটা লোড হচ্ছে...');
+    
+    const districtEl = document.getElementById('rollingDistrict');
+    const countEl = document.getElementById('rollingCount');
+    const totalDisplay = document.getElementById('totalMembersDisplay');
+    const indicator = document.getElementById('rollIndicator');
+    const progressFill = document.getElementById('progressFill');
+    
+    // এলিমেন্ট চেক
+    if (!districtEl || !countEl) {
+        console.warn('⚠️ রোলিং এলিমেন্ট পাওয়া যায়নি');
+        return;
+    }
+    
+    // স্ট্যাটাস মেসেজ দেখান
+    districtEl.textContent = 'লোড হচ্ছে...';
+    countEl.textContent = '০';
+    if (indicator) indicator.textContent = '১/০';
+    if (progressFill) progressFill.style.width = '0%';
+    
+    try {
         const sb = await initSupabase();
         if (!sb) {
-            districtEl.textContent = 'সংযোগ নেই';
-            countEl.textContent = '০';
-            if (indicator) indicator.textContent = '০/০';
+            console.warn('⚠️ সুপাবেস ক্লায়েন্ট নেই, ডিফল্ট ডেটা ব্যবহার করছি');
+            useDefaultData();
             return;
         }
         
-        try {
-            const { data: members, error } = await sb.from('members').select('present_district, status');
-            if (error) throw error;
-            console.log('📊 মোট সদস্য:', members?.length || 0);
-            
-            const districtCount = {};
-            (members || []).forEach(m => {
-                if (m.status === 'deleted') return;
-                const district = m.present_district || 'অজানা';
-                districtCount[district] = (districtCount[district] || 0) + 1;
-            });
-            
-            districtData = Object.entries(districtCount).sort((a, b) => b[1] - a[1]);
-            console.log('🏙️ জেলা সমূহ:', districtData.length);
-            
-            const total = districtData.reduce((sum, [_, count]) => sum + count, 0);
-            if (totalDisplay) {
-                totalDisplay.innerHTML = `<i class="fas fa-users"></i> মোট: ${total} জন`;
-            }
-            
-            if (districtData.length === 0) {
-                districtEl.textContent = 'কোন ডেটা নেই';
-                countEl.textContent = '০';
-                if (indicator) indicator.textContent = '০/০';
-                if (progressFill) progressFill.style.width = '0%';
-                return;
-            }
-            
-            // প্রথম ডেটা সেট করুন
-            currentIndex = 0;
-            const [firstDistrict, firstCount] = districtData[0];
-            
-            // কন্টেইনার ক্লিয়ার করুন
-            const container = document.getElementById('districtContainer');
-            const countContainer = document.getElementById('countContainer');
-            if (container) container.innerHTML = '';
-            if (countContainer) countContainer.innerHTML = '';
-            
-            // নতুন এলিমেন্ট তৈরি করুন
-            const newDistrict = document.createElement('div');
-            newDistrict.id = 'rollingDistrict';
-            newDistrict.className = 'district-text current';
-            newDistrict.textContent = firstDistrict;
-            if (container) container.appendChild(newDistrict);
-            
-            const newCount = document.createElement('div');
-            newCount.id = 'rollingCount';
-            newCount.className = 'count-text current';
-            newCount.textContent = firstCount;
-            if (countContainer) countContainer.appendChild(newCount);
-            
-            if (indicator) indicator.textContent = `1/${districtData.length}`;
-            if (progressFill) progressFill.style.width = '0%';
-            
-            console.log('✅ রোলিং প্রস্তুত! জেলা:', districtData.length);
-            console.log('📌 প্রথম জেলা:', firstDistrict, 'সদস্য:', firstCount);
-            
-            // রোলিং শুরু করুন
-            if (districtData.length > 1) {
-                if (rollInterval) {
-                    clearInterval(rollInterval);
-                    rollInterval = null;
-                }
-                isPaused = false;
-                startRolling();
-                console.log('▶️ রোলিং শুরু! (২.৫ সেকেন্ড ব্যবধান)');
-            } else {
-                console.log('⏸️ শুধু এক জেলা, রোলিং থামানো হয়েছে');
-            }
-            
-        } catch(e) {
-            console.error('❌ জেলা রোলিং ERROR:', e);
-            districtEl.textContent = 'ত্রুটি!';
-            countEl.textContent = '০';
+        // সদস্যদের ডেটা আনুন (শুধু প্রয়োজনীয় ফিল্ড)
+        const { data: members, error } = await sb
+            .from('members')
+            .select('present_district, status')
+            .eq('status', 'active');  // শুধু অ্যাকটিভ সদস্য
+        
+        if (error) {
+            console.error('❌ ডেটা আনতে ERROR:', error);
+            useDefaultData();
+            return;
         }
+        
+        console.log('📊 মোট সদস্য পাওয়া গেছে:', members?.length || 0);
+        
+        // যদি ডেটা না থাকে
+        if (!members || members.length === 0) {
+            console.warn('⚠️ কোনো সদস্য ডেটা নেই, ডিফল্ট ব্যবহার');
+            useDefaultData();
+            return;
+        }
+        
+        // জেলা অনুযায়ী কাউন্ট করুন
+        const districtCount = {};
+        members.forEach(m => {
+            // 'deleted' স্ট্যাটাস বাদ দিন
+            if (m.status === 'deleted') return;
+            
+            let district = m.present_district;
+            // যদি জেলা খালি থাকে বা null হয়
+            if (!district || district.trim() === '') {
+                district = 'অন্যান্য';
+            }
+            districtCount[district] = (districtCount[district] || 0) + 1;
+        });
+        
+        // সাজান (যাদের বেশি সদস্য তাদের আগে)
+        districtData = Object.entries(districtCount).sort((a, b) => b[1] - a[1]);
+        console.log('🏙️ জেলা সমূহ:', districtData.length, 'টি');
+        
+        // যদি কোনো জেলা না থাকে
+        if (districtData.length === 0) {
+            console.warn('⚠️ কোনো জেলা ডেটা নেই, ডিফল্ট ব্যবহার');
+            useDefaultData();
+            return;
+        }
+        
+        // মোট সদস্য দেখান
+        const total = districtData.reduce((sum, [_, count]) => sum + count, 0);
+        if (totalDisplay) {
+            totalDisplay.innerHTML = `<i class="fas fa-users"></i> মোট: ${total.toLocaleString()} জন`;
+        }
+        
+        // প্রথম ডেটা সেট করুন
+        currentIndex = 0;
+        const [firstDistrict, firstCount] = districtData[0];
+        
+        // টেক্সট আপডেট করুন (অ্যানিমেশন ছাড়া)
+        districtEl.textContent = firstDistrict;
+        countEl.textContent = firstCount;
+        districtEl.style.opacity = '1';
+        districtEl.style.transform = 'translate(-50%, -50%) scale(1)';
+        countEl.style.opacity = '1';
+        countEl.style.transform = 'translate(-50%, -50%) scale(1)';
+        
+        if (indicator) indicator.textContent = `1/${districtData.length}`;
+        if (progressFill) progressFill.style.width = '0%';
+        
+        console.log('✅ রোলিং প্রস্তুত! জেলা:', districtData.length);
+        console.log('📌 প্রথম জেলা:', firstDistrict, 'সদস্য:', firstCount);
+        
+        // রোলিং শুরু করুন (যদি একাধিক জেলা থাকে)
+        if (districtData.length > 1) {
+            if (rollInterval) {
+                clearInterval(rollInterval);
+                rollInterval = null;
+            }
+            isPaused = false;
+            startRolling();
+            console.log('▶️ রোলিং শুরু! (২.৫ সেকেন্ড ব্যবধান)');
+        } else {
+            console.log('⏸️ শুধু এক জেলা, রোলিং থামানো হয়েছে');
+        }
+        
+    } catch(e) {
+        console.error('❌ জেলা রোলিং FATAL ERROR:', e);
+        useDefaultData();
     }
+}
+
+// ডিফল্ট ডেটা ব্যবহার করুন
+function useDefaultData() {
+    console.log('📋 ডিফল্ট ডেটা ব্যবহার করছি');
+    districtData = [...DEFAULT_DISTRICTS];
+    currentIndex = 0;
+    
+    const districtEl = document.getElementById('rollingDistrict');
+    const countEl = document.getElementById('rollingCount');
+    const totalDisplay = document.getElementById('totalMembersDisplay');
+    const indicator = document.getElementById('rollIndicator');
+    const progressFill = document.getElementById('progressFill');
+    
+    const total = districtData.reduce((sum, [_, count]) => sum + count, 0);
+    if (totalDisplay) {
+        totalDisplay.innerHTML = `<i class="fas fa-users"></i> মোট: ${total.toLocaleString()} জন`;
+    }
+    
+    if (districtEl && countEl && districtData.length > 0) {
+        const [firstDistrict, firstCount] = districtData[0];
+        districtEl.textContent = firstDistrict;
+        countEl.textContent = firstCount;
+        districtEl.style.opacity = '1';
+        districtEl.style.transform = 'translate(-50%, -50%) scale(1)';
+        countEl.style.opacity = '1';
+        countEl.style.transform = 'translate(-50%, -50%) scale(1)';
+        
+        if (indicator) indicator.textContent = `1/${districtData.length}`;
+        if (progressFill) progressFill.style.width = '0%';
+    }
+    
+    // রোলিং শুরু
+    if (districtData.length > 1) {
+        if (rollInterval) {
+            clearInterval(rollInterval);
+            rollInterval = null;
+        }
+        isPaused = false;
+        startRolling();
+    }
+}
+
+function startRolling() {
+    if (rollInterval) {
+        clearInterval(rollInterval);
+        rollInterval = null;
+    }
+    
+    if (districtData.length <= 1 || isPaused) return;
+    
+    isAnimating = false;
+    let progress = 0;
+    const totalTime = 2500;
+    const intervalTime = 50;
+    
+    rollInterval = setInterval(function() {
+        if (isPaused) return;
+        
+        progress += (intervalTime / totalTime) * 100;
+        const progressFill = document.getElementById('progressFill');
+        if (progressFill) {
+            progressFill.style.width = Math.min(progress, 100) + '%';
+        }
+        
+        if (progress >= 100 && !isAnimating && districtData.length > 1) {
+            isAnimating = true;
+            currentIndex = (currentIndex + 1) % districtData.length;
+            updateRollingDisplay();
+            progress = 0;
+            if (progressFill) {
+                progressFill.style.width = '0%';
+            }
+        }
+    }, intervalTime);
+}
+
+function updateRollingDisplay() {
+    if (districtData.length === 0 || isAnimating) return;
+    
+    const [district, count] = districtData[currentIndex];
+    const districtEl = document.getElementById('rollingDistrict');
+    const countEl = document.getElementById('rollingCount');
+    const indicator = document.getElementById('rollIndicator');
+    
+    if (!districtEl || !countEl) return;
+    
+    console.log('🔄 আপডেট হচ্ছে:', district, '→', count);
+    
+    // ফেইড আউট
+    districtEl.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+    countEl.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+    districtEl.style.opacity = '0';
+    districtEl.style.transform = 'translate(-50%, -50%) scale(0.8)';
+    countEl.style.opacity = '0';
+    countEl.style.transform = 'translate(-50%, -50%) scale(0.8)';
+    
+    setTimeout(() => {
+        // টেক্সট পরিবর্তন
+        districtEl.textContent = district;
+        countEl.textContent = count;
+        
+        // ফেইড ইন
+        districtEl.style.opacity = '1';
+        districtEl.style.transform = 'translate(-50%, -50%) scale(1)';
+        countEl.style.opacity = '1';
+        countEl.style.transform = 'translate(-50%, -50%) scale(1)';
+    }, 300);
+    
+    if (indicator) {
+        indicator.textContent = `${currentIndex + 1}/${districtData.length}`;
+    }
+    
+    const progressFill = document.getElementById('progressFill');
+    if (progressFill) {
+        progressFill.style.width = '0%';
+    }
+    
+    isAnimating = false;
+}
+
+function nextDistrict() {
+    if (districtData.length === 0 || isAnimating) return;
+    
+    if (rollInterval) {
+        clearInterval(rollInterval);
+        rollInterval = null;
+    }
+    isPaused = true;
+    
+    isAnimating = true;
+    currentIndex = (currentIndex + 1) % districtData.length;
+    updateRollingDisplay();
+    
+    setTimeout(function() {
+        isPaused = false;
+        startRolling();
+    }, 600);
+}
+
+function prevDistrict() {
+    if (districtData.length === 0 || isAnimating) return;
+    
+    if (rollInterval) {
+        clearInterval(rollInterval);
+        rollInterval = null;
+    }
+    isPaused = true;
+    
+    isAnimating = true;
+    currentIndex = (currentIndex - 1 + districtData.length) % districtData.length;
+    updateRollingDisplay();
+    
+    setTimeout(function() {
+        isPaused = false;
+        startRolling();
+    }, 600);
+}
 
     function startRolling() {
         if (rollInterval) {
