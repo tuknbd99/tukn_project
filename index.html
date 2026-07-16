@@ -2923,7 +2923,7 @@ async function submitRepApplication() {
 }
 
 // ============================================================
-// ✅ STATS SYSTEM - FIXED (present_district ব্যবহার)
+// ✅ STATS SYSTEM - is_active ফিল্ড বাদ (শুধু status ব্যবহার)
 // ============================================================
 async function loadStats() {
     const sb = await initSupabase();
@@ -2938,10 +2938,10 @@ async function loadStats() {
     }
 
     try {
-        // ✅ present_district ব্যবহার করুন (ইংরেজি ফিল্ড)
+        // ✅ is_active বাদ, শুধু status ব্যবহার
         const { data: members, error: memberError } = await sb
             .from('members')
-            .select('status, is_active, present_district');
+            .select('status, present_district');
 
         if (memberError) throw memberError;
 
@@ -2952,7 +2952,8 @@ async function loadStats() {
         if (members && members.length > 0) {
             members.forEach(m => {
                 totalCount++;
-                const isActive = m.status === 'active' || m.status === 'approved' || m.is_active === true;
+                // ✅ শুধু status চেক করুন
+                const isActive = m.status === 'active' || m.status === 'approved';
                 if (isActive) {
                     activeCount++;
                     if (m.present_district) {
@@ -2988,6 +2989,86 @@ async function loadStats() {
         const cached = getCachedStats();
         if (cached) { updateStatsUI(cached); } 
         else { updateStatsUI(getFallbackStats()); }
+    }
+}
+
+// ============================================================
+// ✅ DISTRICT ROLLING STATS - is_active ফিল্ড বাদ
+// ============================================================
+async function loadDistrictRollingStats() {
+    console.log('🔄 জেলা ডেটা লোড হচ্ছে...');
+    const districtEl = document.getElementById('rollingDistrict');
+    const countEl = document.getElementById('rollingCount');
+    const totalDisplay = document.getElementById('totalMembersDisplay');
+    const indicator = document.getElementById('rollIndicator');
+    const progressFill = document.getElementById('progressFill');
+
+    if (!districtEl || !countEl) {
+        console.warn('⚠️ রোলিং এলিমেন্ট পাওয়া যায়নি');
+        return;
+    }
+
+    const sb = await initSupabase();
+    if (!sb) {
+        showFallbackDistrictData();
+        return;
+    }
+
+    try {
+        // ✅ is_active বাদ, শুধু present_district এবং status ব্যবহার
+        const { data: members, error } = await sb
+            .from('members')
+            .select('present_district, status');
+
+        if (error) {
+            console.error('❌ ডেটা ফেচ ERROR:', error);
+            showFallbackDistrictData();
+            return;
+        }
+
+        console.log('📊 মোট সদস্য পাওয়া গেছে:', members?.length || 0);
+
+        if (!members || members.length === 0) {
+            showFallbackDistrictData();
+            return;
+        }
+
+        const districtCount = {};
+        let totalActive = 0;
+
+        members.forEach(m => {
+            let district = m.present_district || 'অজানা';
+            // ✅ শুধু status চেক করুন
+            const isActive = m.status === 'active' || m.status === 'approved';
+            if (isActive) {
+                districtCount[district] = (districtCount[district] || 0) + 1;
+                totalActive++;
+            }
+        });
+
+        const sortedData = Object.entries(districtCount).sort((a, b) => b[1] - a[1]);
+        console.log('🏙️ জেলা সমূহ:', sortedData.length);
+        console.log('👥 সক্রিয় সদস্য:', totalActive);
+
+        if (sortedData.length === 0) {
+            showFallbackDistrictData();
+            return;
+        }
+
+        window.districtData = sortedData;
+        window.currentIndex = 0;
+        window.totalMembers = totalActive;
+
+        updateDistrictUI(sortedData, totalActive);
+
+        localStorage.setItem('tukn_district_cache', JSON.stringify({
+            data: { districts: Object.fromEntries(sortedData), total: totalActive },
+            timestamp: Date.now()
+        }));
+
+    } catch(e) {
+        console.error('❌ জেলা রোলিং ERROR:', e);
+        showFallbackDistrictData();
     }
 }
 
