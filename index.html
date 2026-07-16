@@ -2939,71 +2939,231 @@
         } catch(e) { console.error('Rep application error:', e); showNotification('জমা ব্যর্থ! আবার চেষ্টা করুন।', 'error'); }
     }
 
-    // ===== Stats System =====
-    async function loadStats() {
-        const sb = await initSupabase();
-        const statMembers = document.getElementById('statMembers');
-        const statMadrasas = document.getElementById('statMadrasas');
-        const topMembers = document.getElementById('topMembers');
-        const topMadrasas = document.getElementById('topMadrasas');
+// ============================================================
+// STATS SYSTEM - FIXED (present_district ব্যবহার)
+// ============================================================
+async function loadStats() {
+    const sb = await initSupabase();
+    const statMembers = document.getElementById('statMembers');
+    const statMadrasas = document.getElementById('statMadrasas');
+    const topMembers = document.getElementById('topMembers');
+    const topMadrasas = document.getElementById('topMadrasas');
 
-        if (!sb) {
-            updateStatsUI(getFallbackStats());
+    if (!sb) {
+        updateStatsUI(getFallbackStats());
+        return;
+    }
+
+    try {
+        const { data: members, error: memberError } = await sb
+            .from('members')
+            .select('status, is_active, present_district');
+
+        if (memberError) throw memberError;
+
+        let activeCount = 0;
+        let totalCount = 0;
+        const districtSet = new Set();
+
+        if (members && members.length > 0) {
+            members.forEach(m => {
+                totalCount++;
+                const isActive = m.status === 'active' || m.status === 'approved' || m.is_active === true;
+                if (isActive) {
+                    activeCount++;
+                    if (m.present_district) {
+                        districtSet.add(m.present_district);
+                    }
+                }
+            });
+        }
+
+        const { count: madrasaCount, error: madrasaError } = await sb
+            .from('madrasas')
+            .select('*', { count: 'exact', head: true });
+
+        if (madrasaError) throw madrasaError;
+
+        const statsData = {
+            activeMembers: activeCount,
+            totalMembers: totalCount,
+            madrasas: madrasaCount || 0,
+            districts: districtSet.size
+        };
+
+        updateStatsUI(statsData);
+        localStorage.setItem('tukn_stats_cache', JSON.stringify({
+            data: statsData,
+            timestamp: Date.now()
+        }));
+
+        await loadDistrictRollingStats();
+
+    } catch(e) {
+        console.error('Stats load error:', e);
+        const cached = getCachedStats();
+        if (cached) { updateStatsUI(cached); } 
+        else { updateStatsUI(getFallbackStats()); }
+    }
+}
+
+// ============================================================
+// DISTRICT ROLLING STATS - FIXED (present_district ব্যবহার)
+// ============================================================
+async function loadDistrictRollingStats() {
+    console.log('🔄 জেলা ডেটা লোড হচ্ছে...');
+    const districtEl = document.getElementById('rollingDistrict');
+    const countEl = document.getElementById('rollingCount');
+    const totalDisplay = document.getElementById('totalMembersDisplay');
+    const indicator = document.getElementById('rollIndicator');
+    const progressFill = document.getElementById('progressFill');
+
+    if (!districtEl || !countEl) {
+        console.warn('⚠️ রোলিং এলিমেন্ট পাওয়া যায়নি');
+        return;
+    }
+
+    const sb = await initSupabase();
+    if (!sb) {
+        showFallbackDistrictData();
+        return;
+    }
+
+    try {
+        const { data: members, error } = await sb
+            .from('members')
+            .select('present_district, status, is_active');
+
+        if (error) {
+            console.error('❌ ডেটা ফেচ ERROR:', error);
+            showFallbackDistrictData();
             return;
         }
 
-        try {
-            const { data: members, error: memberError } = await sb
-                .from('members')
-                .select('status, is_active, জেলা');
+        console.log('📊 মোট সদস্য পাওয়া গেছে:', members?.length || 0);
 
-            if (memberError) throw memberError;
-
-            let activeCount = 0;
-            let totalCount = 0;
-            const districtSet = new Set();
-
-            if (members && members.length > 0) {
-                members.forEach(m => {
-                    totalCount++;
-                    const isActive = m.status === 'active' || m.status === 'approved' || m.is_active === true;
-                    if (isActive) {
-                        activeCount++;
-                        if (m.জেলা) {
-                            districtSet.add(m.জেলা);
-                        }
-                    }
-                });
-            }
-
-            const { count: madrasaCount, error: madrasaError } = await sb
-                .from('madrasas')
-                .select('*', { count: 'exact', head: true });
-
-            if (madrasaError) throw madrasaError;
-
-            const statsData = {
-                activeMembers: activeCount,
-                totalMembers: totalCount,
-                madrasas: madrasaCount || 0,
-                districts: districtSet.size
-            };
-
-            updateStatsUI(statsData);
-            localStorage.setItem('tukn_stats_cache', JSON.stringify({
-                data: statsData,
-                timestamp: Date.now()
-            }));
-
-            await loadDistrictRollingStats();
-
-        } catch(e) {
-            console.error('Stats load error:', e);
-            const cached = getCachedStats();
-            if (cached) { updateStatsUI(cached); } 
-            else { updateStatsUI(getFallbackStats()); }
+        if (!members || members.length === 0) {
+            showFallbackDistrictData();
+            return;
         }
+
+        const districtCount = {};
+        let totalActive = 0;
+
+        members.forEach(m => {
+            let district = m.present_district || 'অজানা';
+            const isActive = m.status === 'active' || m.status === 'approved' || m.is_active === true;
+            if (isActive) {
+                districtCount[district] = (districtCount[district] || 0) + 1;
+                totalActive++;
+            }
+        });
+
+        const sortedData = Object.entries(districtCount).sort((a, b) => b[1] - a[1]);
+        console.log('🏙️ জেলা সমূহ:', sortedData.length);
+        console.log('👥 সক্রিয় সদস্য:', totalActive);
+
+        if (sortedData.length === 0) {
+            showFallbackDistrictData();
+            return;
+        }
+
+        window.districtData = sortedData;
+        window.currentIndex = 0;
+        window.totalMembers = totalActive;
+
+        updateDistrictUI(sortedData, totalActive);
+
+        localStorage.setItem('tukn_district_cache', JSON.stringify({
+            data: { districts: Object.fromEntries(sortedData), total: totalActive },
+            timestamp: Date.now()
+        }));
+
+    } catch(e) {
+        console.error('❌ জেলা রোলিং ERROR:', e);
+        showFallbackDistrictData();
     }
+}
+
+// ============================================================
+// District Rolling Stats - present_district ফিল্ড ব্যবহার
+// ============================================================
+async function loadDistrictRollingStats() {
+    console.log('🔄 জেলা ডেটা লোড হচ্ছে...');
+    const districtEl = document.getElementById('rollingDistrict');
+    const countEl = document.getElementById('rollingCount');
+    const totalDisplay = document.getElementById('totalMembersDisplay');
+    const indicator = document.getElementById('rollIndicator');
+    const progressFill = document.getElementById('progressFill');
+
+    if (!districtEl || !countEl) {
+        console.warn('⚠️ রোলিং এলিমেন্ট পাওয়া যায়নি');
+        return;
+    }
+
+    const sb = await initSupabase();
+    if (!sb) {
+        showFallbackDistrictData();
+        return;
+    }
+
+    try {
+        // ✅ present_district ব্যবহার করুন (ইংরেজি ফিল্ড)
+        const { data: members, error } = await sb
+            .from('members')
+            .select('present_district, status, is_active');
+
+        if (error) {
+            console.error('❌ ডেটা ফেচ ERROR:', error);
+            showFallbackDistrictData();
+            return;
+        }
+
+        console.log('📊 মোট সদস্য পাওয়া গেছে:', members?.length || 0);
+
+        if (!members || members.length === 0) {
+            showFallbackDistrictData();
+            return;
+        }
+
+        const districtCount = {};
+        let totalActive = 0;
+
+        members.forEach(m => {
+            // present_district ফিল্ড ব্যবহার
+            let district = m.present_district || 'অজানা';
+            const isActive = m.status === 'active' || m.status === 'approved' || m.is_active === true;
+            if (isActive) {
+                districtCount[district] = (districtCount[district] || 0) + 1;
+                totalActive++;
+            }
+        });
+
+        const sortedData = Object.entries(districtCount).sort((a, b) => b[1] - a[1]);
+        console.log('🏙️ জেলা সমূহ:', sortedData.length);
+        console.log('👥 সক্রিয় সদস্য:', totalActive);
+
+        if (sortedData.length === 0) {
+            showFallbackDistrictData();
+            return;
+        }
+
+        window.districtData = sortedData;
+        window.currentIndex = 0;
+        window.totalMembers = totalActive;
+
+        updateDistrictUI(sortedData, totalActive);
+
+        localStorage.setItem('tukn_district_cache', JSON.stringify({
+            data: { districts: Object.fromEntries(sortedData), total: totalActive },
+            timestamp: Date.now()
+        }));
+
+    } catch(e) {
+        console.error('❌ জেলা রোলিং ERROR:', e);
+        showFallbackDistrictData();
+    }
+}
 
     function updateStatsUI(data) {
         const formatNumber = (num) => {
