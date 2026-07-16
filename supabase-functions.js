@@ -1,5 +1,7 @@
-// supabase-functions.js
-// TUKNBD - সম্পূর্ণ Supabase ডাটাবেস ফাংশন (সব ফিচার সহ, ডেমো ডাটা ছাড়া)
+// ============================================
+// supabase-functions.js - TUKNBD
+// সম্পূর্ণ আপডেট (সব ফাংশন সহ)
+// ============================================
 
 // ==================== ক্লায়েন্ট রেফারেন্স ====================
 const getClient = () => window._supabaseClient || window.supabaseClient || window._supabase || window.supabase;
@@ -344,8 +346,8 @@ async function getMemberFinancialSummary(memberId) {
             .eq('status', 'approved');
         if (loanError) throw loanError;
         
-        const totalLoan = loans?.reduce((sum, loan) => sum + (loan.loan_amount || 0), 0) || 0;
-        const totalPaid = loans?.reduce((sum, loan) => sum + (loan.paid_amount || 0), 0) || 0;
+        const totalLoan = loans?.reduce((sum, loan) => sum + (loan.amount || 0), 0) || 0;
+        const totalPaid = loans?.reduce((sum, loan) => sum + ((loan.amount || 0) - (loan.remaining_balance || 0)), 0) || 0;
         const dueLoan = totalLoan - totalPaid;
         
         return {
@@ -539,14 +541,13 @@ async function approveRepApplicationById(id, approvedBy) {
         const { data, error } = await client.from('rep_applications').update({ status: 'approved' }).eq('id', id).select();
         if (error) throw error;
         if (data && data[0]) {
-            const app = data[0];
             await addNewRepresentative({
-                member_id: app.member_id,
-                name: app.name,
-                district: app.district,
-                mobile: app.mobile,
-                madrasa: app.madrasa,
-                experience: app.experience,
+                member_id: data[0].member_id,
+                name: data[0].name,
+                district: data[0].district,
+                mobile: data[0].mobile,
+                madrasa: data[0].madrasa,
+                experience: data[0].experience,
                 join_date: new Date().toISOString(),
                 approved_by: approvedBy,
                 status: 'active'
@@ -574,79 +575,269 @@ async function rejectRepApplicationById(id) {
     }
 }
 
-// ==================== লোন আবেদন ফাংশন ====================
+// ==================== লোন ফাংশন (আপডেটেড - আপনার টেবিলের জন্য) ====================
+
+// 1. একটি সদস্যের সব অনুমোদিত লোন দেখুন
+async function getMemberLoans(memberId) {
+    const client = getClient();
+    try {
+        if (!memberId) {
+            console.log('⚠️ No memberId provided');
+            return [];
+        }
+        
+        const { data, error } = await client
+            .from('loan_applications')
+            .select('*')
+            .eq('member_id', memberId)
+            .eq('status', 'approved')
+            .order('approved_at', { ascending: false });
+        
+        if (error) {
+            console.error('❌ getMemberLoans Error:', error);
+            return [];
+        }
+        
+        console.log(`📊 Found ${data?.length || 0} approved loans for ${memberId}`);
+        return data || [];
+        
+    } catch (err) {
+        console.error('❌ getMemberLoans Error:', err);
+        return [];
+    }
+}
+
+// 2. লোনের সারসংক্ষেপ
+async function getMemberLoanSummary(memberId) {
+    const client = getClient();
+    try {
+        if (!memberId) {
+            return { 
+                total_loan: 0, 
+                paid_loan: 0, 
+                due_loan: 0,
+                total_payable: 0,
+                total_remaining: 0,
+                loan_count: 0,
+                loans: [] 
+            };
+        }
+        
+        const { data, error } = await client
+            .from('loan_applications')
+            .select('*')
+            .eq('member_id', memberId)
+            .eq('status', 'approved');
+        
+        if (error) throw error;
+        
+        if (!data || data.length === 0) {
+            return { 
+                total_loan: 0, 
+                paid_loan: 0, 
+                due_loan: 0,
+                total_payable: 0,
+                total_remaining: 0,
+                loan_count: 0,
+                loans: [] 
+            };
+        }
+        
+        let totalAmount = 0;
+        let totalPayable = 0;
+        let totalRemaining = 0;
+        
+        data.forEach(loan => {
+            totalAmount += loan.amount || 0;
+            totalPayable += loan.total_payable || 0;
+            totalRemaining += loan.remaining_balance || 0;
+        });
+        
+        const totalPaid = totalAmount - totalRemaining;
+        
+        return {
+            total_loan: totalAmount,
+            paid_loan: totalPaid > 0 ? totalPaid : 0,
+            due_loan: totalRemaining,
+            total_payable: totalPayable,
+            total_remaining: totalRemaining,
+            loan_count: data.length,
+            loans: data
+        };
+        
+    } catch (err) {
+        console.error('❌ getMemberLoanSummary Error:', err);
+        return { 
+            total_loan: 0, 
+            paid_loan: 0, 
+            due_loan: 0,
+            total_payable: 0,
+            total_remaining: 0,
+            loan_count: 0,
+            loans: [] 
+        };
+    }
+}
+
+// 3. লোনের কিস্তি তথ্য
+function getLoanInstallmentInfo(loan) {
+    const amount = loan.amount || 0;
+    const remaining = loan.remaining_balance || 0;
+    const emi = loan.emi_amount || 0;
+    const duration = loan.duration_months || 0;
+    const totalPayable = loan.total_payable || 0;
+    const paid = amount - remaining;
+    
+    let progress = 0;
+    if (totalPayable > 0) {
+        progress = ((totalPayable - remaining) / totalPayable) * 100;
+    }
+    
+    return {
+        amount: amount,
+        remaining: remaining,
+        paid: paid,
+        emi: emi,
+        duration: duration,
+        totalPayable: totalPayable,
+        progress: Math.round(progress),
+        nextInstallment: remaining > 0 ? Math.min(emi, remaining) : 0,
+        isCompleted: remaining <= 0
+    };
+}
+
+// 4. লোন আবেদন যোগ করুন
+async function addLoanApplication(loanData) {
+    const client = getClient();
+    try {
+        if (!loanData.member_id || !loanData.amount) {
+            showToast('❌ সদস্য এবং লোন পরিমাণ বাধ্যতামূলক', 'error');
+            return null;
+        }
+        
+        loanData.status = loanData.status || 'pending';
+        loanData.submitted_at = loanData.submitted_at || new Date().toISOString();
+        loanData.date = loanData.date || new Date().toISOString();
+        
+        // মেম্বারের তথ্য নিয়ে আসুন
+        const { data: member } = await client
+            .from('members')
+            .select('full_name, mobile')
+            .eq('member_id', loanData.member_id)
+            .single();
+        
+        if (member) {
+            loanData.member_name = member.full_name;
+            loanData.member_mobile = member.mobile;
+        }
+        
+        const { data, error } = await client
+            .from('loan_applications')
+            .insert([loanData])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ লোন আবেদন জমা হয়েছে', 'success');
+        return data;
+        
+    } catch (err) {
+        console.error('❌ addLoanApplication Error:', err);
+        showToast('❌ লোন আবেদন জমা ব্যর্থ', 'error');
+        return null;
+    }
+}
+
+// 5. লোন স্ট্যাটাস আপডেট করুন
+async function updateLoanStatus(loanId, status, adminId = null, adminName = null) {
+    const client = getClient();
+    try {
+        const updateData = { status: status };
+        
+        if (status === 'approved') {
+            updateData.approved_at = new Date().toISOString();
+            updateData.approved_by = adminName || adminId;
+        } else if (status === 'rejected') {
+            updateData.rejected_at = new Date().toISOString();
+            updateData.rejected_by = adminName || adminId;
+        }
+        
+        const { data, error } = await client
+            .from('loan_applications')
+            .update(updateData)
+            .eq('id', loanId)
+            .select();
+        
+        if (error) throw error;
+        
+        showToast(`✅ লোন স্ট্যাটাস ${status} হয়েছে`, 'success');
+        return data;
+        
+    } catch (err) {
+        console.error('❌ updateLoanStatus Error:', err);
+        showToast('❌ স্ট্যাটাস আপডেট ব্যর্থ', 'error');
+        return null;
+    }
+}
+
+// 6. লোন ডিলিট করুন
+async function deleteLoanById(loanId) {
+    const client = getClient();
+    try {
+        const confirmed = confirm('লোন মুছতে চান?');
+        if (!confirmed) return false;
+        
+        const { error } = await client
+            .from('loan_applications')
+            .delete()
+            .eq('id', loanId);
+        
+        if (error) throw error;
+        
+        showToast('✅ লোন মুছে দেওয়া হয়েছে', 'success');
+        return true;
+        
+    } catch (err) {
+        console.error('❌ deleteLoanById Error:', err);
+        showToast('❌ লোন মুছতে ত্রুটি', 'error');
+        return false;
+    }
+}
+
+// 7. সব লোন আবেদন দেখুন (অ্যাডমিন)
 async function getAllLoanApplications() {
     const client = getClient();
     try {
-        const { data, error } = await client.from('loan_applications').select('*').order('created_at', { ascending: false });
+        const { data, error } = await client
+            .from('loan_applications')
+            .select('*')
+            .order('submitted_at', { ascending: false });
+        
         if (error) throw error;
         return data || [];
+        
     } catch (err) {
         console.error('❌ getAllLoanApplications Error:', err);
         return [];
     }
 }
 
-async function getLoanApplicationsByMemberId(memberId) {
+// 8. pending লোন আবেদন দেখুন (অ্যাডমিন)
+async function getPendingLoanApplications() {
     const client = getClient();
     try {
-        if (!memberId) return [];
-        const { data, error } = await client.from('loan_applications').select('*').eq('member_id', memberId).order('created_at', { ascending: false });
+        const { data, error } = await client
+            .from('loan_applications')
+            .select('*')
+            .eq('status', 'pending')
+            .order('submitted_at', { ascending: true });
+        
         if (error) throw error;
         return data || [];
+        
     } catch (err) {
-        console.error('❌ getLoanApplicationsByMemberId Error:', err);
+        console.error('❌ getPendingLoanApplications Error:', err);
         return [];
-    }
-}
-
-async function addLoanApplication(loanData) {
-    const client = getClient();
-    try {
-        if (!loanData.member_id || !loanData.loan_amount) {
-            window.showToast('❌ সদস্য এবং লোন পরিমাণ বাধ্যতামূলক', 'error');
-            return null;
-        }
-        const { data, error } = await client.from('loan_applications').insert([loanData]).select();
-        if (error) throw error;
-        window.showToast('✅ লোন আবেদন জমা হয়েছে', 'success');
-        return data;
-    } catch (err) {
-        console.error('❌ addLoanApplication Error:', err);
-        window.showToast('❌ লোন আবেদন জমা ব্যর্থ', 'error');
-        return null;
-    }
-}
-
-async function updateLoanApplicationStatus(id, status) {
-    const client = getClient();
-    try {
-        if (!id || !status) {
-            window.showToast('❌ ID এবং স্ট্যাটাস প্রয়োজন', 'error');
-            return null;
-        }
-        const { data, error } = await client.from('loan_applications').update({ status: status }).eq('id', id).select();
-        if (error) throw error;
-        window.showToast(`✅ লোন স্ট্যাটাস ${status} হয়েছে`, 'success');
-        return data;
-    } catch (err) {
-        console.error('❌ updateLoanApplicationStatus Error:', err);
-        return null;
-    }
-}
-
-async function deleteLoanApplicationById(id) {
-    const client = getClient();
-    try {
-        const confirmed = confirm('লোন আবেদন মুছতে চান?');
-        if (!confirmed) return false;
-        const { error } = await client.from('loan_applications').delete().eq('id', id);
-        if (error) throw error;
-        window.showToast('✅ লোন আবেদন মুছে দেওয়া হয়েছে', 'success');
-        return true;
-    } catch (err) {
-        console.error('❌ deleteLoanApplicationById Error:', err);
-        return false;
     }
 }
 
@@ -953,39 +1144,79 @@ async function getPaymentById(paymentId) {
     }
 }
 
-// ==================== সদস্য লগইন ফাংশন ====================
+// ==================== সদস্য লগইন ফাংশন (আপডেটেড - লোন সহ) ====================
 async function verifyMemberLogin(username, password) {
     const client = getClient();
     try {
         if (!username || !password) {
-            window.showToast('সদস্য আইডি/মোবাইল এবং পাসওয়ার্ড দিন', 'error');
+            showCenterNotification('সদস্য আইডি/মোবাইল এবং পাসওয়ার্ড দিন', 'error');
             return null;
         }
+        
         let query = client.from('members').select('*');
+        
         if(username.match(/^01[3-9]\d{8}$/)) {
             query = query.eq('mobile', username);
         } else {
             query = query.eq('member_id', username);
         }
+        
         const { data, error } = await query;
+        
         if (error && error.code !== 'PGRST116') throw error;
+        
         const member = data?.[0];
+        
         if (!member) {
-            window.showToast('সদস্য আইডি/মোবাইল নম্বর সঠিক নয়!', 'error');
+            showCenterNotification('সদস্য আইডি/মোবাইল নম্বর সঠিক নয়!', 'error');
             return null;
         }
+        
         if (member.password !== password) {
-            window.showToast('পাসওয়ার্ড ভুল!', 'error');
+            showCenterNotification('পাসওয়ার্ড ভুল!', 'error');
             return null;
         }
+        
         if (member.status !== 'active' && member.status !== 'approved') {
-            window.showToast('আপনার একাউন্ট এখনও অনুমোদিত হয়নি।', 'warning');
+            showCenterNotification('আপনার একাউন্ট এখনও অনুমোদিত হয়নি।', 'warning');
             return null;
         }
+        
+        // ============================================
+        // লোনের তথ্য নিয়ে আসুন
+        // ============================================
+        try {
+            const loanSummary = await getMemberLoanSummary(member.member_id);
+            
+            member.loan_summary = loanSummary;
+            member.has_loan = loanSummary.loans && loanSummary.loans.length > 0;
+            member.total_loan = loanSummary.total_loan || 0;
+            member.total_payable = loanSummary.total_payable || 0;
+            member.due_loan = loanSummary.due_loan || 0;
+            member.loan_count = loanSummary.loan_count || 0;
+            
+            console.log(`📊 Loan data loaded for ${member.full_name}:`, loanSummary);
+            
+        } catch (loanErr) {
+            console.warn('⚠️ Could not fetch loan data:', loanErr);
+            member.loan_summary = { 
+                total_loan: 0, 
+                paid_loan: 0, 
+                due_loan: 0,
+                total_payable: 0,
+                total_remaining: 0,
+                loan_count: 0,
+                loans: [] 
+            };
+            member.has_loan = false;
+            member.loan_count = 0;
+        }
+        
         return member;
+        
     } catch (err) {
         console.error('verifyMemberLogin Error:', err);
-        window.showToast('লগইন করতে ব্যর্থ হয়েছে!', 'error');
+        showCenterNotification('লগইন করতে ব্যর্থ হয়েছে!', 'error');
         return null;
     }
 }
@@ -1001,6 +1232,10 @@ function saveMemberSession(member, rememberMe = false) {
             member_type: member.member_type || 'সাধারণ সদস্য',
             monthly_savings: member.monthly_savings || 500,
             status: member.status,
+            has_loan: member.has_loan || false,
+            loan_count: member.loan_count || 0,
+            total_loan: member.total_loan || 0,
+            due_loan: member.due_loan || 0,
             loggedIn: true,
             loginTime: new Date().toISOString()
         };
@@ -1053,7 +1288,8 @@ const DEFAULT_PERMISSIONS = {
         can_view_all_reports: true,
         can_delete_members: true,
         can_edit_settings: true,
-        can_manage_representatives: true
+        can_manage_representatives: true,
+        can_approve_loans: true
     },
     'admin': {
         can_approve_members: false,
@@ -1062,7 +1298,8 @@ const DEFAULT_PERMISSIONS = {
         can_view_all_reports: true,
         can_delete_members: false,
         can_edit_settings: false,
-        can_manage_representatives: true
+        can_manage_representatives: true,
+        can_approve_loans: true
     }
 };
 
@@ -1105,14 +1342,14 @@ window.registerMember = async function(e) {
     const client = getClient();
     
     if (!client || typeof client.from !== 'function') {
-        alert("সার্ভারের সাথে সংযোগ স্থাপন করা যাচ্ছে না। পেজ রিফ্রেশ করে আবার চেষ্টা করুন।");
+        showCenterNotification('সার্ভারের সাথে সংযোগ স্থাপন করা যাচ্ছে না। পেজ রিফ্রেশ করে আবার চেষ্টা করুন।', 'error');
         return;
     }
     
     try {
         const agreement = document.getElementById("agreementCheck");
         if (!agreement?.checked) {
-            alert("অনুগ্রহ করে অঙ্গীকারে টিক দিন");
+            showCenterNotification('অনুগ্রহ করে অঙ্গীকারে টিক দিন', 'error');
             return;
         }
         
@@ -1127,12 +1364,15 @@ window.registerMember = async function(e) {
         const id_number = getValue("idNumber");
         const id_type = document.querySelector('input[name="idType"]:checked')?.value || "জন্মনিবন্ধন";
         
-        if (!full_name) { alert("পূর্ণ নাম দিন"); return; }
-        if (!mobile) { alert("মোবাইল দিন"); return; }
-        if (!/^01[3-9]\d{8}$/.test(mobile)) { alert("সঠিক মোবাইল নাম্বার দিন"); return; }
+        if (!full_name) { showCenterNotification('পূর্ণ নাম দিন', 'error'); return; }
+        if (!mobile) { showCenterNotification('মোবাইল দিন', 'error'); return; }
+        if (!/^01[3-9]\d{8}$/.test(mobile)) { showCenterNotification('সঠিক মোবাইল নাম্বার দিন', 'error'); return; }
         
         const { data: existingMember } = await client.from("members").select("id").eq("mobile", mobile).maybeSingle();
-        if (existingMember) { alert("এই মোবাইল নাম্বার ইতোমধ্যে নিবন্ধিত"); return; }
+        if (existingMember) { 
+            showCenterNotification('এই মোবাইল নাম্বার ইতিমধ্যে নিবন্ধিত', 'error'); 
+            return; 
+        }
         
         const memberTerm = parseInt(document.getElementById("memberTerm")?.value) || 0;
         let memberType = "সাধারণ সদস্য";
@@ -1267,14 +1507,55 @@ window.registerMember = async function(e) {
             }
         }
         
-        alert(`✅ নিবন্ধন সফল!\n\n🆔 আইডি: ${member_id}\n🔑 পাসওয়ার্ড: ${password}\n🔗 রেফারেল: ${referral_code}`);
+        // ============================================
+        // ✅ সাফল্যের ডায়লগ দেখান
+        // ============================================
+        const dialogHtml = `
+            <div class="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center p-4" id="successDialog">
+                <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl relative" style="animation: fadeInScale 0.3s ease;">
+                    <button onclick="document.getElementById('successDialog').remove()" 
+                            class="absolute top-3 right-3 text-gray-400 hover:text-red-500 text-xl">
+                        &times;
+                    </button>
+                    <div class="text-center mb-4">
+                        <i class="fas fa-check-circle text-green-500 text-5xl mb-2"></i>
+                        <h2 class="text-2xl font-bold text-emerald-700">নিবন্ধন সফল!</h2>
+                    </div>
+                    <div class="bg-emerald-50 p-4 rounded-lg mb-4">
+                        <p class="font-bold text-emerald-800 mb-2">📋 আপনার সদস্য তথ্য:</p>
+                        <div class="space-y-2 text-sm">
+                            <p><span class="font-semibold">সদস্য আইডি:</span> 
+                               <span class="font-mono bg-white px-2 py-1 rounded font-bold text-emerald-700">${member_id}</span></p>
+                            <p><span class="font-semibold">রেফারেল কোড:</span> 
+                               <span class="font-mono bg-white px-2 py-1 rounded font-bold text-emerald-700">${referral_code}</span></p>
+                            <p><span class="font-semibold">মোবাইল নং:</span> 
+                               <span class="font-bold">${mobile}</span></p>
+                            <p><span class="font-semibold">পাসওয়ার্ড:</span> 
+                               <span class="font-mono bg-white px-2 py-1 rounded font-bold text-red-600">${password}</span></p>
+                        </div>
+                    </div>
+                    <div class="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-lg mb-4">
+                        <p class="font-bold text-amber-700 mb-2">⚠️ গুরুত্বপূর্ণ নির্দেশনা:</p>
+                        <ul class="list-disc list-inside text-sm text-gray-700 space-y-2">
+                            <li>আপনার পেমেন্ট সম্পন্ন হবার পর <span class="font-bold text-red-600">সদস্যপদ অনুমোদন</span> করা হবে</li>
+                            <li><span class="font-bold">Send Money</span> করার সময় রেফার হিসেবে <span class="font-bold text-emerald-700">${referral_code}</span> লিখুন</li>
+                            <li>অনুমোদনের পর <span class="font-bold">"আমাদের সেবা"</span> মেনু থেকে সঞ্চয় জমার অনুরোধ করুন</li>
+                        </ul>
+                    </div>
+                    <button onclick="document.getElementById('successDialog').remove()" 
+                            class="w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition text-base font-bold">
+                        <i class="fas fa-check mr-2"></i> বুঝতে পেরেছি
+                    </button>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', dialogHtml);
         
         document.getElementById("signupForm")?.reset();
-        location.reload();
         
     } catch (err) {
         console.error("Registration error:", err);
-        alert("সার্ভার সমস্যা হয়েছে: " + (err.message || "অজানা ত্রুটি"));
+        showCenterNotification('সার্ভার সমস্যা হয়েছে: ' + (err.message || 'অজানা ত্রুটি'), 'error');
     }
 };
 
@@ -1303,11 +1584,14 @@ window.getAllRepApplications = getAllRepApplications;
 window.addRepApplication = addRepApplication;
 window.approveRepApplicationById = approveRepApplicationById;
 window.rejectRepApplicationById = rejectRepApplicationById;
-window.getAllLoanApplications = getAllLoanApplications;
-window.getLoanApplicationsByMemberId = getLoanApplicationsByMemberId;
+window.getMemberLoans = getMemberLoans;
+window.getMemberLoanSummary = getMemberLoanSummary;
+window.getLoanInstallmentInfo = getLoanInstallmentInfo;
 window.addLoanApplication = addLoanApplication;
-window.updateLoanApplicationStatus = updateLoanApplicationStatus;
-window.deleteLoanApplicationById = deleteLoanApplicationById;
+window.updateLoanStatus = updateLoanStatus;
+window.deleteLoanById = deleteLoanById;
+window.getAllLoanApplications = getAllLoanApplications;
+window.getPendingLoanApplications = getPendingLoanApplications;
 window.getAllTransactions = getAllTransactions;
 window.addTransaction = addTransaction;
 window.deleteTransactionById = deleteTransactionById;
@@ -1337,6 +1621,6 @@ window.memberLogout = memberLogout;
 window.getAdminPermissions = getAdminPermissions;
 window.updateAdminPermissions = updateAdminPermissions;
 window.checkAdminPermission = checkAdminPermission;
-window.divisions = divisions; 
+window.divisions = divisions;
 
 console.log('✅ supabase-functions.js loaded (all features included)');
