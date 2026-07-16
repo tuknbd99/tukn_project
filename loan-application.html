@@ -1797,6 +1797,7 @@ function selectPaymentOption(el, method) {
     }
 }
 
+// ===== লোন পরিশোধ জমা (আপডেটেড) =====
 async function submitLoanRepayment() {
     const selected = selectedEmis.map(i => allEmis[i]).filter(e => e && !e.isDisabled);
     if (selected.length === 0) {
@@ -1845,11 +1846,14 @@ async function submitLoanRepayment() {
 
     try {
         for (const emi of selected) {
+            // ============================================
+            // total_amount সহ সব ডেটা পাঠান
+            // ============================================
             const updateData = {
                 status: 'pending_verification',
                 payment_date: new Date().toISOString(),
-                total_amount: emi.totalAmount,
-                late_fee: emi.lateFee,
+                total_amount: emi.totalAmount,  // ← এইটা গুরুত্বপূর্ণ!
+                late_fee: emi.lateFee || 0,
                 transaction_id: transactionId,
                 payment_method: methodText,
                 sender_mobile: senderMobile || null,
@@ -1861,6 +1865,9 @@ async function submitLoanRepayment() {
                 approved_at: new Date().toISOString()
             };
 
+            console.log('📤 Updating payment with data:', updateData);
+
+            // চেক করুন এই installment এর জন্য ইতিমধ্যে রেকর্ড আছে কিনা
             const { data: existing } = await sb
                 .from('loan_payments')
                 .select('id')
@@ -1869,32 +1876,47 @@ async function submitLoanRepayment() {
                 .maybeSingle();
 
             if (existing) {
-                await sb
+                const { error: updateError } = await sb
                     .from('loan_payments')
                     .update(updateData)
                     .eq('id', existing.id);
+                
+                if (updateError) {
+                    console.error('❌ Update error:', updateError);
+                    throw new Error(updateError.message);
+                }
+                console.log(`✅ Updated installment ${emi.installmentNo}`);
             } else {
-                await sb
+                // নতুন রেকর্ড তৈরি (যদি না থাকে)
+                const insertData = {
+                    loan_id: currentLoanId,
+                    installment_no: emi.installmentNo,
+                    emi_amount: emi.emiAmount,
+                    late_fee: emi.lateFee || 0,
+                    total_amount: emi.totalAmount,
+                    due_date: emi.dueDate.toISOString().split('T')[0],
+                    payment_date: new Date().toISOString(),
+                    status: 'pending_verification',
+                    transaction_id: transactionId,
+                    payment_method: methodText,
+                    sender_mobile: senderMobile || null,
+                    bank_name: bankName || null,
+                    account_number: accountNo || null,
+                    account_name: accountName || null,
+                    branch_name: branchName || null,
+                    approved_by: 'সিস্টেম (অনলাইন পেমেন্ট)',
+                    approved_at: new Date().toISOString()
+                };
+
+                const { error: insertError } = await sb
                     .from('loan_payments')
-                    .insert([{
-                        loan_id: currentLoanId,
-                        installment_no: emi.installmentNo,
-                        emi_amount: emi.emiAmount,
-                        late_fee: emi.lateFee,
-                        total_amount: emi.totalAmount,
-                        due_date: emi.dueDate.toISOString().split('T')[0],
-                        payment_date: new Date().toISOString(),
-                        status: 'pending_verification',
-                        transaction_id: transactionId,
-                        payment_method: methodText,
-                        sender_mobile: senderMobile || null,
-                        bank_name: bankName || null,
-                        account_number: accountNo || null,
-                        account_name: accountName || null,
-                        branch_name: branchName || null,
-                        approved_by: 'সিস্টেম (অনলাইন পেমেন্ট)',
-                        approved_at: new Date().toISOString()
-                    }]);
+                    .insert([insertData]);
+                
+                if (insertError) {
+                    console.error('❌ Insert error:', insertError);
+                    throw new Error(insertError.message);
+                }
+                console.log(`✅ Created installment ${emi.installmentNo}`);
             }
         }
 
@@ -1905,8 +1927,8 @@ async function submitLoanRepayment() {
         await searchLoanForRepayment();
 
     } catch(e) {
-        console.error('Payment error:', e);
-        showToast('❌ পরিশোধ ব্যর্থ!', 'error');
+        console.error('❌ Payment error:', e);
+        showToast('❌ পরিশোধ ব্যর্থ! ' + (e.message || ''), 'error');
     } finally {
         btn.innerHTML = originalText;
         btn.disabled = false;
