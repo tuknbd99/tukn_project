@@ -1408,7 +1408,7 @@ async function searchLoanForRepayment() {
 
     try {
         // ============================================
-        // ১. সদস্য খোঁজা (মোবাইল বা আইডি দিয়ে)
+        // ১. সদস্য খোঁজা
         // ============================================
         let memberQuery = sb.from('members').select('*');
         if (input.match(/^01[3-9]\d{8}$/)) {
@@ -1436,7 +1436,6 @@ async function searchLoanForRepayment() {
         console.log('📌 Member ID:', member.member_id);
         console.log('📌 Member Mobile:', member.mobile);
 
-        // পাসওয়ার্ড চেক
         if (member.password !== password) {
             showToast('পাসওয়ার্ড ভুল!', 'error');
             emiList.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;"><i class="fas fa-exclamation-circle"></i> পাসওয়ার্ড ভুল</div>';
@@ -1444,12 +1443,14 @@ async function searchLoanForRepayment() {
         }
 
         // ============================================
-        // ২. লোন খোঁজা (প্রথমে member_id দিয়ে)
+        // ২. লোন খোঁজা - নতুন লজিক
         // ============================================
         let loans = [];
         
-        // ২.১: member_id দিয়ে খোঁজা
-        const { data: idLoans, error: idError } = await sb
+        // ২.১: member_id দিয়ে exact match
+        console.log('🔍 Trying exact match with member_id:', member.member_id);
+        
+        let { data: idLoans, error: idError } = await sb
             .from('loan_applications')
             .select('*')
             .eq('member_id', member.member_id)
@@ -1458,14 +1459,39 @@ async function searchLoanForRepayment() {
 
         if (idError) {
             console.error('ID loan error:', idError);
-        } else if (idLoans && idLoans.length > 0) {
-            loans = idLoans;
-            console.log('✅ Found loans by member_id:', loans.length);
         }
 
-        // ২.২: member_id না পেলে মোবাইল দিয়ে খোঁজা
+        if (idLoans && idLoans.length > 0) {
+            loans = idLoans;
+            console.log('✅ Found loans by exact member_id:', loans.length);
+        }
+
+        // ২.২: exact match না পেলে ILIKE দিয়ে খোঁজা
         if (!loans || loans.length === 0) {
-            console.log('🔄 No loans by member_id, trying mobile...');
+            console.log('🔄 Exact match failed, trying ILIKE...');
+            
+            const last4 = member.member_id.slice(-4);
+            console.log('📌 Searching with last 4 digits:', last4);
+            
+            const { data: likeLoans, error: likeError } = await sb
+                .from('loan_applications')
+                .select('*')
+                .eq('status', 'approved')
+                .ilike('member_id', `%${last4}%`)
+                .order('approved_at', { ascending: false });
+            
+            if (likeError) {
+                console.error('ILIKE error:', likeError);
+            } else if (likeLoans && likeLoans.length > 0) {
+                loans = likeLoans;
+                console.log('✅ Found loans by ILIKE:', loans.length);
+                console.log('📊 ILIKE loans:', loans);
+            }
+        }
+
+        // ২.৩: এখনো না পেলে মোবাইল দিয়ে
+        if (!loans || loans.length === 0) {
+            console.log('🔄 No loans by ID, trying mobile...');
             const { data: mobileLoans, error: mobileError } = await sb
                 .from('loan_applications')
                 .select('*')
@@ -1481,23 +1507,30 @@ async function searchLoanForRepayment() {
             }
         }
 
-        // ২.৩: এখনো না পেলে শেষ ৪ ডিজিট দিয়ে খোঁজা
+        // ২.৪: সব শেষে সব approved লোন দেখানো (ডিবাগ)
         if (!loans || loans.length === 0) {
-            console.log('🔄 Still no loans, trying partial match...');
-            const memberLast4 = member.member_id?.slice(-4) || '';
-            
-            const { data: partialLoans, error: partialError } = await sb
+            console.log('🔄 No loans found, checking all approved loans...');
+            const { data: allLoans, error: allError } = await sb
                 .from('loan_applications')
                 .select('*')
-                .eq('status', 'approved')
-                .ilike('member_id', `%${memberLast4}%`)
-                .order('approved_at', { ascending: false });
+                .eq('status', 'approved');
             
-            if (partialError) {
-                console.error('Partial loan error:', partialError);
-            } else if (partialLoans && partialLoans.length > 0) {
-                loans = partialLoans;
-                console.log('✅ Found loans by partial match:', loans.length);
+            if (allError) {
+                console.error('All loans error:', allError);
+            } else {
+                console.log('📊 All approved loans in DB:', allLoans);
+                if (allLoans && allLoans.length > 0) {
+                    for (const loan of allLoans) {
+                        const loanLast4 = loan.member_id?.slice(-4) || '';
+                        const memberLast4 = member.member_id?.slice(-4) || '';
+                        console.log(`  🔍 Checking: ${loan.member_id} vs ${member.member_id}, Last4: ${loanLast4} vs ${memberLast4}`);
+                        if (loanLast4 === memberLast4 || loan.member_mobile === member.mobile) {
+                            loans = [loan];
+                            console.log('  ✅ MATCH FOUND!');
+                            break;
+                        }
+                    }
+                }
             }
         }
 
@@ -1513,7 +1546,6 @@ async function searchLoanForRepayment() {
             return;
         }
 
-        // প্রথম লোনটি নিন
         const loan = loans[0];
         currentLoanId = loan.id;
         console.log('📌 Selected loan ID:', currentLoanId);
@@ -1622,7 +1654,7 @@ async function searchLoanForRepayment() {
         }
 
         // ============================================
-        // ৬. লোন সারাংশ দেখান
+        // ৬. লোন সারাংশ
         // ============================================
         const totalPaid = allEmis.filter(e => e.status === 'approved' || e.status === 'paid')
             .reduce((sum, e) => sum + (e.paidAmount || e.emiAmount), 0);
@@ -1639,7 +1671,7 @@ async function searchLoanForRepayment() {
         `;
 
         // ============================================
-        // ৭. EMI তালিকা দেখান
+        // ৭. EMI তালিকা
         // ============================================
         selectedEmis = [];
         renderEmiList();
