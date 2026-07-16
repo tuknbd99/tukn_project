@@ -1381,10 +1381,7 @@ function closeSuccessModal() {
     document.getElementById('successModal').classList.remove('active');
 }
 
-// ============================================================
-// ===== লোন পরিশোধ ফিচার =====
-// ============================================================
-
+// ===== লোন পরিশোধ - লোন খুঁজুন (সম্পূর্ণ আপডেটেড) =====
 async function searchLoanForRepayment() {
     const input = document.getElementById('repaySearchInput').value.trim();
     const password = document.getElementById('repayPassword').value.trim();
@@ -1392,8 +1389,14 @@ async function searchLoanForRepayment() {
     if (!input) { showToast('আইডি বা মোবাইল নম্বর দিন!', 'error'); return; }
     if (!password) { showToast('পাসওয়ার্ড দিন!', 'error'); return; }
 
+    console.log('🔍 Searching for loan...');
+    console.log('📌 Input:', input);
+
     const sb = await initSupabase();
-    if (!sb) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
+    if (!sb) { 
+        showToast('সার্ভার সংযোগ সমস্যা!', 'error'); 
+        return; 
+    }
 
     const resultDiv = document.getElementById('repaymentResult');
     const emiList = document.getElementById('repaymentEmiList');
@@ -1404,42 +1407,120 @@ async function searchLoanForRepayment() {
     summaryDiv.classList.remove('show');
 
     try {
-        let query = sb.from('members').select('*');
+        // ============================================
+        // ১. সদস্য খোঁজা (মোবাইল বা আইডি দিয়ে)
+        // ============================================
+        let memberQuery = sb.from('members').select('*');
         if (input.match(/^01[3-9]\d{8}$/)) {
-            query = query.eq('mobile', input);
+            memberQuery = memberQuery.eq('mobile', input);
         } else {
-            query = query.eq('member_id', input);
+            memberQuery = memberQuery.eq('member_id', input);
         }
-        const { data: memberData, error: memberError } = await query;
-        if (memberError || !memberData || memberData.length === 0) {
+        
+        const { data: memberData, error: memberError } = await memberQuery;
+        
+        if (memberError) {
+            console.error('Member error:', memberError);
+            showToast('সদস্য খুঁজতে সমস্যা!', 'error');
+            return;
+        }
+
+        if (!memberData || memberData.length === 0) {
             showToast('সদস্য পাওয়া যায়নি!', 'error');
             emiList.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;"><i class="fas fa-exclamation-circle"></i> সদস্য পাওয়া যায়নি</div>';
             return;
         }
 
         const member = memberData[0];
+        console.log('✅ Member found:', member.full_name);
+        console.log('📌 Member ID:', member.member_id);
+        console.log('📌 Member Mobile:', member.mobile);
+
+        // পাসওয়ার্ড চেক
         if (member.password !== password) {
             showToast('পাসওয়ার্ড ভুল!', 'error');
             emiList.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;"><i class="fas fa-exclamation-circle"></i> পাসওয়ার্ড ভুল</div>';
             return;
         }
 
-        const { data: loans, error: loanError } = await sb
+        // ============================================
+        // ২. লোন খোঁজা (প্রথমে member_id দিয়ে)
+        // ============================================
+        let loans = [];
+        
+        // ২.১: member_id দিয়ে খোঁজা
+        const { data: idLoans, error: idError } = await sb
             .from('loan_applications')
             .select('*')
             .eq('member_id', member.member_id)
             .eq('status', 'approved')
             .order('approved_at', { ascending: false });
 
-        if (loanError || !loans || loans.length === 0) {
+        if (idError) {
+            console.error('ID loan error:', idError);
+        } else if (idLoans && idLoans.length > 0) {
+            loans = idLoans;
+            console.log('✅ Found loans by member_id:', loans.length);
+        }
+
+        // ২.২: member_id না পেলে মোবাইল দিয়ে খোঁজা
+        if (!loans || loans.length === 0) {
+            console.log('🔄 No loans by member_id, trying mobile...');
+            const { data: mobileLoans, error: mobileError } = await sb
+                .from('loan_applications')
+                .select('*')
+                .eq('member_mobile', member.mobile)
+                .eq('status', 'approved')
+                .order('approved_at', { ascending: false });
+            
+            if (mobileError) {
+                console.error('Mobile loan error:', mobileError);
+            } else if (mobileLoans && mobileLoans.length > 0) {
+                loans = mobileLoans;
+                console.log('✅ Found loans by mobile:', loans.length);
+            }
+        }
+
+        // ২.৩: এখনো না পেলে শেষ ৪ ডিজিট দিয়ে খোঁজা
+        if (!loans || loans.length === 0) {
+            console.log('🔄 Still no loans, trying partial match...');
+            const memberLast4 = member.member_id?.slice(-4) || '';
+            
+            const { data: partialLoans, error: partialError } = await sb
+                .from('loan_applications')
+                .select('*')
+                .eq('status', 'approved')
+                .ilike('member_id', `%${memberLast4}%`)
+                .order('approved_at', { ascending: false });
+            
+            if (partialError) {
+                console.error('Partial loan error:', partialError);
+            } else if (partialLoans && partialLoans.length > 0) {
+                loans = partialLoans;
+                console.log('✅ Found loans by partial match:', loans.length);
+            }
+        }
+
+        // ============================================
+        // ৩. লোন পাওয়া গেলে দেখানো
+        // ============================================
+        console.log('📊 Final loans found:', loans?.length || 0);
+        console.log('📊 Loan data:', loans);
+
+        if (!loans || loans.length === 0) {
             showToast('আপনার কোনো অনুমোদিত লোন নেই!', 'warning');
             emiList.innerHTML = '<div style="text-align:center;padding:20px;color:#f59e0b;"><i class="fas fa-info-circle"></i> কোনো অনুমোদিত লোন নেই</div>';
             return;
         }
 
+        // প্রথম লোনটি নিন
         const loan = loans[0];
         currentLoanId = loan.id;
+        console.log('📌 Selected loan ID:', currentLoanId);
 
+        // ============================================
+        // ৪. কিস্তি লোড করুন
+        // ============================================
         const { data: payments, error: payError } = await sb
             .from('loan_payments')
             .select('*')
@@ -1449,7 +1530,11 @@ async function searchLoanForRepayment() {
         if (payError) {
             console.error('Payment load error:', payError);
         }
+        console.log('📊 Payments found:', payments?.length || 0);
 
+        // ============================================
+        // ৫. EMI ডেটা প্রস্তুত করুন
+        // ============================================
         const emiAmount = loan.emi_amount || (loan.amount / loan.duration_months);
         const totalEmi = loan.duration_months || 12;
         const startDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
@@ -1536,6 +1621,9 @@ async function searchLoanForRepayment() {
             });
         }
 
+        // ============================================
+        // ৬. লোন সারাংশ দেখান
+        // ============================================
         const totalPaid = allEmis.filter(e => e.status === 'approved' || e.status === 'paid')
             .reduce((sum, e) => sum + (e.paidAmount || e.emiAmount), 0);
         const remaining = loan.amount - totalPaid;
@@ -1550,16 +1638,20 @@ async function searchLoanForRepayment() {
             <div class="info-box"><span class="label">মেয়াদ</span><span class="value">${totalEmi} মাস</span></div>
         `;
 
+        // ============================================
+        // ৭. EMI তালিকা দেখান
+        // ============================================
+        selectedEmis = [];
         renderEmiList();
 
         resultDiv.classList.add('show');
         summaryDiv.classList.add('show');
         document.getElementById('repayPayBtn').disabled = true;
 
-        showToast('✅ লোন তথ্য লোড সম্পূর্ণ!', 'success');
+        showToast(`✅ ${loan.loan_type} - লোন তথ্য লোড সম্পূর্ণ!`, 'success');
 
     } catch(e) {
-        console.error('Repayment search error:', e);
+        console.error('❌ Repayment search error:', e);
         showToast('লোন খুঁজতে সমস্যা!', 'error');
         emiList.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;"><i class="fas fa-exclamation-circle"></i> ত্রুটি: ' + e.message + '</div>';
     }
