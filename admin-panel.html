@@ -2650,7 +2650,7 @@ async function submitLoanApp() {
 }
 
 // ============================================================
-// LOAN PAYMENT FUNCTIONS
+// LOAD PENDING LOAN PAYMENTS (COMPLETE - BIGINT ID FIXED)
 // ============================================================
 async function loadPendingLoanPayments() {
     const container = document.getElementById('pendingLoanPaymentsList');
@@ -2664,6 +2664,7 @@ async function loadPendingLoanPayments() {
     }
     
     try {
+        // loan_payments টেবিল থেকে pending_verification স্ট্যাটাসের ডেটা আনুন
         const { data: payments, error } = await client
             .from('loan_payments')
             .select('*')
@@ -2699,15 +2700,18 @@ async function loadPendingLoanPayments() {
             return;
         }
         
+        // Badge আপডেট
         const badge = document.getElementById('pendingLoanPaymentBadge');
         if (badge) {
             badge.innerText = pendingLoanPaymentsData.length;
             badge.style.display = 'flex';
         }
         
+        // টেবিল HTML তৈরি করুন
         let html = `<div class="table-scroll"><table class="data-table">
             <thead><tr>
                 <th>তারিখ</th>
+                <th>সদস্য</th>
                 <th>লোন আইডি</th>
                 <th>কিস্তি #</th>
                 <th>পরিমাণ</th>
@@ -2717,12 +2721,13 @@ async function loadPendingLoanPayments() {
             </tr></thead><tbody>`;
         
         for (const payment of pendingLoanPaymentsData) {
+            // লোনের তথ্য আলাদাভাবে আনুন
             let loanInfo = {};
             if (payment.loan_id) {
                 try {
                     const { data: loanData } = await client
                         .from('loan_applications')
-                        .select('member_id, member_name, loan_type')
+                        .select('member_id, member_name, loan_type, amount')
                         .eq('id', payment.loan_id)
                         .single();
                     if (loanData) loanInfo = loanData;
@@ -2735,21 +2740,40 @@ async function loadPendingLoanPayments() {
             const lateFee = payment.late_fee || 0;
             const totalAmount = payment.total_amount || (emiAmount + lateFee);
             
+            // payment.id কে number এ কনভার্ট করুন (BIGINT এর জন্য)
+            const paymentId = Number(payment.id);
+            
+            // পেমেন্ট পদ্ধতি অনুযায়ী রঙ
+            let methodColor = 'bg-blue-100 text-blue-700';
+            if (payment.payment_method === 'bKash') methodColor = 'bg-green-100 text-green-700';
+            else if (payment.payment_method === 'Nagad') methodColor = 'bg-orange-100 text-orange-700';
+            else if (payment.payment_method === 'Rocket') methodColor = 'bg-purple-100 text-purple-700';
+            else if (payment.payment_method === 'bank') methodColor = 'bg-indigo-100 text-indigo-700';
+            else if (payment.payment_method === 'cash') methodColor = 'bg-yellow-100 text-yellow-700';
+            
             html += `
                 <tr>
-                    <td>${payment.payment_date ? new Date(payment.payment_date).toLocaleDateString('bn-BD') : '-'}</td>
+                    <td class="text-xs whitespace-nowrap">${payment.payment_date ? new Date(payment.payment_date).toLocaleDateString('bn-BD') : '-'}</td>
                     <td>
-                        <span class="text-xs font-medium">${loanInfo.member_name || payment.loan_id || '-'}</span>
+                        <span class="text-sm font-medium">${loanInfo.member_name || '-'}</span>
                         <span class="text-xs text-gray-400 block">${loanInfo.member_id || ''}</span>
                     </td>
+                    <td class="text-xs">${payment.loan_id || '-'}</td>
                     <td class="text-center font-bold">#${payment.installment_no || '-'}</td>
                     <td class="text-right font-bold text-emerald-600">${formatAmountWithText(totalAmount)}</td>
                     <td><span class="text-xs font-mono bg-gray-100 px-2 py-1 rounded">${payment.transaction_id || '-'}</span></td>
-                    <td><span class="px-2 py-1 rounded-full text-xs ${payment.payment_method === 'bKash' ? 'bg-green-100 text-green-700' : payment.payment_method === 'Nagad' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'}">${payment.payment_method || 'cash'}</span></td>
+                    <td><span class="px-2 py-1 rounded-full text-xs ${methodColor}">${payment.payment_method || 'cash'}</span></td>
                     <td>
                         <div class="flex gap-1 flex-wrap">
-                            <button onclick="approveLoanPayment('${payment.id}')" class="btn btn-success btn-xs" title="অনুমোদন"><i class="fas fa-check"></i></button>
-                            <button onclick="rejectLoanPayment('${payment.id}')" class="btn btn-danger btn-xs" title="বাতিল"><i class="fas fa-times"></i></button>
+                            <button onclick="approveLoanPayment(${paymentId})" class="btn btn-success btn-xs" title="অনুমোদন">
+                                <i class="fas fa-check"></i>
+                            </button>
+                            <button onclick="rejectLoanPayment(${paymentId})" class="btn btn-danger btn-xs" title="বাতিল">
+                                <i class="fas fa-times"></i>
+                            </button>
+                            <button onclick="viewLoanPaymentDetails(${paymentId})" class="btn btn-info btn-xs" title="বিস্তারিত">
+                                <i class="fas fa-eye"></i>
+                            </button>
                         </div>
                     </td>
                 </tr>
@@ -2759,6 +2783,8 @@ async function loadPendingLoanPayments() {
         html += `</tbody></table></div>`;
         container.innerHTML = html;
         
+        console.log('✅ পেন্ডিং লোন পেমেন্ট লোড সম্পূর্ণ:', pendingLoanPaymentsData.length);
+        
     } catch(e) {
         console.error('Load pending loan payments error:', e);
         container.innerHTML = `
@@ -2766,26 +2792,50 @@ async function loadPendingLoanPayments() {
                 <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
                 <p>❌ লোড করতে সমস্যা!</p>
                 <p class="text-sm text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="loadPendingLoanPayments()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
             </div>
         `;
     }
 }
 
+// ============================================================
+// LOAN PAYMENT FUNCTIONS (FIXED FOR BIGINT ID)
+// ============================================================
+
 async function approveLoanPayment(paymentId) {
+    // paymentId কে number এ কনভার্ট করুন (BIGINT এর জন্য)
+    const id = parseInt(paymentId);
+    
+    if (isNaN(id) || id <= 0) {
+        showToast('❌ পেমেন্ট আইডি সঠিক নয়!', 'error');
+        return;
+    }
+    
     if (!confirm('এই লোন পেমেন্টটি অনুমোদন দেবেন?')) return;
     
     const client = initSupabaseClient();
     if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
     
     try {
-        const { data: payment, error: getError } = await client
+        // প্রথমে চেক করুন পেমেন্টটি আছে কিনা
+        const { data: checkPayment, error: checkError } = await client
             .from('loan_payments')
-            .select('*')
-            .eq('id', paymentId)
-            .single();
+            .select('id, loan_id, total_amount, emi_amount')
+            .eq('id', id)  // ← এখন number ব্যবহার করছি
+            .maybeSingle();
+            
+        if (checkError) {
+            console.error('Check payment error:', checkError);
+            showToast('❌ পেমেন্ট খুঁজে পাওয়া যায়নি!', 'error');
+            return;
+        }
         
-        if (getError) throw getError;
+        if (!checkPayment) {
+            showToast('❌ এই আইডিতে কোনো পেমেন্ট নেই!', 'error');
+            return;
+        }
         
+        // পেমেন্ট স্ট্যাটাস আপডেট করুন
         const { error: updateError } = await client
             .from('loan_payments')
             .update({ 
@@ -2793,25 +2843,30 @@ async function approveLoanPayment(paymentId) {
                 approved_by: currentAdmin?.username || 'system',
                 approved_at: new Date().toISOString()
             })
-            .eq('id', paymentId);
+            .eq('id', id);  // ← number ব্যবহার করছি
         
-        if (updateError) throw updateError;
+        if (updateError) {
+            console.error('Update error:', updateError);
+            showToast('❌ অনুমোদন ব্যর্থ!', 'error');
+            return;
+        }
         
-        if (payment && payment.loan_id) {
+        // লোনের remaining_balance আপডেট করুন
+        if (checkPayment && checkPayment.loan_id) {
+            const totalAmount = checkPayment.total_amount || checkPayment.emi_amount || 0;
+            
             const { data: loan, error: loanError } = await client
                 .from('loan_applications')
                 .select('remaining_balance')
-                .eq('id', payment.loan_id)
+                .eq('id', checkPayment.loan_id)
                 .single();
             
             if (!loanError && loan) {
-                const totalAmount = payment.total_amount || payment.emi_amount || 0;
                 const newRemaining = Math.max(0, (loan.remaining_balance || 0) - totalAmount);
-                
                 await client
                     .from('loan_applications')
                     .update({ remaining_balance: newRemaining })
-                    .eq('id', payment.loan_id);
+                    .eq('id', checkPayment.loan_id);
             }
         }
         
@@ -2823,29 +2878,64 @@ async function approveLoanPayment(paymentId) {
         
     } catch(e) {
         console.error('Approve loan payment error:', e);
-        showToast('❌ অনুমোদন ব্যর্থ!', 'error');
+        showToast('❌ অনুমোদন ব্যর্থ: ' + (e.message || 'অজানা ত্রুটি'), 'error');
     }
 }
 
 async function rejectLoanPayment(paymentId) {
+    // paymentId কে number এ কনভার্ট করুন (BIGINT এর জন্য)
+    const id = parseInt(paymentId);
+    
+    if (isNaN(id) || id <= 0) {
+        showToast('❌ পেমেন্ট আইডি সঠিক নয়!', 'error');
+        return;
+    }
+    
     const reason = prompt('বাতিলের কারণ লিখুন:');
-    if (!reason) return;
+    if (reason === null) return;
+    
+    if (!reason.trim()) {
+        showToast('❌ বাতিলের কারণ লিখুন!', 'error');
+        return;
+    }
     
     const client = initSupabaseClient();
     if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
     
     try {
+        // প্রথমে চেক করুন পেমেন্টটি আছে কিনা
+        const { data: checkPayment, error: checkError } = await client
+            .from('loan_payments')
+            .select('id')
+            .eq('id', id)  // ← number ব্যবহার করছি
+            .maybeSingle();
+            
+        if (checkError) {
+            console.error('Check payment error:', checkError);
+            showToast('❌ পেমেন্ট খুঁজে পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        if (!checkPayment) {
+            showToast('❌ এই আইডিতে কোনো পেমেন্ট নেই!', 'error');
+            return;
+        }
+        
         const { error } = await client
             .from('loan_payments')
             .update({ 
                 status: 'rejected',
-                reject_reason: reason,
+                reject_reason: reason.trim(),
                 rejected_by: currentAdmin?.username || 'system',
                 rejected_at: new Date().toISOString()
             })
-            .eq('id', paymentId);
+            .eq('id', id);  // ← number ব্যবহার করছি
         
-        if (error) throw error;
+        if (error) {
+            console.error('Reject error:', error);
+            showToast('❌ বাতিল করতে সমস্যা: ' + (error.message || 'অজানা ত্রুটি'), 'error');
+            return;
+        }
         
         showToast('❌ লোন পেমেন্ট বাতিল করা হয়েছে!', 'warning');
         loadPendingLoanPayments();
@@ -2853,7 +2943,7 @@ async function rejectLoanPayment(paymentId) {
         
     } catch(e) {
         console.error('Reject loan payment error:', e);
-        showToast('❌ বাতিল করতে সমস্যা!', 'error');
+        showToast('❌ বাতিল করতে সমস্যা: ' + (e.message || 'অজানা ত্রুটি'), 'error');
     }
 }
 
@@ -4388,6 +4478,189 @@ document.addEventListener('DOMContentLoaded', function() {
         updateAllBadges();
     }, 60000);
 });
+    // ============================================================
+// LOAN PAYMENT DETAILS VIEW (ADD THIS SECTION)
+// ============================================================
+
+// পেমেন্ট বিস্তারিত দেখানোর ফাংশন
+function viewLoanPaymentDetails(paymentId) {
+    const payment = pendingLoanPaymentsData.find(p => Number(p.id) === Number(paymentId));
+    if (!payment) {
+        showToast('পেমেন্ট তথ্য পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    // লোনের তথ্য আলাদাভাবে আনুন
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    // লোডিং দেখান
+    const modal = document.getElementById('paymentSlipModal');
+    if (modal) {
+        document.getElementById('slipPrintArea').innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>';
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    }
+    
+    // লোনের তথ্য লোড করুন
+    client
+        .from('loan_applications')
+        .select('member_id, member_name, loan_type, amount')
+        .eq('id', payment.loan_id)
+        .single()
+        .then(({ data: loanData, error }) => {
+            const loanInfo = loanData || {};
+            const totalAmount = payment.total_amount || payment.emi_amount || 0;
+            const lateFee = payment.late_fee || 0;
+            
+            // পেমেন্ট পদ্ধতি অনুযায়ী রঙ
+            let methodColor = 'bg-blue-100 text-blue-700';
+            if (payment.payment_method === 'bKash') methodColor = 'bg-green-100 text-green-700';
+            else if (payment.payment_method === 'Nagad') methodColor = 'bg-orange-100 text-orange-700';
+            else if (payment.payment_method === 'Rocket') methodColor = 'bg-purple-100 text-purple-700';
+            else if (payment.payment_method === 'bank') methodColor = 'bg-indigo-100 text-indigo-700';
+            else if (payment.payment_method === 'cash') methodColor = 'bg-yellow-100 text-yellow-700';
+            
+            const details = `
+                <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg border mb-4">
+                    <h4 class="font-bold text-emerald-700 text-lg mb-3"><i class="fas fa-receipt mr-2"></i>লোন পেমেন্ট বিস্তারিত</h4>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">পেমেন্ট আইডি</span>
+                            <p class="font-semibold text-gray-800">#${payment.id}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">কিস্তি নম্বর</span>
+                            <p class="font-semibold text-gray-800">#${payment.installment_no}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">সদস্য</span>
+                            <p class="font-semibold text-gray-800">${loanInfo.member_name || '-'}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">সদস্য আইডি</span>
+                            <p class="font-semibold text-gray-800">${loanInfo.member_id || '-'}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">লোনের ধরন</span>
+                            <p class="font-semibold text-gray-800">${loanInfo.loan_type || '-'}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">লোন পরিমাণ</span>
+                            <p class="font-semibold text-emerald-600">${formatAmountWithText(loanInfo.amount)}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">কিস্তির পরিমাণ</span>
+                            <p class="font-semibold text-emerald-600">${formatAmountWithText(payment.emi_amount)}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">বিলম্ব ফি</span>
+                            <p class="font-semibold ${lateFee > 0 ? 'text-red-600' : 'text-gray-400'}">${formatAmountWithText(lateFee)}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm col-span-1 md:col-span-2">
+                            <span class="text-gray-500">মোট পরিশোধ</span>
+                            <p class="font-bold text-blue-600 text-xl">${formatAmountWithText(totalAmount)}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">পেমেন্ট মাধ্যম</span>
+                            <p><span class="px-2 py-1 rounded-full text-xs ${methodColor}">${payment.payment_method || 'cash'}</span></p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">লেনদেন আইডি</span>
+                            <p class="font-semibold font-mono text-xs break-all">${payment.transaction_id || '-'}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">তারিখ</span>
+                            <p class="font-semibold text-gray-800">${payment.payment_date ? new Date(payment.payment_date).toLocaleDateString('bn-BD') : '-'}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">স্ট্যাটাস</span>
+                            <p><span class="px-2 py-1 rounded-full text-xs bg-amber-100 text-amber-700">⏳ যাচাইকরণে</span></p>
+                        </div>
+                        ${payment.sender_mobile ? `
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">সেন্ডার মোবাইল</span>
+                            <p class="font-semibold text-gray-800">${payment.sender_mobile}</p>
+                        </div>
+                        ` : ''}
+                        ${payment.bank_name ? `
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">ব্যাংকের নাম</span>
+                            <p class="font-semibold text-gray-800">${payment.bank_name}</p>
+                        </div>
+                        ` : ''}
+                        ${payment.account_number ? `
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">একাউন্ট নম্বর</span>
+                            <p class="font-semibold text-gray-800">${payment.account_number}</p>
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+                <div class="flex gap-2 justify-center no-print">
+                    <button onclick="window.print()" class="btn btn-purple btn-sm"><i class="fas fa-print mr-1"></i> প্রিন্ট</button>
+                    <button onclick="closePaymentSlipModal()" class="btn btn-danger btn-sm"><i class="fas fa-times mr-1"></i> বন্ধ</button>
+                </div>
+            `;
+            
+            // Modal এ দেখান
+            const printArea = document.getElementById('slipPrintArea');
+            if (printArea) {
+                printArea.innerHTML = details;
+            }
+        })
+        .catch(error => {
+            console.error('Error loading loan details:', error);
+            document.getElementById('slipPrintArea').innerHTML = `
+                <div class="text-red-500 p-4 text-center">
+                    <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                    <p>❌ তথ্য লোড করতে সমস্যা!</p>
+                </div>
+            `;
+        });
+}
+
+// পেমেন্ট স্লিপ মডাল তৈরি করুন (যদি না থাকে)
+function ensurePaymentSlipModal() {
+    let modal = document.getElementById('paymentSlipModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'paymentSlipModal';
+        modal.className = 'fixed inset-0 bg-black/70 z-50 hidden items-center justify-center p-4 overflow-y-auto';
+        modal.onclick = function(e) { 
+            if(e.target === this) {
+                this.classList.add('hidden');
+                this.classList.remove('flex');
+            }
+        };
+        modal.innerHTML = `
+            <div class="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-5 relative">
+                <div class="flex justify-between items-center border-b pb-2 mb-4 sticky top-0 bg-white z-10">
+                    <h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-receipt mr-2"></i>পেমেন্ট বিস্তারিত</h3>
+                    <button onclick="document.getElementById('paymentSlipModal').classList.add('hidden'); document.getElementById('paymentSlipModal').classList.remove('flex');" class="text-gray-500 text-2xl hover:text-red-500">&times;</button>
+                </div>
+                <div id="slipPrintArea"></div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+    return modal;
+}
+
+// closePaymentSlipModal ফাংশন (যদি না থাকে)
+function closePaymentSlipModal() {
+    const modal = document.getElementById('paymentSlipModal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+// viewLoanPaymentDetails এ modal চেক যোগ করুন
+// এবং loadPendingLoanPayments এ view বাটন যোগ করা আছে
 
 // Global Exports
 window.showTab = showTab;
