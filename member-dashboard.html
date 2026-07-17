@@ -2616,10 +2616,18 @@ async function loadLoanHistory() {
                                 ${specialNote ? `<div class="col-span-2"><span class="text-blue-600 text-xs">📝 বিশেষ নোট: ${specialNote}</span></div>` : ''}
                             </div>
                         </div>
-                        <div class="flex gap-2 flex-wrap">
-                            <button onclick="viewLoanDetail('${loan.id}')" class="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600 transition">
-                                <i class="fas fa-eye mr-1"></i> কিস্তির বিবরণ
-                            </button>
+                // লোন ইতিহাসের অ্যাকশন বাটন অংশ
+                <div class="flex gap-2 flex-wrap">
+                    <button onclick="viewLoanDetail('${loan.id}')" class="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600 transition">
+                        <i class="fas fa-eye mr-1"></i> কিস্তির বিবরণ
+                    </button>
+                    ${loan.status === 'approved' ? `
+                    <button onclick="openLoanRepaymentFromHistory('${loan.id}')" class="bg-emerald-600 text-white px-3 py-1 rounded text-xs hover:bg-emerald-700 transition">
+                        <i class="fas fa-money-bill-wave mr-1"></i> পরিশোধ
+                    </button>
+                    ` : ''}
+                </div>
+                            
                         </div>
                     </div>
                 </div>`;
@@ -2632,8 +2640,54 @@ async function loadLoanHistory() {
     }
 }
 
+    // ============================================================
+// লোন ইতিহাস থেকে লোন পরিশোধ
 // ============================================================
-// viewLoanDetail
+function openLoanRepaymentFromHistory(loanId) {
+    // লোন পরিশোধ মডাল খুলুন
+    openLoanRepaymentModal();
+    
+    // মডাল খোলার পর লোন আইডি সেট করুন
+    setTimeout(() => {
+        // যদি ইতিমধ্যে লোড হয়ে থাকে, তাহলে ঠিক আছে
+        // নাহলে রিলোড করুন
+        if (window._currentLoanForRepayment && window._currentLoanForRepayment.loan.id == loanId) {
+            showToast('লোন পরিশোধ প্রস্তুত', 'success');
+        } else {
+            // রিলোড
+            loadLoanRepaymentData();
+        }
+    }, 500);
+}
+    
+    // ============================================================
+// নির্দিষ্ট কিস্তি পরিশোধ
+// ============================================================
+function paySpecificInstallment(loanId, installmentNo, emiAmount, lateFee) {
+    // লোন পরিশোধ মডাল খুলুন
+    openLoanRepaymentModal();
+    
+    // মডাল খোলার পর কিস্তি নির্বাচন করুন
+    setTimeout(() => {
+        const checkboxes = document.querySelectorAll('.repay-month-cb');
+        checkboxes.forEach(cb => {
+            if (parseInt(cb.value) === installmentNo) {
+                cb.checked = true;
+                // ইভেন্ট ট্রিগার করুন
+                cb.dispatchEvent(new Event('change'));
+            }
+        });
+        
+        // আপডেট করুন
+        updateRepaymentSummary();
+        
+        showToast(`কিস্তি #${installmentNo} প্রি-সিলেক্ট করা হয়েছে`, 'info');
+    }, 800);
+}
+    
+
+// ============================================================
+// viewLoanDetail - লোন বিস্তারিত (কিস্তির সময়সূচি সহ)
 // ============================================================
 async function viewLoanDetail(loanId) {
     if(!loanId) { showToast('লোন আইডি পাওয়া যায়নি!', 'error'); return; }
@@ -2658,25 +2712,32 @@ async function viewLoanDetail(loanId) {
             .from('loan_payments')
             .select('*')
             .eq('loan_id', loanId)
-            .order('due_date', { ascending: true });
+            .order('installment_no', { ascending: true });
         
         if(payError) {
             console.error('❌ লোন পেমেন্ট লোড error:', payError);
         }
         
+        // ============================================
+        // EMI ডেটা তৈরি
+        // ============================================
         let emiData = [];
         const emiAmount = loan.emi_amount || (loan.total_payable / loan.duration_months);
         const totalEmi = loan.duration_months || 12;
-        const startDate = loan.loan_start_date ? new Date(loan.loan_start_date) : new Date();
+        const startDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
         const installmentType = loan.installment_type || 'monthly';
         
         const paymentMap = {};
         if(payments && payments.length > 0) {
             payments.forEach(p => {
-                const key = p.installment_no || p.due_date;
-                paymentMap[key] = p;
+                paymentMap[p.installment_no] = p;
             });
         }
+        
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const gracePeriod = loan.grace_period_days || 5;
+        const lateFeePercent = loan.late_fee_percent || 0;
         
         for(let i = 1; i <= totalEmi; i++) {
             let dueDate = new Date(startDate);
@@ -2685,69 +2746,65 @@ async function viewLoanDetail(loanId) {
             } else {
                 dueDate.setMonth(startDate.getMonth() + i);
             }
-            const dueDateStr = dueDate.toISOString().split('T')[0];
-            const dueDateDisplay = dueDate.toLocaleDateString('bn-BD');
+            dueDate.setHours(0, 0, 0, 0);
+            
+            const dueDateDisplay = dueDate.toLocaleDateString('bn-BD', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
             
             let paymentStatus = 'pending';
             let paidAmount = 0;
             let lateFee = 0;
             let transactionId = '';
             let paidDate = '';
+            let approvedBy = '';
             
-            const paymentKey = String(i);
-            if(paymentMap[paymentKey]) {
-                const p = paymentMap[paymentKey];
-                paymentStatus = p.status || 'pending';
-                paidAmount = p.total_amount || p.emi_amount || 0;
-                lateFee = p.late_fee || 0;
-                transactionId = p.transaction_id || '';
-                paidDate = p.payment_date || p.created_at || '';
+            const payment = paymentMap[i];
+            if(payment) {
+                paymentStatus = payment.status || 'pending';
+                paidAmount = payment.total_amount || payment.emi_amount || 0;
+                lateFee = payment.late_fee || 0;
+                transactionId = payment.transaction_id || '';
+                paidDate = payment.payment_date || payment.created_at || '';
+                approvedBy = payment.approved_by || '';
             }
             
-            if(paymentStatus === 'pending') {
-                const today = new Date();
-                today.setHours(0,0,0,0);
-                const due = new Date(dueDateStr);
-                due.setHours(0,0,0,0);
-                const gracePeriod = loan.grace_period_days || 5;
-                const graceEndDate = new Date(due);
-                graceEndDate.setDate(due.getDate() + gracePeriod);
+            // বিলম্ব ফি গণনা (শুধুমাত্র pending কিস্তির জন্য)
+            if(paymentStatus === 'pending' || paymentStatus === 'pending_verification') {
+                const graceEndDate = new Date(dueDate);
+                graceEndDate.setDate(dueDate.getDate() + gracePeriod);
                 
                 if(today > graceEndDate) {
                     const daysOverdue = Math.floor((today - graceEndDate) / (1000 * 60 * 60 * 24));
                     const monthsOverdue = Math.ceil(daysOverdue / 30);
-                    const lateFeePercent = loan.late_fee_percent || 2;
                     lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
                 }
             }
             
-            let statusText = '', statusClass = '';
+            // স্ট্যাটাস টেক্সট
+            let statusText = '', statusClass = '', isPaid = false;
             if(paymentStatus === 'approved' || paymentStatus === 'paid') {
                 statusText = '✅ পরিশোধিত';
                 statusClass = 'emi-paid';
+                isPaid = true;
             } else if(paymentStatus === 'pending_verification') {
                 statusText = '⏳ যাচাইকরণে';
                 statusClass = 'emi-pending';
             } else if(paymentStatus === 'pending') {
-                const today = new Date();
-                today.setHours(0,0,0,0);
-                const due = new Date(dueDateStr);
-                due.setHours(0,0,0,0);
-                if(today > due) {
-                    statusText = '⚠️ বিলম্বিত';
+                if(today > dueDate) {
+                    statusText = `⚠️ বিলম্বিত (${Math.ceil((today - dueDate) / (1000*60*60*24))} দিন)`;
                     statusClass = 'emi-overdue';
                 } else {
                     statusText = '⏳ pending';
                     statusClass = 'emi-pending';
                 }
-            } else {
-                statusText = '⏳ pending';
-                statusClass = 'emi-pending';
             }
             
             emiData.push({
                 installmentNo: i,
-                dueDate: dueDateStr,
+                dueDate: dueDate,
                 dueDateDisplay: dueDateDisplay,
                 emiAmount: emiAmount,
                 lateFee: lateFee,
@@ -2757,10 +2814,16 @@ async function viewLoanDetail(loanId) {
                 statusClass: statusClass,
                 paidAmount: paidAmount,
                 transactionId: transactionId,
-                paidDate: paidDate
+                paidDate: paidDate,
+                approvedBy: approvedBy,
+                isPaid: isPaid,
+                isPending: paymentStatus === 'pending' || paymentStatus === 'pending_verification'
             });
         }
         
+        // ============================================
+        // মডাল HTML তৈরি
+        // ============================================
         const modal = document.getElementById('loanDetailModal');
         const content = document.getElementById('loanDetailContent');
         
@@ -2777,26 +2840,54 @@ async function viewLoanDetail(loanId) {
         };
         
         let emiRows = '';
-        emiData.forEach(emi => {
+        emiData.forEach((emi, index) => {
             const totalAmount = (emi.totalAmount || 0).toFixed(2);
             const emiAmount = (emi.emiAmount || 0).toFixed(2);
             const lateFee = (emi.lateFee || 0).toFixed(2);
+            
+            // পরিশোধ বাটন - শুধুমাত্র pending কিস্তির জন্য
+            let payButton = '';
+            if (emi.isPending && !emi.isPaid) {
+                payButton = `
+                    <button onclick="paySpecificInstallment('${loan.id}', ${emi.installmentNo}, ${emi.emiAmount}, ${emi.lateFee})" 
+                            class="bg-emerald-600 text-white px-2 py-1 rounded text-xs hover:bg-emerald-700 transition">
+                        💳 পরিশোধ
+                    </button>
+                `;
+            } else if (emi.isPaid) {
+                payButton = `<span class="text-green-600 text-xs font-bold">✅ পরিশোধিত</span>`;
+            } else {
+                payButton = `<span class="text-gray-400 text-xs">⏳ অপেক্ষমান</span>`;
+            }
+            
+            // ট্রানজেকশন আইডি দেখান
+            let txIdHtml = emi.transactionId ? `<span class="text-xs text-gray-400 font-mono">${emi.transactionId}</span>` : '-';
+            let approvedByHtml = emi.approvedBy ? `<span class="text-xs text-gray-500">${emi.approvedBy}</span>` : '-';
+            
             emiRows += `
-                <tr>
-                    <td>${emi.installmentNo}</td>
-                    <td>${emi.dueDateDisplay}</td>
-                    <td>${emiAmount} টাকা</td>
-                    <td>${lateFee} টাকা</td>
-                    <td>${totalAmount} টাকা</td>
-                    <td class="${emi.statusClass}">${emi.statusText}</td>
-                    ${emi.paidDate ? `<td>${new Date(emi.paidDate).toLocaleDateString('bn-BD')}</td>` : '<td>-</td>'}
+                <tr class="${emi.isPaid ? 'bg-green-50' : emi.status === 'pending_verification' ? 'bg-yellow-50' : ''}">
+                    <td class="text-center font-semibold">${emi.installmentNo}</td>
+                    <td class="text-center">${emi.dueDateDisplay}</td>
+                    <td class="text-center font-medium text-emerald-600">${emiAmount} টাকা</td>
+                    <td class="text-center ${emi.lateFee > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}">${lateFee} টাকা</td>
+                    <td class="text-center font-bold text-blue-600">${totalAmount} টাকা</td>
+                    <td class="text-center"><span class="px-2 py-1 rounded-full text-xs ${emi.statusClass}">${emi.statusText}</span></td>
+                    <td class="text-center text-xs">${emi.paidDate ? new Date(emi.paidDate).toLocaleDateString('bn-BD') : '-'}</td>
+                    <td class="text-center text-xs">${txIdHtml}</td>
+                    <td class="text-center text-xs">${approvedByHtml}</td>
+                    <td class="text-center">${payButton}</td>
                 </tr>
             `;
         });
         
+        // মোট সারাংশ
+        const totalPaid = emiData.filter(e => e.isPaid).reduce((sum, e) => sum + e.emiAmount, 0);
+        const totalLateFeePaid = emiData.filter(e => e.isPaid).reduce((sum, e) => sum + e.lateFee, 0);
+        const remainingBalance = loan.amount - totalPaid;
+        
         content.innerHTML = `
             <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg mb-4">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
                     <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
                         <span class="font-bold text-gray-700 text-sm">লোনের ধরন</span>
                         <span class="font-semibold text-emerald-700 text-sm">${loan.loan_type || '-'}</span>
@@ -2821,6 +2912,18 @@ async function viewLoanDetail(loanId) {
                         <span class="font-bold text-gray-700 text-sm">স্ট্যাটাস</span>
                         <span class="font-semibold ${statusColorMap[loan.status] || 'text-gray-600'} text-sm">${statusMap[loan.status] || loan.status}</span>
                     </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">পরিশোধিত</span>
+                        <span class="font-semibold text-green-600 text-sm">${totalPaid.toFixed(2)} টাকা</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">বাকি ব্যালেন্স</span>
+                        <span class="font-semibold text-red-600 text-sm">${remainingBalance.toFixed(2)} টাকা</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">মোট বিলম্ব ফি</span>
+                        <span class="font-semibold text-orange-600 text-sm">${totalLateFeePaid.toFixed(2)} টাকা</span>
+                    </div>
                     ${loan.application_no ? `
                     <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
                         <span class="font-bold text-gray-700 text-sm">🔢 সিরিয়াল নম্বর</span>
@@ -2840,7 +2943,7 @@ async function viewLoanDetail(loanId) {
                     </div>
                     ` : ''}
                     ${loan.reject_reason ? `
-                    <div class="col-span-1 md:col-span-2 flex justify-between items-center border-b border-dashed border-red-200 py-2">
+                    <div class="col-span-1 md:col-span-2 flex justify-between items-center border-b border-dashed border-red-200 py-2 bg-red-50/50 px-2 rounded">
                         <span class="font-bold text-red-600 text-sm">❌ বাতিলের কারণ</span>
                         <span class="font-semibold text-red-700 text-sm">${loan.reject_reason}</span>
                     </div>
@@ -2854,18 +2957,24 @@ async function viewLoanDetail(loanId) {
                 </div>
             </div>
             
-            <h4 class="font-bold text-emerald-700 mb-3">📅 কিস্তির সময়সূচি (${emiData.length} টি কিস্তি)</h4>
-            <div class="overflow-x-auto max-h-96 overflow-y-auto">
-                <table class="emi-table">
+            <div class="flex justify-between items-center mb-3">
+                <h4 class="font-bold text-emerald-700">📅 কিস্তির সময়সূচি (${emiData.length} টি কিস্তি)</h4>
+                <span class="text-xs text-gray-500">🟢 পরিশোধিত | 🟡 যাচাইকরণে | 🔴 বিলম্বিত</span>
+            </div>
+            <div class="overflow-x-auto max-h-96 overflow-y-auto border rounded-lg">
+                <table class="emi-table min-w-[800px]">
                     <thead>
                         <tr>
                             <th>কিস্তি</th>
                             <th>নির্ধারিত তারিখ</th>
-                            <th>কিস্তির পরিমাণ</th>
+                            <th>কিস্তি</th>
                             <th>বিলম্ব ফি</th>
                             <th>মোট</th>
                             <th>স্ট্যাটাস</th>
                             <th>পরিশোধের তারিখ</th>
+                            <th>লেনদেন আইডি</th>
+                            <th>অনুমোদনকারী</th>
+                            <th>অ্যাকশন</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -2874,12 +2983,15 @@ async function viewLoanDetail(loanId) {
                 </table>
             </div>
             
-            <div class="mt-4 text-right no-print">
-                <button onclick="printLoanDetail()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm mr-2">
+            <div class="mt-4 flex flex-wrap gap-2 no-print">
+                <button onclick="window.print()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
                     <i class="fas fa-print mr-1"></i> প্রিন্ট
                 </button>
                 <button onclick="downloadLoanDetailPDF()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition text-sm">
                     <i class="fas fa-file-pdf mr-1"></i> পিডিএফ
+                </button>
+                <button onclick="closeLoanDetailModal()" class="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600 transition text-sm">
+                    <i class="fas fa-times mr-1"></i> বন্ধ
                 </button>
             </div>
         `;
