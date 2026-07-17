@@ -4609,24 +4609,32 @@ async function loadLoanRepaymentData() {
         
         const loan = loans[0];
         
+        // ============================================
+        // লোন পেমেন্ট লোড করুন
+        // ============================================
         let loanPayments = [];
         try {
             const { data: payments, error: payError } = await client
                 .from('loan_payments')
                 .select('*')
                 .eq('loan_id', loan.id)
-                .order('due_date', { ascending: true });
+                .order('installment_no', { ascending: true });
             
             if (!payError && payments) {
                 loanPayments = payments;
+                console.log('✅ লোন পেমেন্ট পাওয়া গেছে:', loanPayments.length);
             }
         } catch(e) {
             console.log('loan_payments টেবিল নেই বা ডাটা নেই');
         }
         
+        // ============================================
+        // লোনের তথ্য দেখান
+        // ============================================
         document.getElementById('repayLoanType').innerHTML = loan.loan_type || 'সাধারণ লোন';
         document.getElementById('repayTotalLoan').innerHTML = Number(loan.amount).toLocaleString() + ' টাকা';
         
+        // পরিশোধিত পরিমাণ গণনা
         const paidAmount = loanPayments
             .filter(p => p.status === 'approved' || p.status === 'paid')
             .reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0);
@@ -4635,61 +4643,109 @@ async function loadLoanRepaymentData() {
         
         document.getElementById('repayPaidAmount').innerHTML = paidAmount.toLocaleString() + ' টাকা';
         document.getElementById('repayRemainingBalance').innerHTML = remainingBalance.toLocaleString() + ' টাকা';
-        document.getElementById('repayDuration').innerHTML = (loan.duration_months || loan.duration || 0) + ' মাস';
+        document.getElementById('repayDuration').innerHTML = (loan.duration_months || 0) + ' মাস';
         document.getElementById('repayEmiAmount').innerHTML = (loan.emi_amount || 0).toFixed(2) + ' টাকা';
         document.getElementById('repayLateFeePercent').innerHTML = (loan.late_fee_percent || 0) + '%';
-        document.getElementById('repayStartDate').innerHTML = loan.approved_at ? new Date(loan.approved_at).toLocaleDateString('bn-BD') : '-';
         
+        // লোন শুরুর তারিখ (approved_at থেকে)
+        const startDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
+        document.getElementById('repayStartDate').innerHTML = startDate.toLocaleDateString('bn-BD', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+        
+        // ============================================
+        // কিস্তি তৈরি করুন
+        // ============================================
         const container = document.getElementById('repayMonthsContainer');
         container.innerHTML = '';
         
         const totalEmi = loan.duration_months || 12;
-        const emiAmount = loan.emi_amount || 0;
-        const startDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
+        const emiAmount = loan.emi_amount || (loan.amount / totalEmi);
         const lateFeePercent = loan.late_fee_percent || 0;
         const gracePeriod = loan.grace_period_days || 5;
         const today = new Date();
-        today.setHours(0,0,0,0);
+        today.setHours(0, 0, 0, 0);
         
-        const paidInstallments = new Set();
-        loanPayments.forEach(p => {
-            if (p.status === 'approved' || p.status === 'paid') {
-                paidInstallments.add(p.installment_no);
-            }
-        });
+        // পেমেন্ট ম্যাপ তৈরি
+        const paymentMap = {};
+        if (loanPayments) {
+            loanPayments.forEach(p => {
+                paymentMap[p.installment_no] = p;
+            });
+        }
         
         for (let i = 1; i <= totalEmi; i++) {
+            // কিস্তির নির্ধারিত তারিখ (প্রতি মাসে ১ মাস যোগ)
             let dueDate = new Date(startDate);
             dueDate.setMonth(startDate.getMonth() + i);
-            dueDate.setHours(0,0,0,0);
+            dueDate.setHours(0, 0, 0, 0);
             
-            const dueDateStr = dueDate.toLocaleDateString('bn-BD');
-            const isPaid = paidInstallments.has(i);
-            const isOverdue = !isPaid && today > dueDate;
+            const dueDateStr = dueDate.toLocaleDateString('bn-BD', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
             
+            // এই কিস্তির পেমেন্ট স্ট্যাটাস
+            const payment = paymentMap[i];
+            let status = 'pending';
+            let paidAmount = 0;
             let lateFee = 0;
-            if (!isPaid && today > dueDate) {
-                const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
-                const monthsOverdue = Math.ceil(daysOverdue / 30);
-                lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
+            let transactionId = '';
+            let paidDate = '';
+            
+            if (payment) {
+                status = payment.status || 'pending';
+                paidAmount = payment.total_amount || payment.emi_amount || 0;
+                lateFee = payment.late_fee || 0;
+                transactionId = payment.transaction_id || '';
+                paidDate = payment.payment_date || payment.created_at || '';
+            }
+            
+            // বিলম্ব ফি গণনা (শুধুমাত্র pending কিস্তির জন্য)
+            if (status === 'pending' || status === 'pending_verification') {
+                const graceEndDate = new Date(dueDate);
+                graceEndDate.setDate(dueDate.getDate() + gracePeriod);
+                
+                if (today > graceEndDate) {
+                    const daysOverdue = Math.floor((today - graceEndDate) / (1000 * 60 * 60 * 24));
+                    const monthsOverdue = Math.ceil(daysOverdue / 30);
+                    // প্রতি মাসে lateFeePercent% বিলম্ব ফি
+                    lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
+                }
             }
             
             const totalWithLateFee = emiAmount + lateFee;
             
+            // স্ট্যাটাস টেক্সট
             let statusText = '';
             let statusColor = '';
-            if (isPaid) {
+            let isDisabled = false;
+            
+            if (status === 'approved' || status === 'paid') {
                 statusText = '✅ পরিশোধিত';
                 statusColor = 'text-green-600 bg-green-50';
-            } else if (isOverdue) {
-                statusText = '⚠️ বিলম্বিত';
-                statusColor = 'text-red-600 bg-red-50';
-            } else {
-                statusText = '⏳ pending';
-                statusColor = 'text-amber-600 bg-amber-50';
+                isDisabled = true;
+            } else if (status === 'pending_verification') {
+                statusText = '⏳ যাচাইকরণে';
+                statusColor = 'text-blue-600 bg-blue-50';
+                isDisabled = true;
+            } else if (status === 'pending') {
+                if (today > dueDate) {
+                    statusText = `⚠️ বিলম্বিত (${Math.ceil((today - dueDate) / (1000*60*60*24))} দিন)`;
+                    statusColor = 'text-red-600 bg-red-50';
+                } else {
+                    statusText = '⏳ pending';
+                    statusColor = 'text-amber-600 bg-amber-50';
+                }
             }
             
-            const isDisabled = isPaid || remainingBalance <= 0;
+            // বাকি ব্যালেন্স শেষ হলে ডিজেবল
+            if (remainingBalance <= 0) {
+                isDisabled = true;
+            }
             
             container.innerHTML += `
                 <label class="flex items-center gap-2 p-2 border rounded-lg hover:bg-gray-50 cursor-pointer transition ${isDisabled ? 'opacity-50 cursor-not-allowed bg-gray-100' : ''}">
@@ -4707,14 +4763,19 @@ async function loadLoanRepaymentData() {
                             <span class="text-xs px-2 py-0.5 rounded-full ${statusColor}">${statusText}</span>
                         </div>
                         <div class="flex justify-between text-xs text-gray-500">
-                            <span>নির্ধারিত: ${dueDateStr}</span>
-                            <span>${emiAmount.toFixed(2)} টাকা ${lateFee > 0 ? '+ ' + lateFee.toFixed(2) + ' টাকা (বিলম্ব ফি)' : ''}</span>
+                            <span>📅 নির্ধারিত: ${dueDateStr}</span>
+                            <span class="font-medium">${emiAmount.toFixed(0)} টাকা ${lateFee > 0 ? ' + ' + lateFee.toFixed(0) + ' টাকা (বিলম্ব ফি)' : ''}</span>
                         </div>
+                        ${payment && payment.transaction_id ? `<div class="text-xs text-gray-400 mt-1">📝 লেনদেন ID: ${payment.transaction_id}</div>` : ''}
+                        ${payment && payment.approved_by ? `<div class="text-xs text-gray-400">✅ অনুমোদনকারী: ${payment.approved_by}</div>` : ''}
                     </div>
                 </label>
             `;
         }
         
+        // ============================================
+        // UI আপডেট
+        // ============================================
         document.getElementById('loanRepaymentLoading').classList.add('hidden');
         document.getElementById('loanRepaymentInfo').classList.remove('hidden');
         
@@ -4722,10 +4783,22 @@ async function loadLoanRepaymentData() {
             loan: loan,
             loanPayments: loanPayments,
             remainingBalance: remainingBalance,
-            emiAmount: emiAmount
+            emiAmount: emiAmount,
+            startDate: startDate,
+            totalEmi: totalEmi,
+            lateFeePercent: lateFeePercent,
+            gracePeriod: gracePeriod
         };
         
         updateRepaymentSummary();
+        
+        console.log('✅ লোন পরিশোধ ডাটা লোড সম্পূর্ণ:', {
+            loanId: loan.id,
+            totalEmi: totalEmi,
+            emiAmount: emiAmount,
+            remainingBalance: remainingBalance,
+            payments: loanPayments.length
+        });
         
     } catch(e) {
         console.error('লোন ডাটা লোড error:', e);
@@ -4833,10 +4906,12 @@ async function submitLoanRepayment() {
         selectedInstallments.push(installmentNo);
     });
     
+    // বিলম্ব ফি দেখান
+    let lateFeeMsg = totalLateFee > 0 ? `\n⚠️ বিলম্ব ফি: ${totalLateFee.toFixed(2)} টাকা` : '';
+    
     const confirmMsg = `আপনি কি ${selectedInstallments.length}টি কিস্তি পরিশোধ করতে চান?\n\n` +
         `📊 কিস্তি নম্বর: ${selectedInstallments.join(', ')}\n` +
-        `💰 মূল কিস্তি: ${totalEmi.toFixed(2)} টাকা\n` +
-        `⚠️ বিলম্ব ফি: ${totalLateFee.toFixed(2)} টাকা\n` +
+        `💰 মূল কিস্তি: ${totalEmi.toFixed(2)} টাকা${lateFeeMsg}\n` +
         `💳 মোট পরিশোধ: ${totalAmount.toFixed(2)} টাকা\n` +
         `📉 পরিশোধের পর বাকি থাকবে: ${(loanData.remainingBalance - totalAmount).toFixed(2)} টাকা\n\n` +
         `এই পরিশোধ কি আপনি নিশ্চিত করতে চান?`;
@@ -4859,21 +4934,31 @@ async function submitLoanRepayment() {
     try {
         for (const installmentNo of selectedInstallments) {
             const emiAmount = loanData.emiAmount || 0;
-            const dueDate = new Date(loanData.loan.approved_at || Date.now());
-            dueDate.setMonth(dueDate.getMonth() + installmentNo);
             
+            // নির্ধারিত তারিখ
+            const startDate = loanData.startDate || new Date(loanData.loan.approved_at || Date.now());
+            const dueDate = new Date(startDate);
+            dueDate.setMonth(startDate.getMonth() + installmentNo);
+            dueDate.setHours(0, 0, 0, 0);
+            
+            // বিলম্ব ফি গণনা
             const today = new Date();
-            today.setHours(0,0,0,0);
+            today.setHours(0, 0, 0, 0);
             let lateFee = 0;
-            if (today > dueDate) {
-                const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+            const gracePeriod = loanData.gracePeriod || 5;
+            const graceEndDate = new Date(dueDate);
+            graceEndDate.setDate(dueDate.getDate() + gracePeriod);
+            
+            if (today > graceEndDate) {
+                const daysOverdue = Math.floor((today - graceEndDate) / (1000 * 60 * 60 * 24));
                 const monthsOverdue = Math.ceil(daysOverdue / 30);
-                const lateFeePercent = loanData.loan.late_fee_percent || 0;
+                const lateFeePercent = loanData.lateFeePercent || 0;
                 lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
             }
             
             const totalAmountPerInstallment = emiAmount + lateFee;
             
+            // চেক করুন এই installment এর জন্য ইতিমধ্যে রেকর্ড আছে কিনা
             const { data: existing } = await client
                 .from('loan_payments')
                 .select('id')
@@ -4885,10 +4970,12 @@ async function submitLoanRepayment() {
                 await client
                     .from('loan_payments')
                     .update({
-                        status: 'approved',
+                        status: 'pending_verification',
                         payment_date: new Date().toISOString(),
                         total_amount: totalAmountPerInstallment,
                         late_fee: lateFee,
+                        transaction_id: `ONLINE-${Date.now()}-${installmentNo}`,
+                        payment_method: 'অনলাইন',
                         approved_by: currentUser.name || 'সিস্টেম (অনলাইন পেমেন্ট)',
                         approved_at: new Date().toISOString()
                     })
@@ -4904,25 +4991,29 @@ async function submitLoanRepayment() {
                         total_amount: totalAmountPerInstallment,
                         due_date: dueDate.toISOString().split('T')[0],
                         payment_date: new Date().toISOString(),
-                        status: 'approved',
+                        status: 'pending_verification',
+                        transaction_id: `ONLINE-${Date.now()}-${installmentNo}`,
+                        payment_method: 'অনলাইন',
                         approved_by: currentUser.name || 'সিস্টেম (অনলাইন পেমেন্ট)',
                         approved_at: new Date().toISOString()
                     }]);
             }
         }
         
-        const newRemainingBalance = loanData.remainingBalance - totalAmount;
+        // remaining_balance আপডেট
+        const newRemaining = loanData.remainingBalance - totalAmount;
         await client
             .from('loan_applications')
-            .update({ remaining_balance: newRemainingBalance })
+            .update({ remaining_balance: newRemaining })
             .eq('id', loanData.loan.id);
         
-        showToast(`✅ ${selectedInstallments.length}টি কিস্তি সফলভাবে পরিশোধ করা হয়েছে!\nমোট পরিশোধ: ${totalAmount.toFixed(2)} টাকা`, 'success');
+        showToast(`✅ ${selectedInstallments.length}টি কিস্তি পরিশোধের অনুরোধ জমা হয়েছে!\nমোট পরিশোধ: ${totalAmount.toFixed(2)} টাকা`, 'success');
         
         closeLoanRepaymentModal();
         await loadLoanHistory();
         await loadUserFunds();
         
+        // পেজ রিফ্রেশ না করেই ডাটা আপডেট
         setTimeout(() => {
             openLoanRepaymentModal();
         }, 1000);
