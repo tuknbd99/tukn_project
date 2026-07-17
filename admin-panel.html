@@ -1728,7 +1728,7 @@ function quickStatement() {
 }
 
 // ============================================================
-// DASHBOARD FUNCTIONS
+// DASHBOARD FUNCTIONS (UPDATED)
 // ============================================================
 async function loadRealDashboard() {
     try {
@@ -1741,22 +1741,95 @@ async function loadRealDashboard() {
         const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
         const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
         
+        // ============================================
+        // 1. মাসিক সঞ্চয় সংগ্রহ
+        // ============================================
         const { data: monthlyPayments } = await client.from('payments').select('amount').eq('status', 'approved').gte('submitted_at', firstDay).lte('submitted_at', lastDay);
         let monthlyCollection = 0;
         if (monthlyPayments && monthlyPayments.length > 0) monthlyCollection = monthlyPayments.reduce((s, p) => s + (p.amount || 0), 0);
         
-        const { data: loans } = await client.from('loan_applications').select('amount').eq('status', 'approved');
-        let totalLoanGiven = 0;
-        if (loans && loans.length > 0) totalLoanGiven = loans.reduce((s, l) => s + (l.amount || 0), 0);
-        
-        const { data: withdrawals } = await client.from('withdrawals').select('amount').eq('status', 'approved');
-        let totalWithdrawal = 0;
-        if (withdrawals && withdrawals.length > 0) totalWithdrawal = withdrawals.reduce((s, w) => s + (w.amount || 0), 0);
-        
+        // ============================================
+        // 2. মোট সঞ্চয় (সব অনুমোদিত পেমেন্ট)
+        // ============================================
         const { data: allPayments } = await client.from('payments').select('amount').eq('status', 'approved');
         let totalSavings = 0;
         if (allPayments && allPayments.length > 0) totalSavings = allPayments.reduce((s, p) => s + (p.amount || 0), 0);
         
+        // ============================================
+        // 3. মোট রেফারেল বোনাস
+        // ============================================
+        const { data: allMembers } = await client.from('members').select('referral_bonus');
+        let totalReferralBonus = 0;
+        if (allMembers && allMembers.length > 0) totalReferralBonus = allMembers.reduce((s, m) => s + (m.referral_bonus || 0), 0);
+        
+        // ============================================
+        // 4. মোট লভ্যাংশ (সঞ্চয় + বিনিয়োগ + রেফারেল)
+        // ============================================
+        let totalProfitSavings = 0, totalProfitInvestment = 0, totalProfitReferral = 0;
+        if (allMembers && allMembers.length > 0) {
+            totalProfitSavings = allMembers.reduce((s, m) => s + (m.profit_balance_savings || 0), 0);
+            totalProfitInvestment = allMembers.reduce((s, m) => s + (m.profit_balance_investment || 0), 0);
+            totalProfitReferral = allMembers.reduce((s, m) => s + (m.profit_balance_referral || 0), 0);
+        }
+        const totalProfit = totalProfitSavings + totalProfitInvestment + totalProfitReferral;
+        
+        // ============================================
+        // 5. মোট লোন আদায় (অনুমোদিত লোন পেমেন্ট)
+        // ============================================
+        const { data: loanPayments } = await client.from('loan_payments').select('total_amount, emi_amount').eq('status', 'approved');
+        let totalLoanCollected = 0;
+        if (loanPayments && loanPayments.length > 0) {
+            totalLoanCollected = loanPayments.reduce((s, p) => s + (p.total_amount || p.emi_amount || 0), 0);
+        }
+        
+        // ============================================
+        // 6. মোট কল্যাণ তহবিল
+        // ============================================
+        const { data: welfareData } = await client.from('welfare_fund').select('total');
+        let totalWelfare = 0;
+        if (welfareData && welfareData.length > 0) {
+            totalWelfare = welfareData.reduce((s, w) => s + (w.total || 0), 0);
+        }
+        
+        // ============================================
+        // 7. মোট তহবিল (সঞ্চয় + রেফারেল বোনাস + লভ্যাংশ + লোন আদায় + কল্যাণ তহবিল)
+        // ============================================
+        const totalFund = totalSavings + totalReferralBonus + totalProfit + totalLoanCollected + totalWelfare;
+        
+        // ============================================
+        // 8. মোট উত্তোলন (সঞ্চয় উত্তোলন + রেফারেল বোনাস উত্তোলন + লভ্যাংশ উত্তোলন + লোন প্রদান)
+        // ============================================
+        // সঞ্চয় উত্তোলন
+        const { data: savingsWithdrawals } = await client.from('withdrawals').select('amount').eq('status', 'approved').eq('type', 'মূলধন উত্তোলন');
+        let totalSavingsWithdrawal = 0;
+        if (savingsWithdrawals && savingsWithdrawals.length > 0) totalSavingsWithdrawal = savingsWithdrawals.reduce((s, w) => s + (w.amount || 0), 0);
+        
+        // রেফারেল বোনাস উত্তোলন
+        const { data: bonusWithdrawals } = await client.from('withdrawals').select('amount').eq('status', 'approved').eq('type', 'রেফারেল বোনাস উত্তোলন');
+        let totalBonusWithdrawal = 0;
+        if (bonusWithdrawals && bonusWithdrawals.length > 0) totalBonusWithdrawal = bonusWithdrawals.reduce((s, w) => s + (w.amount || 0), 0);
+        
+        // লভ্যাংশ উত্তোলন (সঞ্চয় লভ্যাংশ + বিনিয়োগ লভ্যাংশ + রেফারেল লভ্যাংশ)
+        const { data: profitWithdrawals } = await client.from('withdrawals').select('amount').eq('status', 'approved').in('type', ['সঞ্চয় লভ্যাংশ উত্তোলন', 'বিনিয়োগ লভ্যাংশ উত্তোলন', 'রেফারেল লভ্যাংশ উত্তোলন']);
+        let totalProfitWithdrawal = 0;
+        if (profitWithdrawals && profitWithdrawals.length > 0) totalProfitWithdrawal = profitWithdrawals.reduce((s, w) => s + (w.amount || 0), 0);
+        
+        // মোট লোন প্রদান (অনুমোদিত লোন)
+        const { data: loansGiven } = await client.from('loan_applications').select('amount').eq('status', 'approved');
+        let totalLoanGiven = 0;
+        if (loansGiven && loansGiven.length > 0) totalLoanGiven = loansGiven.reduce((s, l) => s + (l.amount || 0), 0);
+        
+        // মোট উত্তোলন
+        const totalWithdrawal = totalSavingsWithdrawal + totalBonusWithdrawal + totalProfitWithdrawal + totalLoanGiven;
+        
+        // ============================================
+        // 9. নীট ব্যালেন্স (মোট তহবিল - মোট উত্তোলন)
+        // ============================================
+        const netBalance = totalFund - totalWithdrawal;
+        
+        // ============================================
+        // 10. অন্যান্য পরিসংখ্যান
+        // ============================================
         const { count: totalMembers } = await client.from('members').select('*', { count: 'exact', head: true });
         const { count: pendingMembers } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
         const { count: pendingPayments } = await client.from('payments').select('*', { count: 'exact', head: true }).eq('status', 'pending');
@@ -1764,30 +1837,136 @@ async function loadRealDashboard() {
         const { count: pendingLoans } = await client.from('loan_applications').select('*', { count: 'exact', head: true }).eq('status', 'pending');
         const { count: pendingLoanPayments } = await client.from('loan_payments').select('*', { count: 'exact', head: true }).eq('status', 'pending_verification');
         
+        // ============================================
+        // 11. UI আপডেট - ড্যাশবোর্ড কার্ড
+        // ============================================
+        
+        // সারি ১: আর্থিক সারাংশ কার্ড (৬টি কার্ড)
         document.getElementById('dashMonthlyCollection').innerHTML = formatAmountWithText(monthlyCollection);
         document.getElementById('dashTotalLoanGiven').innerHTML = formatAmountWithText(totalLoanGiven);
         document.getElementById('dashTotalWithdrawal').innerHTML = formatAmountWithText(totalWithdrawal);
-        document.getElementById('dashCurrentFund').innerHTML = formatAmountWithText(Math.max(0, totalSavings - totalWithdrawal - totalLoanGiven));
-        document.getElementById('dashWelfareFund').innerHTML = formatAmountWithText(0);
+        document.getElementById('dashCurrentFund').innerHTML = formatAmountWithText(totalFund);
+        document.getElementById('dashWelfareFund').innerHTML = formatAmountWithText(totalWelfare);
         
+        // সদস্য পরিসংখ্যান
         document.getElementById('statActiveMembers').innerText = (totalMembers || 0) - (pendingMembers || 0);
         document.getElementById('statPendingMembers2').innerText = pendingMembers || 0;
         document.getElementById('statInactiveMembers').innerText = 0;
         document.getElementById('statTotalMembers2').innerText = totalMembers || 0;
         
-        // Recent members
+        // ============================================
+        // 12. নতুন: সম্পূর্ণ আর্থিক সারাংশ কার্ড (নীট ব্যালেন্স সহ)
+        // ============================================
+        // এই কার্ডগুলো ড্যাশবোর্ডের উপরে দেখানোর জন্য
+        const dashboardCardsHTML = `
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
+                <div class="stat-card green">
+                    <div class="flex items-start justify-between">
+                        <div><div class="icon"><i class="fas fa-piggy-bank"></i></div></div>
+                        <span class="text-xs text-gray-400">মোট</span>
+                    </div>
+                    <div class="value text-emerald-600">${formatAmountWithText(totalSavings)}</div>
+                    <div class="label">📊 মোট সঞ্চয়</div>
+                </div>
+                <div class="stat-card orange">
+                    <div class="flex items-start justify-between">
+                        <div><div class="icon"><i class="fas fa-gift"></i></div></div>
+                        <span class="text-xs text-gray-400">মোট</span>
+                    </div>
+                    <div class="value text-amber-600">${formatAmountWithText(totalReferralBonus)}</div>
+                    <div class="label">🎁 রেফারেল বোনাস</div>
+                </div>
+                <div class="stat-card purple">
+                    <div class="flex items-start justify-between">
+                        <div><div class="icon"><i class="fas fa-chart-line"></i></div></div>
+                        <span class="text-xs text-gray-400">মোট</span>
+                    </div>
+                    <div class="value text-purple-600">${formatAmountWithText(totalProfit)}</div>
+                    <div class="label">📈 মোট লভ্যাংশ</div>
+                </div>
+                <div class="stat-card blue">
+                    <div class="flex items-start justify-between">
+                        <div><div class="icon"><i class="fas fa-hand-holding-usd"></i></div></div>
+                        <span class="text-xs text-gray-400">মোট</span>
+                    </div>
+                    <div class="value text-blue-600">${formatAmountWithText(totalLoanCollected)}</div>
+                    <div class="label">💰 লোন আদায়</div>
+                </div>
+                <div class="stat-card teal">
+                    <div class="flex items-start justify-between">
+                        <div><div class="icon"><i class="fas fa-heart"></i></div></div>
+                        <span class="text-xs text-gray-400">মোট</span>
+                    </div>
+                    <div class="value text-teal-600">${formatAmountWithText(totalWelfare)}</div>
+                    <div class="label">🤝 কল্যাণ তহবিল</div>
+                </div>
+            </div>
+            
+            <!-- মোট তহবিল ও নীট ব্যালেন্স -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                <div class="bg-gradient-to-r from-emerald-600 to-emerald-700 rounded-xl p-4 text-white shadow-lg">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs opacity-80"><i class="fas fa-database mr-1"></i>মোট তহবিল</p>
+                            <p class="text-2xl md:text-3xl font-bold">${formatAmountWithText(totalFund)}</p>
+                            <p class="text-[10px] opacity-70 mt-1">সঞ্চয় + বোনাস + লভ্যাংশ + লোন আদায় + কল্যাণ</p>
+                        </div>
+                        <div class="bg-white/20 rounded-full p-3">
+                            <i class="fas fa-coins text-2xl"></i>
+                        </div>
+                    </div>
+                    <div class="mt-2 grid grid-cols-5 gap-1 text-[10px] opacity-80">
+                        <div class="text-center"><span class="block">${formatAmount(totalSavings)}</span><span class="opacity-60">সঞ্চয়</span></div>
+                        <div class="text-center"><span class="block">${formatAmount(totalReferralBonus)}</span><span class="opacity-60">বোনাস</span></div>
+                        <div class="text-center"><span class="block">${formatAmount(totalProfit)}</span><span class="opacity-60">লভ্যাংশ</span></div>
+                        <div class="text-center"><span class="block">${formatAmount(totalLoanCollected)}</span><span class="opacity-60">লোন আদায়</span></div>
+                        <div class="text-center"><span class="block">${formatAmount(totalWelfare)}</span><span class="opacity-60">কল্যাণ</span></div>
+                    </div>
+                </div>
+                
+                <div class="bg-gradient-to-r ${netBalance >= 0 ? 'from-emerald-500 to-blue-500' : 'from-red-500 to-red-600'} rounded-xl p-4 text-white shadow-lg">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs opacity-80"><i class="fas fa-calculator mr-1"></i>নীট ব্যালেন্স</p>
+                            <p class="text-2xl md:text-3xl font-bold">${formatAmountWithText(netBalance)}</p>
+                            <p class="text-[10px] opacity-70 mt-1">মোট তহবিল - মোট উত্তোলন</p>
+                        </div>
+                        <div class="bg-white/20 rounded-full p-3">
+                            <i class="fas ${netBalance >= 0 ? 'fa-arrow-up' : 'fa-arrow-down'} text-2xl"></i>
+                        </div>
+                    </div>
+                    <div class="mt-2 grid grid-cols-2 gap-1 text-[10px] opacity-80">
+                        <div class="text-center"><span class="block">${formatAmount(totalWithdrawal)}</span><span class="opacity-60">মোট উত্তোলন</span></div>
+                        <div class="text-center"><span class="block">${formatAmount(totalFund)}</span><span class="opacity-60">মোট তহবিল</span></div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // ড্যাশবোর্ডের উপরে কার্ডগুলো যোগ করুন (স্ট্যাট কার্ডের জায়গায়)
+        const statsContainer = document.querySelector('.grid.grid-cols-2.sm\\:grid-cols-3.lg\\:grid-cols-5');
+        if (statsContainer) {
+            // নতুন HTML তৈরি করুন
+            const newHTML = dashboardCardsHTML;
+            statsContainer.outerHTML = newHTML;
+        }
+        
+        // ============================================
+        // 13. Recent Members & Payments
+        // ============================================
         const { data: recentMembers } = await client.from('members').select('full_name, member_id, created_at, status').order('created_at', { ascending: false }).limit(5);
         document.getElementById('recentMembersList').innerHTML = (recentMembers || []).map(m => 
             `<div class="flex justify-between items-center border-b py-2"><div><p class="font-medium">${m.full_name || '-'}</p><p class="text-xs text-gray-500">${m.member_id}</p></div><span class="text-xs px-2 py-0.5 rounded-full ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${m.status === 'active' ? 'সক্রিয়' : 'পেন্ডিং'}</span></div>`
         ).join('');
         
-        // Recent payments
         const { data: recentPayments } = await client.from('payments').select('member_name, amount, status, submitted_at').order('submitted_at', { ascending: false }).limit(5);
         document.getElementById('recentPaymentsList').innerHTML = (recentPayments || []).map(p => 
             `<div class="flex justify-between items-center border-b py-2"><div><p class="font-medium">${p.member_name || '-'}</p><p class="text-xs text-gray-500">${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</p></div><p class="font-bold text-emerald-600">${formatAmountWithText(p.amount)}</p></div>`
         ).join('');
         
-        // District stats
+        // ============================================
+        // 14. District Stats
+        // ============================================
         const { data: districtData } = await client.from('members').select('present_district, status');
         const districtStats = {};
         if (districtData) {
@@ -1803,9 +1982,20 @@ async function loadRealDashboard() {
             `<div class="district-stat-item"><div class="district-name">${name}</div><div class="district-count">${count}</div></div>`
         ).join('') || '<div class="text-gray-500 text-center py-4">কোনো ডেটা নেই</div>';
         
+        // ============================================
+        // 15. Charts Update
+        // ============================================
         await updateCharts();
         
-    } catch(e) { console.error('Dashboard error:', e); }
+        // ============================================
+        // 16. Badges Update
+        // ============================================
+        await updateAllBadges();
+        
+    } catch(e) { 
+        console.error('Dashboard error:', e);
+        showToast('ড্যাশবোর্ড লোড করতে সমস্যা!', 'error');
+    }
 }
 
 async function updateAllBadges() {
