@@ -4848,13 +4848,17 @@ function updateRepaymentSummary() {
     const remainingBalance = window._currentLoanForRepayment?.remainingBalance || 0;
     const loanData = window._currentLoanForRepayment;
     
-    if (totalAmount > remainingBalance) {
+    // ============================================
+    // চেক: শুধু মূল কিস্তি ব্যালেন্স থেকে বাদ হবে
+    // ============================================
+    if (totalEmi > remainingBalance) {
         balanceCheck.className = 'p-3 rounded-lg mb-4 bg-red-50 border border-red-200';
         balanceCheck.innerHTML = `
             <p class="text-red-600 font-semibold">
                 <i class="fas fa-exclamation-triangle mr-2"></i>
-                ⚠️ পরিশোধের পরিমাণ (${totalAmount.toFixed(2)} টাকা) আপনার বাকি ব্যালেন্স (${remainingBalance.toFixed(2)} টাকা) থেকে বেশি!
+                ⚠️ পরিশোধের পরিমাণ (${totalEmi.toFixed(2)} টাকা) আপনার বাকি ব্যালেন্স (${remainingBalance.toFixed(2)} টাকা) থেকে বেশি!
             </p>
+            <p class="text-xs text-red-500 mt-1">বিলম্ব ফি (${totalLateFee.toFixed(2)} টাকা) ব্যালেন্স থেকে বাদ হবে না।</p>
         `;
         balanceCheck.classList.remove('hidden');
         submitBtn.disabled = true;
@@ -4864,11 +4868,18 @@ function updateRepaymentSummary() {
         balanceCheck.classList.remove('hidden');
         submitBtn.disabled = true;
     } else {
+        const newBalance = remainingBalance - totalEmi;
         balanceCheck.className = 'p-3 rounded-lg mb-4 bg-emerald-50 border border-emerald-200';
         balanceCheck.innerHTML = `
             <p class="text-emerald-600 font-semibold">
                 <i class="fas fa-check-circle mr-2"></i>
-                ✅ পরিশোধের পরিমাণ ${totalAmount.toFixed(2)} টাকা। পরিশোধের পর বাকি থাকবে ${(remainingBalance - totalAmount).toFixed(2)} টাকা।
+                ✅ মূল কিস্তি: ${totalEmi.toFixed(2)} টাকা পরিশোধ হবে।
+            </p>
+            <p class="text-amber-600 text-sm mt-1">
+                ⚠️ বিলম্ব ফি: ${totalLateFee.toFixed(2)} টাকা আলাদা হিসাবে জমা হবে।
+            </p>
+            <p class="text-emerald-600 text-sm mt-1">
+                📉 পরিশোধের পর বাকি থাকবে: ${newBalance.toFixed(2)} টাকা
             </p>
         `;
         balanceCheck.classList.remove('hidden');
@@ -4890,9 +4901,9 @@ async function submitLoanRepayment() {
     }
     
     let totalAmount = 0;
+    let totalPrincipal = 0;  // মূল কিস্তি
+    let totalLateFee = 0;    // মোট বিলম্ব ফি
     let selectedInstallments = [];
-    let totalLateFee = 0;
-    let totalEmi = 0;
     
     selected.forEach(cb => {
         const installmentNo = parseInt(cb.value);
@@ -4900,9 +4911,9 @@ async function submitLoanRepayment() {
         const lateFee = parseFloat(cb.dataset.latefee) || 0;
         const total = parseFloat(cb.dataset.total) || 0;
         
-        totalAmount += total;
-        totalEmi += emi;
+        totalPrincipal += emi;
         totalLateFee += lateFee;
+        totalAmount += total;
         selectedInstallments.push(installmentNo);
     });
     
@@ -4911,9 +4922,9 @@ async function submitLoanRepayment() {
     
     const confirmMsg = `আপনি কি ${selectedInstallments.length}টি কিস্তি পরিশোধ করতে চান?\n\n` +
         `📊 কিস্তি নম্বর: ${selectedInstallments.join(', ')}\n` +
-        `💰 মূল কিস্তি: ${totalEmi.toFixed(2)} টাকা${lateFeeMsg}\n` +
+        `💰 মূল কিস্তি: ${totalPrincipal.toFixed(2)} টাকা${lateFeeMsg}\n` +
         `💳 মোট পরিশোধ: ${totalAmount.toFixed(2)} টাকা\n` +
-        `📉 পরিশোধের পর বাকি থাকবে: ${(loanData.remainingBalance - totalAmount).toFixed(2)} টাকা\n\n` +
+        `📉 পরিশোধের পর বাকি থাকবে: ${(loanData.remainingBalance - totalPrincipal).toFixed(2)} টাকা (বিলম্ব ফি বাদে)\n\n` +
         `এই পরিশোধ কি আপনি নিশ্চিত করতে চান?`;
     
     if (!confirm(confirmMsg)) return;
@@ -4973,7 +4984,8 @@ async function submitLoanRepayment() {
                         status: 'pending_verification',
                         payment_date: new Date().toISOString(),
                         total_amount: totalAmountPerInstallment,
-                        late_fee: lateFee,
+                        emi_amount: emiAmount,      // মূল কিস্তি
+                        late_fee: lateFee,           // বিলম্ব ফি
                         transaction_id: `ONLINE-${Date.now()}-${installmentNo}`,
                         payment_method: 'অনলাইন',
                         approved_by: currentUser.name || 'সিস্টেম (অনলাইন পেমেন্ট)',
@@ -5000,14 +5012,17 @@ async function submitLoanRepayment() {
             }
         }
         
-        // remaining_balance আপডেট
-        const newRemaining = loanData.remainingBalance - totalAmount;
+        // ============================================
+        // 🔴 গুরুত্বপূর্ণ: শুধু মূল কিস্তি বাদ দিন, বিলম্ব ফি বাদ দেবেন না!
+        // ============================================
+        // remaining_balance আপডেট - শুধু মূল কিস্তি বাদ দিন
+        const newRemaining = loanData.remainingBalance - totalPrincipal;
         await client
             .from('loan_applications')
             .update({ remaining_balance: newRemaining })
             .eq('id', loanData.loan.id);
         
-        showToast(`✅ ${selectedInstallments.length}টি কিস্তি পরিশোধের অনুরোধ জমা হয়েছে!\nমোট পরিশোধ: ${totalAmount.toFixed(2)} টাকা`, 'success');
+        showToast(`✅ ${selectedInstallments.length}টি কিস্তি পরিশোধের অনুরোধ জমা হয়েছে!\nমূল পরিশোধ: ${totalPrincipal.toFixed(2)} টাকা\nবিলম্ব ফি: ${totalLateFee.toFixed(2)} টাকা`, 'success');
         
         closeLoanRepaymentModal();
         await loadLoanHistory();
