@@ -3128,105 +3128,164 @@ function exportSLRExcel() {
 }
 
 // ============================================================
-// 🆕 সঞ্চয় বকেয়া রিপোর্ট (SAVINGS DUE REPORT)
+// 🆕 সঞ্চয় বকেয়া রিপোর্ট (FIXED)
 // ============================================================
 async function loadSavingsDueReport() {
     const fromDate = document.getElementById('dueFromDate').value;
     const toDate = document.getElementById('dueToDate').value;
     const container = document.getElementById('dueTableContainer');
     if (!container) return;
+    
     container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">ডেটা লোড হচ্ছে...</p></div>';
+    
     const client = initSupabaseClient();
-    if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
+    if (!client) { 
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; 
+        return; 
+    }
+    
     try {
-        let startDate = fromDate || '2000-01-01';
-        let endDate = toDate || new Date().toISOString().slice(0,10);
-        endDate += 'T23:59:59';
-        // সক্রিয় সদস্য যাদের সঞ্চয় বকেয়া আছে
-        let membersQuery = client.from('members').select('member_id, full_name, mobile, balance, monthly_savings, status');
-        if (fromDate) membersQuery = membersQuery.gte('created_at', startDate);
-        if (toDate) membersQuery = membersQuery.lte('created_at', endDate);
+        // ============================================
+        // 1. সক্রিয় সকল সদস্য লোড করুন
+        // ============================================
+        let membersQuery = client.from('members')
+            .select('member_id, full_name, mobile, balance, monthly_savings, status, created_at')
+            .in('status', ['active', 'approved']);
+        
         const { data: members } = await membersQuery;
-        // পেমেন্ট ডেটা (অনুমোদিত)
-        let paymentsQuery = client.from('payments').select('member_id, amount, submitted_at, month, year').eq('status', 'approved');
-        if (fromDate) paymentsQuery = paymentsQuery.gte('submitted_at', startDate);
-        if (toDate) paymentsQuery = paymentsQuery.lte('submitted_at', endDate);
-        const { data: payments } = await paymentsQuery;
-        // সদস্য ভিত্তিক বকেয়া হিসাব
-        const dueMap = {};
-        const totalExpectedMap = {};
-        if (members) {
-            members.forEach(m => {
-                if (m.status === 'deleted' || m.status === 'pending') return;
-                const memberId = m.member_id;
-                const monthlySavings = m.monthly_savings || 500;
-                const currentBalance = m.balance || 0;
-                // মোট প্রত্যাশিত সঞ্চয় = ব্যালেন্স + উত্তোলন + বকেয়া
-                // যারা সক্রিয় তাদের জন্য হিসাব
-                if (m.status === 'active' || m.status === 'approved') {
-                    // প্রতি মাসে প্রত্যাশিত সঞ্চয়
-                    const joinDate = new Date(m.created_at);
-                    const now = new Date();
-                    let expectedMonths = 0;
-                    if (joinDate && now) {
-                        const months = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth());
-                        expectedMonths = Math.max(0, months + 1);
-                    }
-                    const expectedTotal = expectedMonths * monthlySavings;
-                    // মোট পরিশোধ
-                    let totalPaid = 0;
-                    if (payments) {
-                        payments.forEach(p => {
-                            if (p.member_id === memberId) {
-                                totalPaid += (p.amount || 0);
-                            }
-                        });
-                    }
-                    const dueAmount = expectedTotal - totalPaid;
-                    if (dueAmount > 0) {
-                        dueMap[memberId] = {
-                            member_id: memberId,
-                            member_name: m.full_name || 'অজানা',
-                            mobile: m.mobile || '-',
-                            monthly_savings: monthlySavings,
-                            expected_total: expectedTotal,
-                            paid_total: totalPaid,
-                            due_amount: dueAmount,
-                            due_months: Math.ceil(dueAmount / monthlySavings),
-                            balance: currentBalance
-                        };
-                    }
-                }
+        
+        if (!members || members.length === 0) {
+            container.innerHTML = '<div class="text-center text-gray-500 py-12"><i class="fas fa-users text-4xl block mb-3 text-gray-300"></i><p>কোনো সক্রিয় সদস্য নেই</p></div>';
+            return;
+        }
+        
+        // ============================================
+        // 2. সকল অনুমোদিত পেমেন্ট লোড করুন (সব সময়ের)
+        // ============================================
+        const { data: allPayments } = await client
+            .from('payments')
+            .select('member_id, amount, submitted_at')
+            .eq('status', 'approved');
+        
+        // ============================================
+        // 3. সদস্য ভিত্তিক পেমেন্ট গ্রুপ করুন
+        // ============================================
+        const paymentMap = {};
+        if (allPayments) {
+            allPayments.forEach(p => {
+                if (!paymentMap[p.member_id]) paymentMap[p.member_id] = [];
+                paymentMap[p.member_id].push(p.amount || 0);
             });
         }
-        const dueList = Object.values(dueMap);
+        
+        // ============================================
+        // 4. প্রতিটি সদস্যের বকেয়া হিসাব করুন
+        // ============================================
+        const dueList = [];
+        const today = new Date();
+        const todayMonth = today.getMonth();
+        const todayYear = today.getFullYear();
+        
+        for (const member of members) {
+            // ৪.১: মাসিক সঞ্চয়
+            const monthlySavings = member.monthly_savings || 500;
+            
+            // ৪.২: সদস্য হওয়ার মাস ও বছর
+            const joinDate = new Date(member.created_at);
+            const joinMonth = joinDate.getMonth();
+            const joinYear = joinDate.getFullYear();
+            
+            // ৪.৩: মোট মাস গণনা (যত মাস সদস্য আছে)
+            let totalMonths = 0;
+            if (joinYear < todayYear) {
+                totalMonths = (todayYear - joinYear) * 12 + (todayMonth - joinMonth) + 1;
+            } else if (joinYear === todayYear) {
+                totalMonths = todayMonth - joinMonth + 1;
+            } else {
+                totalMonths = 0;
+            }
+            
+            // যদি মাস ০ বা ঋণাত্মক হয়, তাহলে ০ সেট করুন
+            if (totalMonths < 0) totalMonths = 0;
+            
+            // ৪.৪: মোট প্রত্যাশিত সঞ্চয়
+            const expectedTotal = totalMonths * monthlySavings;
+            
+            // ৪.৫: মোট পরিশোধ
+            const memberPayments = paymentMap[member.member_id] || [];
+            const totalPaid = memberPayments.reduce((sum, amt) => sum + amt, 0);
+            
+            // ৪.৬: বকেয়া = প্রত্যাশিত - পরিশোধ
+            const dueAmount = expectedTotal - totalPaid;
+            
+            // ৪.৭: শুধুমাত্র যাদের বকেয়া > 0 তাদের যোগ করুন
+            if (dueAmount > 0) {
+                dueList.push({
+                    member_id: member.member_id,
+                    member_name: member.full_name || 'অজানা',
+                    mobile: member.mobile || '-',
+                    monthly_savings: monthlySavings,
+                    expected_total: expectedTotal,
+                    paid_total: totalPaid,
+                    due_amount: dueAmount,
+                    due_months: Math.ceil(dueAmount / monthlySavings),
+                    balance: member.balance || 0,
+                    total_months: totalMonths,
+                    join_date: member.created_at
+                });
+            }
+        }
+        
+        // ============================================
+        // 5. সারাংশ আপডেট
+        // ============================================
         const totalDueMembers = dueList.length;
         const totalDueAmount = dueList.reduce((s, d) => s + d.due_amount, 0);
         const avgDue = totalDueMembers > 0 ? totalDueAmount / totalDueMembers : 0;
-        const totalActiveMembers = members ? members.filter(m => m.status === 'active' || m.status === 'approved').length : 0;
-        const noDueCount = totalActiveMembers - totalDueMembers;
+        const noDueCount = members.length - totalDueMembers;
+        
         document.getElementById('dueTotalMembers').innerHTML = totalDueMembers + ' জন';
         document.getElementById('dueTotalAmount').innerHTML = formatAmountWithText(totalDueAmount);
         document.getElementById('dueAvgAmount').innerHTML = formatAmountWithText(avgDue);
         document.getElementById('dueNoDue').innerHTML = noDueCount + ' জন';
+        
+        // ============================================
+        // 6. বকেয়া তালিকা দেখান
+        // ============================================
         if (totalDueMembers === 0) {
-            container.innerHTML = `<div class="text-center text-green-500 py-12"><i class="fas fa-check-circle text-5xl block mb-3"></i><p>🎉 সব সদস্যের সঞ্চয় বকেয়া নেই!</p></div>`;
+            container.innerHTML = `
+                <div class="text-center text-green-500 py-12">
+                    <i class="fas fa-check-circle text-5xl block mb-3"></i>
+                    <p class="text-lg font-bold">🎉 সব সদস্যের সঞ্চয় বকেয়া নেই!</p>
+                    <p class="text-sm text-gray-500 mt-2">সকল সদস্য তাদের সঞ্চয় সময়মতো পরিশোধ করেছে।</p>
+                </div>
+            `;
             return;
         }
+        
         // সাজান (বকেয়া বেশি যাদের আগে)
         dueList.sort((a, b) => b.due_amount - a.due_amount);
-        let html = `<div class="table-scroll"><table class="data-table">
-            <thead><tr>
-                <th>সদস্য</th>
-                <th>আইডি</th>
-                <th>মোবাইল</th>
-                <th class="text-left">মাসিক সঞ্চয়</th>
-                <th class="text-left">প্রত্যাশিত</th>
-                <th class="text-left">পরিশোধিত</th>
-                <th class="text-left">বকেয়া</th>
-                <th>বকেয়া মাস</th>
-                <th>স্ট্যাটাস</th>
-            </tr></thead><tbody>`;
+        
+        // টেবিল তৈরি
+        let html = `
+            <div class="overflow-x-auto">
+                <table class="data-table" style="width:100%; border-collapse:collapse; font-size:13px;">
+                    <thead>
+                        <tr style="background:#f8fafc; border-bottom:2px solid #e5e7eb;">
+                            <th style="padding:10px 14px; text-align:left; font-weight:600; color:#1f2937;">সদস্য</th>
+                            <th style="padding:10px 14px; text-align:left; font-weight:600; color:#1f2937;">আইডি</th>
+                            <th style="padding:10px 14px; text-align:left; font-weight:600; color:#1f2937;">মোবাইল</th>
+                            <th style="padding:10px 14px; text-align:left; font-weight:600; color:#1f2937;">মাসিক সঞ্চয়</th>
+                            <th style="padding:10px 14px; text-align:left; font-weight:600; color:#1f2937;">প্রত্যাশিত</th>
+                            <th style="padding:10px 14px; text-align:left; font-weight:600; color:#1f2937;">পরিশোধিত</th>
+                            <th style="padding:10px 14px; text-align:left; font-weight:600; color:#1f2937;">বকেয়া</th>
+                            <th style="padding:10px 14px; text-align:left; font-weight:600; color:#1f2937;">বকেয়া মাস</th>
+                            <th style="padding:10px 14px; text-align:left; font-weight:600; color:#1f2937;">স্ট্যাটাস</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
         dueList.forEach(d => {
             let statusClass = '', statusText = '';
             if (d.due_amount > 5000) {
@@ -3239,54 +3298,94 @@ async function loadSavingsDueReport() {
                 statusClass = 'due-low-bg';
                 statusText = 'ℹ️ কম';
             }
+            
             const dueColor = d.due_amount > 5000 ? 'due-high' : d.due_amount > 1000 ? 'due-medium' : 'due-low';
-            html += `<tr>
-                <td><span class="font-medium">${d.member_name}</span></td>
-                <td class="text-xs text-gray-500">${d.member_id}</td>
-                <td class="text-xs">${d.mobile}</td>
-                <td class="text-left font-bold text-emerald-600">${formatAmountWithText(d.monthly_savings)}</td>
-                <td class="text-left text-blue-600">${formatAmountWithText(d.expected_total)}</td>
-                <td class="text-left text-green-600">${formatAmountWithText(d.paid_total)}</td>
-                <td class="text-left font-bold ${dueColor}">${formatAmountWithText(d.due_amount)}</td>
-                <td class="text-center text-red-600 font-bold">${d.due_months} মাস</td>
-                <td><span class="due-badge ${statusClass}">${statusText}</span></td>
-            </tr>`;
+            
+            html += `
+                <tr style="border-bottom:1px solid #f1f5f9;">
+                    <td style="padding:10px 14px; font-weight:500; color:#1f2937;">${d.member_name}</td>
+                    <td style="padding:10px 14px; font-size:12px; color:#6b7280;">${d.member_id}</td>
+                    <td style="padding:10px 14px; font-size:12px; color:#6b7280;">${d.mobile}</td>
+                    <td style="padding:10px 14px; font-weight:600; color:#059669; text-align:left;">${formatAmountWithText(d.monthly_savings)}</td>
+                    <td style="padding:10px 14px; color:#2563eb; text-align:left;">${formatAmountWithText(d.expected_total)}</td>
+                    <td style="padding:10px 14px; color:#059669; text-align:left;">${formatAmountWithText(d.paid_total)}</td>
+                    <td style="padding:10px 14px; font-weight:700; color:${d.due_amount > 5000 ? '#dc2626' : d.due_amount > 1000 ? '#f59e0b' : '#059669'}; text-align:left;">${formatAmountWithText(d.due_amount)}</td>
+                    <td style="padding:10px 14px; text-align:center; font-weight:600; color:#dc2626;">${d.due_months} মাস</td>
+                    <td style="padding:10px 14px;"><span class="due-badge ${statusClass}" style="padding:2px 10px; border-radius:12px; font-size:10px; font-weight:600;">${statusText}</span></td>
+                </tr>
+            `;
         });
+        
         // টোটাল রো
-        html += `<tr style="font-weight:700; background:#f3f4f6; border-top:2px solid #059669;">
-            <td colspan="3" class="text-left">📊 মোট</td>
-            <td class="text-left">-</td>
-            <td class="text-left">-</td>
-            <td class="text-left">-</td>
-            <td class="text-left text-red-700 font-bold">${formatAmountWithText(totalDueAmount)}</td>
-            <td colspan="2"></td>
-        </tr>`;
-        html += '</tbody></table></div>';
-        // কার্ড ভিউ (বিকল্প)
-        let cardHtml = `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-4">`;
+        html += `
+            <tr style="font-weight:700; background:#f3f4f6; border-top:2px solid #059669;">
+                <td colspan="3" style="padding:10px 14px; text-align:left;">📊 মোট</td>
+                <td style="padding:10px 14px; text-align:left;">-</td>
+                <td style="padding:10px 14px; text-align:left;">-</td>
+                <td style="padding:10px 14px; text-align:left;">-</td>
+                <td style="padding:10px 14px; text-align:left; color:#dc2626; font-weight:700;">${formatAmountWithText(totalDueAmount)}</td>
+                <td colspan="2" style="padding:10px 14px;"></td>
+            </tr>
+        `;
+        
+        html += `</tbody></table></div>`;
+        
+        // ============================================
+        // 7. কার্ড ভিউ (বিকল্প)
+        // ============================================
+        let cardHtml = `
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-4 no-print">
+                <div class="col-span-full">
+                    <h5 class="font-bold text-gray-700 mb-2"><i class="fas fa-id-card text-emerald-600 mr-2"></i>সদস্য কার্ড ভিউ (সর্বোচ্চ ৯ জন)</h5>
+                </div>
+        `;
+        
         dueList.slice(0, 9).forEach(d => {
-            const iconColor = d.due_amount > 5000 ? 'bg-red-100 text-red-600' : d.due_amount > 1000 ? 'bg-amber-100 text-amber-600' : 'bg-green-100 text-green-600';
-            const amountColor = d.due_amount > 5000 ? 'due-high' : d.due_amount > 1000 ? 'due-medium' : 'due-low';
+            const iconColor = d.due_amount > 5000 ? 'bg-red-100 text-red-600' : 
+                              d.due_amount > 1000 ? 'bg-amber-100 text-amber-600' : 
+                              'bg-green-100 text-green-600';
+            const amountColor = d.due_amount > 5000 ? 'due-high' : 
+                               d.due_amount > 1000 ? 'due-medium' : 'due-low';
+            
             cardHtml += `
-                <div class="due-card">
-                    <div class="icon-circle ${iconColor}"><i class="fas fa-user"></i></div>
-                    <div class="flex-1">
-                        <div class="due-name">${d.member_name}</div>
-                        <div class="due-id">${d.member_id}</div>
-                        <div class="due-amount ${amountColor}">${formatAmountWithText(d.due_amount)}</div>
+                <div class="due-card" style="background:white; border-radius:12px; padding:14px 18px; border:1px solid #e5e7eb; display:flex; align-items:center; gap:14px;">
+                    <div class="icon-circle ${iconColor}" style="width:42px; height:42px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0;">
+                        <i class="fas fa-user"></i>
                     </div>
-                    <div class="text-right">
-                        <span class="due-badge ${d.due_amount > 5000 ? 'due-high-bg' : d.due_amount > 1000 ? 'due-medium-bg' : 'due-low-bg'}">${d.due_months} মাস</span>
+                    <div style="flex:1;">
+                        <div style="font-weight:600; color:#1f2937; font-size:14px;">${d.member_name}</div>
+                        <div style="font-size:11px; color:#6b7280;">${d.member_id}</div>
+                        <div style="font-weight:700; font-size:18px; color:${d.due_amount > 5000 ? '#dc2626' : d.due_amount > 1000 ? '#f59e0b' : '#059669'};">${formatAmountWithText(d.due_amount)}</div>
+                    </div>
+                    <div style="text-align:right;">
+                        <span class="due-badge ${d.due_amount > 5000 ? 'due-high-bg' : d.due_amount > 1000 ? 'due-medium-bg' : 'due-low-bg'}" style="padding:2px 10px; border-radius:12px; font-size:10px; font-weight:600; ${d.due_amount > 5000 ? 'background:#fee2e2; color:#991b1b;' : d.due_amount > 1000 ? 'background:#fef3c7; color:#92400e;' : 'background:#d1fae5; color:#065f46;'}">${d.due_months} মাস</span>
                     </div>
                 </div>
             `;
         });
-        cardHtml += '</div>';
-        // কন্টেইনারে HTML যোগ করুন (টেবিল + কার্ড)
-        container.innerHTML = html + `<div class="mt-4 no-print">${cardHtml}</div>`;
+        
+        cardHtml += `</div>`;
+        
+        // কন্টেইনারে HTML যোগ করুন
+        container.innerHTML = html + cardHtml;
+        
+        console.log('✅ বকেয়া রিপোর্ট লোড সম্পূর্ণ:', {
+            totalMembers: members.length,
+            totalDueMembers: totalDueMembers,
+            totalDueAmount: totalDueAmount,
+            noDueCount: noDueCount
+        });
+        
     } catch(e) {
         console.error('Due report error:', e);
-        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ রিপোর্ট লোড করতে সমস্যা!</div>';
+        container.innerHTML = `
+            <div class="text-red-500 p-4 text-center">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ রিপোর্ট লোড করতে সমস্যা!</p>
+                <p class="text-sm text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="loadSavingsDueReport()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
     }
 }
 
