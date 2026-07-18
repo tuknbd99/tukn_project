@@ -1320,6 +1320,13 @@
                     <input type="text" id="loanMemberId" placeholder="সদস্য আইডি" class="mb-3">
                     <input type="text" id="loanMemberName" readonly placeholder="সদস্যের নাম" class="mb-3 bg-gray-50">
                     <button onclick="fetchLoanMemberName()" class="btn btn-info w-full mb-3 no-print">👤 সদস্যের নাম লোড করুন</button>
+                    <!-- ব্রাঞ্চ সিলেক্টর -->
+                    <div id="loanBranchSection" style="display:none;" class="mb-3">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">🏢 ব্রাঞ্চ নির্বাচন করুন</label>
+                        <select id="loanBranchSelect" class="w-full border rounded-lg p-2">
+                            <option value="">-- ব্রাঞ্চ নির্বাচন করুন --</option>
+                        </select>
+                    </div>
                     <select id="loanType" class="mb-3"><option value="">লোনের ধরন নির্বাচন করুন</option><option>শিক্ষা লোন</option><option>ব্যবসায়িক লোন</option><option>জরুরি লোন</option><option>ঘর নির্মাণ লোন</option><option>চিকিৎসা লোন</option></select>
                     <input type="number" id="loanAmount" placeholder="লোনের পরিমাণ (টাকা)" class="mb-3">
                     <button type="button" onclick="submitLoanApp()" class="btn btn-success w-full py-2 no-print">📝 লোন আবেদন জমা দিন</button>
@@ -1804,7 +1811,7 @@
 <!-- ==================== ALL JAVASCRIPT ==================== -->
 <script>
 // ============================================================
-// COMPLETE JAVASCRIPT - All Functions with Savings Due Report & Invoice
+// COMPLETE JAVASCRIPT - All Functions with Updated Loan & Branch
 // ============================================================
 
 // Supabase Configuration
@@ -1965,7 +1972,10 @@ function showTab(tabName) {
         'backup': loadBackupHistory,
         'report': loadReport,
         'statement': () => {},
-        'allTransactions': loadAllTransactions
+        'allTransactions': loadAllTransactions,
+        'branches': loadBranches,
+        'branchView': loadBranchView,
+        'branchReport': loadBranchReport
     };
     if (loadMap[tabName]) loadMap[tabName]();
 }
@@ -2648,9 +2658,77 @@ async function loadBranchView() {
             return;
         }
         
-        let html = `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">`;
-        branchMembers.forEach(bm => {
+        // ব্রাঞ্চের লোনের সারাংশ
+        let totalLoanGiven = 0, totalLoanCollected = 0;
+        const { data: branchLoans } = await client
+            .from('loan_applications')
+            .select('id, amount')
+            .eq('branch_id', branchId !== 'all' ? branchId : branchMembers[0]?.branch_id)
+            .eq('status', 'approved');
+            
+        if (branchLoans) {
+            totalLoanGiven = branchLoans.reduce((s, l) => s + (l.amount || 0), 0);
+            const loanIds = branchLoans.map(l => l.id);
+            if (loanIds.length > 0) {
+                const { data: payments } = await client
+                    .from('loan_payments')
+                    .select('total_amount, emi_amount')
+                    .in('loan_id', loanIds)
+                    .eq('status', 'approved');
+                if (payments) {
+                    totalLoanCollected = payments.reduce((s, p) => s + (p.total_amount || p.emi_amount || 0), 0);
+                }
+            }
+        }
+        
+        let html = `
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                <div class="bg-blue-50 p-3 rounded-lg border border-blue-200 text-center">
+                    <p class="text-sm text-gray-600">💰 মোট লোন প্রদান</p>
+                    <p class="text-xl font-bold text-blue-600">${formatAmountWithText(totalLoanGiven)}</p>
+                </div>
+                <div class="bg-emerald-50 p-3 rounded-lg border border-emerald-200 text-center">
+                    <p class="text-sm text-gray-600">📥 মোট লোন আদায়</p>
+                    <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(totalLoanCollected)}</p>
+                </div>
+                <div class="bg-red-50 p-3 rounded-lg border border-red-200 text-center">
+                    <p class="text-sm text-gray-600">⏳ বকেয়া</p>
+                    <p class="text-xl font-bold text-red-600">${formatAmountWithText(totalLoanGiven - totalLoanCollected)}</p>
+                </div>
+            </div>
+        `;
+        
+        html += `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">`;
+        
+        for (const bm of branchMembers) {
             const m = bm.members;
+            // সদস্যের লোনের তথ্য
+            const { data: loans } = await client
+                .from('loan_applications')
+                .select('amount, status, id')
+                .eq('member_id', m?.member_id)
+                .eq('branch_id', branchId !== 'all' ? branchId : bm.branch_id);
+            
+            const totalLoan = loans ? loans.reduce((s, l) => s + (l.amount || 0), 0) : 0;
+            const approvedLoan = loans ? loans.filter(l => l.status === 'approved').reduce((s, l) => s + (l.amount || 0), 0) : 0;
+            const pendingLoan = loans ? loans.filter(l => l.status === 'pending').reduce((s, l) => s + (l.amount || 0), 0) : 0;
+            
+            // সদস্যের লোন আদায়
+            let memberCollected = 0;
+            if (loans && loans.length > 0) {
+                const loanIds = loans.filter(l => l.status === 'approved').map(l => l.id);
+                if (loanIds.length > 0) {
+                    const { data: payments } = await client
+                        .from('loan_payments')
+                        .select('total_amount, emi_amount')
+                        .in('loan_id', loanIds)
+                        .eq('status', 'approved');
+                    if (payments) {
+                        memberCollected = payments.reduce((s, p) => s + (p.total_amount || p.emi_amount || 0), 0);
+                    }
+                }
+            }
+            
             html += `
                 <div class="bg-white p-3 rounded-lg border hover:shadow-md transition">
                     <div class="flex items-center gap-3">
@@ -2666,11 +2744,15 @@ async function loadBranchView() {
                     <div class="mt-2 grid grid-cols-2 gap-1 text-xs">
                         <div><span class="text-gray-500">সঞ্চয়:</span> ${formatAmountWithText(m?.balance || 0)}</div>
                         <div><span class="text-gray-500">রেফারেল:</span> ${formatAmountWithText(m?.referral_bonus || 0)}</div>
+                        <div><span class="text-gray-500">মোট লোন:</span> <span class="font-medium">${formatAmountWithText(totalLoan)}</span></div>
+                        <div><span class="text-gray-500">অনুমোদিত:</span> <span class="text-emerald-600">${formatAmountWithText(approvedLoan)}</span></div>
+                        <div><span class="text-gray-500">লোন আদায়:</span> <span class="text-blue-600">${formatAmountWithText(memberCollected)}</span></div>
+                        ${pendingLoan > 0 ? `<div><span class="text-gray-500">⏳ পেন্ডিং:</span> <span class="text-amber-600">${formatAmountWithText(pendingLoan)}</span></div>` : ''}
                         <div class="col-span-2"><span class="text-gray-500">যোগদান:</span> ${bm.joined_at ? new Date(bm.joined_at).toLocaleDateString('bn-BD') : '-'}</div>
                     </div>
                 </div>
             `;
-        });
+        }
         html += `</div>`;
         container.innerHTML = html;
         
@@ -2696,7 +2778,6 @@ async function loadBranchReport() {
     if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
     
     try {
-        // ব্রাঞ্চের তথ্য
         let branchQuery = client.from('branches').select('*');
         if (branchId !== 'all') branchQuery = branchQuery.eq('id', branchId);
         const { data: branches } = await branchQuery;
@@ -2722,20 +2803,42 @@ async function loadBranchReport() {
         let grandTotalSavings = 0, grandTotalLoan = 0, grandTotalCollected = 0, grandTotalWithdrawal = 0;
         
         for (const branch of branches) {
+            // ব্রাঞ্চ ব্যালেন্স
             const { data: balance } = await client
                 .from('branch_balances')
                 .select('*')
                 .eq('branch_id', branch.id)
                 .single();
             
+            // ব্রাঞ্চের সদস্য সংখ্যা
             const { count } = await client
                 .from('branch_members')
                 .select('*', { count: 'exact', head: true })
                 .eq('branch_id', branch.id);
             
+            // ব্রাঞ্চের লোন আদায় (loan_payments থেকে)
+            let collected = 0;
+            const { data: branchLoans } = await client
+                .from('loan_applications')
+                .select('id')
+                .eq('branch_id', branch.id)
+                .eq('status', 'approved');
+                
+            if (branchLoans && branchLoans.length > 0) {
+                const loanIds = branchLoans.map(l => l.id);
+                const { data: payments } = await client
+                    .from('loan_payments')
+                    .select('total_amount, emi_amount')
+                    .in('loan_id', loanIds)
+                    .eq('status', 'approved');
+                    
+                if (payments) {
+                    collected = payments.reduce((s, p) => s + (p.total_amount || p.emi_amount || 0), 0);
+                }
+            }
+            
             const savings = balance?.total_savings || 0;
             const loan = balance?.total_loan_given || 0;
-            const collected = balance?.total_loan_collected || 0;
             const withdrawal = balance?.total_withdrawal || 0;
             const netBalance = savings - loan - withdrawal + collected;
             
@@ -2932,7 +3035,7 @@ document.getElementById('directDepositForm')?.addEventListener('submit', async f
 });
 
 // ============================================================
-// LOAN FUNCTIONS
+// LOAN FUNCTIONS - UPDATED WITH BRANCH
 // ============================================================
 async function loadAllLoans() {
     const container = document.getElementById('loanApplicationsList');
@@ -2940,25 +3043,47 @@ async function loadAllLoans() {
     container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লোন লোড হচ্ছে...</p></div>';
     const client = initSupabaseClient();
     if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
-    const { data } = await client.from('loan_applications').select('*').order('submitted_at', { ascending: false });
-    allLoansData = data || [];
-    renderAllLoansTable();
-    await updateAllBadges();
+    
+    try {
+        const { data, error } = await client
+            .from('loan_applications')
+            .select('*, branches(branch_name)')
+            .order('submitted_at', { ascending: false });
+        if (error) throw error;
+        allLoansData = data || [];
+        renderAllLoansTable();
+        await updateAllBadges();
+    } catch(e) {
+        console.error('Load loans error:', e);
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ লোন লোড করতে সমস্যা!</div>';
+    }
 }
 
 function renderAllLoansTable() {
     const container = document.getElementById('loanApplicationsList');
     if (!container) return;
-    if (allLoansData.length === 0) { container.innerHTML = '<div class="text-center text-gray-500 py-12"><i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i><p>কোনো লোন আবেদন নেই</p></div>'; return; }
-    container.innerHTML = allLoansData.map(loan => `
+    if (allLoansData.length === 0) { 
+        container.innerHTML = '<div class="text-center text-gray-500 py-12"><i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i><p>কোনো লোন আবেদন নেই</p></div>'; 
+        return; 
+    }
+    
+    container.innerHTML = allLoansData.map(loan => {
+        const branchName = loan.branches?.branch_name || loan.branch_name || '-';
+        return `
         <div class="border rounded-lg p-4 mb-3 ${loan.status === 'pending' ? 'border-yellow-400 bg-yellow-50' : loan.status === 'approved' ? 'border-green-400 bg-green-50' : 'border-red-400 bg-red-50'}">
             <div class="flex flex-wrap justify-between items-start gap-2">
                 <div class="flex-1">
-                    <div class="flex items-center gap-2 flex-wrap"><span class="font-bold text-gray-800 text-lg">${loan.member_name || '-'}</span><span class="status-badge ${loan.status === 'pending' ? 'status-pending' : loan.status === 'approved' ? 'status-approved' : 'status-rejected'}">${loan.status === 'pending' ? '⏳ বিচারাধীন' : loan.status === 'approved' ? '✅ অনুমোদিত' : '❌ বাতিল'}</span></div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <span class="font-bold text-gray-800 text-lg">${loan.member_name || '-'}</span>
+                        <span class="status-badge ${loan.status === 'pending' ? 'status-pending' : loan.status === 'approved' ? 'status-approved' : 'status-rejected'}">
+                            ${loan.status === 'pending' ? '⏳ বিচারাধীন' : loan.status === 'approved' ? '✅ অনুমোদিত' : '❌ বাতিল'}
+                        </span>
+                    </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2 text-sm">
                         <div><span class="text-gray-500">🆔 আইডি:</span> ${loan.member_id || '-'}</div>
                         <div><span class="text-gray-500">📋 ধরন:</span> ${loan.loan_type || '-'}</div>
                         <div><span class="text-gray-500">💰 পরিমাণ:</span> <span class="font-bold text-emerald-600">${formatAmountWithText(loan.amount)}</span></div>
+                        <div><span class="text-gray-500">🏢 ব্রাঞ্চ:</span> <span class="font-medium text-blue-600">${branchName}</span></div>
                         <div><span class="text-gray-500">📅 তারিখ:</span> ${loan.submitted_at ? new Date(loan.submitted_at).toLocaleDateString('bn-BD') : '-'}</div>
                     </div>
                     ${loan.reject_reason ? `<div class="mt-2 text-sm bg-red-50 p-2 rounded border border-red-200"><span class="text-red-600">❌ বাতিলের কারণ:</span><p class="mt-1 text-red-700">${loan.reject_reason}</p></div>` : ''}
@@ -2970,7 +3095,7 @@ function renderAllLoansTable() {
                 </div>
             </div>
         </div>
-    `).join('');
+    `}).join('');
 }
 
 async function loadPendingLoans() {
@@ -3008,9 +3133,72 @@ async function approveLoan(loanId) {
     if (!confirm('লোন অনুমোদন দেবেন?')) return;
     const client = initSupabaseClient();
     if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-    await client.from('loan_applications').update({ status: 'approved', approved_by: currentAdmin?.username || 'system', approved_at: new Date().toISOString() }).eq('id', loanId);
-    loadAllLoans(); loadPendingLoans(); await updateAllBadges();
-    showToast('✅ লোন অনুমোদিত হয়েছে!');
+    
+    try {
+        // লোনের তথ্য নিন (ব্রাঞ্চ আইডি সহ)
+        const { data: loan, error: loanError } = await client
+            .from('loan_applications')
+            .select('branch_id, amount')
+            .eq('id', loanId)
+            .single();
+            
+        if (loanError) throw loanError;
+        
+        // লোন আপডেট করুন
+        const { error: updateError } = await client
+            .from('loan_applications')
+            .update({ 
+                status: 'approved', 
+                approved_by: currentAdmin?.username || 'system', 
+                approved_at: new Date().toISOString() 
+            })
+            .eq('id', loanId);
+            
+        if (updateError) throw updateError;
+        
+        // ব্রাঞ্চ ব্যালেন্স আপডেট করুন
+        if (loan && loan.branch_id) {
+            const { data: balance, error: balanceError } = await client
+                .from('branch_balances')
+                .select('*')
+                .eq('branch_id', loan.branch_id)
+                .single();
+                
+            if (balanceError && balanceError.code !== 'PGRST116') throw balanceError;
+            
+            if (balance) {
+                const newLoanGiven = (balance.total_loan_given || 0) + loan.amount;
+                const newNetBalance = (balance.net_balance || 0) - loan.amount;
+                await client
+                    .from('branch_balances')
+                    .update({
+                        total_loan_given: newLoanGiven,
+                        net_balance: newNetBalance,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('branch_id', loan.branch_id);
+            } else {
+                // যদি ব্যালেন্স না থাকে, নতুন তৈরি করুন
+                await client
+                    .from('branch_balances')
+                    .insert([{
+                        branch_id: loan.branch_id,
+                        total_loan_given: loan.amount,
+                        net_balance: -loan.amount,
+                        updated_at: new Date().toISOString()
+                    }]);
+            }
+        }
+        
+        loadAllLoans(); 
+        loadPendingLoans(); 
+        loadBranchReport(); // ব্রাঞ্চ রিপোর্ট রিলোড
+        await updateAllBadges();
+        showToast('✅ লোন অনুমোদিত হয়েছে!');
+    } catch(e) {
+        console.error('Loan approval error:', e);
+        showToast('❌ লোন অনুমোদন ব্যর্থ: ' + (e.message || 'অজানা ত্রুটি'), 'error');
+    }
 }
 
 async function rejectLoan(loanId) {
@@ -3054,41 +3242,111 @@ async function fetchLoanMemberName() {
     if (!memberId) { showToast('সদস্য আইডি দিন!', 'error'); return; }
     const client = initSupabaseClient();
     if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-    const { data } = await client.from('members').select('full_name, status').eq('member_id', memberId).single();
-    if (!data) { showToast('❌ এই আইডিতে কোনো সদস্য নেই!', 'error'); return; }
-    if (data.status !== 'active') { showToast('❌ সদস্যটি সক্রিয় নয়!', 'error'); return; }
-    document.getElementById('loanMemberName').value = data.full_name || 'অজানা';
-    showToast(`✅ সদস্য পাওয়া গেছে: ${data.full_name}`);
+    
+    try {
+        const { data: member, error: memberError } = await client
+            .from('members')
+            .select('full_name, status')
+            .eq('member_id', memberId)
+            .single();
+            
+        if (memberError || !member) { 
+            showToast('❌ এই আইডিতে কোনো সদস্য নেই!', 'error'); 
+            return; 
+        }
+        if (member.status !== 'active') { 
+            showToast('❌ সদস্যটি সক্রিয় নয়!', 'error'); 
+            return; 
+        }
+        
+        document.getElementById('loanMemberName').value = member.full_name || 'অজানা';
+        showToast(`✅ সদস্য পাওয়া গেছে: ${member.full_name}`);
+        
+        // ব্রাঞ্চ লোড করুন
+        const { data: branchMembers, error: branchError } = await client
+            .from('branch_members')
+            .select('branches(id, branch_name)')
+            .eq('member_id', memberId);
+            
+        const branchSelect = document.getElementById('loanBranchSelect');
+        const branchSection = document.getElementById('loanBranchSection');
+        
+        if (branchError) throw branchError;
+        
+        if (branchMembers && branchMembers.length > 0) {
+            branchSection.style.display = 'block';
+            branchSelect.innerHTML = '<option value="">-- ব্রাঞ্চ নির্বাচন করুন --</option>' + 
+                branchMembers.map(b => `<option value="${b.branches.id}">${b.branches.branch_name}</option>`).join('');
+        } else {
+            branchSection.style.display = 'none';
+            branchSelect.innerHTML = '<option value="">-- ব্রাঞ্চ নির্বাচন করুন --</option>';
+            showToast('⚠️ এই সদস্য কোনো ব্রাঞ্চের সাথে যুক্ত নয়!', 'warning');
+        }
+    } catch(e) {
+        console.error('Fetch member error:', e);
+        showToast('❌ সদস্যের তথ্য লোড করতে সমস্যা!', 'error');
+    }
 }
 
 async function submitLoanApp() {
     const isMember = document.getElementById('memberYes').checked;
-    if (!isMember) { showToast('শুধুমাত্র সদস্যরা লোন আবেদন করতে পারেন!', 'error'); return; }
+    if (!isMember) { 
+        showToast('শুধুমাত্র সদস্যরা লোন আবেদন করতে পারেন!', 'error'); 
+        return; 
+    }
+    
     const memberId = document.getElementById('loanMemberId').value.trim();
     const loanType = document.getElementById('loanType').value;
     const amount = parseFloat(document.getElementById('loanAmount').value);
+    const branchId = document.getElementById('loanBranchSelect').value;
+    
     if (!memberId) { showToast('সদস্য আইডি দিন!', 'error'); return; }
     if (!loanType) { showToast('লোনের ধরন নির্বাচন করুন!', 'error'); return; }
     if (!amount || amount <= 0) { showToast('সঠিক লোনের পরিমাণ দিন!', 'error'); return; }
+    if (!branchId) { showToast('ব্রাঞ্চ নির্বাচন করুন!', 'error'); return; }
+    
     const client = initSupabaseClient();
     if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-    const { data: member } = await client.from('members').select('full_name').eq('member_id', memberId).single();
-    if (!member) { showToast('❌ এই আইডিতে কোনো সদস্য নেই!', 'error'); return; }
-    await client.from('loan_applications').insert([{ 
-        member_id: memberId, 
-        member_name: member.full_name, 
-        loan_type: loanType, 
-        amount, 
-        status: 'pending', 
-        submitted_at: new Date().toISOString(), 
-        submitted_by: currentAdmin?.username || 'web_user' 
-    }]);
-    showToast('✅ লোন আবেদন জমা হয়েছে!');
-    document.getElementById('loanMemberId').value = '';
-    document.getElementById('loanMemberName').value = '';
-    document.getElementById('loanType').value = '';
-    document.getElementById('loanAmount').value = '';
-    loadAllLoans();
+    
+    try {
+        const { data: member, error: memberError } = await client
+            .from('members')
+            .select('full_name')
+            .eq('member_id', memberId)
+            .single();
+            
+        if (memberError || !member) { 
+            showToast('❌ এই আইডিতে কোনো সদস্য নেই!', 'error'); 
+            return; 
+        }
+        
+        // লোন আবেদন জমা দিন
+        const { error: insertError } = await client.from('loan_applications').insert([{ 
+            member_id: memberId, 
+            member_name: member.full_name, 
+            loan_type: loanType, 
+            amount, 
+            branch_id: branchId,  // ব্রাঞ্চ আইডি যোগ করা হলো
+            status: 'pending', 
+            submitted_at: new Date().toISOString(), 
+            submitted_by: currentAdmin?.username || 'web_user' 
+        }]);
+        
+        if (insertError) throw insertError;
+        
+        showToast('✅ লোন আবেদন জমা হয়েছে!');
+        // ফর্ম রিসেট
+        document.getElementById('loanMemberId').value = '';
+        document.getElementById('loanMemberName').value = '';
+        document.getElementById('loanType').value = '';
+        document.getElementById('loanAmount').value = '';
+        document.getElementById('loanBranchSelect').value = '';
+        document.getElementById('loanBranchSection').style.display = 'none';
+        loadAllLoans();
+    } catch(e) {
+        console.error('Submit loan error:', e);
+        showToast('❌ লোন আবেদন জমা দিতে সমস্যা!', 'error');
+    }
 }
 
 // ============================================================
@@ -4814,7 +5072,7 @@ function loadAboutContent() {
 }
 
 function loadCareerContent() {
-    const career = JSON.parse(localStorage.getItem('tukn_career') || '{"description":"আমাদের সংগঠনে নিয়মিত বিভিন্ন পদে নিয়োগ দেওয়া হয়。"}');
+    const career = JSON.parse(localStorage.getItem('tukn_career') || '{"description":"আমাদের সংগঠনে নিয়মিত বিভিন্ন পদে নিয়োগ দেওয়া হয়।"}');
     document.getElementById('careerDescription').innerHTML = `<p class="text-gray-700">${career.description}</p>`;
 }
 
@@ -5446,6 +5704,9 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAllTablesData();
     loadAuditLogs();
     loadBackupHistory();
+    loadBranches();
+    loadBranchView();
+    loadBranchReport();
     updateAllBadges();
     
     const today = new Date();
@@ -5602,6 +5863,59 @@ window.quickStatement = quickStatement;
 window.viewLoanPaymentDetails = viewLoanPaymentDetails;
 window.closePaymentSlipModal = closePaymentSlipModal;
 window.ensurePaymentSlipModal = ensurePaymentSlipModal;
+// Branch Global Exports
+window.loadBranches = loadBranches;
+window.loadBranchView = loadBranchView;
+window.loadBranchReport = loadBranchReport;
+window.showAddBranchModal = showAddBranchModal;
+window.closeAddBranchModal = closeAddBranchModal;
+window.exportBranchReport = function() {
+    const table = document.querySelector('#branchReportContent table');
+    if (!table) { showToast('কোনো ডেটা নেই!', 'error'); return; }
+    let csv = "ব্রাঞ্চ,কোড,মোট সঞ্চয়,মোট লোন,মোট আদায়,মোট উত্তোলন,নীট ব্যালেন্স,সদস্য,স্ট্যাটাস\n";
+    const rows = table.querySelectorAll('tbody tr');
+    rows.forEach(row => {
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 9) {
+            csv += `"${cells[0]?.textContent.trim() || ''}","${cells[1]?.textContent.trim() || ''}","${cells[2]?.textContent.trim() || ''}","${cells[3]?.textContent.trim() || ''}","${cells[4]?.textContent.trim() || ''}","${cells[5]?.textContent.trim() || ''}","${cells[6]?.textContent.trim() || ''}","${cells[7]?.textContent.trim() || ''}","${cells[8]?.textContent.trim() || ''}"\n`;
+        }
+    });
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `branch_report_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    showToast('✅ ব্রাঞ্চ রিপোর্ট এক্সপোর্ট সম্পূর্ণ!');
+};
+window.viewBranchDetails = function(branchId) {
+    showTab('branchView');
+    setTimeout(() => {
+        document.getElementById('branchViewSelector').value = branchId;
+        loadBranchView();
+    }, 300);
+};
+window.editBranch = function(branchId) {
+    showToast('ব্রাঞ্চ সম্পাদনা ফিচার শীঘ্রই যোগ হবে', 'info');
+};
+window.toggleBranchStatus = async function(branchId) {
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    try {
+        const { data: branch, error } = await client.from('branches').select('status').eq('id', branchId).single();
+        if (error) throw error;
+        const newStatus = branch.status === 'active' ? 'inactive' : 'active';
+        await client.from('branches').update({ status: newStatus }).eq('id', branchId);
+        loadBranches();
+        showToast(`ব্রাঞ্চ ${newStatus === 'active' ? 'সক্রিয়' : 'নিষ্ক্রিয়'} করা হয়েছে!`, 'success');
+    } catch(e) { showToast('স্ট্যাটাস পরিবর্তন ব্যর্থ!', 'error'); }
+};
+window.viewBranchReport = function(branchId) {
+    showTab('branchReport');
+    setTimeout(() => {
+        document.getElementById('branchReportSelector').value = branchId;
+        loadBranchReport();
+    }, 300);
+};
 </script>
 </body>
 </html>
