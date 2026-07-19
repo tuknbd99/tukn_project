@@ -2120,15 +2120,24 @@ let auditLogsData = [];
 let pendingLoanPaymentsData = [];
 let slrViewMode = 'combined';
 
+// ============================================================
+// Supabase Client - গ্লোবালি অ্যাক্সেসযোগ্য
+// ============================================================
+let supabaseClient = null;
+
 function initSupabaseClient() {
-    if (_supabaseClient) return _supabaseClient;
+    if (supabaseClient) return supabaseClient;
     try {
         if (typeof supabase !== 'undefined' && supabase.createClient) {
-            _supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
             console.log("✅ Supabase client initialized");
+            // গ্লোবালি সেট করুন
+            window.supabaseClient = supabaseClient;
         }
-    } catch(e) { console.error("Supabase init error:", e); }
-    return _supabaseClient;
+    } catch(e) { 
+        console.error("Supabase init error:", e); 
+    }
+    return supabaseClient;
 }
 
 function showToast(msg, type='success') {
@@ -2508,35 +2517,28 @@ async function searchMemberForTransfer() {
     }
 }
 
-// ============================================================
-// ব্রাঞ্চ অ্যাডমিন লোড - JOIN ছাড়া (সরাসরি ডেটা)
-// ============================================================
 async function loadBranchAdmins() {
     const container = document.getElementById('branchAdminsList');
     if (!container) return;
     
     container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>';
     
-    const client = initSupabaseClient();
-    if (!client) {
-        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
-        return;
-    }
+    // 🔥 সরাসরি Supabase client তৈরি করুন
+    const client = supabase.createClient(
+        'https://bffomfsffrtfgxyetzvm.supabase.co',
+        'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D'
+    );
     
     try {
-        // 🔥 JOIN ছাড়া সরাসরি ডেটা আনুন
-        const { data: admins, error: adminError } = await client
+        // সরাসরি branch_admins থেকে ডেটা আনুন
+        const { data: admins, error } = await client
             .from('branch_admins')
-            .select('*')
-            .order('created_at', { ascending: false });
+            .select('*');
         
-        if (adminError) {
-            console.error('❌ Admin fetch error:', adminError);
-            throw adminError;
-        }
+        console.log('📊 Admins:', admins);
+        console.log('❌ Error:', error);
         
-        console.log('📊 Admins found:', admins?.length || 0);
-        console.log('📊 Admins data:', admins);
+        if (error) throw error;
         
         if (!admins || admins.length === 0) {
             container.innerHTML = `
@@ -2551,7 +2553,6 @@ async function loadBranchAdmins() {
             return;
         }
         
-        // 🔥 ব্রাঞ্চের নাম আলাদাভাবে আনুন
         let html = `<div class="table-scroll"><table class="data-table">
             <thead><tr>
                 <th>নাম</th>
@@ -2564,28 +2565,19 @@ async function loadBranchAdmins() {
             </tr></thead><tbody>`;
         
         for (const admin of admins) {
-            // ব্রাঞ্চের নাম আলাদাভাবে আনুন
             let branchName = 'ব্রাঞ্চ নেই';
             let branchCode = '';
             
             if (admin.branch_id) {
-                try {
-                    const { data: branch, error: branchError } = await client
-                        .from('branches')
-                        .select('branch_name, branch_code')
-                        .eq('id', admin.branch_id)
-                        .maybeSingle();
+                const { data: branch } = await client
+                    .from('branches')
+                    .select('branch_name, branch_code')
+                    .eq('id', admin.branch_id)
+                    .maybeSingle();
                     
-                    if (branchError) {
-                        console.error('Branch fetch error for id:', admin.branch_id, branchError);
-                    }
-                    
-                    if (branch) {
-                        branchName = branch.branch_name || 'ব্রাঞ্চ';
-                        branchCode = branch.branch_code || '';
-                    }
-                } catch(e) {
-                    console.error('Error fetching branch:', e);
+                if (branch) {
+                    branchName = branch.branch_name || 'ব্রাঞ্চ';
+                    branchCode = branch.branch_code || '';
                 }
             }
             
@@ -2609,10 +2601,9 @@ async function loadBranchAdmins() {
         
         html += '</tbody></table></div>';
         container.innerHTML = html;
-        console.log('✅ Branch admins loaded successfully!');
         
     } catch(e) {
-        console.error('❌ Load branch admins error:', e);
+        console.error('❌ Error:', e);
         container.innerHTML = `
             <div class="text-red-500 p-4 text-center">
                 <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
