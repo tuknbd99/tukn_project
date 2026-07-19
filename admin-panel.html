@@ -2521,28 +2521,42 @@ async function searchMemberForTransfer() {
     }
 }
 
+// ============================================================
+// ব্রাঞ্চ অ্যাডমিন লোড - ফিক্সড (একটি ক্লায়েন্ট ব্যবহার করে)
+// ============================================================
 async function loadBranchAdmins() {
+    console.log('🔄 loadBranchAdmins called!');
     const container = document.getElementById('branchAdminsList');
-    if (!container) return;
+    if (!container) {
+        console.error('❌ Container not found!');
+        return;
+    }
     
     container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>';
     
-    // 🔥 সরাসরি Supabase client তৈরি করুন
-    const client = supabase.createClient(
-        'https://bffomfsffrtfgxyetzvm.supabase.co',
-        'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D'
-    );
+    // 🔥 initSupabaseClient() ব্যবহার করুন (নতুন client তৈরি করবেন না)
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        console.error('❌ Supabase client not initialized');
+        return;
+    }
     
     try {
+        console.log('📊 Fetching branch admins...');
+        
         // সরাসরি branch_admins থেকে ডেটা আনুন
         const { data: admins, error } = await client
             .from('branch_admins')
             .select('*');
         
-        console.log('📊 Admins:', admins);
-        console.log('❌ Error:', error);
+        console.log('📊 Result:', { admins, error });
+        console.log('📊 Admins count:', admins?.length || 0);
         
-        if (error) throw error;
+        if (error) {
+            console.error('❌ Error fetching admins:', error);
+            throw error;
+        }
         
         if (!admins || admins.length === 0) {
             container.innerHTML = `
@@ -2554,8 +2568,11 @@ async function loadBranchAdmins() {
                     </button>
                 </div>
             `;
+            console.log('📊 No admins found');
             return;
         }
+        
+        console.log('✅ Found', admins.length, 'admins');
         
         let html = `<div class="table-scroll"><table class="data-table">
             <thead><tr>
@@ -2573,15 +2590,26 @@ async function loadBranchAdmins() {
             let branchCode = '';
             
             if (admin.branch_id) {
-                const { data: branch } = await client
-                    .from('branches')
-                    .select('branch_name, branch_code')
-                    .eq('id', admin.branch_id)
-                    .maybeSingle();
+                try {
+                    const { data: branch, error: branchError } = await client
+                        .from('branches')
+                        .select('branch_name, branch_code')
+                        .eq('id', admin.branch_id)
+                        .maybeSingle();
                     
-                if (branch) {
-                    branchName = branch.branch_name || 'ব্রাঞ্চ';
-                    branchCode = branch.branch_code || '';
+                    if (branchError) {
+                        console.error('Branch fetch error:', branchError);
+                    }
+                    
+                    if (branch) {
+                        branchName = branch.branch_name || 'ব্রাঞ্চ';
+                        branchCode = branch.branch_code || '';
+                        console.log('✅ Branch found:', branchName, branchCode);
+                    } else {
+                        console.log('⚠️ No branch found for id:', admin.branch_id);
+                    }
+                } catch(e) {
+                    console.error('Error fetching branch:', e);
                 }
             }
             
@@ -2605,6 +2633,7 @@ async function loadBranchAdmins() {
         
         html += '</tbody></table></div>';
         container.innerHTML = html;
+        console.log('✅ Branch admins loaded successfully!');
         
     } catch(e) {
         console.error('❌ Error:', e);
