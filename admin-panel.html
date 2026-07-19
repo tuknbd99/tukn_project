@@ -3167,12 +3167,12 @@ async function updateBranchSummary(branches) {
                 .eq('branch_id', b.id);
             totalMembers += count || 0;
             
-            // ব্রাঞ্চের ব্যালেন্স
+            // 🔥 .single() → .maybeSingle() পরিবর্তন করুন
             const { data: balance } = await client
                 .from('branch_balances')
                 .select('total_savings, total_loan_given')
                 .eq('branch_id', b.id)
-                .single();
+                .maybeSingle();  // ← এখানে পরিবর্তন
             
             if (balance) {
                 totalSavings += balance.total_savings || 0;
@@ -3202,9 +3202,6 @@ function populateBranchSelectors(branches) {
     });
 }
 
-// ============================================================
-// BRANCH VIEW
-// ============================================================
 async function loadBranchView() {
     const branchId = document.getElementById('branchViewSelector').value;
     const container = document.getElementById('branchViewContent');
@@ -3225,15 +3222,16 @@ async function loadBranchView() {
             return;
         }
         
-        // ব্রাঞ্চের লোনের সারাংশ
+        // 🔥 ব্রাঞ্চ লোনের সারাংশ - .maybeSingle() ব্যবহার করুন
         let totalLoanGiven = 0, totalLoanCollected = 0;
+        
         const { data: branchLoans } = await client
             .from('loan_applications')
             .select('id, amount')
             .eq('branch_id', branchId !== 'all' ? branchId : branchMembers[0]?.branch_id)
             .eq('status', 'approved');
             
-        if (branchLoans) {
+        if (branchLoans && branchLoans.length > 0) {
             totalLoanGiven = branchLoans.reduce((s, l) => s + (l.amount || 0), 0);
             const loanIds = branchLoans.map(l => l.id);
             if (loanIds.length > 0) {
@@ -3247,6 +3245,13 @@ async function loadBranchView() {
                 }
             }
         }
+        
+        // 🔥 ব্যালেন্সের জন্য .maybeSingle() ব্যবহার করুন
+        const { data: balance } = await client
+            .from('branch_balances')
+            .select('total_savings, total_loan_given, total_loan_collected, total_withdrawal')
+            .eq('branch_id', branchId !== 'all' ? branchId : branchMembers[0]?.branch_id)
+            .maybeSingle();
         
         let html = `
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
@@ -3305,7 +3310,7 @@ async function loadBranchView() {
                         <div>
                             <p class="font-semibold">${m?.full_name || 'নাম নেই'}</p>
                             <p class="text-xs text-gray-500">${m?.member_id || '-'}</p>
-                            <p class="text-xs text-gray-400">${bm.branches?.branch_name || '-'}</p>
+                            <p class="text-xs text-gray-400">${bm.branches?.name || bm.branches?.branch_name || '-'}</p>
                         </div>
                     </div>
                     <div class="mt-2 grid grid-cols-2 gap-1 text-xs">
@@ -3329,9 +3334,6 @@ async function loadBranchView() {
     }
 }
 
-// ============================================================
-// BRANCH REPORT
-// ============================================================
 async function loadBranchReport() {
     const branchId = document.getElementById('branchReportSelector').value;
     const fromDate = document.getElementById('branchReportFrom').value;
@@ -3370,20 +3372,19 @@ async function loadBranchReport() {
         let grandTotalSavings = 0, grandTotalLoan = 0, grandTotalCollected = 0, grandTotalWithdrawal = 0;
         
         for (const branch of branches) {
-            // ব্রাঞ্চ ব্যালেন্স
+            // 🔥 .maybeSingle() ব্যবহার করুন
             const { data: balance } = await client
                 .from('branch_balances')
                 .select('*')
                 .eq('branch_id', branch.id)
-                .single();
+                .maybeSingle();
             
-            // ব্রাঞ্চের সদস্য সংখ্যা
             const { count } = await client
                 .from('branch_members')
                 .select('*', { count: 'exact', head: true })
                 .eq('branch_id', branch.id);
             
-            // ব্রাঞ্চের লোন আদায় (loan_payments থেকে)
+            // ব্রাঞ্চের লোন আদায়
             let collected = 0;
             const { data: branchLoans } = await client
                 .from('loan_applications')
@@ -3415,7 +3416,7 @@ async function loadBranchReport() {
             grandTotalWithdrawal += withdrawal;
             
             html += `<tr>
-                <td><span class="font-medium">${branch.branch_name}</span></td>
+                <td><span class="font-medium">${branch.branch_name || branch.name}</span></td>
                 <td class="text-xs text-gray-500">${branch.branch_code}</td>
                 <td class="text-left text-emerald-600">${formatAmountWithText(savings)}</td>
                 <td class="text-left text-blue-600">${formatAmountWithText(loan)}</td>
