@@ -672,6 +672,13 @@
         <button onclick="showTab('memberTransfer')" id="tabMemberTransfer" class="nav-item">
             <i class="fas fa-exchange-alt"></i> সদস্য স্থানান্তর
             <span class="badge" style="background:#059669;">নতুন</span>
+
+            <!-- ব্রাঞ্চ অ্যাডমিন ম্যানেজমেন্ট -->
+        <button onclick="showTab('branchAdmins')" id="tabBranchAdmins" class="nav-item">
+            <i class="fas fa-user-tie"></i> ব্রাঞ্চ অ্যাডমিন
+            <span id="branchAdminBadge" class="badge" style="background:#7c3aed;">নতুন</span>
+        </button>
+            
         </button>
         <button onclick="showTab('pendingPayments')" id="tabPendingPayments" class="nav-item">
             <i class="fas fa-hand-holding-usd"></i> পেন্ডিং সঞ্চয়
@@ -1019,6 +1026,48 @@
                 </div>
             </div>
         </div>
+    </div>
+</div>
+
+    <!-- ==================== BRANCH ADMINS MANAGEMENT ==================== -->
+<div id="branchAdminsTab" class="tab-content">
+    <div class="content-card">
+        <div class="card-header no-print">
+            <h3><i class="fas fa-user-tie mr-2"></i>👤 ব্রাঞ্চ অ্যাডমিন ব্যবস্থাপনা</h3>
+            <button onclick="showAddBranchAdminModal()" class="btn btn-success btn-sm">
+                <i class="fas fa-plus mr-1"></i> নতুন অ্যাডমিন
+            </button>
+        </div>
+        <div class="p-4">
+            <div class="table-scroll" id="branchAdminsList">
+                <div class="text-center text-gray-500 py-8"><i class="fas fa-spinner fa-spin mr-2"></i>লোড হচ্ছে...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== ADD BRANCH ADMIN MODAL ==================== -->
+<div id="addBranchAdminModal" class="modal-overlay">
+    <div class="modal-container max-w-lg">
+        <h3 class="text-xl font-bold mb-4"><i class="fas fa-user-tie text-purple-600 mr-2"></i>নতুন ব্রাঞ্চ অ্যাডমিন যোগ করুন</h3>
+        <form id="addBranchAdminForm">
+            <div class="grid md:grid-cols-2 gap-3">
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">পূর্ণ নাম *</label><input type="text" id="baFullName" class="w-full border rounded-lg p-2" required></div>
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">ইউজারনেম *</label><input type="text" id="baUsername" class="w-full border rounded-lg p-2" required></div>
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">পাসওয়ার্ড *</label><input type="text" id="baPassword" class="w-full border rounded-lg p-2" value="123456" required></div>
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">ইমেইল</label><input type="email" id="baEmail" class="w-full border rounded-lg p-2"></div>
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">ফোন</label><input type="tel" id="baPhone" class="w-full border rounded-lg p-2"></div>
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">ব্রাঞ্চ *</label>
+                    <select id="baBranch" class="w-full border rounded-lg p-2" required>
+                        <option value="">-- ব্রাঞ্চ নির্বাচন করুন --</option>
+                    </select>
+                </div>
+            </div>
+            <div class="flex gap-3 mt-4">
+                <button type="submit" class="btn btn-success flex-1">✅ তৈরি করুন</button>
+                <button type="button" onclick="closeAddBranchAdminModal()" class="btn btn-danger flex-1">বাতিল</button>
+            </div>
+        </form>
     </div>
 </div>
     
@@ -2256,6 +2305,196 @@ async function searchMemberForTransfer() {
     }
 }
 
+// ============================================================
+// BRANCH ADMIN FUNCTIONS
+// ============================================================
+
+// ব্রাঞ্চ অ্যাডমিন লোড
+async function loadBranchAdmins() {
+    const container = document.getElementById('branchAdminsList');
+    if (!container) return;
+    
+    container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>';
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('branch_admins')
+            .select('*, branches(branch_name, branch_code)')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        if (!data || data.length === 0) {
+            container.innerHTML = '<div class="text-center text-gray-500 py-8">কোনো ব্রাঞ্চ অ্যাডমিন নেই</div>';
+            return;
+        }
+        
+        let html = `<table class="data-table">
+            <thead><tr>
+                <th>নাম</th>
+                <th>ইউজারনেম</th>
+                <th>ব্রাঞ্চ</th>
+                <th>ইমেইল</th>
+                <th>ফোন</th>
+                <th>স্ট্যাটাস</th>
+                <th>অ্যাকশন</th>
+            </tr></thead><tbody>`;
+        
+        data.forEach(admin => {
+            html += `<tr>
+                <td><span class="font-medium">${admin.full_name}</span></td>
+                <td><span class="text-xs font-mono bg-gray-100 px-2 py-1 rounded">${admin.username}</span></td>
+                <td><span class="text-sm text-emerald-600">${admin.branches?.branch_name || '-'}</span></td>
+                <td>${admin.email || '-'}</td>
+                <td>${admin.phone || '-'}</td>
+                <td><span class="status-badge ${admin.status === 'active' ? 'status-active' : 'status-inactive'}">${admin.status === 'active' ? '✅ সক্রিয়' : '⏸️ নিষ্ক্রিয়'}</span></td>
+                <td>
+                    <button onclick="deleteBranchAdmin('${admin.id}')" class="btn btn-danger btn-sm"><i class="fas fa-trash"></i></button>
+                    <button onclick="toggleBranchAdminStatus('${admin.id}')" class="btn ${admin.status === 'active' ? 'btn-warning' : 'btn-success'} btn-sm">
+                        ${admin.status === 'active' ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>'}
+                    </button>
+                </td>
+            </tr>`;
+        });
+        
+        html += '</tbody></table>';
+        container.innerHTML = html;
+        
+    } catch(e) {
+        console.error('Load branch admins error:', e);
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ লোড করতে সমস্যা!</div>';
+    }
+}
+
+// ব্রাঞ্চ অ্যাডমিন মডাল
+function showAddBranchAdminModal() {
+    document.getElementById('addBranchAdminModal').classList.add('active');
+    document.getElementById('addBranchAdminForm').reset();
+    loadBranchesForAdminSelect();
+}
+
+function closeAddBranchAdminModal() {
+    document.getElementById('addBranchAdminModal').classList.remove('active');
+}
+
+// ব্রাঞ্চ সিলেক্টর লোড
+async function loadBranchesForAdminSelect() {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const { data, error } = await client
+            .from('branches')
+            .select('id, branch_name, branch_code')
+            .eq('status', 'active')
+            .order('branch_name');
+        
+        if (error) throw error;
+        
+        const select = document.getElementById('baBranch');
+        select.innerHTML = '<option value="">-- ব্রাঞ্চ নির্বাচন করুন --</option>';
+        
+        if (data && data.length > 0) {
+            data.forEach(branch => {
+                const option = document.createElement('option');
+                option.value = branch.id;
+                option.textContent = `${branch.branch_name} (${branch.branch_code})`;
+                select.appendChild(option);
+            });
+        }
+    } catch(e) {
+        console.error('Load branches for admin error:', e);
+    }
+}
+
+// ব্রাঞ্চ অ্যাডমিন তৈরি
+document.getElementById('addBranchAdminForm')?.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const username = document.getElementById('baUsername').value.trim();
+    const password = document.getElementById('baPassword').value.trim();
+    const branchId = document.getElementById('baBranch').value;
+    
+    if (!username || !password || !branchId) {
+        showToast('সব তথ্য পূরণ করুন!', 'error');
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    try {
+        const { data, error } = await client
+            .from('branch_admins')
+            .insert([{
+                branch_id: branchId,
+                username: username,
+                password: password,
+                full_name: document.getElementById('baFullName').value.trim(),
+                email: document.getElementById('baEmail').value.trim(),
+                phone: document.getElementById('baPhone').value.trim(),
+                status: 'active',
+                created_at: new Date().toISOString()
+            }])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast('✅ নতুন ব্রাঞ্চ অ্যাডমিন তৈরি হয়েছে!', 'success');
+        closeAddBranchAdminModal();
+        loadBranchAdmins();
+        
+    } catch(e) {
+        console.error('Create branch admin error:', e);
+        showToast('❌ তৈরি ব্যর্থ: ' + e.message, 'error');
+    }
+});
+
+// ব্রাঞ্চ অ্যাডমিন ডিলিট
+async function deleteBranchAdmin(id) {
+    if (!confirm('এই অ্যাডমিন ডিলিট করবেন?')) return;
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    try {
+        await client.from('branch_admins').delete().eq('id', id);
+        showToast('✅ অ্যাডমিন ডিলিট করা হয়েছে', 'success');
+        loadBranchAdmins();
+    } catch(e) {
+        showToast('❌ ডিলিট ব্যর্থ!', 'error');
+    }
+}
+
+// ব্রাঞ্চ অ্যাডমিন স্ট্যাটাস টগল
+async function toggleBranchAdminStatus(id) {
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    try {
+        const { data, error } = await client
+            .from('branch_admins')
+            .select('status')
+            .eq('id', id)
+            .single();
+        
+        if (error) throw error;
+        
+        const newStatus = data.status === 'active' ? 'inactive' : 'active';
+        await client.from('branch_admins').update({ status: newStatus }).eq('id', id);
+        
+        showToast(`অ্যাডমিন ${newStatus === 'active' ? 'সক্রিয়' : 'নিষ্ক্রিয়'} করা হয়েছে`, 'success');
+        loadBranchAdmins();
+    } catch(e) {
+        showToast('❌ পরিবর্তন ব্যর্থ!', 'error');
+    }
+}
+    
 // স্থানান্তরের জন্য ব্রাঞ্চ লোড করুন
 async function loadTransferBranches(currentBranchId) {
     const client = initSupabaseClient();
