@@ -2813,7 +2813,7 @@ async function loadTransferBranches(currentBranchId) {
 }
 
 // ============================================================
-// স্থানান্তর নিশ্চিত করুন - কলাম আপডেটের পর
+// স্থানান্তর নিশ্চিত করুন - উন্নত Error হ্যান্ডেলিং সহ
 // ============================================================
 async function confirmTransfer() {
     if (!transferMemberData) {
@@ -2841,9 +2841,31 @@ async function confirmTransfer() {
         return;
     }
     
+    // 🔥 শুরুতে কানেকশন টেস্ট করুন
     try {
+        const { data: testData, error: testError } = await client
+            .from('branches')
+            .select('id')
+            .limit(1);
+            
+        if (testError) {
+            console.error('❌ Connection test failed:', testError);
+            showToast('ডাটাবেস সংযোগ সমস্যা! অ্যাডমিনকে জানান।', 'error');
+            return;
+        }
+        console.log('✅ Connection test passed');
+    } catch(e) {
+        console.error('❌ Connection test error:', e);
+        showToast('সংযোগ টেস্ট ব্যর্থ!', 'error');
+        return;
+    }
+    
+    try {
+        console.log('🔄 Transferring member:', memberId, 'to branch:', newBranchId);
+        
         // ১. পুরনো ব্রাঞ্চের সদস্য স্ট্যাটাস inactive করুন
         if (transferMemberData.branchMember) {
+            console.log('📝 Updating old branch status...');
             const { error: updateError } = await client
                 .from('branch_members')
                 .update({ 
@@ -2852,11 +2874,15 @@ async function confirmTransfer() {
                 })
                 .eq('id', transferMemberData.branchMember.id);
             
-            if (updateError) throw updateError;
+            if (updateError) {
+                console.error('❌ Update error:', updateError);
+                throw new Error('পুরনো ব্রাঞ্চ আপডেটে সমস্যা: ' + updateError.message);
+            }
             console.log('✅ পুরনো ব্রাঞ্চ inactive করা হয়েছে');
         }
         
         // ২. নতুন ব্রাঞ্চে সদস্য যোগ করুন
+        console.log('📝 Inserting into new branch...');
         const { error: insertError } = await client
             .from('branch_members')
             .insert([{
@@ -2866,10 +2892,14 @@ async function confirmTransfer() {
                 status: 'active'
             }]);
         
-        if (insertError) throw insertError;
+        if (insertError) {
+            console.error('❌ Insert error:', insertError);
+            throw new Error('নতুন ব্রাঞ্চে যোগ করতে সমস্যা: ' + insertError.message);
+        }
         console.log('✅ নতুন ব্রাঞ্চে সদস্য যোগ করা হয়েছে');
         
-        // ৩. স্থানান্তরের ইতিহাস সংরক্ষণ করুন (নতুন কলাম সহ)
+        // ৩. স্থানান্তরের ইতিহাস সংরক্ষণ করুন
+        console.log('📝 Saving transfer history...');
         const { error: logError } = await client
             .from('branch_transfer_logs')
             .insert([{
@@ -2887,7 +2917,7 @@ async function confirmTransfer() {
             }]);
         
         if (logError) {
-            console.error('❌ Log insert error:', logError);
+            console.error('❌ Log error:', logError);
             // logError দেখে কি সমস্যা হয়েছে তা বুঝুন
             showToast('⚠️ স্থানান্তর হয়েছে কিন্তু ইতিহাস সংরক্ষণে সমস্যা!', 'warning');
         } else {
