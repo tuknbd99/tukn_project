@@ -2813,7 +2813,7 @@ async function loadTransferBranches(currentBranchId) {
 }
 
 // ============================================================
-// স্থানান্তর নিশ্চিত করুন - সম্পূর্ণ ফিক্সড
+// স্থানান্তর নিশ্চিত করুন - কলাম আপডেটের পর
 // ============================================================
 async function confirmTransfer() {
     if (!transferMemberData) {
@@ -2842,7 +2842,7 @@ async function confirmTransfer() {
     }
     
     try {
-        // 🔥 ১. পুরনো ব্রাঞ্চের সদস্য স্ট্যাটাস inactive করুন (যদি থাকে)
+        // ১. পুরনো ব্রাঞ্চের সদস্য স্ট্যাটাস inactive করুন
         if (transferMemberData.branchMember) {
             const { error: updateError } = await client
                 .from('branch_members')
@@ -2856,7 +2856,7 @@ async function confirmTransfer() {
             console.log('✅ পুরনো ব্রাঞ্চ inactive করা হয়েছে');
         }
         
-        // 🔥 ২. নতুন ব্রাঞ্চে সদস্য যোগ করুন
+        // ২. নতুন ব্রাঞ্চে সদস্য যোগ করুন
         const { error: insertError } = await client
             .from('branch_members')
             .insert([{
@@ -2869,7 +2869,7 @@ async function confirmTransfer() {
         if (insertError) throw insertError;
         console.log('✅ নতুন ব্রাঞ্চে সদস্য যোগ করা হয়েছে');
         
-        // 🔥 ৩. স্থানান্তরের ইতিহাস সংরক্ষণ করুন
+        // ৩. স্থানান্তরের ইতিহাস সংরক্ষণ করুন (নতুন কলাম সহ)
         const { error: logError } = await client
             .from('branch_transfer_logs')
             .insert([{
@@ -2877,17 +2877,27 @@ async function confirmTransfer() {
                 from_branch_id: transferMemberData.currentBranch?.id || null,
                 to_branch_id: newBranchId,
                 reason: reason,
+                transfer_type: 'member_transfer',
+                status: 'approved',
                 transferred_by: currentAdmin?.username || 'সুপার অ্যাডমিন',
-                transferred_at: new Date().toISOString()
+                transferred_at: new Date().toISOString(),
+                requested_at: new Date().toISOString(),
+                approved_at: new Date().toISOString(),
+                approved_by: currentAdmin?.username || 'সুপার অ্যাডমিন'
             }]);
         
-        if (logError) throw logError;
-        console.log('✅ ইতিহাস সংরক্ষণ করা হয়েছে');
+        if (logError) {
+            console.error('❌ Log insert error:', logError);
+            // logError দেখে কি সমস্যা হয়েছে তা বুঝুন
+            showToast('⚠️ স্থানান্তর হয়েছে কিন্তু ইতিহাস সংরক্ষণে সমস্যা!', 'warning');
+        } else {
+            console.log('✅ ইতিহাস সংরক্ষণ করা হয়েছে');
+        }
         
-        // 🔥 ৪. সাফল্যের মেসেজ
+        // ৪. সাফল্যের মেসেজ
         showToast(`✅ সদস্য "${memberName}" সফলভাবে স্থানান্তরিত হয়েছে!`, 'success');
         
-        // 🔥 ৫. ফর্ম রিসেট করুন
+        // ৫. ফর্ম রিসেট করুন
         document.getElementById('transferForm').style.display = 'none';
         document.getElementById('transferMemberResult').innerHTML = '';
         document.getElementById('transferSearch').value = '';
@@ -2895,12 +2905,10 @@ async function confirmTransfer() {
         document.getElementById('transferReason').value = '';
         transferMemberData = null;
         
-        // 🔥 ৬. ইতিহাস ও ব্রাঞ্চ ভিউ রিলোড করুন
+        // ৬. ইতিহাস ও ব্রাঞ্চ ভিউ রিলোড করুন
         await loadTransferHistory();
         await loadBranchView();
         await loadBranches();
-        
-        // 🔥 ৭. সদস্য তালিকা রিলোড (যদি members ট্যাব খোলা থাকে)
         loadMembers();
         
         console.log('✅ স্থানান্তর সম্পূর্ণ!');
@@ -2911,55 +2919,102 @@ async function confirmTransfer() {
     }
 }
 
-// স্থানান্তরের ইতিহাস লোড করুন
+// ============================================================
+// স্থানান্তরের ইতিহাস লোড - কলাম আপডেটের পর
+// ============================================================
 async function loadTransferHistory() {
     const container = document.getElementById('transferHistoryContainer');
     if (!container) return;
     
     const client = initSupabaseClient();
-    if (!client) return;
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    container.innerHTML = '<div class="text-center py-4"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>';
     
     try {
-        const { data, error } = await client
+        // নতুন কলাম সহ SELECT
+        const { data: logs, error } = await client
             .from('branch_transfer_logs')
-            .select('*, from_branch:from_branch_id(name), to_branch:to_branch_id(name)')
+            .select('*')
             .order('transferred_at', { ascending: false })
             .limit(50);
         
-        if (error) throw error;
+        if (error) {
+            console.error('❌ Logs fetch error:', error);
+            throw error;
+        }
         
-        if (!data || data.length === 0) {
-            container.innerHTML = '<div class="text-center text-gray-500 py-8">কোনো স্থানান্তরের ইতিহাস নেই</div>';
+        if (!logs || logs.length === 0) {
+            container.innerHTML = '<div class="text-center text-gray-500 py-4">কোনো স্থানান্তরের ইতিহাস নেই</div>';
             return;
         }
         
-        let html = `<table class="data-table">
+        // ব্রাঞ্চের নাম আলাদাভাবে আনুন
+        let html = `<div class="table-scroll"><table class="data-table">
             <thead><tr>
                 <th>তারিখ</th>
                 <th>সদস্য আইডি</th>
                 <th>পুরনো ব্রাঞ্চ</th>
                 <th>নতুন ব্রাঞ্চ</th>
                 <th>কারণ</th>
-                <th>স্থানান্তর করেছেন</th>
+                <th>স্থানান্তরকারী</th>
+                <th>স্ট্যাটাস</th>
             </tr></thead><tbody>`;
         
-        data.forEach(log => {
+        for (const log of logs) {
+            // পুরনো ব্রাঞ্চের নাম
+            let fromBranchName = '-';
+            if (log.from_branch_id) {
+                const { data: branch } = await client
+                    .from('branches')
+                    .select('branch_name')
+                    .eq('id', log.from_branch_id)
+                    .maybeSingle();
+                if (branch) fromBranchName = branch.branch_name;
+            }
+            
+            // নতুন ব্রাঞ্চের নাম
+            let toBranchName = '-';
+            if (log.to_branch_id) {
+                const { data: branch } = await client
+                    .from('branches')
+                    .select('branch_name')
+                    .eq('id', log.to_branch_id)
+                    .maybeSingle();
+                if (branch) toBranchName = branch.branch_name;
+            }
+            
+            const statusText = log.status === 'approved' ? '✅ অনুমোদিত' : 
+                              log.status === 'pending' ? '⏳ পেন্ডিং' : '❌ বাতিল';
+            
+            const date = log.transferred_at || log.approved_at || log.requested_at;
+            
             html += `<tr>
-                <td>${log.transferred_at ? new Date(log.transferred_at).toLocaleDateString('bn-BD') : '-'}</td>
-                <td>${log.member_id || '-'}</td>
-                <td>${log.from_branch?.name || '-'}</td>
-                <td class="text-emerald-600 font-medium">${log.to_branch?.name || '-'}</td>
-                <td>${log.reason || '-'}</td>
-                <td>${log.transferred_by || '-'}</td>
+                <td class="text-xs">${date ? new Date(date).toLocaleDateString('bn-BD') : '-'}</td>
+                <td class="text-xs">${log.member_id || '-'}</td>
+                <td>${fromBranchName}</td>
+                <td class="text-emerald-600 font-medium">${toBranchName}</td>
+                <td class="text-sm">${log.reason || '-'}</td>
+                <td class="text-sm">${log.transferred_by || log.approved_by || '-'}</td>
+                <td><span class="status-badge ${log.status === 'approved' ? 'status-approved' : log.status === 'pending' ? 'status-pending' : 'status-rejected'}">${statusText}</span></td>
             </tr>`;
-        });
+        }
         
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         container.innerHTML = html;
         
     } catch(e) {
-        console.error('Load history error:', e);
-        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ ইতিহাস লোড করতে সমস্যা!</div>';
+        console.error('❌ Load history error:', e);
+        container.innerHTML = `
+            <div class="text-red-500 p-4 text-center">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ ইতিহাস লোড করতে সমস্যা!</p>
+                <button onclick="loadTransferHistory()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
     }
 }
     
