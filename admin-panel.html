@@ -2509,7 +2509,7 @@ async function searchMemberForTransfer() {
 }
 
 // ============================================================
-// ব্রাঞ্চ অ্যাডমিন লোড - ফিক্সড
+// ব্রাঞ্চ অ্যাডমিন লোড - সম্পূর্ণ ফিক্সড
 // ============================================================
 async function loadBranchAdmins() {
     const container = document.getElementById('branchAdminsList');
@@ -2524,20 +2524,20 @@ async function loadBranchAdmins() {
     }
     
     try {
-        // 🔥 সরাসরি branch_admins থেকে ডেটা আনুন
-        const { data, error } = await client
+        // ধাপ ১: সকল ব্রাঞ্চ অ্যাডমিন আনুন
+        const { data: admins, error: adminError } = await client
             .from('branch_admins')
             .select('*')
             .order('created_at', { ascending: false });
         
-        if (error) {
-            console.error('❌ Error fetching branch admins:', error);
-            throw error;
+        if (adminError) {
+            console.error('❌ Admin fetch error:', adminError);
+            throw adminError;
         }
         
-        console.log('📊 Branch Admins Data:', data);
+        console.log('📊 Admins found:', admins?.length || 0);
         
-        if (!data || data.length === 0) {
+        if (!admins || admins.length === 0) {
             container.innerHTML = `
                 <div class="text-center text-gray-500 py-8">
                     <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
@@ -2550,7 +2550,25 @@ async function loadBranchAdmins() {
             return;
         }
         
-        // 🔥 প্রতিটি অ্যাডমিনের জন্য ব্রাঞ্চের নাম আলাদাভাবে আনুন
+        // ধাপ ২: সকল ব্রাঞ্চের তালিকা আনুন (একবারেই)
+        const { data: branches, error: branchError } = await client
+            .from('branches')
+            .select('id, branch_name, branch_code')
+            .eq('status', 'active');
+        
+        if (branchError) {
+            console.error('❌ Branch fetch error:', branchError);
+        }
+        
+        // ব্রাঞ্চের নাম ম্যাপ তৈরি করুন
+        const branchMap = {};
+        if (branches) {
+            branches.forEach(b => {
+                branchMap[b.id] = b;
+            });
+        }
+        
+        // ধাপ ৩: HTML তৈরি করুন
         let html = `<div class="table-scroll"><table class="data-table">
             <thead><tr>
                 <th>নাম</th>
@@ -2562,30 +2580,40 @@ async function loadBranchAdmins() {
                 <th>অ্যাকশন</th>
             </tr></thead><tbody>`;
         
-        for (const admin of data) {
-            // ব্রাঞ্চের নাম আলাদাভাবে আনুন
-            let branchName = '-';
-            if (admin.branch_id) {
-                const { data: branch } = await client
+        for (const admin of admins) {
+            // ব্রাঞ্চের নাম বের করুন
+            let branchDisplay = '-';
+            if (admin.branch_id && branchMap[admin.branch_id]) {
+                const branch = branchMap[admin.branch_id];
+                branchDisplay = `${branch.branch_name} (${branch.branch_code || 'N/A'})`;
+            } else if (admin.branch_id) {
+                // যদি ম্যাপে না থাকে, আলাদাভাবে খুঁজুন
+                const { data: singleBranch } = await client
                     .from('branches')
                     .select('branch_name, branch_code')
                     .eq('id', admin.branch_id)
                     .maybeSingle();
-                if (branch) {
-                    branchName = branch.branch_name + ' (' + branch.branch_code + ')';
+                    
+                if (singleBranch) {
+                    branchDisplay = `${singleBranch.branch_name} (${singleBranch.branch_code || 'N/A'})`;
+                    // ক্যাশে যোগ করুন
+                    branchMap[admin.branch_id] = singleBranch;
                 }
             }
+            
+            const statusClass = admin.status === 'active' ? 'status-active' : 'status-inactive';
+            const statusText = admin.status === 'active' ? '✅ সক্রিয়' : '⏸️ নিষ্ক্রিয়';
             
             html += `<tr>
                 <td><span class="font-medium">${admin.full_name || '-'}</span></td>
                 <td><span class="text-xs font-mono bg-gray-100 px-2 py-1 rounded">${admin.username || '-'}</span></td>
-                <td><span class="text-sm text-emerald-600">${branchName}</span></td>
+                <td><span class="text-sm text-emerald-600">${branchDisplay}</span></td>
                 <td>${admin.email || '-'}</td>
                 <td>${admin.phone || '-'}</td>
-                <td><span class="status-badge ${admin.status === 'active' ? 'status-active' : 'status-inactive'}">${admin.status === 'active' ? '✅ সক্রিয়' : '⏸️ নিষ্ক্রিয়'}</span></td>
+                <td><span class="status-badge ${statusClass}">${statusText}</span></td>
                 <td>
-                    <button onclick="deleteBranchAdmin('${admin.id}')" class="btn btn-danger btn-sm"><i class="fas fa-trash"></i></button>
-                    <button onclick="toggleBranchAdminStatus('${admin.id}')" class="btn ${admin.status === 'active' ? 'btn-warning' : 'btn-success'} btn-sm">
+                    <button onclick="deleteBranchAdmin('${admin.id}')" class="btn btn-danger btn-sm" title="ডিলিট"><i class="fas fa-trash"></i></button>
+                    <button onclick="toggleBranchAdminStatus('${admin.id}')" class="btn ${admin.status === 'active' ? 'btn-warning' : 'btn-success'} btn-sm" title="স্ট্যাটাস পরিবর্তন">
                         ${admin.status === 'active' ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>'}
                     </button>
                 </td>
@@ -2594,6 +2622,7 @@ async function loadBranchAdmins() {
         
         html += '</tbody></table></div>';
         container.innerHTML = html;
+        console.log('✅ Branch admins loaded successfully!');
         
     } catch(e) {
         console.error('❌ Load branch admins error:', e);
