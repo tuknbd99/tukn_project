@@ -4646,87 +4646,195 @@ function updateTransferTotalAmount() {
     }
 }
 
+// ============================================================
+// ট্রান্সফার মডাল খোলা (আপডেটেড)
+// ============================================================
 function openTransferSavingsModal() {
+    // প্রেরকের তথ্য দেখান
     document.getElementById('transferSenderName').innerHTML = currentUser.name;
     document.getElementById('transferSenderId').innerHTML = currentUser.id;
     const termText = (currentUser.memberTerm === 0 || currentUser.memberTerm === null || currentUser.memberTerm === undefined) ? 'মেয়াদহীন' : currentUser.memberTerm + ' বছর';
     document.getElementById('transferSenderTerm').innerHTML = termText;
     
-    const savingsBalance = userFunds.monthlySavings || 0;
-    const bonusBalance = userFunds.referralBonus || 0;
-    document.getElementById('senderBalanceDisplay').innerHTML = savingsBalance.toLocaleString();
-    document.getElementById('senderBonusDisplay').innerHTML = bonusBalance.toLocaleString();
-    
-    const savingsOption = document.getElementById('transferFromSavings');
-    const bonusOption = document.getElementById('transferFromBonus');
-    const savingsLabel = document.getElementById('savingsOptionLabel');
-    const bonusLabel = document.getElementById('bonusOptionLabel');
-    const statusMsg = document.getElementById('fundStatusMessage');
-    
-    const isTermMember = parseInt(currentUser.memberTerm) > 0;
-    
-    if (isTermMember) {
-        if (savingsOption) {
+    // ব্যালেন্স আপডেট করুন
+    refreshMemberDataFromSupabase().then(() => {
+        const savingsBalance = userFunds.monthlySavings || 0;
+        const bonusBalance = userFunds.referralBonus || 0;
+        const profitBalance = (userFunds.savingsProfit || 0) + (userFunds.investmentProfit || 0) + (userFunds.referralProfit || 0);
+        
+        document.getElementById('senderBalanceDisplay').innerHTML = savingsBalance.toLocaleString();
+        document.getElementById('senderBonusDisplay').innerHTML = bonusBalance.toLocaleString();
+        document.getElementById('senderProfitDisplay').innerHTML = profitBalance.toLocaleString();
+        
+        // মেয়াদী সদস্য চেক
+        const isTermMember = parseInt(currentUser.memberTerm) > 0;
+        const warningEl = document.getElementById('termMemberWarning');
+        const savingsOption = document.getElementById('transferFromSavings');
+        const savingsLabel = document.getElementById('savingsOptionLabel');
+        
+        if (isTermMember) {
+            warningEl.classList.remove('hidden');
             savingsOption.disabled = true;
-            savingsOption.checked = false;
             savingsLabel.classList.add('opacity-50', 'cursor-not-allowed', 'bg-gray-100');
-        }
-        if (bonusOption) {
-            bonusOption.disabled = false;
-            bonusOption.checked = true;
-            bonusLabel.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-gray-100');
-        }
-        if (statusMsg) {
-            statusMsg.innerHTML = 'ℹ️ আপনি মেয়াদী সদস্য, শুধুমাত্র <strong>রেফারেল বোনাস</strong> থেকে ট্রান্সফার করতে পারবেন!';
-            statusMsg.className = 'text-xs text-amber-600 mt-1';
-        }
-        if (bonusBalance === 0) {
-            statusMsg.innerHTML = '⚠️ আপনার রেফারেল বোনাস ব্যালেন্স ০ (শূন্য), ট্রান্সফার সম্ভব নয়!';
-            statusMsg.className = 'text-xs text-red-600 mt-1';
-            document.getElementById('transferSubmitBtn').disabled = true;
-        }
-    } else {
-        if (savingsOption) {
+            // বোনাস সিলেক্ট করুন
+            document.getElementById('transferFromBonus').checked = true;
+        } else {
+            warningEl.classList.add('hidden');
             savingsOption.disabled = false;
-            savingsOption.checked = true;
             savingsLabel.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-gray-100');
+            // সঞ্চয় সিলেক্ট করুন
+            document.getElementById('transferFromSavings').checked = true;
         }
-        if (bonusOption) {
-            bonusOption.disabled = false;
-            bonusLabel.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-gray-100');
-        }
-        if (statusMsg) {
-            statusMsg.innerHTML = '✅ আপনি মেয়াদহীন সদস্য, <strong>সঞ্চয়</strong> এবং <strong>বোনাস</strong> উভয় ফান্ড থেকে ট্রান্সফার করতে পারবেন!';
-            statusMsg.className = 'text-xs text-emerald-600 mt-1';
-        }
-        if (savingsBalance === 0 && bonusBalance === 0) {
-            statusMsg.innerHTML = '⚠️ আপনার কোনো ব্যালেন্স নেই! ট্রান্সফার সম্ভব নয়।';
-            statusMsg.className = 'text-xs text-red-600 mt-1';
-            document.getElementById('transferSubmitBtn').disabled = true;
-        }
-    }
+        
+        // ফান্ড ব্যালেন্স আপডেট
+        updateFundBalanceDisplay();
+    });
     
+    // ফিল্ড রিসেট
     document.getElementById('transferReceiverSearch').value = '';
     document.getElementById('transferReceiverInfo').classList.add('hidden');
     document.getElementById('transferReceiverNotFound').classList.add('hidden');
     document.getElementById('transferReceiverError').classList.add('hidden');
-    
+    document.getElementById('transferMonthsSection').classList.add('hidden');
+    document.getElementById('transferCustomAmountSection').classList.add('hidden');
     document.querySelectorAll('.transfer-month-cb').forEach(cb => cb.checked = false);
+    document.getElementById('transferCustomAmount').value = '';
     document.getElementById('transferTotalAmount').innerHTML = '০ টাকা';
     document.getElementById('transferFundLabel').innerHTML = '📊 সঞ্চয় ফান্ড থেকে';
     document.getElementById('transferFundLabel').className = 'text-emerald-600 font-semibold';
     
     const submitBtn = document.getElementById('transferSubmitBtn');
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> মাস নির্বাচন করুন';
+    submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> মাস নির্বাচন করুন অথবা টাকা দিন';
     
     document.getElementById('transferSavingsModal').classList.remove('hidden');
     document.getElementById('transferSavingsModal').classList.add('flex');
-    
     document.getElementById('transferPerMonthSavings').innerHTML = currentUser?.monthlySavings || 500;
     
     updateTransferTotalAmount();
 }
+
+// ============================================================
+// ফান্ড ব্যালেন্স আপডেট
+// ============================================================
+function updateFundBalanceDisplay() {
+    const fromSavings = document.getElementById('transferFromSavings')?.checked;
+    const fromBonus = document.getElementById('transferFromBonus')?.checked;
+    const fromProfit = document.getElementById('transferFromProfit')?.checked;
+    const fromAll = document.getElementById('transferFromAll')?.checked;
+    
+    let balance = 0;
+    let label = '';
+    
+    if (fromSavings) {
+        balance = userFunds.monthlySavings || 0;
+        label = 'সঞ্চয় ফান্ড';
+        document.getElementById('transferFundLabel').innerHTML = '📊 সঞ্চয় ফান্ড থেকে';
+        document.getElementById('transferFundLabel').className = 'text-emerald-600 font-semibold';
+    } else if (fromBonus) {
+        balance = userFunds.referralBonus || 0;
+        label = 'রেফারেল বোনাস';
+        document.getElementById('transferFundLabel').innerHTML = '🎁 রেফারেল বোনাস থেকে';
+        document.getElementById('transferFundLabel').className = 'text-amber-600 font-semibold';
+    } else if (fromProfit) {
+        balance = (userFunds.savingsProfit || 0) + (userFunds.investmentProfit || 0) + (userFunds.referralProfit || 0);
+        label = 'লভ্যাংশ';
+        document.getElementById('transferFundLabel').innerHTML = '📈 লভ্যাংশ থেকে';
+        document.getElementById('transferFundLabel').className = 'text-purple-600 font-semibold';
+    } else if (fromAll) {
+        balance = (userFunds.monthlySavings || 0) + (userFunds.referralBonus || 0) + 
+                  (userFunds.savingsProfit || 0) + (userFunds.investmentProfit || 0) + (userFunds.referralProfit || 0);
+        label = 'সব ফান্ড';
+        document.getElementById('transferFundLabel').innerHTML = '🔷 সব ফান্ড থেকে';
+        document.getElementById('transferFundLabel').className = 'text-blue-600 font-semibold';
+    }
+    
+    document.getElementById('selectedFundBalance').innerHTML = balance.toLocaleString() + ' টাকা';
+    document.getElementById('selectedFundBalance').dataset.balance = balance;
+    
+    // স্ট্যাটাস মেসেজ আপডেট
+    const statusMsg = document.getElementById('fundStatusMessage');
+    statusMsg.innerHTML = `📊 ${label} ব্যালেন্স: ${balance.toFixed(2)} টাকা`;
+    statusMsg.className = 'text-xs text-gray-500 mt-1';
+}
+
+// ============================================================
+// ট্রান্সফার পরিমাণ আপডেট (আপডেটেড)
+// ============================================================
+function updateTransferTotalAmount() {
+    const receiverInfo = document.getElementById('transferReceiverInfo');
+    const isTermMember = receiverInfo.dataset.isTermMember === 'true';
+    const monthlyDue = parseFloat(receiverInfo.dataset.receiverMonthlyDue) || 0;
+    
+    let totalAmount = 0;
+    let calculationNote = '';
+    
+    if (!receiverInfo.classList.contains('hidden')) {
+        if (isTermMember) {
+            // মেয়াদী সদস্য - মাস অনুযায়ী
+            const selected = document.querySelectorAll('.transfer-month-cb:checked');
+            const monthCount = selected.length;
+            totalAmount = monthCount * monthlyDue;
+            calculationNote = monthCount > 0 ? `${monthCount} মাস × ${monthlyDue} টাকা = ${totalAmount} টাকা` : 'মাস নির্বাচন করুন';
+            document.getElementById('transferCalculationNote').innerHTML = `* ${calculationNote}`;
+        } else {
+            // মেয়াদহীন সদস্য - ইচ্ছামতো টাকা
+            const customAmount = parseFloat(document.getElementById('transferCustomAmount').value) || 0;
+            totalAmount = customAmount;
+            calculationNote = customAmount > 0 ? `${customAmount} টাকা` : 'টাকা ইনপুট দিন';
+            document.getElementById('transferCalculationNote').innerHTML = `* ${calculationNote}`;
+        }
+    } else {
+        document.getElementById('transferCalculationNote').innerHTML = '* প্রথমে গ্রহীতা সার্চ করুন';
+    }
+    
+    document.getElementById('transferTotalAmount').innerHTML = totalAmount.toLocaleString() + ' টাকা';
+    
+    // ব্যালেন্স চেক ও সাবমিট বাটন আপডেট
+    const availableBalance = parseFloat(document.getElementById('selectedFundBalance').dataset.balance) || 0;
+    const submitBtn = document.getElementById('transferSubmitBtn');
+    const statusMsg = document.getElementById('fundStatusMessage');
+    
+    if (totalAmount > 0) {
+        if (availableBalance === 0) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i> ফান্ড খালি (০ টাকা)`;
+            statusMsg.innerHTML = `❌ আপনার নির্বাচিত ফান্ডে কোনো ব্যালেন্স নেই!`;
+            statusMsg.className = 'text-xs text-red-600 mt-1 font-semibold';
+        } else if (totalAmount > availableBalance) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i> ব্যালেন্স কম (${availableBalance.toLocaleString()} টাকা)`;
+            statusMsg.innerHTML = `⚠️ আপনার ফান্ডে ${availableBalance.toFixed(2)} টাকা আছে। ট্রান্সফার করতে চাচ্ছেন ${totalAmount.toFixed(2)} টাকা!`;
+            statusMsg.className = 'text-xs text-red-600 mt-1 font-semibold';
+        } else {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i> ট্রান্সফার করুন';
+            statusMsg.innerHTML = `✅ ট্রান্সফারের পর বাকি থাকবে ${(availableBalance - totalAmount).toFixed(2)} টাকা।`;
+            statusMsg.className = 'text-xs text-emerald-600 mt-1 font-semibold';
+        }
+    } else {
+        submitBtn.disabled = true;
+        if (receiverInfo.classList.contains('hidden')) {
+            submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> প্রথমে গ্রহীতা সার্চ করুন';
+        } else if (isTermMember) {
+            submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> মাস নির্বাচন করুন';
+        } else {
+            submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> টাকা ইনপুট দিন';
+        }
+        statusMsg.innerHTML = `📊 নির্বাচিত ফান্ডে ${availableBalance.toFixed(2)} টাকা আছে`;
+        statusMsg.className = 'text-xs text-gray-500 mt-1';
+    }
+}
+
+// ============================================================
+// রেডিও বাটনে পরিবর্তন শুনুন
+// ============================================================
+document.addEventListener('change', function(e) {
+    if (e.target.name === 'transferFund') {
+        updateFundBalanceDisplay();
+        updateTransferTotalAmount();
+    }
+});
 
 function closeTransferModal() {
     document.getElementById('transferSavingsModal').classList.add('hidden');
@@ -4747,12 +4855,20 @@ function deselectAllTransferMonths() {
     updateTransferTotalAmount();
 }
 
+// ============================================================
+// গ্রহীতা সার্চ ফাংশন (আইডি ও মোবাইল উভয় দিয়ে)
+// ============================================================
 async function searchReceiverForTransfer() {
     const searchQuery = document.getElementById('transferReceiverSearch').value.trim();
+    
+    // ভ্যালিডেশন
     if (!searchQuery) {
         showToast('গ্রহীতার আইডি বা মোবাইল নম্বর দিন!', 'error');
         return;
     }
+    
+    // কনসোলে সার্চ কোয়েরি দেখান (ডিবাগিংয়ের জন্য)
+    console.log('🔍 সার্চ কোয়েরি:', searchQuery);
     
     const client = await initSupabase();
     if (!client) {
@@ -4760,80 +4876,192 @@ async function searchReceiverForTransfer() {
         return;
     }
     
+    // বাটন ডিসেবল করুন
     const btn = document.querySelector('#transferSavingsModal .bg-teal-500');
     const originalText = btn.innerHTML;
-    btn.innerHTML = '<span class="loading-spinner"></span>';
+    btn.innerHTML = '<span class="loading-spinner"></span> সার্চ হচ্ছে...';
     btn.disabled = true;
     
     try {
-        let { data, error } = await client
+        let data = null;
+        let error = null;
+        
+        // ============================================================
+        // ১. প্রথমে মোবাইল নম্বর দিয়ে সার্চ
+        // ============================================================
+        const { data: mobileData, error: mobileError } = await client
             .from('members')
-            .select('member_id, full_name, mobile, member_term, monthly_savings, status')
+            .select('member_id, full_name, mobile, member_term, monthly_savings, status, monthly_due')
             .eq('mobile', searchQuery)
             .maybeSingle();
         
+        if (mobileError) {
+            console.error('❌ মোবাইল সার্চ error:', mobileError);
+        }
+        
+        if (mobileData) {
+            data = mobileData;
+            console.log('✅ মোবাইলে পাওয়া গেছে:', data);
+        }
+        
+        // ============================================================
+        // ২. মোবাইলে না পেলে আইডি দিয়ে সার্চ
+        // ============================================================
         if (!data) {
             const { data: idData, error: idError } = await client
                 .from('members')
-                .select('member_id, full_name, mobile, member_term, monthly_savings, status')
+                .select('member_id, full_name, mobile, member_term, monthly_savings, status, monthly_due')
                 .eq('member_id', searchQuery)
                 .maybeSingle();
-            data = idData;
-            error = idError;
+            
+            if (idError) {
+                console.error('❌ আইডি সার্চ error:', idError);
+            }
+            
+            if (idData) {
+                data = idData;
+                console.log('✅ আইডিতে পাওয়া গেছে:', data);
+            }
         }
         
+        // ============================================================
+        // ৩. সার্চের ফলাফল প্রক্রিয়াকরণ
+        // ============================================================
         const receiverInfo = document.getElementById('transferReceiverInfo');
         const notFound = document.getElementById('transferReceiverNotFound');
         const errorDiv = document.getElementById('transferReceiverError');
+        const monthsSection = document.getElementById('transferMonthsSection');
+        const customAmountSection = document.getElementById('transferCustomAmountSection');
         
+        // সব ডিভাইস হাইড করুন
         receiverInfo.classList.add('hidden');
         notFound.classList.add('hidden');
         errorDiv.classList.add('hidden');
+        monthsSection.classList.add('hidden');
+        customAmountSection.classList.add('hidden');
         
-        if (error) {
-            console.error('Search error:', error);
-            showToast('সার্চ করতে ব্যর্থ!', 'error');
-            return;
-        }
-        
+        // ============================================================
+        // ৪. সার্চ রেজাল্ট চেক
+        // ============================================================
         if (data && data.member_id) {
+            // ৪.১: নিজেকে ট্রান্সফার করা যাবে না
             if (data.member_id === currentUser.id) {
                 showToast('আপনি নিজেকে ট্রান্সফার করতে পারবেন না!', 'error');
                 return;
             }
             
+            // ৪.২: অনুমোদিত সদস্য কিনা চেক
             if (data.status !== 'active' && data.status !== 'approved') {
                 errorDiv.classList.remove('hidden');
                 document.getElementById('transferReceiverErrorText').innerHTML = 'গ্রহীতা অনুমোদিত নন, ট্রান্সফার সম্ভব নয়!';
                 return;
             }
             
-            document.getElementById('transferReceiverName').innerHTML = data.full_name || 'নাম নেই';
-            document.getElementById('transferReceiverId').innerHTML = data.member_id;
-            const termText = (parseInt(data.member_term) === 0) ? 'মেয়াদহীন' : data.member_term + ' বছর';
-            document.getElementById('transferReceiverTerm').innerHTML = termText;
-            document.getElementById('transferReceiverMonthlyDue').innerHTML = data.monthly_savings || 500;
+            // ============================================================
+            // ৫. গ্রহীতার তথ্য ডিসপ্লে করুন
+            // ============================================================
+            const isTermMember = parseInt(data.member_term) > 0;
+            const monthlyDue = data.monthly_due || data.monthly_savings || 500;
+            const termText = isTermMember ? data.member_term + ' বছর' : 'মেয়াদহীন';
+            const badgeText = isTermMember ? '📌 মেয়াদী সদস্য' : '🟢 মেয়াদহীন';
+            const badgeColor = isTermMember ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700';
             
-            receiverInfo.classList.remove('hidden');
+            // নাম
+            document.getElementById('transferReceiverName').innerHTML = data.full_name || 'নাম নেই';
+            
+            // আইডি
+            document.getElementById('transferReceiverId').innerHTML = data.member_id;
+            
+            // মেয়াদ
+            document.getElementById('transferReceiverTerm').innerHTML = termText;
+            
+            // টাইপ ব্যাজ
+            document.getElementById('receiverTypeBadge').innerHTML = badgeText;
+            document.getElementById('receiverTypeBadge').className = `text-xs px-2 py-0.5 rounded-full ${badgeColor}`;
+            
+            // মাসিক ধার্য
+            document.getElementById('transferReceiverMonthlyDue').innerHTML = monthlyDue + ' টাকা';
+            
+            // ডেটাসেটে সংরক্ষণ করুন
             receiverInfo.dataset.receiverId = data.member_id;
             receiverInfo.dataset.receiverName = data.full_name || '';
             receiverInfo.dataset.receiverMobile = data.mobile || '';
-            receiverInfo.dataset.receiverMonthlySavings = data.monthly_savings || 500;
+            receiverInfo.dataset.receiverMonthlyDue = monthlyDue;
+            receiverInfo.dataset.isTermMember = isTermMember;
+            receiverInfo.dataset.receiverStatus = data.status;
+            
+            // ইনফো দেখান
+            receiverInfo.classList.remove('hidden');
+            
+            // ============================================================
+            // ৬. গ্রহীতার ধরন অনুযায়ী ফিল্ড দেখান
+            // ============================================================
+            if (isTermMember) {
+                // মেয়াদী সদস্য - মাস নির্বাচন দেখান
+                monthsSection.classList.remove('hidden');
+                customAmountSection.classList.add('hidden');
+                document.getElementById('transferCalculationNote').innerHTML = 
+                    `* প্রতি মাসের ধার্য: ${monthlyDue} টাকা × নির্বাচিত মাস সংখ্যা`;
+                
+                // মাসের চেকবক্স রিসেট
+                document.querySelectorAll('.transfer-month-cb').forEach(cb => cb.checked = false);
+                document.getElementById('transferCustomAmount').value = '';
+                
+                showToast(`✅ গ্রহীতা মেয়াদী সদস্য, মাস নির্বাচন করে ট্রান্সফার করুন`, 'info');
+            } else {
+                // মেয়াদহীন সদস্য - ইচ্ছামতো টাকা ইনপুট দেখান
+                monthsSection.classList.add('hidden');
+                customAmountSection.classList.remove('hidden');
+                document.getElementById('transferCalculationNote').innerHTML = 
+                    `* আপনি ইচ্ছামতো যেকোনো পরিমাণ টাকা ট্রান্সফার করতে পারেন`;
+                
+                // কাস্টম টাকা ফিল্ড রিসেট
+                document.querySelectorAll('.transfer-month-cb').forEach(cb => cb.checked = false);
+                document.getElementById('transferCustomAmount').value = '';
+                
+                showToast(`✅ গ্রহীতা মেয়াদহীন সদস্য, ইচ্ছামতো টাকা ইনপুট দিন`, 'info');
+            }
+            
+            // ট্রান্সফার পরিমাণ আপডেট করুন
+            updateTransferTotalAmount();
             
             showToast(`✅ গ্রহীতা পাওয়া গেছে: ${data.full_name}`, 'success');
+            
         } else {
+            // ============================================================
+            // ৭. সদস্য পাওয়া যায়নি
+            // ============================================================
             notFound.classList.remove('hidden');
+            
+            // ডেটাসেট ক্লিয়ার করুন
+            receiverInfo.dataset.receiverId = '';
+            receiverInfo.dataset.receiverName = '';
+            receiverInfo.dataset.receiverMobile = '';
+            receiverInfo.dataset.receiverMonthlyDue = '0';
+            receiverInfo.dataset.isTermMember = 'false';
+            
+            // ট্রান্সফার পরিমাণ রিসেট
+            document.getElementById('transferTotalAmount').innerHTML = '০ টাকা';
+            document.getElementById('transferCalculationNote').innerHTML = '* প্রথমে গ্রহীতা সার্চ করুন';
+            
+            // সাবমিট বাটন ডিসেবল
+            const submitBtn = document.getElementById('transferSubmitBtn');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> প্রথমে গ্রহীতা সার্চ করুন';
+            
             showToast('❌ এই সদস্য পাওয়া যায়নি!', 'error');
         }
+        
     } catch(e) {
-        console.error('Search error:', e);
+        console.error('❌ সার্চ error:', e);
         showToast('সার্চ করতে ব্যর্থ!', 'error');
     } finally {
+        // বাটন এনেবল করুন
         btn.innerHTML = originalText;
         btn.disabled = false;
     }
 }
-
+    
 // ============================================================
 // সঞ্চয় ট্রান্সফার (এখন pending স্ট্যাটাসে জমা হবে)
 // ============================================================
