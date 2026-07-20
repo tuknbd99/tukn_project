@@ -2550,6 +2550,9 @@ function submitWithdraw(type) {
     }
 }
 
+// ============================================================
+// উত্তোলন রিকোয়েস্ট সেভ (payment_method এরর ফিক্স)
+// ============================================================
 async function saveWithdrawRequest(type, amount, method, receiverDetails, typeName) {
     const client = await initSupabase();
     if(!client) {
@@ -2557,31 +2560,40 @@ async function saveWithdrawRequest(type, amount, method, receiverDetails, typeNa
         return;
     }
     try {
+        // ✅ শুধু বিদ্যমান কলামগুলো ব্যবহার করুন
         const withdrawData = {
             member_id: currentUser.id,
             member_name: currentUser.name,
             mobile: currentUser.mobile,
             type: typeName,
             amount: amount,
-            payment_method: method,
             status: 'pending',
             requested_at: new Date().toISOString()
         };
-        if(method === 'bank') {
+        
+        // ✅ payment_method যোগ করুন (এখন কলাম আছে)
+        if (method === 'bkash' || method === 'nagad' || method === 'rocket') {
+            withdrawData.payment_method = method;
+            withdrawData.receiver_mobile = receiverDetails.mobile || null;
+        } else if (method === 'bank') {
+            withdrawData.payment_method = 'bank';
             withdrawData.bank_name = receiverDetails.bankName || null;
             withdrawData.account_number = receiverDetails.accountNo || null;
             withdrawData.account_name = receiverDetails.accountName || null;
-        } else {
-            withdrawData.receiver_mobile = receiverDetails.mobile || null;
         }
+        
+        console.log('📤 উত্তোলন ডাটা:', withdrawData);
+        
         const { data, error } = await client
             .from('withdrawals')
             .insert([withdrawData]);
+            
         if(error) {
             console.error('❌ উত্তোলন রিকোয়েস্ট সেভ error:', error);
             showToast('উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ!', 'error');
         } else {
             console.log('✅ উত্তোলন রিকোয়েস্ট সেভ হয়েছে:', data);
+            showToast('✅ উত্তোলনের অনুরোধ জমা হয়েছে!', 'success');
             await loadWithdrawalHistory();
         }
     } catch(e) {
@@ -4653,7 +4665,7 @@ function updateTransferTotalAmount() {
 }
 
 // ============================================================
-// ট্রান্সফার মডাল খোলা (ব্যালেন্স রিফ্রেশ সহ)
+// ট্রান্সফার মডাল খোলা (ব্যালেন্স রিফ্রেশ সহ - ফিক্সড)
 // ============================================================
 function openTransferSavingsModal() {
     console.log('🔓 ট্রান্সফার মডাল খোলা হচ্ছে...');
@@ -4663,7 +4675,7 @@ function openTransferSavingsModal() {
         return;
     }
     
-    // ✅ এলিমেন্টগুলো নিরাপদে সেট করুন
+    // এলিমেন্টগুলো নিরাপদে সেট করুন
     const senderNameEl = document.getElementById('transferSenderName');
     const senderIdEl = document.getElementById('transferSenderId');
     const senderTermEl = document.getElementById('transferSenderTerm');
@@ -4700,14 +4712,14 @@ function openTransferSavingsModal() {
     }
     
     // ============================================================
-    // ✅ গুরুত্বপূর্ণ: ব্যালেন্স রিফ্রেশ করুন (ডাটাবেস থেকে তাজা ডাটা আনুন)
+    // ✅ গুরুত্বপূর্ণ: প্রথমে ব্যালেন্স রিফ্রেশ করুন
     // ============================================================
     refreshMemberDataFromSupabase().then(() => {
         console.log('✅ ব্যালেন্স রিফ্রেশ সম্পন্ন:', userFunds);
         
-        const savingsBalance = userFunds.monthlySavings || 0;
-        const bonusBalance = userFunds.referralBonus || 0;
-        const profitBalance = (userFunds.savingsProfit || 0) + (userFunds.investmentProfit || 0) + (userFunds.referralProfit || 0);
+        const savingsBalance = Number(userFunds.monthlySavings) || 0;
+        const bonusBalance = Number(userFunds.referralBonus) || 0;
+        const profitBalance = Number(userFunds.savingsProfit || 0) + Number(userFunds.investmentProfit || 0) + Number(userFunds.referralProfit || 0);
         
         if (senderBalanceEl) senderBalanceEl.innerHTML = savingsBalance.toLocaleString();
         if (senderBonusEl) senderBonusEl.innerHTML = bonusBalance.toLocaleString();
@@ -4746,7 +4758,9 @@ function openTransferSavingsModal() {
         }
         
         // ✅ ফান্ড ব্যালেন্স আপডেট করুন (এখন সঠিক ব্যালেন্স দেখাবে)
-        updateFundBalanceDisplay();
+        setTimeout(() => {
+            updateFundBalanceDisplay();
+        }, 100);
     });
     
     // সব ফিল্ড রিসেট করুন
@@ -4798,7 +4812,7 @@ function openTransferSavingsModal() {
 }
 
 // ============================================================
-// ফান্ড ব্যালেন্স আপডেট (সঠিক ব্যালেন্স দেখানোর জন্য)
+// ফান্ড ব্যালেন্স আপডেট (সঠিক ব্যালেন্স দেখানোর জন্য - ফিক্সড)
 // ============================================================
 function updateFundBalanceDisplay() {
     console.log('💰 ফান্ড ব্যালেন্স আপডেট করা হচ্ছে...');
@@ -4812,60 +4826,71 @@ function updateFundBalanceDisplay() {
     const fundLabelEl = document.getElementById('transferFundLabel');
     const statusMsg = document.getElementById('fundStatusMessage');
     
-    // ✅ userFunds থেকে সরাসরি ব্যালেন্স নিন (তাজা ডাটা)
+    // ✅ নিশ্চিত করুন userFunds আপডেটেড
     let balance = 0;
-    let label = '';
-    let icon = '';
+    let label = 'সঞ্চয় ফান্ড';
+    let icon = '📊';
     
     if (fromSavings && fromSavings.checked) {
-        balance = userFunds.monthlySavings || 0;
+        balance = Number(userFunds.monthlySavings) || 0;
         label = 'সঞ্চয় ফান্ড';
         icon = '📊';
         if (fundLabelEl) {
             fundLabelEl.innerHTML = '📊 সঞ্চয় ফান্ড থেকে';
             fundLabelEl.className = 'text-emerald-600 font-semibold';
         }
+        console.log(`✅ সঞ্চয় ফান্ড সিলেক্টেড, ব্যালেন্স: ${balance}`);
+        
     } else if (fromBonus && fromBonus.checked) {
-        balance = userFunds.referralBonus || 0;
+        balance = Number(userFunds.referralBonus) || 0;
         label = 'রেফারেল বোনাস';
         icon = '🎁';
         if (fundLabelEl) {
             fundLabelEl.innerHTML = '🎁 রেফারেল বোনাস থেকে';
             fundLabelEl.className = 'text-amber-600 font-semibold';
         }
+        console.log(`✅ বোনাস ফান্ড সিলেক্টেড, ব্যালেন্স: ${balance}`);
+        
     } else if (fromProfit && fromProfit.checked) {
-        balance = (userFunds.savingsProfit || 0) + (userFunds.investmentProfit || 0) + (userFunds.referralProfit || 0);
+        balance = Number(userFunds.savingsProfit || 0) + Number(userFunds.investmentProfit || 0) + Number(userFunds.referralProfit || 0);
         label = 'লভ্যাংশ';
         icon = '📈';
         if (fundLabelEl) {
             fundLabelEl.innerHTML = '📈 লভ্যাংশ থেকে';
             fundLabelEl.className = 'text-purple-600 font-semibold';
         }
+        console.log(`✅ লভ্যাংশ ফান্ড সিলেক্টেড, ব্যালেন্স: ${balance}`);
+        
     } else if (fromAll && fromAll.checked) {
-        balance = (userFunds.monthlySavings || 0) + (userFunds.referralBonus || 0) + 
-                  (userFunds.savingsProfit || 0) + (userFunds.investmentProfit || 0) + (userFunds.referralProfit || 0);
+        balance = Number(userFunds.monthlySavings || 0) + Number(userFunds.referralBonus || 0) + 
+                  Number(userFunds.savingsProfit || 0) + Number(userFunds.investmentProfit || 0) + Number(userFunds.referralProfit || 0);
         label = 'সব ফান্ড';
         icon = '🔷';
         if (fundLabelEl) {
             fundLabelEl.innerHTML = '🔷 সব ফান্ড থেকে';
             fundLabelEl.className = 'text-blue-600 font-semibold';
         }
+        console.log(`✅ সব ফান্ড সিলেক্টেড, ব্যালেন্স: ${balance}`);
+        
     } else {
-        // ডিফল্ট - সঞ্চয়
-        balance = userFunds.monthlySavings || 0;
+        // ডিফল্ট - সঞ্চয় (যদি কোনো রেডিও সিলেক্ট না থাকে)
+        balance = Number(userFunds.monthlySavings) || 0;
         label = 'সঞ্চয় ফান্ড';
         icon = '📊';
         if (fundLabelEl) {
             fundLabelEl.innerHTML = '📊 সঞ্চয় ফান্ড থেকে';
             fundLabelEl.className = 'text-emerald-600 font-semibold';
         }
+        // ডিফল্টভাবে সঞ্চয় সিলেক্ট করুন
+        if (fromSavings) fromSavings.checked = true;
+        console.log(`✅ ডিফল্ট সঞ্চয় ফান্ড, ব্যালেন্স: ${balance}`);
     }
     
-    // ✅ সঠিক ব্যালেন্স দেখান
+    // ✅ সঠিক ব্যালেন্স দেখান (টাকার পরিমাণ সঠিক ফরম্যাটে)
     if (fundBalanceEl) {
         fundBalanceEl.innerHTML = balance.toFixed(2) + ' টাকা';
         fundBalanceEl.dataset.balance = balance;
-        console.log(`✅ ${label} ব্যালেন্স সেট করা হয়েছে: ${balance} টাকা`);
+        console.log(`✅ ফান্ড ব্যালেন্স এলিমেন্টে সেট করা হয়েছে: ${balance} টাকা`);
     }
     
     // স্ট্যাটাস মেসেজ
