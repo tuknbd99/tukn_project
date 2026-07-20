@@ -4834,6 +4834,9 @@ async function searchReceiverForTransfer() {
     }
 }
 
+// ============================================================
+// সঞ্চয় ট্রান্সফার (এখন pending স্ট্যাটাসে জমা হবে)
+// ============================================================
 async function submitTransferSavings() {
     const senderTerm = parseInt(currentUser.memberTerm) || 0;
     const isTermMember = senderTerm > 0;
@@ -4895,7 +4898,7 @@ async function submitTransferSavings() {
         return;
     }
     
-    const confirmMsg = `✅ নিশ্চিতকরণ\n━━━━━━━━━━━━━━━━━━━━━\n📤 ট্রান্সফার: ${totalAmount.toLocaleString()} টাকা\n📂 ফান্ড: ${fundType}\n👤 প্রেরক: ${currentUser.name} (${currentUser.id})\n👤 গ্রহীতা: ${receiverName} (${receiverId})\n📆 মাস: ${selectedMonths.join(', ')}\n━━━━━━━━━━━━━━━━━━━━━\n💰 বর্তমান ব্যালেন্স: ${availableBalance.toFixed(2)} টাকা\n📉 বাকি থাকবে: ${(availableBalance - totalAmount).toFixed(2)} টাকা\n━━━━━━━━━━━━━━━━━━━━━\n⚠️ অ্যাডমিন অনুমোদন সাপেক্ষে ট্রান্সফার হবে।`;
+    const confirmMsg = `✅ নিশ্চিতকরণ\n━━━━━━━━━━━━━━━━━━━━━\n📤 ট্রান্সফার: ${totalAmount.toLocaleString()} টাকা\n📂 ফান্ড: ${fundType}\n👤 প্রেরক: ${currentUser.name} (${currentUser.id})\n👤 গ্রহীতা: ${receiverName} (${receiverId})\n📆 মাস: ${selectedMonths.join(', ')}\n━━━━━━━━━━━━━━━━━━━━━\n⏳ অ্যাডমিন অনুমোদন সাপেক্ষে ট্রান্সফার হবে।\n✅ অনুমোদন পেলে গ্রহীতার একাউন্টে টাকা যাবে।`;
     
     if (!confirm(confirmMsg)) return;
     
@@ -4916,37 +4919,28 @@ async function submitTransferSavings() {
         const transactionId = `TFR-${Date.now()}-${Math.floor(Math.random()*1000)}`;
         const note = `${selectedMonths.length} মাসের সঞ্চয় ট্রান্সফার (${selectedMonths.join(', ')})`;
         
-        const { data, error } = await client.rpc('transfer_funds', {
+        // 🔹 এখন RPC কল করব 'pending_transfer' নামে (নিচে SQL দিচ্ছি)
+        const { data, error } = await client.rpc('pending_transfer', {
             p_from_member_id: currentUser.id,
             p_to_member_id: receiverId,
             p_amount: totalAmount,
             p_note: note,
-            p_transaction_id: transactionId
+            p_transaction_id: transactionId,
+            p_fund_type: fundType  // 'সঞ্চয়' বা 'রেফারেল বোনাস'
         });
         
         if (error) {
             console.error('❌ RPC error:', error);
-            showToast('ট্রান্সফার ব্যর্থ! ' + error.message, 'error');
+            showToast('ট্রান্সফার অনুরোধ জমা দিতে ব্যর্থ! ' + error.message, 'error');
             return;
         }
         
         if (data && data.success) {
-            showToast(`✅ ${totalAmount.toLocaleString()} টাকা সফলভাবে ট্রান্সফার হয়েছে!`, 'success');
-            
-            if (fromSavings) {
-                userFunds.monthlySavings = data.new_sender_balance || (userFunds.monthlySavings - totalAmount);
-            } else if (fromBonus) {
-                userFunds.referralBonus = data.new_sender_balance || (userFunds.referralBonus - totalAmount);
-            }
-            
-            updateFundsDisplay();
-            
+            showToast(`✅ ${totalAmount.toLocaleString()} টাকা ট্রান্সফারের অনুরোধ জমা হয়েছে!\n⏳ অ্যাডমিন অনুমোদনের জন্য অপেক্ষা করুন।`, 'success');
             closeTransferModal();
-            await loadUserFunds();
-            await loadSavingsData();
-            await loadTransferHistory();
+            await loadTransferHistory(); // পেন্ডিং ট্রান্সফার দেখাবে
         } else {
-            showToast('❌ ' + (data?.message || 'ট্রান্সফার ব্যর্থ!'), 'error');
+            showToast('❌ ' + (data?.message || 'ট্রান্সফার অনুরোধ ব্যর্থ!'), 'error');
         }
         
     } catch(e) {
