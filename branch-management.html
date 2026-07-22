@@ -55,8 +55,6 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        .skeleton { animation: pulse 1.5s ease-in-out infinite; background: #e2e8f0; border-radius: 4px; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
         .tab-active { border-bottom: 3px solid #059669; color: #059669; font-weight: 600; }
         .dark-mode .tab-active { border-bottom-color: #34d399; color: #34d399; }
         .leaderboard-card { transition: transform 0.2s; }
@@ -67,6 +65,8 @@
         .status-inactive { background: #fee2e2; color: #991b1b; }
         .dark-mode .status-active { background: #1a4a3a; color: #34d399; }
         .dark-mode .status-inactive { background: #4a2a2a; color: #f87171; }
+        .member-row:hover { background: #f9fafb; }
+        .dark-mode .member-row:hover { background: #4a5568; }
     </style>
 </head>
 <body>
@@ -446,7 +446,6 @@ const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let branchesData = [];
 let membersData = [];
 let paymentsData = [];
-let logsData = [];
 let filteredBranches = [];
 let currentPage = 1;
 const pageSize = 10;
@@ -549,8 +548,13 @@ async function loadAllData() {
         console.log('✅ সদস্য লোড:', membersData.length);
         console.log('✅ পেমেন্ট লোড:', paymentsData.length);
         
+        // ✅ branch_id ডিবাগ
         if (membersData.length > 0) {
-            console.log('🔍 প্রথম সদস্যের branch_id:', membersData[0]?.branch_id);
+            console.log('🔍 প্রথম ৫ সদস্যের branch_id:', membersData.slice(0, 5).map(m => ({ 
+                name: m.full_name, 
+                branch_id: m.branch_id,
+                type: typeof m.branch_id
+            })));
         }
 
         filteredBranches = [...branchesData];
@@ -607,7 +611,7 @@ function calculateDue(member) {
 }
 
 // ============================================================
-// ফিল্টার ও সার্চ
+// ফিল্টার ও সার্চ (সঠিক Number কনভার্সন সহ)
 // ============================================================
 function applyFilters() {
     const search = document.getElementById('searchInput').value.toLowerCase();
@@ -623,11 +627,11 @@ function applyFilters() {
         let aVal = a[sortField] || 0;
         let bVal = b[sortField] || 0;
         if (sortField === 'members') {
-            aVal = membersData.filter(m => m.branch_id === a.id).length;
-            bVal = membersData.filter(m => m.branch_id === b.id).length;
+            aVal = membersData.filter(m => Number(m.branch_id) === Number(a.id)).length;
+            bVal = membersData.filter(m => Number(m.branch_id) === Number(b.id)).length;
         } else if (sortField === 'due') {
-            aVal = membersData.filter(m => m.branch_id === a.id).reduce((sum, m) => sum + calculateDue(m).due, 0);
-            bVal = membersData.filter(m => m.branch_id === b.id).reduce((sum, m) => sum + calculateDue(m).due, 0);
+            aVal = membersData.filter(m => Number(m.branch_id) === Number(a.id)).reduce((sum, m) => sum + calculateDue(m).due, 0);
+            bVal = membersData.filter(m => Number(m.branch_id) === Number(b.id)).reduce((sum, m) => sum + calculateDue(m).due, 0);
         }
         return sortOrder === 'asc' ? aVal - bVal : bVal - aVal;
     });
@@ -636,7 +640,7 @@ function applyFilters() {
 }
 
 // ============================================================
-// রেন্ডার ব্রাঞ্চ টেবিল
+// রেন্ডার ব্রাঞ্চ টেবিল (সঠিক সদস্য কাউন্ট সহ)
 // ============================================================
 function renderBranches() {
     const tbody = document.getElementById('branchesList');
@@ -651,7 +655,8 @@ function renderBranches() {
     }
     let html = '';
     pageItems.forEach((branch, idx) => {
-        const branchMembers = membersData.filter(m => m.branch_id === branch.id);
+        // ✅ সঠিকভাবে branch_id দিয়ে ফিল্টার করুন (Number কনভার্সন সহ)
+        const branchMembers = membersData.filter(m => Number(m.branch_id) === Number(branch.id));
         const memberCount = branchMembers.length;
         let branchDue = 0;
         branchMembers.forEach(m => { const { due } = calculateDue(m); branchDue += due; });
@@ -686,7 +691,7 @@ function renderBranches() {
 }
 
 // ============================================================
-// সারাংশ আপডেট
+// সারাংশ আপডেট (সঠিক লিডারবোর্ড সহ)
 // ============================================================
 function updateSummary() {
     const allMembers = membersData.filter(m => m.status === 'active' || m.status === 'approved');
@@ -708,7 +713,7 @@ function updateSummary() {
     let maxMembers = -1, maxMembersBranch = '-';
     let maxRate = -1, maxRateBranch = '-';
     branchesData.forEach(b => {
-        const bMembers = membersData.filter(m => m.branch_id === b.id);
+        const bMembers = membersData.filter(m => Number(m.branch_id) === Number(b.id));
         const count = bMembers.length;
         let due = 0;
         bMembers.forEach(m => { due += calculateDue(m).due; });
@@ -724,13 +729,13 @@ function updateSummary() {
 }
 
 // ============================================================
-// চার্ট
+// চার্ট আপডেট (সঠিক সদস্য কাউন্ট সহ)
 // ============================================================
 function updateChart() {
     if (!chartInstance) return;
     const labels = branchesData.map(b => b.name);
-    const memberCounts = branchesData.map(b => membersData.filter(m => m.branch_id === b.id).length);
-    const dueData = branchesData.map(b => membersData.filter(m => m.branch_id === b.id).reduce((sum, m) => sum + calculateDue(m).due, 0));
+    const memberCounts = branchesData.map(b => membersData.filter(m => Number(m.branch_id) === Number(b.id)).length);
+    const dueData = branchesData.map(b => membersData.filter(m => Number(m.branch_id) === Number(b.id)).reduce((sum, m) => sum + calculateDue(m).due, 0));
     chartInstance.data.labels = labels;
     chartInstance.data.datasets[0].data = memberCounts;
     chartInstance.data.datasets[1].data = dueData;
@@ -774,7 +779,7 @@ function showDashboardWidget(branchId) {
     if (!branch) return;
     document.getElementById('widgetBranchNameText').innerText = branch.name;
     document.getElementById('branchDashboardWidget').classList.remove('hidden');
-    const bMembers = membersData.filter(m => m.branch_id === branchId);
+    const bMembers = membersData.filter(m => Number(m.branch_id) === Number(branchId));
     let totalPaid = 0, totalDue = 0;
     bMembers.forEach(m => {
         const { totalPaid: paid, due } = calculateDue(m);
@@ -848,7 +853,7 @@ function populateBranchSelects() {
 async function generateReport() {
     const year = parseInt(document.getElementById('reportYear').value);
     const branchId = document.getElementById('reportBranch').value;
-    const filteredMembers = branchId === 'all' ? membersData : membersData.filter(m => m.branch_id === parseInt(branchId));
+    const filteredMembers = branchId === 'all' ? membersData : membersData.filter(m => Number(m.branch_id) === Number(branchId));
     const monthlyData = {};
     for (let m = 1; m <= 12; m++) {
         monthlyData[m] = { paid: 0, due: 0 };
@@ -1001,7 +1006,7 @@ async function applyBatchAction() {
     if (selected.length === 0) { showToast('কমপক্ষে একটি ব্রাঞ্চ নির্বাচন করুন!', 'error'); return; }
     const ids = Array.from(selected).map(cb => parseInt(cb.value));
     if (action === 'delete') {
-        const hasMembers = ids.some(id => membersData.some(m => m.branch_id === id));
+        const hasMembers = ids.some(id => membersData.some(m => Number(m.branch_id) === Number(id)));
         if (hasMembers) { showToast('কিছু ব্রাঞ্চে সদস্য আছে, ডিলিট করা যাবে না!', 'error'); return; }
         if (!confirm(`${selected.length}টি ব্রাঞ্চ ডিলিট করবেন?`)) return;
         const { error } = await supabase.from('branches').delete().in('id', ids);
@@ -1024,7 +1029,7 @@ function exportCSV() {
     if (filteredBranches.length === 0) { showToast('কোনো ডাটা নেই!', 'error'); return; }
     let csv = 'ক্রম,নাম,জেলা,ঠিকানা,ম্যানেজার,মোবাইল,স্ট্যাটাস,সদস্য,বকেয়া\n';
     filteredBranches.forEach((b, i) => {
-        const members = membersData.filter(m => m.branch_id === b.id);
+        const members = membersData.filter(m => Number(m.branch_id) === Number(b.id));
         const due = members.reduce((sum, m) => sum + calculateDue(m).due, 0);
         csv += `${i+1},${b.name},${b.district||''},${b.address||''},${b.manager||''},${b.mobile||''},${b.status},${members.length},${due.toFixed(2)}\n`;
     });
@@ -1048,8 +1053,8 @@ function exportExcel() {
         'ম্যানেজার': b.manager || '',
         'মোবাইল': b.mobile || '',
         'স্ট্যাটাস': b.status,
-        'সদস্য': membersData.filter(m => m.branch_id === b.id).length,
-        'বকেয়া': membersData.filter(m => m.branch_id === b.id).reduce((sum, m) => sum + calculateDue(m).due, 0)
+        'সদস্য': membersData.filter(m => Number(m.branch_id) === Number(b.id)).length,
+        'বকেয়া': membersData.filter(m => Number(m.branch_id) === Number(b.id)).reduce((sum, m) => sum + calculateDue(m).due, 0)
     }));
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(data);
@@ -1143,7 +1148,7 @@ async function saveBranch(e) {
 async function deleteBranch(id) {
     const branch = branchesData.find(b => b.id === id);
     if (!branch) return;
-    const members = membersData.filter(m => m.branch_id === id);
+    const members = membersData.filter(m => Number(m.branch_id) === Number(id));
     if (members.length > 0) {
         showToast(`এই ব্রাঞ্চে ${members.length} জন সদস্য আছে, ডিলিট করা যাবে না!`, 'error');
         return;
@@ -1233,7 +1238,7 @@ async function moveMember(e) {
 }
 
 // ============================================================
-// ✅ ব্রাঞ্চ ডিটেইল মোডাল (সঠিক ফিল্টার সহ)
+// ✅ ব্রাঞ্চ ডিটেইল মোডাল (সঠিক ফিল্টার সহ - ফিক্সড)
 // ============================================================
 async function viewBranchDetail(branchId) {
     currentBranchId = branchId;
@@ -1256,12 +1261,29 @@ async function viewBranchDetail(branchId) {
     document.getElementById('branchModalTitle').innerHTML = `<i class="fas fa-users mr-2"></i>${branch.name} - সদস্য তালিকা`;
     
     try {
-        // ✅ শুধুমাত্র এই ব্রাঞ্চের সদস্য ফিল্টার করুন
-        allModalMembers = membersData.filter(m => m.branch_id === branchId);
+        // ✅ শুধুমাত্র এই ব্রাঞ্চের সদস্য ফিল্টার করুন (Number() কনভার্সন সহ)
+        allModalMembers = membersData.filter(m => {
+            const memberBranchId = Number(m.branch_id);
+            const targetBranchId = Number(branchId);
+            return memberBranchId === targetBranchId;
+        });
         
-        console.log(`🏢 ব্রাঞ্চ ID: ${branchId}, নাম: ${branch.name}`);
+        console.log(`🏢 ব্রাঞ্চ: ${branch.name} (ID: ${branchId})`);
         console.log(`👥 এই ব্রাঞ্চের সদস্য: ${allModalMembers.length} জন`);
         console.log(`📋 মোট সদস্য: ${membersData.length} জন`);
+        
+        if (allModalMembers.length === 0) {
+            document.getElementById('branchMembersList').innerHTML = `
+                <tr><td colspan="8" class="text-center p-4 text-gray-500">এই ব্রাঞ্চে কোনো সদস্য নেই</td></tr>
+            `;
+            document.getElementById('modalTotalMembers').innerText = '০';
+            document.getElementById('modalTotalPaid').innerHTML = '০ টাকা';
+            document.getElementById('modalTotalDue').innerHTML = '০ টাকা';
+            
+            loader.classList.add('hidden');
+            content.classList.remove('hidden');
+            return;
+        }
         
         renderModalMembers(allModalMembers);
         
@@ -1284,7 +1306,7 @@ async function viewBranchDetail(branchId) {
         loader.classList.add('hidden');
         content.classList.remove('hidden');
         document.getElementById('branchMembersList').innerHTML = `
-            <tr><td colspan="8" class="text-center p-4 text-red-500">ডাটা লোড করতে সমস্যা!</td></tr>
+            <tr><td colspan="8" class="text-center p-4 text-red-500">ডাটা লোড করতে সমস্যা! ${error.message}</td></tr>
         `;
     }
 }
@@ -1306,7 +1328,7 @@ function renderModalMembers(members) {
         const statusText = m.status === 'active' ? '✅ সক্রিয়' : '⏳ অনুমোদিত নয়';
         
         rows += `
-            <tr class="border-b hover:bg-gray-50 transition">
+            <tr class="border-b hover:bg-gray-50 transition member-row">
                 <td class="p-2 border font-mono text-sm">${m.member_id}</td>
                 <td class="p-2 border font-semibold">${m.full_name || 'নাম নেই'}</td>
                 <td class="p-2 border">${m.mobile || '-'}</td>
