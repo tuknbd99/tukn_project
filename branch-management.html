@@ -512,45 +512,92 @@ function checkUserRole() {
 }
 
 // ============================================================
-// ডাটা লোড
+// ডাটা লোড (সম্পূর্ণ)
 // ============================================================
 async function loadAllData() {
     try {
+        // ব্রাঞ্চ ম্যানেজারের জন্য শুধু নিজের ব্রাঞ্চ দেখানো
         let branchQuery = supabase.from('branches').select('*').order('id');
-        let memberQuery = supabase.from('members').select('member_id, full_name, mobile, monthly_savings, join_date, branch_id, status');
-        let paymentQuery = supabase.from('payments').select('member_id, amount, status');
-
+        
+        // ব্রাঞ্চ ম্যানেজার রোল চেক
         if (currentUserRole === 'branch_manager' && currentUserBranchId) {
             branchQuery = supabase.from('branches').select('*').eq('id', currentUserBranchId).order('id');
         }
 
+        // লোডিং ইন্ডিকেটর
+        const tbody = document.getElementById('branchesList');
+        if (tbody) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="11" class="text-center p-4">
+                        <div class="loader"></div>
+                        <p class="text-gray-500 mt-2 text-sm">ডাটা লোড হচ্ছে...</p>
+                    </td>
+                </tr>
+            `;
+        }
+
+        // সমান্তরালে ডাটা লোড
         const [branchesRes, membersRes, paymentsRes] = await Promise.all([
             branchQuery,
-            memberQuery,
-            paymentQuery
+            supabase.from('members').select('member_id, full_name, mobile, monthly_savings, join_date, branch_id, status'),
+            supabase.from('payments').select('member_id, amount, status')
         ]);
 
+        // এরর চেক
         if (branchesRes.error) throw branchesRes.error;
         if (membersRes.error) throw membersRes.error;
         if (paymentsRes.error) throw paymentsRes.error;
 
+        // ডাটা সেট করুন
         branchesData = branchesRes.data || [];
         membersData = membersRes.data || [];
         paymentsData = paymentsRes.data || [];
 
+        // ডিবাগিং লগ
+        console.log(`✅ ব্রাঞ্চ লোড: ${branchesData.length}টি`);
+        console.log(`✅ সদস্য লোড: ${membersData.length}টি`);
+        console.log(`✅ পেমেন্ট লোড: ${paymentsData.length}টি`);
+        
+        // ব্রাঞ্চ আইডি চেক (ডিবাগ)
+        if (membersData.length > 0) {
+            const branchIds = [...new Set(membersData.map(m => m.branch_id))];
+            console.log('📋 ব্রাঞ্চ আইডি সমূহ:', branchIds);
+            console.log('🔍 প্রথম সদস্যের branch_id:', membersData[0]?.branch_id);
+        }
+
+        // ফিল্টারড ব্রাঞ্চ সেট করুন
         filteredBranches = [...branchesData];
+
+        // UI আপডেট
         renderBranches();
         updateSummary();
         updateChart();
         populateBranchSelects();
         populateReportYear();
 
+        // শো টোস্ট
+        showToast(`✅ ${branchesData.length}টি ব্রাঞ্চ লোড হয়েছে!`, 'success');
+
     } catch (error) {
-        console.error('ডাটা লোডে সমস্যা:', error);
-        document.getElementById('branchesList').innerHTML = `
-            <tr><td colspan="11" class="text-center p-4 text-red-500">
-                <i class="fas fa-exclamation-circle mr-2"></i>ডাটা লোড করতে সমস্যা! ${error.message}
-            </td></tr>`;
+        console.error('❌ ডাটা লোডে সমস্যা:', error);
+        
+        // এরর মেসেজ দেখান
+        const tbody = document.getElementById('branchesList');
+        if (tbody) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="11" class="text-center p-4 text-red-500">
+                        <i class="fas fa-exclamation-circle mr-2"></i>
+                        ডাটা লোড করতে সমস্যা! 
+                        <br><span class="text-sm">${error.message || 'অজানা ত্রুটি'}</span>
+                        <br><button onclick="refreshData()" class="mt-2 bg-emerald-600 text-white px-4 py-1 rounded-lg text-sm hover:bg-emerald-700 transition">
+                            <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
+                        </button>
+                    </td>
+                </tr>
+            `;
+        }
         showToast('ডাটা লোডে সমস্যা!', 'error');
     }
 }
@@ -1220,56 +1267,77 @@ async function moveMember(e) {
     if (currentBranchId) viewBranchDetail(currentBranchId);
 }
 
-// ============================================================
-// ব্রাঞ্চ ডিটেইল মোডাল
-// ============================================================
 async function viewBranchDetail(branchId) {
     currentBranchId = branchId;
     const modal = document.getElementById('branchDetailModal');
     const loader = document.getElementById('branchDetailLoader');
     const content = document.getElementById('branchDetailContent');
+    
     modal.classList.remove('hidden');
     modal.classList.add('flex');
     loader.classList.remove('hidden');
     content.classList.add('hidden');
+    
     const branch = branchesData.find(b => b.id === branchId);
+    if (!branch) {
+        showToast('ব্রাঞ্চ পাওয়া যায়নি!', 'error');
+        loader.classList.add('hidden');
+        return;
+    }
+    
     document.getElementById('branchModalTitle').innerHTML = `<i class="fas fa-users mr-2"></i>${branch.name} - সদস্য তালিকা`;
+    
     try {
+        // ✅ সঠিক ফিল্টার: শুধু এই ব্রাঞ্চের সদস্য
         allModalMembers = membersData.filter(m => m.branch_id === branchId);
+        
+        // ডিবাগ
+        console.log(`🏢 ব্রাঞ্চ ID: ${branchId}, নাম: ${branch.name}`);
+        console.log(`👥 এই ব্রাঞ্চের সদস্য: ${allModalMembers.length} জন`);
+        console.log(`📋 মোট সদস্য: ${membersData.length} জন`);
+        
         renderModalMembers(allModalMembers);
+        
         let totalPaid = 0, totalDue = 0;
         allModalMembers.forEach(m => {
             const { totalPaid: paid, due } = calculateDue(m);
             totalPaid += paid;
             totalDue += due;
         });
+        
         document.getElementById('modalTotalMembers').innerText = allModalMembers.length;
         document.getElementById('modalTotalPaid').innerHTML = totalPaid.toFixed(2) + ' টাকা';
         document.getElementById('modalTotalDue').innerHTML = totalDue.toFixed(2) + ' টাকা';
+        
         loader.classList.add('hidden');
         content.classList.remove('hidden');
+        
     } catch (error) {
-        console.error(error);
+        console.error('❌ ব্রাঞ্চ ডিটেইল লোডে সমস্যা:', error);
         loader.classList.add('hidden');
         content.classList.remove('hidden');
-        document.getElementById('branchMembersList').innerHTML = `<tr><td colspan="8" class="text-center p-4 text-red-500">ডাটা লোড করতে সমস্যা!</td></tr>`;
+        document.getElementById('branchMembersList').innerHTML = `
+            <tr><td colspan="8" class="text-center p-4 text-red-500">ডাটা লোড করতে সমস্যা! ${error.message}</td></tr>
+        `;
     }
 }
 
 function renderModalMembers(members) {
     const tbody = document.getElementById('branchMembersList');
-    if (members.length === 0) {
+    if (!members || members.length === 0) {
         tbody.innerHTML = `<tr><td colspan="8" class="text-center p-4 text-gray-500">এই ব্রাঞ্চে কোনো সদস্য নেই</td></tr>`;
         return;
     }
+    
     let rows = '';
     members.forEach(m => {
         const { totalPaid: paid, due } = calculateDue(m);
         const statusClass = m.status === 'active' ? 'text-green-600' : 'text-red-600';
         const statusText = m.status === 'active' ? '✅ সক্রিয়' : '⏳ অনুমোদিত নয়';
+        
         rows += `
-            <tr class="border-b hover:bg-gray-50">
-                <td class="p-2 border">${m.member_id}</td>
+            <tr class="border-b hover:bg-gray-50 transition">
+                <td class="p-2 border font-mono text-sm">${m.member_id}</td>
                 <td class="p-2 border font-semibold">${m.full_name || 'নাম নেই'}</td>
                 <td class="p-2 border">${m.mobile || '-'}</td>
                 <td class="p-2 border text-center">${Number(m.monthly_savings || 0).toFixed(2)} টাকা</td>
@@ -1277,20 +1345,26 @@ function renderModalMembers(members) {
                 <td class="p-2 border text-center ${due > 0 ? 'text-red-600 font-bold' : 'text-green-600 font-bold'}">${due.toFixed(2)} টাকা</td>
                 <td class="p-2 border text-center ${statusClass}">${statusText}</td>
                 <td class="p-2 border text-center">
-                    <button onclick="openMemberMove('${m.member_id}', '${m.full_name}')" class="text-amber-500 hover:text-amber-700" title="স্থানান্তর">
+                    <button onclick="openMemberMove('${m.member_id}', '${m.full_name}')" class="text-amber-500 hover:text-amber-700 transition" title="স্থানান্তর">
                         <i class="fas fa-arrows-alt-h"></i>
                     </button>
                 </td>
-            </tr>`;
+            </tr>
+        `;
     });
     tbody.innerHTML = rows;
 }
 
 function filterModalMembers() {
     const search = document.getElementById('memberSearch').value.toLowerCase();
+    if (!search) {
+        renderModalMembers(allModalMembers);
+        return;
+    }
+    
     const filtered = allModalMembers.filter(m => 
-        m.full_name.toLowerCase().includes(search) || 
-        m.member_id.toLowerCase().includes(search) ||
+        (m.full_name || '').toLowerCase().includes(search) || 
+        (m.member_id || '').toLowerCase().includes(search) ||
         (m.mobile || '').includes(search)
     );
     renderModalMembers(filtered);
