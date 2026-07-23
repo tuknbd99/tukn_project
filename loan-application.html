@@ -1774,108 +1774,95 @@
         }
 
 // ============================================================
-// সদস্য সার্চ ফাংশন (সঠিক নাল চেক সহ)
+// Member Search (আবেদনের জন্য) - প্রোফাইল ছবি সহ (আপডেটেড)
 // ============================================================
 async function searchMember() {
-    const searchInput = document.getElementById('searchInput');
-    const searchQuery = searchInput?.value?.trim() || '';
-    
-    if (!searchQuery) {
-        showToast('আইডি বা মোবাইল নম্বর দিন!', 'error');
-        return;
-    }
+    const input = document.getElementById('memberSearch').value.trim();
+    if (!input) { showAlert('আইডি বা মোবাইল নম্বর দিন!', 'error'); return; }
 
     const sb = await initSupabase();
-    if (!sb) {
-        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
-        return;
-    }
+    if (!sb) { showAlert('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
 
-    const btn = document.querySelector('.search-btn');
-    const originalText = btn?.innerHTML || 'খুঁজুন';
-    if (btn) {
-        btn.innerHTML = '<span class="loading-spinner"></span> খুঁজছি...';
-        btn.disabled = true;
+    // ✅ বাটন ডিসেবল করুন
+    const searchBtn = document.querySelector('button[onclick="searchMember()"]');
+    const originalText = searchBtn?.innerHTML || 'খুঁজুন';
+    if (searchBtn) {
+        searchBtn.innerHTML = '<span class="loading-spinner"></span> খুঁজছি...';
+        searchBtn.disabled = true;
     }
 
     try {
         let query = sb.from('members').select('*');
-        
-        // মোবাইল নম্বর দিয়ে সার্চ
-        if (/^01[3-9]\d{8}$/.test(searchQuery)) {
-            query = query.eq('mobile', searchQuery);
+        if (input.match(/^01[3-9]\d{8}$/)) {
+            query = query.eq('mobile', input);
         } else {
-            query = query.eq('member_id', searchQuery);
+            query = query.eq('member_id', input);
         }
-
-        const { data, error } = await query.maybeSingle();
-
+        const { data, error } = await query;
         if (error) throw error;
 
-        // ✅ এলিমেন্ট চেক সহ
-        const resultDiv = document.getElementById('searchResult');
-        const memberIdEl = document.getElementById('memberId');
-        const memberNameEl = document.getElementById('memberName');
-        const memberMobileEl = document.getElementById('memberMobile');
-        const memberBalanceEl = document.getElementById('memberBalance');
-        const memberStatusEl = document.getElementById('memberStatus');
-
-        if (!resultDiv) {
-            console.warn('⚠️ searchResult element not found');
-            if (btn) { btn.innerHTML = originalText; btn.disabled = false; }
+        if (!data || data.length === 0) {
+            showAlert('সদস্য পাওয়া যায়নি!', 'error');
+            // ✅ ফর্ম রিসেট করুন
+            resetMemberFields();
             return;
         }
 
-        if (data && data.member_id) {
-            // সদস্য পাওয়া গেছে
-            resultDiv.classList.remove('hidden');
-            
-            if (memberIdEl) memberIdEl.textContent = data.member_id || '-';
-            if (memberNameEl) memberNameEl.textContent = data.full_name || 'নাম নেই';
-            if (memberMobileEl) memberMobileEl.textContent = data.mobile || '-';
-            if (memberBalanceEl) memberBalanceEl.textContent = (data.balance || 0) + ' টাকা';
-            if (memberStatusEl) {
-                const statusText = data.status === 'active' ? '✅ সক্রিয়' : data.status === 'approved' ? '✅ অনুমোদিত' : '⏳ বিচারাধীন';
-                memberStatusEl.textContent = statusText;
-                memberStatusEl.className = data.status === 'active' || data.status === 'approved' ? 'text-green-600' : 'text-amber-600';
-            }
-
-            // লোন আবেদন ফর্মে ডাটা সেট করুন
-            const loanMemberIdEl = document.getElementById('loanMemberId');
-            const loanMemberNameEl = document.getElementById('loanMemberName');
-            const loanMemberMobileEl = document.getElementById('loanMemberMobile');
-
-            if (loanMemberIdEl) loanMemberIdEl.value = data.member_id || '';
-            if (loanMemberNameEl) loanMemberNameEl.value = data.full_name || '';
-            if (loanMemberMobileEl) loanMemberMobileEl.value = data.mobile || '';
-
-            showToast('✅ সদস্য পাওয়া গেছে!', 'success');
-
-        } else {
-            // সদস্য পাওয়া যায়নি
-            resultDiv.classList.add('hidden');
-            
-            // ফর্ম রিসেট
-            const loanMemberIdEl = document.getElementById('loanMemberId');
-            const loanMemberNameEl = document.getElementById('loanMemberName');
-            const loanMemberMobileEl = document.getElementById('loanMemberMobile');
-            
-            if (loanMemberIdEl) loanMemberIdEl.value = '';
-            if (loanMemberNameEl) loanMemberNameEl.value = '';
-            if (loanMemberMobileEl) loanMemberMobileEl.value = '';
-
-            showToast('❌ এই সদস্য পাওয়া যায়নি!', 'error');
+        const member = data[0];
+        if (member.status !== 'active' && member.status !== 'approved') {
+            showAlert('এই সদস্য সক্রিয় নয়!', 'error');
+            resetMemberFields();
+            return;
         }
 
-    } catch(e) {
+        currentMember = member;
+        currentMemberPhoto = member.profile_photo || null;
+
+        // ✅ এলিমেন্ট চেক সহ সেট করুন
+        const memberNameEl = document.getElementById('memberName');
+        const memberMobileEl = document.getElementById('memberMobile');
+        const memberIdEl = document.getElementById('memberId');
+        const memberMonthlySavingsEl = document.getElementById('memberMonthlySavings');
+        const memberTermEl = document.getElementById('memberTerm');
+
+        if (memberNameEl) memberNameEl.value = member.full_name || '';
+        if (memberMobileEl) memberMobileEl.value = member.mobile || '';
+        if (memberIdEl) memberIdEl.value = member.member_id || '';
+        if (memberMonthlySavingsEl) memberMonthlySavingsEl.value = (member.monthly_savings || 500) + ' টাকা';
+        if (memberTermEl) memberTermEl.value = (member.member_term || 0) + ' বছর';
+
+        renderMemberProfile(member);
+        updateSummaryWithProfit();
+        showAlert(`✅ ${member.full_name} পাওয়া গেছে!`, 'success');
+        await checkPendingLoan(member.member_id);
+
+    } catch (e) {
         console.error('Search error:', e);
-        showToast('সার্চ করতে ব্যর্থ!', 'error');
+        showAlert('সার্চ করতে সমস্যা!', 'error');
     } finally {
-        if (btn) {
-            btn.innerHTML = originalText;
-            btn.disabled = false;
+        // ✅ বাটন এনেবল করুন
+        if (searchBtn) {
+            searchBtn.innerHTML = originalText;
+            searchBtn.disabled = false;
         }
     }
+}
+
+// ============================================================
+// ✅ সদস্য ফিল্ড রিসেট ফাংশন (নতুন যোগ)
+// ============================================================
+function resetMemberFields() {
+    const fields = ['memberName', 'memberMobile', 'memberId', 'memberMonthlySavings', 'memberTerm'];
+    fields.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    
+    const container = document.getElementById('memberProfileContainer');
+    if (container) {
+        container.innerHTML = '<div style="color:#9ca3af;font-size:13px;padding:8px 0;"><i class="fas fa-info-circle"></i> সদস্য খুঁজলে প্রোফাইল দেখাবে</div>';
+    }
+    currentMember = null;
 }
 
         function renderMemberProfile(member) {
