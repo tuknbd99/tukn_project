@@ -2671,18 +2671,34 @@ showTab = function(tabName) {
 // ===== WITHDRAWAL FUNCTIONS (UPDATED WITH DETAILS & NOTES) =====
 // ============================================================
 
-// ===== APPROVE WITHDRAWAL WITH NOTE (FIXED) =====
+// ===== APPROVE WITHDRAWAL WITH NOTE (FULLY FIXED) =====
 async function approveWithdrawalWithNote(id, amount, memberId, type) {
     const note = document.getElementById('adminWithdrawalNote')?.value?.trim() || '';
     
-    // ✅ টাইপ নরমালাইজ করুন (ড্যাশবোর্ডের টাইপের সাথে মিলান)
-    let normalizedType = type;
-    if (type.includes('রেফারেল বোনাস')) normalizedType = 'রেফারেল বোনাস';
-    else if (type.includes('সঞ্চয় লভ্যাংশ')) normalizedType = 'সঞ্চয় লভ্যাংশ';
-    else if (type.includes('বিনিয়োগ লভ্যাংশ')) normalizedType = 'বিনিয়োগ লভ্যাংশ';
-    else if (type.includes('রেফারেল লভ্যাংশ')) normalizedType = 'রেফারেল লভ্যাংশ';
-    else if (type.includes('মূলধন')) normalizedType = 'মূলধন';
-    else if (type.includes('সব লভ্যাংশ')) normalizedType = 'সব লভ্যাংশ';
+    // ✅ টাইপ নরমালাইজ করুন (সব সম্ভাব্য ভ্যারিয়েন্ট কভার করুন)
+    let normalizedType = type || '';
+    
+    // সঠিক টাইপ ম্যাপিং - includes() ব্যবহার করে চেক করুন
+    if (normalizedType.includes('রেফারেল বোনাস')) {
+        normalizedType = 'রেফারেল বোনাস';
+    } else if (normalizedType.includes('সঞ্চয় লভ্যাংশ') || normalizedType.includes('সঞ্চয় লভ্যাংশ')) {
+        normalizedType = 'সঞ্চয় লভ্যাংশ';
+    } else if (normalizedType.includes('বিনিয়োগ লভ্যাংশ') || normalizedType.includes('বিনিয়োগ লভ্যাংশ')) {
+        normalizedType = 'বিনিয়োগ লভ্যাংশ';
+    } else if (normalizedType.includes('রেফারেল লভ্যাংশ')) {
+        normalizedType = 'রেফারেল লভ্যাংশ';
+    } else if (normalizedType.includes('মূলধন')) {
+        normalizedType = 'মূলধন';
+    } else if (normalizedType.includes('সব লভ্যাংশ')) {
+        normalizedType = 'সব লভ্যাংশ';
+    }
+    
+    // যদি টাইপ খালি থাকে বা চেনা না যায়, ডিফল্ট 'মূলধন'
+    if (!normalizedType || normalizedType === type) {
+        normalizedType = 'মূলধন';
+    }
+    
+    console.log('📌 উত্তোলন টাইপ:', { original: type, normalized: normalizedType });
     
     if (!confirm(`${formatAmount(amount)} টাকা উত্তোলন অনুমোদন দেবেন?\n\n📌 ধরন: ${normalizedType}\n👤 সদস্য: ${memberId}${note ? '\n📝 নোট: ' + note : ''}`)) {
         return;
@@ -2693,13 +2709,20 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
     
     // ✅ টাইপ অনুযায়ী আপডেট ফিল্ড নির্ধারণ
     let updateField = 'balance';
-    if (normalizedType === 'রেফারেল বোনাস') updateField = 'referral_bonus';
-    else if (normalizedType === 'সঞ্চয় লভ্যাংশ') updateField = 'profit_balance_savings';
-    else if (normalizedType === 'বিনিয়োগ লভ্যাংশ') updateField = 'profit_balance_investment';
-    else if (normalizedType === 'রেফারেল লভ্যাংশ') updateField = 'profit_balance_referral';
-    else if (normalizedType === 'মূলধন') updateField = 'balance';
-    else if (normalizedType === 'সব লভ্যাংশ') {
-        // সব লভ্যাংশ একসাথে কমাতে হবে
+    if (normalizedType === 'রেফারেল বোনাস') {
+        updateField = 'referral_bonus';
+    } else if (normalizedType === 'সঞ্চয় লভ্যাংশ') {
+        updateField = 'profit_balance_savings';
+    } else if (normalizedType === 'বিনিয়োগ লভ্যাংশ') {
+        updateField = 'profit_balance_investment';
+    } else if (normalizedType === 'রেফারেল লভ্যাংশ') {
+        updateField = 'profit_balance_referral';
+    } else if (normalizedType === 'মূলধন') {
+        updateField = 'balance';
+    }
+    
+    // সব লভ্যাংশ একসাথে - আলাদা লজিক
+    if (normalizedType === 'সব লভ্যাংশ') {
         try {
             const { data: member, error: memberError } = await client
                 .from('members')
@@ -2712,28 +2735,31 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
             let remaining = amount;
             const updates = {};
             
-            // সঞ্চয় লভ্যাংশ থেকে কমান
+            // ১. সঞ্চয় লভ্যাংশ থেকে কমান
             const savings = member.profit_balance_savings || 0;
             if (remaining > 0 && savings > 0) {
                 const deduct = Math.min(remaining, savings);
                 updates.profit_balance_savings = savings - deduct;
                 remaining -= deduct;
+                console.log(`✅ সঞ্চয় লভ্যাংশ থেকে কাটল: ${deduct}, বাকি: ${remaining}`);
             }
             
-            // বিনিয়োগ লভ্যাংশ থেকে কমান
+            // ২. বিনিয়োগ লভ্যাংশ থেকে কমান
             const investment = member.profit_balance_investment || 0;
             if (remaining > 0 && investment > 0) {
                 const deduct = Math.min(remaining, investment);
                 updates.profit_balance_investment = investment - deduct;
                 remaining -= deduct;
+                console.log(`✅ বিনিয়োগ লভ্যাংশ থেকে কাটল: ${deduct}, বাকি: ${remaining}`);
             }
             
-            // রেফারেল লভ্যাংশ থেকে কমান
+            // ৩. রেফারেল লভ্যাংশ থেকে কমান
             const referral = member.profit_balance_referral || 0;
             if (remaining > 0 && referral > 0) {
                 const deduct = Math.min(remaining, referral);
                 updates.profit_balance_referral = referral - deduct;
                 remaining -= deduct;
+                console.log(`✅ রেফারেল লভ্যাংশ থেকে কাটল: ${deduct}, বাকি: ${remaining}`);
             }
             
             if (remaining > 0) {
@@ -2770,6 +2796,7 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
     
     // ✅ একক ফিল্ড আপডেট (সব লভ্যাংশ ছাড়া)
     try {
+        // প্রথমে সদস্যের বর্তমান ব্যালেন্স চেক করুন
         const { data: member, error: memberError } = await client
             .from('members')
             .select(updateField)
@@ -2779,13 +2806,18 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
         if (memberError) throw memberError;
         
         const currentAmount = member?.[updateField] || 0;
+        console.log(`📊 বর্তমান ${updateField}: ${currentAmount}, উত্তোলন: ${amount}`);
+        
         if (currentAmount < amount) {
             showToast(`❌ ব্যালেন্স ${formatAmount(currentAmount)} টাকা। এর বেশি উত্তোলন সম্ভব নয়!`, 'error');
             return;
         }
         
+        // ব্যালেন্স আপডেট করুন
         await client.from('members').update({ [updateField]: currentAmount - amount }).eq('member_id', memberId);
+        console.log(`✅ ${updateField} আপডেট: ${currentAmount} → ${currentAmount - amount}`);
         
+        // উত্তোলন রেকর্ড আপডেট
         await client.from('withdrawals').update({ 
             status: 'approved', 
             approved_by: currentAdmin?.username || 'system', 
@@ -5565,7 +5597,7 @@ function loadAboutContent() {
 }
 
 function loadCareerContent() {
-    const career = JSON.parse(localStorage.getItem('tukn_career') || '{"description":"আমাদের সংগঠনে নিয়মিত বিভিন্ন পদে নিয়োগ দেওয়া হয়।"}');
+    const career = JSON.parse(localStorage.getItem('tukn_career') || '{"description":"আমাদের সংগঠনে নিয়মিত বিভিন্ন পদে নিয়োগ দেওয়া হয়。"}');
     document.getElementById('careerDescription').innerHTML = `<p class="text-gray-700">${career.description}</p>`;
 }
 
