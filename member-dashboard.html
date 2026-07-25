@@ -1268,7 +1268,7 @@
 </div>
 
 <script>
-    // ============================================================
+// ============================================================
 // Supabase কনফিগারেশন
 // ============================================================
 const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
@@ -2660,65 +2660,78 @@ function submitWithdraw(type) {
 // উত্তোলন রিকোয়েস্ট সেভ (ক্যাশ সহ - সম্পূর্ণ আপডেটেড)
 // ============================================================
 async function saveWithdrawRequest(type, amount, method, receiverDetails, typeName) {
+    console.log('📤 saveWithdrawRequest called:', { type, amount, method, receiverDetails, typeName });
+    
+    // ✅ Supabase ক্লায়েন্ট চেক
     const client = await initSupabase();
-    if(!client) {
+    if (!client) {
+        console.error('❌ Supabase client not initialized!');
         showToast('সার্ভার সংযোগ সমস্যা!', 'error');
         return;
     }
+    
     try {
-        // ✅ টাইপ নাম নরমালাইজ করুন (সুপার অ্যাডমিনের সাথে মিলানোর জন্য)
-        let normalizedType = typeName;
-        // যদি typeName এ 'উত্তোলন' থাকে তাহলে বাদ দিন
+        // ✅ টাইপ নাম নরমালাইজ করুন
+        let normalizedType = typeName || '';
         normalizedType = normalizedType.replace(/ উত্তোলন/g, '');
         
+        // ✅ মৌলিক ডাটা তৈরি
         const withdrawData = {
             member_id: currentUser.id,
             member_name: currentUser.name,
             mobile: currentUser.mobile,
-            type: normalizedType,  // ✅ সুপার অ্যাডমিনের সাথে মিলবে
+            type: normalizedType,
             amount: amount,
             status: 'pending',
-            requested_at: new Date().toISOString(),
-            payment_method: method
+            requested_at: new Date().toISOString()
         };
         
-        // মাধ্যম অনুযায়ী ডাটা যোগ করুন
-        if (method === 'cash') {
-            withdrawData.receiver_name = receiverDetails.receiverName || null;
-            withdrawData.receiver_mobile = receiverDetails.receiverMobile || null;
-            withdrawData.receiver_id = receiverDetails.receiverId || null;
-        } else if (method === 'bank') {
-            withdrawData.bank_name = receiverDetails.bankName || null;
-            withdrawData.account_number = receiverDetails.accountNo || null;
-            withdrawData.account_name = receiverDetails.accountName || null;
-        } else {
-            // bKash, Nagad, Rocket
-            withdrawData.sender_mobile = receiverDetails.mobile || null;
+        // ✅ পেমেন্ট মাধ্যম যোগ করুন
+        if (method) {
+            withdrawData.payment_method = method;
         }
         
-        console.log('📤 উত্তোলন ডাটা:', withdrawData);
+        // ✅ মাধ্যম অনুযায়ী অতিরিক্ত ডাটা যোগ করুন
+        if (method === 'cash') {
+            if (receiverDetails.receiverName) withdrawData.receiver_name = receiverDetails.receiverName;
+            if (receiverDetails.receiverMobile) withdrawData.receiver_mobile = receiverDetails.receiverMobile;
+            if (receiverDetails.receiverId) withdrawData.receiver_id = receiverDetails.receiverId;
+        } else if (method === 'bank') {
+            if (receiverDetails.bankName) withdrawData.bank_name = receiverDetails.bankName;
+            if (receiverDetails.accountNo) withdrawData.account_number = receiverDetails.accountNo;
+            if (receiverDetails.accountName) withdrawData.account_holder_name = receiverDetails.accountName;
+        } else if (method === 'bkash' || method === 'nagad' || method === 'rocket') {
+            if (receiverDetails.mobile) withdrawData.sender_mobile = receiverDetails.mobile;
+        }
         
+        console.log('📤 Inserting withdrawal data:', withdrawData);
+        
+        // ✅ Supabase-এ Insert করুন
         const { data, error } = await client
             .from('withdrawals')
-            .insert([withdrawData]);
-            
-        if(error) {
-            console.error('❌ উত্তোলন রিকোয়েস্ট সেভ error:', error);
-            showToast('উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ!', 'error');
-        } else {
-            console.log('✅ উত্তোলন রিকোয়েস্ট সেভ হয়েছে:', data);
-            await loadWithdrawalHistory();
-            
-            // ✅ ব্যালেন্স রিফ্রেশ করুন
-            await refreshMemberDataFromSupabase();
-            await loadUserFunds();
-            await updateFundsDisplay();
-            
-            showToast('✅ উত্তোলনের অনুরোধ জমা হয়েছে!', 'success');
+            .insert([withdrawData])
+            .select();
+        
+        if (error) {
+            console.error('❌ Supabase insert error:', error);
+            console.error('❌ Error details:', error.message, error.details, error.hint);
+            showToast('উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ! ' + (error.message || ''), 'error');
+            return;
         }
+        
+        console.log('✅ উত্তোলন রিকোয়েস্ট সেভ হয়েছে:', data);
+        
+        // ✅ ব্যালেন্স রিফ্রেশ করুন
+        await refreshMemberDataFromSupabase();
+        await loadUserFunds();
+        await updateFundsDisplay();
+        await loadWithdrawalHistory();
+        
+        showToast('✅ উত্তোলনের অনুরোধ জমা হয়েছে!', 'success');
+        
     } catch(e) {
         console.error('❌ saveWithdrawRequest error:', e);
-        showToast('উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ!', 'error');
+        showToast('উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ! ' + (e.message || ''), 'error');
     }
 }
   
