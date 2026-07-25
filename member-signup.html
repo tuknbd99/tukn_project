@@ -791,6 +791,9 @@ document.getElementById('signupForm').addEventListener('submit', async function(
         const memberTerm = parseInt(document.getElementById(memberType === 'regular' ? 'memberTerm' : 'currentMemberTerm').value) || 0;
         const memberId = await generateMemberId(memberTerm);
         
+        // ============================================================
+        // ফর্ম ডাটা তৈরি - আপনার টেবিলের সাথে মানিয়ে নেওয়া হয়েছে
+        // ============================================================
         const formData = {
             member_id: memberId,
             full_name: document.getElementById('fullName').value.trim(),
@@ -799,7 +802,7 @@ document.getElementById('signupForm').addEventListener('submit', async function(
             mobile: mobile,
             telegram: document.getElementById('telegram').value.trim(),
             email: document.getElementById('email').value.trim(),
-            dob: document.getElementById('dob').value,
+            dob: document.getElementById('dob').value || null,  // নতুন যোগ করা
             id_type: document.querySelector('input[name="idType"]:checked')?.value || 'জন্মনিবন্ধন',
             id_number: document.getElementById('idNumber').value.trim(),
             present_village: document.getElementById('presentVillage').value.trim(),
@@ -816,15 +819,15 @@ document.getElementById('signupForm').addEventListener('submit', async function(
             permanent_details: document.getElementById('permanentDetails').value.trim(),
             profession: document.getElementById('profession').value.trim(),
             education: document.getElementById('education').value.trim(),
-            member_position: document.getElementById('memberPosition').value,
+            member_position: document.getElementById('memberPosition').value,  // ✅ এটা এখন ঠিক আছে
             member_type: memberType,
             monthly_savings: monthlySavings,
             member_term: memberTerm,
-            refer_code: document.getElementById('referCode').value.trim(),
+            refer_code: document.getElementById('referCode').value.trim(),  // ✅ এটা এখন ঠিক আছে
             nominee_name: document.getElementById('nomineeName').value.trim(),
             nominee_relation: document.getElementById('nomineeRelation').value,
             nominee_nid: document.getElementById('nomineeNid').value.trim(),
-            branch_id: branchId,
+            branch_id: parseInt(branchId),  // ✅ bigint এর জন্য number এ কনভার্ট
             student_class: document.getElementById('studentClass')?.value?.trim() || '',
             student_madrasa: document.getElementById('studentMadrasa')?.value?.trim() || '',
             student_address: document.getElementById('studentAddress')?.value?.trim() || '',
@@ -835,23 +838,30 @@ document.getElementById('signupForm').addEventListener('submit', async function(
             created_at: new Date().toISOString()
         };
         
+        console.log('📝 ফর্ম ডাটা:', formData);
+        
         const { data: member, error: memberError } = await client
             .from('members')
             .insert([formData])
             .select()
             .single();
         
-        if (memberError) throw memberError;
+        if (memberError) {
+            console.error('❌ Member Insert Error:', memberError);
+            throw memberError;
+        }
         
+        // branch_members এ যোগ করুন
         await client
             .from('branch_members')
             .insert([{
-                branch_id: branchId,
+                branch_id: parseInt(branchId),
                 member_id: memberId,
                 joined_at: new Date().toISOString(),
                 status: 'active'
             }]);
         
+        // কারেন্ট সদস্যের জন্য পেমেন্ট
         if (memberType === 'current') {
             const currentMonth = new Date().toLocaleString('bn-BD', { month: 'long' });
             const currentYear = new Date().getFullYear();
@@ -868,7 +878,7 @@ document.getElementById('signupForm').addEventListener('submit', async function(
                     transaction_id: 'TXN-' + Date.now() + '-' + Math.floor(Math.random() * 10000),
                     status: 'pending',
                     submitted_at: new Date().toISOString(),
-                    branch_id: branchId,
+                    branch_id: parseInt(branchId),
                     note: 'কারেন্ট সদস্য - প্রথম জমা'
                 }]);
         }
@@ -896,8 +906,12 @@ document.getElementById('signupForm').addEventListener('submit', async function(
         }, 500);
         
     } catch (err) {
-        console.error('Registration error:', err);
-        showCenterNotification('❌ নিবন্ধনে সমস্যা হয়েছে! দয়া করে আবার চেষ্টা করুন।', 'error');
+        console.error('❌ Registration error:', err);
+        let errorMessage = '❌ নিবন্ধনে সমস্যা হয়েছে! দয়া করে আবার চেষ্টা করুন।';
+        if (err.message) {
+            errorMessage += `<br><br><span class="text-sm text-gray-500">${err.message}</span>`;
+        }
+        showCenterNotification(errorMessage, 'error');
     } finally {
         submitBtn.disabled = false;
         submitBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>নিবন্ধন জমা দিন';
@@ -950,10 +964,6 @@ window.generateMemberId = generateMemberId;
 window.updateDistricts = updateDistricts;
 window.toggleDynamicFields = toggleDynamicFields;
 window.selectMemberType = selectMemberType;
-window.registerMember = async function(e) {
-    // এই ফাংশনটি ফর্ম সাবমিটে কল হবে
-    document.getElementById('signupForm').dispatchEvent(new Event('submit'));
-};
 </script>
 </body>
 </html>
