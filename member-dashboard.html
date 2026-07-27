@@ -1391,7 +1391,8 @@ async function initSupabase() {
         id: parsed.member_id || parsed.id,
         name: parsed.full_name || parsed.name,
         mobile: parsed.mobile,
-        referId: parsed.referral_code,
+        referId: parsed.refer_code || parsed.referral_code || null,
+        refer_code: parsed.refer_code || parsed.referral_code || null,
         joinDate: parsed.join_date || new Date().toISOString(),
         memberTerm: parseInt(parsed.member_term) || 0,
         monthlySavings: parsed.monthly_savings || 500,
@@ -1402,6 +1403,7 @@ async function initSupabase() {
         approved_at: parsed.approved_at || null
     };
     console.log('✅ লগইন সফল:', currentUser.name);
+    console.log('✅ রেফারেল কোড:', currentUser.referId || currentUser.refer_code || 'N/A');
 })();
 
 function handleLogout() { 
@@ -1557,7 +1559,12 @@ async function updateUI() {
     const greeting = hour < 12 ? 'সুপ্রভাত' : (hour < 18 ? 'শুভ অপরাহ্ন' : 'শুভ সন্ধ্যা');
     document.getElementById('greetingMessage').innerHTML = `${greeting}, ${currentUser.name}!`;
     document.getElementById('memberIdDisplay').innerHTML = currentUser.id;
-    document.getElementById('referIdDisplay').innerHTML = currentUser.referId || 'N/A';
+    
+    // ✅ রেফারেল কোড দেখান (refer_code ব্যবহার)
+    const referCode = currentUser.referId || currentUser.refer_code || 'N/A';
+    document.getElementById('referIdDisplay').innerHTML = referCode;
+    document.getElementById('cardReferId').innerHTML = referCode;
+    
     document.getElementById('memberMobile').innerHTML = currentUser.mobile;
     
     if(currentUser.joinDate) document.getElementById('joinDateDisplay').innerHTML = new Date(currentUser.joinDate).toLocaleDateString('bn-BD');
@@ -1565,7 +1572,6 @@ async function updateUI() {
     
     document.getElementById('cardName').innerHTML = currentUser.name;
     document.getElementById('cardId').innerHTML = currentUser.id;
-    document.getElementById('cardReferId').innerHTML = currentUser.referId || 'N/A';
     
     let termText = (currentUser.memberTerm === 0 || currentUser.memberTerm === null || currentUser.memberTerm === undefined) 
         ? 'মেয়াদহীন' 
@@ -1583,6 +1589,9 @@ async function updateUI() {
     
     document.getElementById('presentAddressDisplay').innerHTML = currentUser.presentAddress || 'যোগ করা হয়নি';
     document.getElementById('permanentAddressDisplay').innerHTML = currentUser.permanentAddress || 'যোগ করা হয়নি';
+    
+    // ✅ রেফারেল লিংক আপডেট
+    updateReferralLink();
     
     if (currentUser.approved_at) {
         startMembershipTimer(currentUser.approved_at);
@@ -1614,15 +1623,39 @@ async function updateUI() {
 }
 
 // ============================================================
-// Refresh Member Data (নিশ্চিত করুন referral_bonus আপডেট হয়)
+// রেফারেল লিংক আপডেট ফাংশন
+// ============================================================
+function updateReferralLink() {
+    const referralLink = document.getElementById('referralLink');
+    if(!referralLink) return;
+    
+    let refCode = currentUser.referId || currentUser.refer_code;
+    if(!refCode) {
+        referralLink.value = 'রেফারেল কোড পাওয়া যায়নি';
+        return;
+    }
+    
+    // কোড ক্লিন করুন (শুধু সংখ্যা)
+    if(refCode && typeof refCode === 'string') {
+        const match = refCode.match(/\d+/);
+        if(match) refCode = match[0];
+    }
+    
+    const baseUrl = window.location.origin;
+    referralLink.value = `${baseUrl}/signup?ref=${refCode}`;
+}
+
+// ============================================================
+// Refresh Member Data (refer_code ব্যবহার)
 // ============================================================
 async function refreshMemberDataFromSupabase() {
     if(!currentUser || !currentUser.id) return;
     let client = await initSupabase();
     if(!client) return;
     try {
+        // ✅ refer_code ব্যবহার করুন
         const { data, error } = await client.from('members')
-            .select('present_address, permanent_address, profile_image, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, balance, member_term, approved_at, created_at')
+            .select('present_address, permanent_address, profile_image, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, balance, member_term, approved_at, created_at, refer_code')
             .eq('member_id', currentUser.id)
             .single();
         if(error) throw error;
@@ -1637,6 +1670,12 @@ async function refreshMemberDataFromSupabase() {
                 currentUser.approved_at = data.created_at;
             }
             
+            // ✅ refer_code আপডেট করুন
+            if(data.refer_code) {
+                currentUser.referId = data.refer_code;
+                currentUser.refer_code = data.refer_code;
+            }
+            
             // ✅ সকল ফান্ড আপডেট করুন
             userFunds.savingsProfit = data.profit_balance_savings || 0;
             userFunds.investmentProfit = data.profit_balance_investment || 0;
@@ -1645,6 +1684,7 @@ async function refreshMemberDataFromSupabase() {
             userFunds.monthlySavings = data.balance || 0;
             
             console.log('✅ রিফ্রেশ করা userFunds:', userFunds);
+            console.log('✅ রেফারেল কোড:', currentUser.referId || currentUser.refer_code);
         }
     } catch(e) { 
         console.error('❌ refreshMemberDataFromSupabase error:', e); 
@@ -2347,7 +2387,7 @@ function deselectAllMonths() {
 }
 
 // ============================================================
-// উত্তোলন মডাল খোলা (ক্যাশ অপশন সহ) - UPDATED
+// উত্তোলন মডাল খোলা (ক্যাশ অপশন সহ)
 // ============================================================
 function openWithdrawModal(type) {
     let title = '', balance = 0, fieldLabel = '';
@@ -4321,7 +4361,7 @@ async function loadNotices() {
 async function loadComplaintReplies() { document.getElementById('complaintRepliesContainer').innerHTML = '<p class="text-gray-500 text-center py-4">কোনো উত্তর পাওয়া যায়নি</p>'; }
 
 // ============================================================
-// 🆕 রেফারেল ফাংশন
+// 🆕 রেফারেল ফাংশন (refer_code ব্যবহার)
 // ============================================================
 async function insertReferralBonusLog(memberId, amount, level, note) {
     const client = await initSupabase();
@@ -4407,8 +4447,9 @@ async function loadReferralData() {
     }
     
     try {
+        // ✅ refer_code ব্যবহার করুন
         const { data: allMembers, error } = await client.from('members')
-            .select('member_id, full_name, mobile, monthly_savings, referred_by, referral_code, status, created_at');
+            .select('member_id, full_name, mobile, monthly_savings, referred_by, refer_code, status, created_at');
         
         if(error) {
             console.error('Supabase error:', error);
@@ -4437,8 +4478,9 @@ async function loadReferralData() {
         
         const commissionRates = {1:0.15,2:0.10,3:0.05,4:0.05,5:0.05,6:0.05,7:0.05,8:0.05,9:0.05,10:0.05};
         
+        // ✅ রেফারেল কোড নরমালাইজ করুন (refer_code)
         const normalizedMembers = allMembers.map(member => {
-            let refCode = member.referral_code;
+            let refCode = member.refer_code;
             let refBy = member.referred_by;
             if(refCode && typeof refCode === 'string') {
                 const match = refCode.match(/\d+/);
@@ -4448,16 +4490,36 @@ async function loadReferralData() {
                 const match = refBy.match(/\d+/);
                 if(match) refBy = match[0];
             }
-            return { ...member, referral_code_normalized: refCode, referred_by_normalized: refBy };
+            return { ...member, refer_code_normalized: refCode, referred_by_normalized: refBy };
         });
         
-        let myReferCode = currentUser.referId;
+        // ✅ আমার রেফারেল কোড নিন
+        let myReferCode = currentUser.referId || currentUser.refer_code;
         if(myReferCode && typeof myReferCode === 'string') {
             const match = myReferCode.match(/\d+/);
             if(match) myReferCode = match[0];
         }
         
         console.log('🔑 আমার রেফারেল কোড:', myReferCode);
+        
+        // ✅ রেফারেল কোড না থাকলে API থেকে নিন
+        if(!myReferCode) {
+            try {
+                const { data: memberData } = await client
+                    .from('members')
+                    .select('refer_code')
+                    .eq('member_id', currentUser.id)
+                    .single();
+                if(memberData && memberData.refer_code) {
+                    myReferCode = memberData.refer_code;
+                    currentUser.referId = myReferCode;
+                    currentUser.refer_code = myReferCode;
+                    console.log('✅ API থেকে রেফারেল কোড পাওয়া গেছে:', myReferCode);
+                }
+            } catch(e) {
+                console.error('❌ রেফারেল কোড fetch error:', e);
+            }
+        }
         
         if(!myReferCode) {
             for(let i=1; i<=10; i++) {
@@ -4476,9 +4538,11 @@ async function loadReferralData() {
             return;
         }
         
+        // ✅ রেফারেল ট্রি বিল্ড করুন
         const levelReferrals = {1:[],2:[],3:[],4:[],5:[],6:[],7:[],8:[],9:[],10:[]};
         const visited = new Set();
         
+        // Level 1: যারা সরাসরি আমার রেফারেল কোড ব্যবহার করেছে
         levelReferrals[1] = normalizedMembers.filter(m => 
             m.referred_by_normalized === myReferCode && 
             m.member_id !== currentUser.id &&
@@ -4491,11 +4555,12 @@ async function loadReferralData() {
         
         console.log('📊 Level 1 referrals:', levelReferrals[1].length);
         
+        // Level 2-10: ডাউনলাইন রেফারেল
         let currentLevelMembers = [...levelReferrals[1]];
         for(let level = 2; level <= 10; level++) {
             const nextLevelMembers = [];
             for(const member of currentLevelMembers) {
-                let memberReferCode = member.referral_code_normalized;
+                let memberReferCode = member.refer_code_normalized;
                 if(memberReferCode && !visited.has(memberReferCode) && memberReferCode !== myReferCode) {
                     const childRefs = normalizedMembers.filter(m => 
                         m.referred_by_normalized === memberReferCode && 
@@ -4516,6 +4581,7 @@ async function loadReferralData() {
             console.log(`📊 Level ${level} referrals:`, nextLevelMembers.length);
         }
         
+        // ✅ বোনাস ক্যালকুলেশন
         let totalCommission = 0;
         let totalReferrals = 0;
         const referralBonusMap = {};
@@ -4545,6 +4611,7 @@ async function loadReferralData() {
             updateLevelList(level, levelReferrals[level], rate * 100);
         }
         
+        // ✅ বোনাস লগ আপডেট
         const now = new Date();
         const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         
@@ -4561,6 +4628,7 @@ async function loadReferralData() {
             }
         }
         
+        // ✅ আমার বোনাস আপডেট
         const myTotalBonus = totalCommission;
         const roundedMyBonus = Math.round(myTotalBonus);
         
@@ -4601,16 +4669,8 @@ async function loadReferralData() {
             referralProfitCard.innerText = (userFunds.referralProfit || 0).toLocaleString() + ' টাকা';
         }
         
-        const referralLink = document.getElementById('referralLink');
-        if(referralLink && currentUser.referId) {
-            let cleanRefCode = currentUser.referId;
-            if(cleanRefCode && typeof cleanRefCode === 'string') {
-                const match = cleanRefCode.match(/\d+/);
-                if(match) cleanRefCode = match[0];
-            }
-            const baseUrl = window.location.origin;
-            referralLink.value = `${baseUrl}/signup?ref=${cleanRefCode || currentUser.referId}`;
-        }
+        // ✅ রেফারেল লিংক আপডেট
+        updateReferralLink();
         
         updateFundsDisplay();
         
@@ -4693,7 +4753,8 @@ function whatsappShare() {
 }
 
 function copyReferId() { 
-    navigator.clipboard.writeText(currentUser.referId || ''); 
+    const referCode = currentUser.referId || currentUser.refer_code || '';
+    navigator.clipboard.writeText(referCode); 
     showToast('রেফার আইডি কপি করা হয়েছে!','success'); 
 }
 
@@ -4787,7 +4848,7 @@ function updateTransferTotalAmount() {
 }
 
 // ============================================================
-// ট্রান্সফার মডাল খোলা (ব্যালেন্স রিফ্রেশ সহ - ফিক্সড)
+// ট্রান্সফার মডাল খোলা (ব্যালেন্স রিফ্রেশ সহ)
 // ============================================================
 function openTransferSavingsModal() {
     console.log('🔓 ট্রান্সফার মডাল খোলা হচ্ছে...');
@@ -4797,35 +4858,15 @@ function openTransferSavingsModal() {
         return;
     }
     
-    // এলিমেন্টগুলো নিরাপদে সেট করুন
     const senderNameEl = document.getElementById('transferSenderName');
     const senderIdEl = document.getElementById('transferSenderId');
     const senderTermEl = document.getElementById('transferSenderTerm');
     const senderBalanceEl = document.getElementById('senderBalanceDisplay');
     const senderBonusEl = document.getElementById('senderBonusDisplay');
-    const senderProfitEl = document.getElementById('senderProfitDisplay');
-    const termWarningEl = document.getElementById('termMemberWarning');
-    const savingsOptionEl = document.getElementById('transferFromSavings');
-    const savingsLabelEl = document.getElementById('savingsOptionLabel');
-    const bonusOptionEl = document.getElementById('transferFromBonus');
-    const submitBtn = document.getElementById('transferSubmitBtn');
-    const fundStatusMsg = document.getElementById('fundStatusMessage');
-    const monthsSection = document.getElementById('transferMonthsSection');
-    const customAmountSection = document.getElementById('transferCustomAmountSection');
-    const receiverSearchEl = document.getElementById('transferReceiverSearch');
-    const receiverInfoEl = document.getElementById('transferReceiverInfo');
-    const receiverNotFoundEl = document.getElementById('transferReceiverNotFound');
-    const receiverErrorEl = document.getElementById('transferReceiverError');
-    const totalAmountEl = document.getElementById('transferTotalAmount');
-    const fundLabelEl = document.getElementById('transferFundLabel');
-    const calculationNoteEl = document.getElementById('transferCalculationNote');
-    const perMonthSavingsEl = document.getElementById('transferPerMonthSavings');
     const modal = document.getElementById('transferSavingsModal');
     
-    // প্রেরকের তথ্য দেখান
     if (senderNameEl) senderNameEl.innerHTML = currentUser.name || 'নাম নেই';
     if (senderIdEl) senderIdEl.innerHTML = currentUser.id || '-';
-    
     if (senderTermEl) {
         const termText = (currentUser.memberTerm === 0 || currentUser.memberTerm === null || currentUser.memberTerm === undefined) 
             ? 'মেয়াদহীন' 
@@ -4833,298 +4874,40 @@ function openTransferSavingsModal() {
         senderTermEl.innerHTML = termText;
     }
     
-    // ============================================================
-    // ✅ গুরুত্বপূর্ণ: প্রথমে ব্যালেন্স রিফ্রেশ করুন
-    // ============================================================
     refreshMemberDataFromSupabase().then(() => {
         console.log('✅ ব্যালেন্স রিফ্রেশ সম্পন্ন:', userFunds);
-        
         const savingsBalance = Number(userFunds.monthlySavings) || 0;
         const bonusBalance = Number(userFunds.referralBonus) || 0;
-        const profitBalance = Number(userFunds.savingsProfit || 0) + Number(userFunds.investmentProfit || 0) + Number(userFunds.referralProfit || 0);
-        
         if (senderBalanceEl) senderBalanceEl.innerHTML = savingsBalance.toLocaleString();
         if (senderBonusEl) senderBonusEl.innerHTML = bonusBalance.toLocaleString();
-        if (senderProfitEl) senderProfitEl.innerHTML = profitBalance.toLocaleString();
-        
-        console.log(`📊 সঞ্চয়: ${savingsBalance}, 🎁 বোনাস: ${bonusBalance}, 📈 লভ্যাংশ: ${profitBalance}`);
-        
-        // মেয়াদী সদস্য চেক
-        const isTermMember = parseInt(currentUser.memberTerm) > 0;
-        
-        if (termWarningEl) {
-            if (isTermMember) {
-                termWarningEl.classList.remove('hidden');
-            } else {
-                termWarningEl.classList.add('hidden');
-            }
-        }
-        
-        // সঞ্চয় অপশন ডিসেবল/ইনেবল
-        if (savingsOptionEl) {
-            savingsOptionEl.disabled = isTermMember;
-        }
-        if (savingsLabelEl) {
-            if (isTermMember) {
-                savingsLabelEl.classList.add('opacity-50', 'cursor-not-allowed', 'bg-gray-100');
-            } else {
-                savingsLabelEl.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-gray-100');
-            }
-        }
-        
-        // ডিফল্ট ফান্ড সিলেক্ট করুন
-        if (bonusOptionEl && isTermMember) {
-            bonusOptionEl.checked = true;
-        } else if (savingsOptionEl && !isTermMember) {
-            savingsOptionEl.checked = true;
-        }
-        
-        // ✅ ফান্ড ব্যালেন্স আপডেট করুন (এখন সঠিক ব্যালেন্স দেখাবে)
         setTimeout(() => {
             updateFundBalanceDisplay();
         }, 100);
     });
     
-    // সব ফিল্ড রিসেট করুন
-    if (receiverSearchEl) receiverSearchEl.value = '';
-    if (receiverInfoEl) receiverInfoEl.classList.add('hidden');
-    if (receiverNotFoundEl) receiverNotFoundEl.classList.add('hidden');
-    if (receiverErrorEl) receiverErrorEl.classList.add('hidden');
-    if (monthsSection) monthsSection.classList.add('hidden');
-    if (customAmountSection) customAmountSection.classList.add('hidden');
-    
-    document.querySelectorAll('.transfer-month-cb').forEach(cb => {
-        if (cb) cb.checked = false;
-    });
-    
-    const customAmountEl = document.getElementById('transferCustomAmount');
-    if (customAmountEl) customAmountEl.value = '';
-    
-    if (totalAmountEl) totalAmountEl.innerHTML = '০ টাকা';
-    if (fundLabelEl) {
-        fundLabelEl.innerHTML = '📊 সঞ্চয় ফান্ড থেকে';
-        fundLabelEl.className = 'text-emerald-600 font-semibold';
-    }
-    if (calculationNoteEl) {
-        calculationNoteEl.innerHTML = '* প্রথমে গ্রহীতা সার্চ করুন';
-    }
-    
-    if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> প্রথমে গ্রহীতা সার্চ করুন';
-    }
-    
-    if (fundStatusMsg) {
-        fundStatusMsg.innerHTML = '📊 দয়া করে একটি ফান্ড নির্বাচন করুন';
-        fundStatusMsg.className = 'text-xs text-gray-500 mt-1';
-    }
-    
-    if (perMonthSavingsEl) {
-        perMonthSavingsEl.innerHTML = currentUser?.monthlySavings || 500;
-    }
+    document.getElementById('transferReceiverSearch').value = '';
+    document.getElementById('transferReceiverInfo').classList.add('hidden');
+    document.getElementById('transferReceiverNotFound').classList.add('hidden');
+    document.getElementById('transferReceiverError').classList.add('hidden');
+    document.getElementById('transferMonthsSection')?.classList.add('hidden');
+    document.getElementById('transferCustomAmountSection')?.classList.add('hidden');
+    document.querySelectorAll('.transfer-month-cb').forEach(cb => cb.checked = false);
+    document.getElementById('transferCustomAmount').value = '';
+    document.getElementById('transferTotalAmount').innerHTML = '০ টাকা';
+    document.getElementById('transferSubmitBtn').disabled = true;
+    document.getElementById('transferSubmitBtn').innerHTML = '<i class="fas fa-hand mr-1"></i> প্রথমে গ্রহীতা সার্চ করুন';
     
     if (modal) {
         modal.classList.remove('hidden');
         modal.classList.add('flex');
         console.log('✅ মডাল ওপেন হয়েছে');
-    } else {
-        console.error('❌ মডাল এলিমেন্ট পাওয়া যায়নি!');
-        showToast('মডাল লোড করতে সমস্যা!', 'error');
     }
 }
 
-// ============================================================
-// ফান্ড ব্যালেন্স আপডেট (সঠিক ব্যালেন্স দেখানোর জন্য - ফিক্সড)
-// ============================================================
 function updateFundBalanceDisplay() {
-    console.log('💰 ফান্ড ব্যালেন্স আপডেট করা হচ্ছে...');
-    console.log('📊 userFunds:', userFunds);
-    
-    const fromSavings = document.getElementById('transferFromSavings');
-    const fromBonus = document.getElementById('transferFromBonus');
-    const fromProfit = document.getElementById('transferFromProfit');
-    const fromAll = document.getElementById('transferFromAll');
-    const fundBalanceEl = document.getElementById('selectedFundBalance');
-    const fundLabelEl = document.getElementById('transferFundLabel');
-    const statusMsg = document.getElementById('fundStatusMessage');
-    
-    // ✅ নিশ্চিত করুন userFunds আপডেটেড
-    let balance = 0;
-    let label = 'সঞ্চয় ফান্ড';
-    let icon = '📊';
-    
-    if (fromSavings && fromSavings.checked) {
-        balance = Number(userFunds.monthlySavings) || 0;
-        label = 'সঞ্চয় ফান্ড';
-        icon = '📊';
-        if (fundLabelEl) {
-            fundLabelEl.innerHTML = '📊 সঞ্চয় ফান্ড থেকে';
-            fundLabelEl.className = 'text-emerald-600 font-semibold';
-        }
-        console.log(`✅ সঞ্চয় ফান্ড সিলেক্টেড, ব্যালেন্স: ${balance}`);
-        
-    } else if (fromBonus && fromBonus.checked) {
-        balance = Number(userFunds.referralBonus) || 0;
-        label = 'রেফারেল বোনাস';
-        icon = '🎁';
-        if (fundLabelEl) {
-            fundLabelEl.innerHTML = '🎁 রেফারেল বোনাস থেকে';
-            fundLabelEl.className = 'text-amber-600 font-semibold';
-        }
-        console.log(`✅ বোনাস ফান্ড সিলেক্টেড, ব্যালেন্স: ${balance}`);
-        
-    } else if (fromProfit && fromProfit.checked) {
-        balance = Number(userFunds.savingsProfit || 0) + Number(userFunds.investmentProfit || 0) + Number(userFunds.referralProfit || 0);
-        label = 'লভ্যাংশ';
-        icon = '📈';
-        if (fundLabelEl) {
-            fundLabelEl.innerHTML = '📈 লভ্যাংশ থেকে';
-            fundLabelEl.className = 'text-purple-600 font-semibold';
-        }
-        console.log(`✅ লভ্যাংশ ফান্ড সিলেক্টেড, ব্যালেন্স: ${balance}`);
-        
-    } else if (fromAll && fromAll.checked) {
-        balance = Number(userFunds.monthlySavings || 0) + Number(userFunds.referralBonus || 0) + 
-                  Number(userFunds.savingsProfit || 0) + Number(userFunds.investmentProfit || 0) + Number(userFunds.referralProfit || 0);
-        label = 'সব ফান্ড';
-        icon = '🔷';
-        if (fundLabelEl) {
-            fundLabelEl.innerHTML = '🔷 সব ফান্ড থেকে';
-            fundLabelEl.className = 'text-blue-600 font-semibold';
-        }
-        console.log(`✅ সব ফান্ড সিলেক্টেড, ব্যালেন্স: ${balance}`);
-        
-    } else {
-        // ডিফল্ট - সঞ্চয় (যদি কোনো রেডিও সিলেক্ট না থাকে)
-        balance = Number(userFunds.monthlySavings) || 0;
-        label = 'সঞ্চয় ফান্ড';
-        icon = '📊';
-        if (fundLabelEl) {
-            fundLabelEl.innerHTML = '📊 সঞ্চয় ফান্ড থেকে';
-            fundLabelEl.className = 'text-emerald-600 font-semibold';
-        }
-        // ডিফল্টভাবে সঞ্চয় সিলেক্ট করুন
-        if (fromSavings) fromSavings.checked = true;
-        console.log(`✅ ডিফল্ট সঞ্চয় ফান্ড, ব্যালেন্স: ${balance}`);
-    }
-    
-    // ✅ সঠিক ব্যালেন্স দেখান (টাকার পরিমাণ সঠিক ফরম্যাটে)
-    if (fundBalanceEl) {
-        fundBalanceEl.innerHTML = balance.toFixed(2) + ' টাকা';
-        fundBalanceEl.dataset.balance = balance;
-        console.log(`✅ ফান্ড ব্যালেন্স এলিমেন্টে সেট করা হয়েছে: ${balance} টাকা`);
-    }
-    
-    // স্ট্যাটাস মেসেজ
-    if (statusMsg) {
-        statusMsg.innerHTML = `${icon} ${label} ব্যালেন্স: ${balance.toFixed(2)} টাকা`;
-        statusMsg.className = 'text-xs text-gray-500 mt-1';
-    }
-    
-    // ট্রান্সফার পরিমাণ আপডেট
+    // ফান্ড ব্যালেন্স আপডেট
     updateTransferTotalAmount();
 }
-
-// ============================================================
-// ট্রান্সফার পরিমাণ আপডেট (নাল চেক সহ)
-// ============================================================
-function updateTransferTotalAmount() {
-    console.log('📊 ট্রান্সফার পরিমাণ আপডেট করা হচ্ছে...');
-    
-    // ✅ এলিমেন্টগুলো নিরাপদে নিন
-    const receiverInfo = document.getElementById('transferReceiverInfo');
-    const totalAmountEl = document.getElementById('transferTotalAmount');
-    const calculationNoteEl = document.getElementById('transferCalculationNote');
-    const submitBtn = document.getElementById('transferSubmitBtn');
-    const statusMsg = document.getElementById('fundStatusMessage');
-    const fundBalanceEl = document.getElementById('selectedFundBalance');
-    
-    // ✅ ডিফল্ট মান
-    let totalAmount = 0;
-    let calculationNote = 'প্রথমে গ্রহীতা সার্চ করুন';
-    let isReceiverFound = receiverInfo && !receiverInfo.classList.contains('hidden');
-    
-    if (isReceiverFound) {
-        const isTermMember = receiverInfo.dataset.isTermMember === 'true';
-        const monthlyDue = parseFloat(receiverInfo.dataset.receiverMonthlyDue) || 0;
-        
-        if (isTermMember) {
-            // ✅ মেয়াদী সদস্য - মাস অনুযায়ী
-            const selected = document.querySelectorAll('.transfer-month-cb:checked');
-            const monthCount = selected.length;
-            totalAmount = monthCount * monthlyDue;
-            calculationNote = monthCount > 0 
-                ? `${monthCount} মাস × ${monthlyDue} টাকা = ${totalAmount} টাকা` 
-                : 'মাস নির্বাচন করুন';
-        } else {
-            // ✅ মেয়াদহীন সদস্য - ইচ্ছামতো টাকা
-            const customAmount = parseFloat(document.getElementById('transferCustomAmount')?.value) || 0;
-            totalAmount = customAmount;
-            calculationNote = customAmount > 0 ? `${customAmount} টাকা` : 'টাকা ইনপুট দিন';
-        }
-    }
-    
-    // ✅ টাকা দেখান (নাল চেক সহ)
-    if (totalAmountEl) {
-        totalAmountEl.innerHTML = totalAmount.toLocaleString() + ' টাকা';
-    }
-    if (calculationNoteEl) {
-        calculationNoteEl.innerHTML = `* ${calculationNote}`;
-    }
-    
-    // ✅ ব্যালেন্স চেক (নাল চেক সহ)
-    const availableBalance = fundBalanceEl ? parseFloat(fundBalanceEl.dataset.balance) || 0 : 0;
-    
-    if (submitBtn) {
-        if (totalAmount > 0) {
-            if (availableBalance === 0) {
-                submitBtn.disabled = true;
-                submitBtn.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i> ফান্ড খালি (০ টাকা)`;
-                if (statusMsg) {
-                    statusMsg.innerHTML = '❌ আপনার নির্বাচিত ফান্ডে কোনো ব্যালেন্স নেই!';
-                    statusMsg.className = 'text-xs text-red-600 mt-1 font-semibold';
-                }
-            } else if (totalAmount > availableBalance) {
-                submitBtn.disabled = true;
-                submitBtn.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i> ব্যালেন্স কম (${availableBalance.toLocaleString()} টাকা)`;
-                if (statusMsg) {
-                    statusMsg.innerHTML = `⚠️ আপনার ফান্ডে ${availableBalance.toFixed(2)} টাকা আছে। ট্রান্সফার করতে চাচ্ছেন ${totalAmount.toFixed(2)} টাকা!`;
-                    statusMsg.className = 'text-xs text-red-600 mt-1 font-semibold';
-                }
-            } else {
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i> ট্রান্সফার করুন';
-                if (statusMsg) {
-                    statusMsg.innerHTML = `✅ ট্রান্সফারের পর বাকি থাকবে ${(availableBalance - totalAmount).toFixed(2)} টাকা।`;
-                    statusMsg.className = 'text-xs text-emerald-600 mt-1 font-semibold';
-                }
-            }
-        } else {
-            submitBtn.disabled = true;
-            if (!isReceiverFound) {
-                submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> প্রথমে গ্রহীতা সার্চ করুন';
-            } else if (receiverInfo && receiverInfo.dataset.isTermMember === 'true') {
-                submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> মাস নির্বাচন করুন';
-            } else {
-                submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> টাকা ইনপুট দিন';
-            }
-            if (statusMsg && !statusMsg.innerHTML.includes('❌') && !statusMsg.innerHTML.includes('⚠️')) {
-                statusMsg.innerHTML = `📊 নির্বাচিত ফান্ডে ${availableBalance.toFixed(2)} টাকা আছে`;
-                statusMsg.className = 'text-xs text-gray-500 mt-1';
-            }
-        }
-    }
-}
-
-// ============================================================
-// রেডিও বাটনে পরিবর্তন শুনুন
-// ============================================================
-document.addEventListener('change', function(e) {
-    if (e.target.name === 'transferFund') {
-        updateFundBalanceDisplay();
-        updateTransferTotalAmount();
-    }
-});
 
 function closeTransferModal() {
     document.getElementById('transferSavingsModal').classList.add('hidden');
@@ -5145,18 +4928,12 @@ function deselectAllTransferMonths() {
     updateTransferTotalAmount();
 }
 
-// ============================================================
-// গ্রহীতা সার্চ ফাংশন (আইডি ও মোবাইল উভয় দিয়ে) - monthly_due ফিক্স
-// ============================================================
 async function searchReceiverForTransfer() {
     const searchQuery = document.getElementById('transferReceiverSearch').value.trim();
-    
     if (!searchQuery) {
         showToast('গ্রহীতার আইডি বা মোবাইল নম্বর দিন!', 'error');
         return;
     }
-    
-    console.log('🔍 সার্চ কোয়েরি:', searchQuery);
     
     const client = await initSupabase();
     if (!client) {
@@ -5164,7 +4941,6 @@ async function searchReceiverForTransfer() {
         return;
     }
     
-    // বাটন ডিসেবল করুন
     const btn = document.querySelector('#transferSavingsModal .bg-teal-500');
     const originalText = btn ? btn.innerHTML : 'খুঁজুন';
     if (btn) {
@@ -5174,77 +4950,46 @@ async function searchReceiverForTransfer() {
     
     try {
         let data = null;
-        let error = null;
         
-        // ✅ SELECT কুয়েরি থেকে monthly_due বাদ দিন (কারণ কলাম নেই)
-        // ⚠️ monthly_due না থাকলে monthly_savings ব্যবহার করুন
-        const selectFields = 'member_id, full_name, mobile, member_term, monthly_savings, status';
-        
-        // ============================================================
-        // ১. প্রথমে মোবাইল নম্বর দিয়ে সার্চ
-        // ============================================================
         const { data: mobileData, error: mobileError } = await client
             .from('members')
-            .select(selectFields)
+            .select('member_id, full_name, mobile, member_term, monthly_savings, status')
             .eq('mobile', searchQuery)
             .maybeSingle();
         
-        if (mobileError) {
-            console.error('❌ মোবাইল সার্চ error:', mobileError);
-        }
-        
         if (mobileData) {
             data = mobileData;
-            console.log('✅ মোবাইলে পাওয়া গেছে:', data);
         }
         
-        // ============================================================
-        // ২. মোবাইলে না পেলে আইডি দিয়ে সার্চ
-        // ============================================================
         if (!data) {
             const { data: idData, error: idError } = await client
                 .from('members')
-                .select(selectFields)
+                .select('member_id, full_name, mobile, member_term, monthly_savings, status')
                 .eq('member_id', searchQuery)
                 .maybeSingle();
-            
-            if (idError) {
-                console.error('❌ আইডি সার্চ error:', idError);
-            }
-            
             if (idData) {
                 data = idData;
-                console.log('✅ আইডিতে পাওয়া গেছে:', data);
             }
         }
         
-        // ============================================================
-        // ৩. সার্চের ফলাফল প্রক্রিয়াকরণ
-        // ============================================================
         const receiverInfo = document.getElementById('transferReceiverInfo');
         const notFound = document.getElementById('transferReceiverNotFound');
         const errorDiv = document.getElementById('transferReceiverError');
         const monthsSection = document.getElementById('transferMonthsSection');
         const customAmountSection = document.getElementById('transferCustomAmountSection');
         
-        // সব ডিভাইস হাইড করুন (নাল চেক সহ)
         if (receiverInfo) receiverInfo.classList.add('hidden');
         if (notFound) notFound.classList.add('hidden');
         if (errorDiv) errorDiv.classList.add('hidden');
         if (monthsSection) monthsSection.classList.add('hidden');
         if (customAmountSection) customAmountSection.classList.add('hidden');
         
-        // ============================================================
-        // ৪. সার্চ রেজাল্ট চেক
-        // ============================================================
         if (data && data.member_id) {
-            // ৪.১: নিজেকে ট্রান্সফার করা যাবে না
             if (data.member_id === currentUser.id) {
                 showToast('আপনি নিজেকে ট্রান্সফার করতে পারবেন না!', 'error');
                 return;
             }
             
-            // ৪.২: অনুমোদিত সদস্য কিনা চেক
             if (data.status !== 'active' && data.status !== 'approved') {
                 if (errorDiv) {
                     errorDiv.classList.remove('hidden');
@@ -5254,17 +4999,12 @@ async function searchReceiverForTransfer() {
                 return;
             }
             
-            // ============================================================
-            // ৫. গ্রহীতার তথ্য ডিসপ্লে করুন
-            // ============================================================
             const isTermMember = parseInt(data.member_term) > 0;
-            // ✅ monthly_due না থাকলে monthly_savings ব্যবহার করুন
-            const monthlyDue = data.monthly_due || data.monthly_savings || 500;
+            const monthlyDue = data.monthly_savings || 500;
             const termText = isTermMember ? data.member_term + ' বছর' : 'মেয়াদহীন';
-            const badgeText = isTermMember ? '📌 মেয়াদী সদস্য' : '🟢 মেয়াদহীন';
             const badgeColor = isTermMember ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700';
+            const badgeText = isTermMember ? '📌 মেয়াদী সদস্য' : '🟢 মেয়াদহীন';
             
-            // এলিমেন্ট গুলো পপুলেট করুন (নাল চেক সহ)
             const nameEl = document.getElementById('transferReceiverName');
             if (nameEl) nameEl.innerHTML = data.full_name || 'নাম নেই';
             
@@ -5283,7 +5023,6 @@ async function searchReceiverForTransfer() {
             const dueEl = document.getElementById('transferReceiverMonthlyDue');
             if (dueEl) dueEl.innerHTML = monthlyDue + ' টাকা';
             
-            // ডেটাসেটে সংরক্ষণ করুন
             if (receiverInfo) {
                 receiverInfo.dataset.receiverId = data.member_id;
                 receiverInfo.dataset.receiverName = data.full_name || '';
@@ -5291,66 +5030,34 @@ async function searchReceiverForTransfer() {
                 receiverInfo.dataset.receiverMonthlyDue = monthlyDue;
                 receiverInfo.dataset.isTermMember = isTermMember;
                 receiverInfo.dataset.receiverStatus = data.status;
-                
-                // ইনফো দেখান
                 receiverInfo.classList.remove('hidden');
             }
             
-            // ============================================================
-            // ৬. গ্রহীতার ধরন অনুযায়ী ফিল্ড দেখান
-            // ============================================================
             if (isTermMember) {
-                // মেয়াদী সদস্য - মাস নির্বাচন দেখান
                 if (monthsSection) monthsSection.classList.remove('hidden');
                 if (customAmountSection) customAmountSection.classList.add('hidden');
-                
                 const calcNote = document.getElementById('transferCalculationNote');
                 if (calcNote) {
                     calcNote.innerHTML = `* প্রতি মাসের ধার্য: ${monthlyDue} টাকা × নির্বাচিত মাস সংখ্যা`;
                 }
-                
-                // মাসের চেকবক্স রিসেট
-                document.querySelectorAll('.transfer-month-cb').forEach(cb => {
-                    if (cb) cb.checked = false;
-                });
-                
-                const customAmountEl = document.getElementById('transferCustomAmount');
-                if (customAmountEl) customAmountEl.value = '';
-                
+                document.querySelectorAll('.transfer-month-cb').forEach(cb => cb.checked = false);
+                document.getElementById('transferCustomAmount').value = '';
                 showToast(`✅ গ্রহীতা মেয়াদী সদস্য, মাস নির্বাচন করে ট্রান্সফার করুন`, 'info');
             } else {
-                // মেয়াদহীন সদস্য - ইচ্ছামতো টাকা ইনপুট দেখান
                 if (monthsSection) monthsSection.classList.add('hidden');
                 if (customAmountSection) customAmountSection.classList.remove('hidden');
-                
                 const calcNote = document.getElementById('transferCalculationNote');
                 if (calcNote) {
                     calcNote.innerHTML = `* আপনি ইচ্ছামতো যেকোনো পরিমাণ টাকা ট্রান্সফার করতে পারেন`;
                 }
-                
-                // কাস্টম টাকা ফিল্ড রিসেট
-                document.querySelectorAll('.transfer-month-cb').forEach(cb => {
-                    if (cb) cb.checked = false;
-                });
-                
-                const customAmountEl = document.getElementById('transferCustomAmount');
-                if (customAmountEl) customAmountEl.value = '';
-                
+                document.querySelectorAll('.transfer-month-cb').forEach(cb => cb.checked = false);
                 showToast(`✅ গ্রহীতা মেয়াদহীন সদস্য, ইচ্ছামতো টাকা ইনপুট দিন`, 'info');
             }
             
-            // ট্রান্সফার পরিমাণ আপডেট করুন
             updateTransferTotalAmount();
-            
             showToast(`✅ গ্রহীতা পাওয়া গেছে: ${data.full_name}`, 'success');
-            
         } else {
-            // ============================================================
-            // ৭. সদস্য পাওয়া যায়নি
-            // ============================================================
             if (notFound) notFound.classList.remove('hidden');
-            
-            // ডেটাসেট ক্লিয়ার করুন
             if (receiverInfo) {
                 receiverInfo.dataset.receiverId = '';
                 receiverInfo.dataset.receiverName = '';
@@ -5358,53 +5065,29 @@ async function searchReceiverForTransfer() {
                 receiverInfo.dataset.receiverMonthlyDue = '0';
                 receiverInfo.dataset.isTermMember = 'false';
             }
-            
-            // ট্রান্সফার পরিমাণ রিসেট
-            const totalAmountEl = document.getElementById('transferTotalAmount');
-            if (totalAmountEl) totalAmountEl.innerHTML = '০ টাকা';
-            
-            const calcNote = document.getElementById('transferCalculationNote');
-            if (calcNote) calcNote.innerHTML = '* প্রথমে গ্রহীতা সার্চ করুন';
-            
-            // সাবমিট বাটন ডিসেবল
-            const submitBtn = document.getElementById('transferSubmitBtn');
-            if (submitBtn) {
-                submitBtn.disabled = true;
-                submitBtn.innerHTML = '<i class="fas fa-hand mr-1"></i> প্রথমে গ্রহীতা সার্চ করুন';
-            }
-            
+            document.getElementById('transferTotalAmount').innerHTML = '০ টাকা';
+            document.getElementById('transferCalculationNote').innerHTML = '* প্রথমে গ্রহীতা সার্চ করুন';
+            document.getElementById('transferSubmitBtn').disabled = true;
+            document.getElementById('transferSubmitBtn').innerHTML = '<i class="fas fa-hand mr-1"></i> প্রথমে গ্রহীতা সার্চ করুন';
             showToast('❌ এই সদস্য পাওয়া যায়নি!', 'error');
         }
-        
     } catch(e) {
         console.error('❌ সার্চ error:', e);
         showToast('সার্চ করতে ব্যর্থ!', 'error');
     } finally {
-        // বাটন এনেবল করুন
         if (btn) {
             btn.innerHTML = originalText;
             btn.disabled = false;
         }
     }
 }
-    
-// ============================================================
-// সঞ্চয় ট্রান্সফার (এখন pending স্ট্যাটাসে জমা হবে)
-// ============================================================
+
 async function submitTransferSavings() {
-    const senderTerm = parseInt(currentUser.memberTerm) || 0;
-    const isTermMember = senderTerm > 0;
-    
     const fromSavings = document.getElementById('transferFromSavings')?.checked;
     const fromBonus = document.getElementById('transferFromBonus')?.checked;
     
     if (!fromSavings && !fromBonus) {
         showToast('ট্রান্সফারের উৎস নির্বাচন করুন!', 'error');
-        return;
-    }
-    
-    if (isTermMember && fromSavings) {
-        showToast('❌ মেয়াদী সদস্য হিসেবে সঞ্চয় থেকে ট্রান্সফার করতে পারবেন না!', 'error');
         return;
     }
     
@@ -5416,20 +5099,32 @@ async function submitTransferSavings() {
     
     const receiverId = receiverInfo.dataset.receiverId;
     const receiverName = receiverInfo.dataset.receiverName;
+    const isTermMember = receiverInfo.dataset.isTermMember === 'true';
     
     if (!receiverId) {
         showToast('গ্রহীতার আইডি পাওয়া যায়নি!', 'error');
         return;
     }
     
-    const selectedMonths = Array.from(document.querySelectorAll('.transfer-month-cb:checked')).map(cb => cb.value);
-    if (selectedMonths.length === 0) {
-        showToast('কমপক্ষে একটি মাস নির্বাচন করুন!', 'error');
-        return;
-    }
+    let totalAmount = 0;
+    let selectedMonths = [];
     
-    const perMonthAmount = currentUser.monthlySavings || 500;
-    const totalAmount = selectedMonths.length * perMonthAmount;
+    if (isTermMember) {
+        selectedMonths = Array.from(document.querySelectorAll('.transfer-month-cb:checked')).map(cb => cb.value);
+        if (selectedMonths.length === 0) {
+            showToast('কমপক্ষে একটি মাস নির্বাচন করুন!', 'error');
+            return;
+        }
+        const monthlyDue = parseFloat(receiverInfo.dataset.receiverMonthlyDue) || 500;
+        totalAmount = selectedMonths.length * monthlyDue;
+    } else {
+        const customAmount = parseFloat(document.getElementById('transferCustomAmount')?.value) || 0;
+        if (!customAmount || customAmount <= 0) {
+            showToast('সঠিক টাকার পরিমাণ দিন!', 'error');
+            return;
+        }
+        totalAmount = customAmount;
+    }
     
     let availableBalance = 0;
     let fundType = '';
@@ -5452,7 +5147,7 @@ async function submitTransferSavings() {
         return;
     }
     
-    const confirmMsg = `✅ নিশ্চিতকরণ\n━━━━━━━━━━━━━━━━━━━━━\n📤 ট্রান্সফার: ${totalAmount.toLocaleString()} টাকা\n📂 ফান্ড: ${fundType}\n👤 প্রেরক: ${currentUser.name} (${currentUser.id})\n👤 গ্রহীতা: ${receiverName} (${receiverId})\n📆 মাস: ${selectedMonths.join(', ')}\n━━━━━━━━━━━━━━━━━━━━━\n⏳ অ্যাডমিন অনুমোদন সাপেক্ষে ট্রান্সফার হবে।\n✅ অনুমোদন পেলে গ্রহীতার একাউন্টে টাকা যাবে।`;
+    const confirmMsg = `✅ নিশ্চিতকরণ\n━━━━━━━━━━━━━━━━━━━━━\n📤 ট্রান্সফার: ${totalAmount.toLocaleString()} টাকা\n📂 ফান্ড: ${fundType}\n👤 প্রেরক: ${currentUser.name} (${currentUser.id})\n👤 গ্রহীতা: ${receiverName} (${receiverId})${isTermMember ? '\n📆 মাস: ' + selectedMonths.join(', ') : ''}\n━━━━━━━━━━━━━━━━━━━━━\n⏳ অ্যাডমিন অনুমোদন সাপেক্ষে ট্রান্সফার হবে।\n✅ অনুমোদন পেলে গ্রহীতার একাউন্টে টাকা যাবে।`;
     
     if (!confirm(confirmMsg)) return;
     
@@ -5471,16 +5166,15 @@ async function submitTransferSavings() {
     
     try {
         const transactionId = `TFR-${Date.now()}-${Math.floor(Math.random()*1000)}`;
-        const note = `${selectedMonths.length} মাসের সঞ্চয় ট্রান্সফার (${selectedMonths.join(', ')})`;
+        const note = isTermMember ? `${selectedMonths.length} মাসের সঞ্চয় ট্রান্সফার (${selectedMonths.join(', ')})` : `${totalAmount} টাকা ট্রান্সফার`;
         
-        // 🔹 এখন RPC কল করবেন 'pending_transfer' নামে (নিচে SQL দিচ্ছি)
         const { data, error } = await client.rpc('pending_transfer', {
             p_from_member_id: currentUser.id,
             p_to_member_id: receiverId,
             p_amount: totalAmount,
             p_note: note,
             p_transaction_id: transactionId,
-            p_fund_type: fundType  // 'সঞ্চয়' বা 'রেফারেল বোনাস'
+            p_fund_type: fundType
         });
         
         if (error) {
@@ -5492,11 +5186,10 @@ async function submitTransferSavings() {
         if (data && data.success) {
             showToast(`✅ ${totalAmount.toLocaleString()} টাকা ট্রান্সফারের অনুরোধ জমা হয়েছে!\n⏳ অ্যাডমিন অনুমোদনের জন্য অপেক্ষা করুন।`, 'success');
             closeTransferModal();
-            await loadTransferHistory(); // পেন্ডিং ট্রান্সফার দেখাবে
+            await loadTransferHistory();
         } else {
             showToast('❌ ' + (data?.message || 'ট্রান্সফার অনুরোধ ব্যর্থ!'), 'error');
         }
-        
     } catch(e) {
         console.error('❌ Transfer error:', e);
         showToast('ট্রান্সফার অনুরোধ জমা দিতে ব্যর্থ!', 'error');
@@ -5506,9 +5199,6 @@ async function submitTransferSavings() {
     }
 }
 
-// ============================================================
-// ট্রান্সফার ইতিহাস
-// ============================================================
 async function loadTransferHistory() {
     const tbody = document.getElementById('transferHistoryBody');
     if (!tbody) return;
@@ -5522,10 +5212,8 @@ async function loadTransferHistory() {
     }
     
     try {
-        const memberId = currentUser.id.trim();
-        
         const { data, error } = await client.rpc('get_user_transfers', {
-            p_member_id: memberId
+            p_member_id: currentUser.id
         });
         
         if (error) {
@@ -5541,8 +5229,7 @@ async function loadTransferHistory() {
         }
         
         tbody.innerHTML = transfers.map(t => {
-            const isSender = t.sender_id === memberId || t.from_member_id === memberId;
-            
+            const isSender = t.sender_id === currentUser.id || t.from_member_id === currentUser.id;
             const statusBadge = {
                 'pending': 'badge-pending',
                 'completed': 'badge-completed',
@@ -5561,21 +5248,17 @@ async function loadTransferHistory() {
                 'rejected': '❌ বাতিল'
             }[t.status] || t.status;
             
-            const senderName = t.sender_name || t.from_member_name || t.sender_id || t.from_member_id;
-            const receiverName = t.receiver_name || t.to_member_name || t.receiver_id || t.to_member_id;
-            
             return `
                 <tr>
                     <td class="p-2 text-sm">${formatDate(t.requested_at)}</td>
-                    <td class="p-2 text-sm">${isSender ? '👤 আপনি' : senderName}</td>
-                    <td class="p-2 text-sm">${!isSender ? '👤 আপনি' : receiverName}</td>
+                    <td class="p-2 text-sm">${isSender ? '👤 আপনি' : (t.sender_name || t.from_member_name || t.sender_id)}</td>
+                    <td class="p-2 text-sm">${!isSender ? '👤 আপনি' : (t.receiver_name || t.to_member_name || t.receiver_id)}</td>
                     <td class="p-2 text-sm font-bold ${isSender ? 'text-red-600' : 'text-emerald-600'}">${isSender ? '-' : '+'}${Number(t.amount).toLocaleString()} টাকা</td>
                     <td class="p-2 text-sm"><span class="badge ${statusBadge}">${statusText}</span></td>
                     <td class="p-2 text-sm text-gray-400">${t.note || t.transfer_type || 'সঞ্চয় ট্রান্সফার'}</td>
                 </tr>
             `;
         }).join('');
-        
     } catch(e) {
         console.error('Transfer history error:', e);
         tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-red-500">❌ ${e.message || 'ডাটা লোড করতে সমস্যা!'}</td></tr>`;
@@ -5629,7 +5312,7 @@ async function generateStatement() {
         // স্টেপ 1: আসল রেফারেল কাউন্ট চেক করুন
         const { data: memberData, error: memberErr } = await client
             .from('members')
-            .select('member_id, referral_code')
+            .select('member_id, refer_code')
             .eq('member_id', currentUser.id)
             .single();
         
@@ -5640,11 +5323,11 @@ async function generateStatement() {
         let actualReferralCount = 0;
         let actualReferralIds = [];
         
-        if (memberData && memberData.referral_code) {
+        if (memberData && memberData.refer_code) {
             const { data: referrals, error: refErr } = await client
                 .from('members')
                 .select('member_id, full_name, mobile')
-                .eq('referred_by', memberData.referral_code)
+                .eq('referred_by', memberData.refer_code)
                 .eq('status', 'active');
             
             if (!refErr && referrals) {
@@ -5724,7 +5407,6 @@ async function generateStatement() {
                     bData.forEach(b => {
                         const amount = b.amount || 0;
                         if (amount <= 0) return;
-                        
                         const date = new Date(b.created_at || b.date);
                         const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
                         const level = b.level || 0;
