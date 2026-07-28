@@ -3045,29 +3045,26 @@ async function loadRealDashboard() {
         
         const totalFund = totalSavings + totalReferralBonus + totalProfit + totalLoanCollected + totalWelfare;
         
-        const { data: savingsWithdrawals } = await client.from('withdrawals').select('amount').eq('status', 'approved').eq('type', 'মূলধন উত্তোলন');
-        let totalSavingsWithdrawal = 0;
-        if (savingsWithdrawals && savingsWithdrawals.length > 0) totalSavingsWithdrawal = savingsWithdrawals.reduce((s, w) => s + (w.amount || 0), 0);
-        
-        const { data: bonusWithdrawals } = await client.from('withdrawals').select('amount').eq('status', 'approved').eq('type', 'রেফারেল বোনাস উত্তোলন');
-        let totalBonusWithdrawal = 0;
-        if (bonusWithdrawals && bonusWithdrawals.length > 0) totalBonusWithdrawal = bonusWithdrawals.reduce((s, w) => s + (w.amount || 0), 0);
-        
-        const { data: profitWithdrawals } = await client.from('withdrawals').select('amount').eq('status', 'approved').in('type', ['সঞ্চয় লভ্যাংশ উত্তোলন', 'বিনিয়োগ লভ্যাংশ উত্তোলন', 'রেফারেল লভ্যাংশ উত্তোলন']);
-        let totalProfitWithdrawal = 0;
-        if (profitWithdrawals && profitWithdrawals.length > 0) totalProfitWithdrawal = profitWithdrawals.reduce((s, w) => s + (w.amount || 0), 0);
+        // ===== FIX: MOVE WITHDRAWAL CALCULATIONS BEFORE DASHBOARD UPDATE =====
+        const { data: allWithdrawals } = await client.from('withdrawals').select('amount, type').eq('status', 'approved');
+        let totalSavingsWithdrawal = 0, totalBonusWithdrawal = 0, totalProfitWithdrawal = 0, totalWithdrawal = 0;
+        if (allWithdrawals) {
+            allWithdrawals.forEach(w => {
+                totalWithdrawal += (w.amount || 0);
+                if (w.type && w.type.includes('মূলধন')) totalSavingsWithdrawal += (w.amount || 0);
+                else if (w.type && w.type.includes('রেফারেল বোনাস')) totalBonusWithdrawal += (w.amount || 0);
+                else if (w.type && (w.type.includes('লভ্যাংশ') || w.type.includes('সব লভ্যাংশ'))) totalProfitWithdrawal += (w.amount || 0);
+            });
+        }
         
         const { data: loansGiven } = await client.from('loan_applications').select('amount').eq('status', 'approved');
         let totalLoanGiven = 0;
         if (loansGiven && loansGiven.length > 0) totalLoanGiven = loansGiven.reduce((s, l) => s + (l.amount || 0), 0);
         
-        const totalWithdrawal = totalSavingsWithdrawal + totalBonusWithdrawal + totalProfitWithdrawal + totalLoanGiven;
-        const netBalance = totalFund - totalWithdrawal;
         const totalDue = totalLoanGiven - totalLoanCollected;
+        const netBalance = totalFund - totalWithdrawal;
         
-        const { count: totalMembers } = await client.from('members').select('*', { count: 'exact', head: true });
-        const { count: pendingMembers } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-        
+        // ===== UPDATE DASHBOARD STATS =====
         document.getElementById('dashMonthlyCollection').innerHTML = formatAmountWithText(monthlyCollection);
         document.getElementById('dashSavingsProfit').innerHTML = formatAmountWithText(totalProfitSavings);
         document.getElementById('dashInvestmentProfit').innerHTML = formatAmountWithText(totalProfitInvestment);
@@ -3080,6 +3077,9 @@ async function loadRealDashboard() {
         document.getElementById('dashTotalWithdrawal').innerHTML = formatAmountWithText(totalWithdrawal);
         document.getElementById('dashWelfareFund').innerHTML = formatAmountWithText(totalWelfare);
         document.getElementById('dashCurrentFund').innerHTML = formatAmountWithText(netBalance);
+        
+        const { count: totalMembers } = await client.from('members').select('*', { count: 'exact', head: true });
+        const { count: pendingMembers } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
         
         document.getElementById('statActiveMembers').innerText = (totalMembers || 0) - (pendingMembers || 0);
         document.getElementById('statPendingMembers2').innerText = pendingMembers || 0;
