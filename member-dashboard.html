@@ -1346,7 +1346,9 @@ function getGreeting() {
     return 'শুভ সন্ধ্যা';
 }
 
-// 5. মেয়াদ শেষের কাউন্টডাউন
+// ============================================================
+// ✅ FIXED: মেয়াদ শেষের কাউন্টডাউন - "অনুমোদিত হয়নি" সমস্যা সমাধান
+// ============================================================
 function calculateMembershipExpiry() {
     if (!currentUser) return;
     const expiryElement = document.getElementById('membershipExpiry');
@@ -1364,12 +1366,22 @@ function calculateMembershipExpiry() {
         return;
     }
     
-    let startDate = currentUser.approved_at 
-        ? new Date(currentUser.approved_at) 
-        : new Date(currentUser.joinDate);
+    // ✅ FIXED: approved_at নাই থাকলে joinDate ব্যবহার করব
+    let startDate = null;
     
-    if (isNaN(startDate.getTime())) {
-        expiryElement.innerHTML = '<span class="text-red-600">⚠️ তারিখের ত্রুটি!</span>';
+    if (currentUser.approved_at && currentUser.approved_at !== 'null' && currentUser.approved_at !== 'undefined') {
+        startDate = new Date(currentUser.approved_at);
+    } else if (currentUser.joinDate) {
+        startDate = new Date(currentUser.joinDate);
+    }
+    
+    if (!startDate || isNaN(startDate.getTime())) {
+        expiryElement.innerHTML = `
+            <span class="text-red-600 font-bold text-base">
+                <i class="fas fa-exclamation-triangle mr-1"></i> 
+                ⚠️ সদস্য অনুমোদনের তারিখ পাওয়া যায়নি!
+            </span>
+        `;
         return;
     }
     
@@ -1430,8 +1442,17 @@ function calculateMembershipExpiry() {
     `;
 }
 
-// 6. সদস্যপদকাল
+// ============================================================
+// ✅ FIXED: সদস্যপদকাল - "অনুমোদিত হয়নি" সমস্যা সমাধান
+// ============================================================
 function startMembershipTimer(approvedAt) {
+    if (!approvedAt) {
+        // ✅ FIXED: approved_at না থাকলে joinDate ব্যবহার করব
+        if (currentUser && currentUser.joinDate) {
+            approvedAt = currentUser.joinDate;
+        }
+    }
+    
     if (!approvedAt) {
         document.getElementById('membershipDuration').innerHTML = 'অনুমোদিত হয়নি';
         return;
@@ -1569,7 +1590,7 @@ async function initSupabase() {
 }
 
 // ============================================================
-// Login Check
+// ✅ FIXED: Login Check - approved_at সহ সঠিকভাবে লোড করা
 // ============================================================
 (function() {
     let userData = localStorage.getItem('tukn_logged_member') || sessionStorage.getItem('tukn_logged_member');
@@ -1580,23 +1601,35 @@ async function initSupabase() {
         window.location.href = 'index.html'; 
         return; 
     }
+    
+    // ✅ FIXED: approved_at সঠিকভাবে সেট করা
+    let approvedAt = parsed.approved_at || parsed.approvedAt || null;
+    
+    // যদি approved_at না থাকে কিন্তু status approved হয়, তাহলে join_date ব্যবহার করব
+    if (!approvedAt && (parsed.status === 'approved' || parsed.status === 'active')) {
+        approvedAt = parsed.join_date || parsed.joinDate || parsed.created_at || null;
+    }
+    
     currentUser = {
         id: parsed.member_id || parsed.id,
         name: parsed.full_name || parsed.name,
         mobile: parsed.mobile,
         referId: parsed.refer_code || parsed.referral_code || null,
         refer_code: parsed.refer_code || parsed.referral_code || null,
-        joinDate: parsed.join_date || new Date().toISOString(),
+        joinDate: parsed.join_date || parsed.joinDate || new Date().toISOString(),
         memberTerm: parseInt(parsed.member_term) || 0,
         monthlySavings: parsed.monthly_savings || 500,
         status: parsed.status,
         profileImage: parsed.profile_image || 'images/logo.png',
         presentAddress: parsed.present_address || '',
         permanentAddress: parsed.permanent_address || '',
-        approved_at: parsed.approved_at || null
+        approved_at: approvedAt
     };
+    
     console.log('✅ লগইন সফল:', currentUser.name);
-    console.log('✅ রেফারেল কোড:', currentUser.referId || currentUser.refer_code || 'N/A');
+    console.log('✅ approved_at:', currentUser.approved_at);
+    console.log('✅ joinDate:', currentUser.joinDate);
+    console.log('✅ memberTerm:', currentUser.memberTerm);
 })();
 
 function handleLogout() { 
@@ -1647,11 +1680,10 @@ async function updateUI() {
     
     updateReferralLink();
     
-    if (currentUser.approved_at) {
-        startMembershipTimer(currentUser.approved_at);
-        calculateMembershipExpiry();
-    } else if (currentUser.joinDate) {
-        startMembershipTimer(currentUser.joinDate);
+    // ✅ FIXED: approved_at বা joinDate ব্যবহার করে টাইমার শুরু
+    const timerStartDate = currentUser.approved_at || currentUser.joinDate;
+    if (timerStartDate) {
+        startMembershipTimer(timerStartDate);
         calculateMembershipExpiry();
     } else {
         document.getElementById('membershipDuration').innerHTML = 'তারিখ পাওয়া যায়নি';
@@ -1742,7 +1774,12 @@ function setupTimeIntervals() {
     if(durationInterval) clearInterval(durationInterval);
     if(expiryInterval) clearInterval(expiryInterval);
     clockInterval = setInterval(updateDigitalClock, 1000);
-    durationInterval = setInterval(startMembershipTimer, 1000);
+    durationInterval = setInterval(() => {
+        if (currentUser) {
+            const timerStartDate = currentUser.approved_at || currentUser.joinDate;
+            if (timerStartDate) startMembershipTimer(timerStartDate);
+        }
+    }, 1000);
     expiryInterval = setInterval(calculateMembershipExpiry, 1000);
 }
 
@@ -1764,11 +1801,15 @@ async function refreshMemberDataFromSupabase() {
             if(data.permanent_address) currentUser.permanentAddress = data.permanent_address;
             if(data.profile_image) currentUser.profileImage = data.profile_image;
             if(data.member_term !== undefined) currentUser.memberTerm = data.member_term;
+            
+            // ✅ FIXED: approved_at আপডেট করা
             if(data.approved_at) {
                 currentUser.approved_at = data.approved_at;
             } else if(data.created_at) {
+                // যদি approved_at না থাকে কিন্তু created_at থাকে
                 currentUser.approved_at = data.created_at;
             }
+            
             if(data.refer_code) {
                 currentUser.referId = data.refer_code;
                 currentUser.refer_code = data.refer_code;
@@ -1779,6 +1820,7 @@ async function refreshMemberDataFromSupabase() {
             userFunds.referralBonus = data.referral_bonus || 0;
             userFunds.monthlySavings = data.balance || 0;
             console.log('✅ রিফ্রেশ করা userFunds:', userFunds);
+            console.log('✅ রিফ্রেশ করা approved_at:', currentUser.approved_at);
         }
     } catch(e) { 
         console.error('❌ refreshMemberDataFromSupabase error:', e); 
