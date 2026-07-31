@@ -3390,11 +3390,14 @@ function renderMembersList() {
 function renderPendingMembersList() {
     const tbody = document.getElementById('pendingMembersList');
     if (!tbody) return;
+    
     const pending = membersData.filter(m => m.status === 'pending');
+    
     if (pending.length === 0) { 
         tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4"><i class="fas fa-check-circle text-green-500 text-2xl"></i> কোনো পেন্ডিং সদস্য নেই</td></tr>'; 
         return; 
     }
+    
     tbody.innerHTML = pending.map(m => `
         <tr>
             <td>${m.created_at ? new Date(m.created_at).toLocaleDateString('bn-BD') : '-'}</td>
@@ -3427,6 +3430,9 @@ function renderDeletedMembersList() {
     </tr>`).join('');
 }
 
+// ============================================================
+// ===== APPROVE MEMBER (FIXED) =====
+// ============================================================
 async function approveMember(id) {
     if (!confirm('সদস্যকে অনুমোদন দেবেন?')) return;
     
@@ -3437,13 +3443,15 @@ async function approveMember(id) {
     }
     
     // লোডিং ইন্ডিকেটর
-    const btn = document.querySelector(`[onclick*="approveMember('${id}')"]`);
-    if (btn) {
+    const btns = document.querySelectorAll(`[onclick*="approveMember('${id}')"]`);
+    btns.forEach(btn => {
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-    }
+    });
     
     try {
+        console.log('🔄 সদস্য অনুমোদন শুরু:', id);
+        
         // 1. সদস্যকে active করুন
         const { error: updateError } = await client
             .from('members')
@@ -3454,25 +3462,40 @@ async function approveMember(id) {
             })
             .eq('member_id', id);
         
-        if (updateError) throw updateError;
+        if (updateError) {
+            console.error('❌ Update error:', updateError);
+            throw updateError;
+        }
+        console.log('✅ সদস্য আপডেট করা হয়েছে');
         
         // 2. branch_members চেক করুন
-        const { data: existingBranch } = await client
+        const { data: existingBranch, error: branchCheckError } = await client
             .from('branch_members')
             .select('id')
             .eq('member_id', id)
             .maybeSingle();
         
+        if (branchCheckError) {
+            console.error('❌ Branch check error:', branchCheckError);
+            throw branchCheckError;
+        }
+        
         if (!existingBranch) {
-            const { data: defaultBranch } = await client
+            // ডিফল্ট ব্রাঞ্চ খুঁজুন
+            const { data: defaultBranch, error: branchError } = await client
                 .from('branches')
                 .select('id')
                 .eq('status', 'active')
                 .limit(1)
                 .maybeSingle();
             
+            if (branchError) {
+                console.error('❌ Branch find error:', branchError);
+                throw branchError;
+            }
+            
             if (defaultBranch) {
-                await client
+                const { error: insertError } = await client
                     .from('branch_members')
                     .insert([{
                         branch_id: defaultBranch.id,
@@ -3480,36 +3503,53 @@ async function approveMember(id) {
                         joined_at: new Date().toISOString(),
                         status: 'active'
                     }]);
+                
+                if (insertError) {
+                    console.error('❌ Branch insert error:', insertError);
+                    throw insertError;
+                }
+                console.log('✅ branch_members এ যোগ করা হয়েছে');
             }
         }
         
-        // 3. ডেটা রিলোড
-        await loadMembers();
+        // 3. ডেটা রিলোড করুন
+        console.log('🔄 ডেটা রিলোড হচ্ছে...');
+        
+        // membersData রিফ্রেশ করুন
+        const { data: freshData, error: loadError } = await client
+            .from('members')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (loadError) throw loadError;
+        
+        membersData = freshData || [];
+        console.log('✅ সদস্য ডেটা রিলোড:', membersData.length);
+        
+        // UI রি-রেন্ডার
+        renderMembersList();
+        renderPendingMembersList();
+        renderDeletedMembersList();
+        
+        // ব্যাজ আপডেট
         await updateAllBadges();
+        
+        // ড্যাশবোর্ড আপডেট
         await loadRealDashboard();
         await loadBranches();
         
-        // 4. পেন্ডিং লিস্ট রিফ্রেশ
-        const tbody = document.getElementById('pendingMembersList');
-        if (tbody) {
-            const pending = membersData.filter(m => m.status === 'pending');
-            if (pending.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4"><i class="fas fa-check-circle text-green-500 text-2xl"></i> কোনো পেন্ডিং সদস্য নেই</td></tr>';
-            } else {
-                renderPendingMembersList();
-            }
-        }
-        
         showToast('✅ সদস্য সফলভাবে অনুমোদিত হয়েছে!', 'success');
+        console.log('✅ অনুমোদন সম্পূর্ণ!');
         
     } catch(e) {
-        console.error('Approval error:', e);
+        console.error('❌ Approval error:', e);
         showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
     } finally {
-        if (btn) {
+        // বাটন রিস্টোর করুন
+        btns.forEach(btn => {
             btn.disabled = false;
             btn.innerHTML = '✅ অনুমোদন';
-        }
+        });
     }
 }
 
@@ -3533,29 +3573,67 @@ function editMember(id) {
     setTimeout(() => selectMemberForFullInfo(id), 300);
 }
 
+// ============================================================
+// ===== SHOW PENDING MEMBER DETAILS (FIXED) =====
+// ============================================================
 function showPendingMemberDetails(memberId) {
-    // membersData রিফ্রেশ করুন
-    const member = membersData.find(m => m.member_id === memberId);
+    console.log('🔍 সদস্য খোঁজা হচ্ছে:', memberId);
+    console.log('📊 মোট সদস্য:', membersData.length);
+    
+    // membersData থেকে সদস্য খুঁজুন
+    let member = membersData.find(m => m.member_id === memberId);
+    
+    // যদি না পাওয়া যায়, ডাটাবেস থেকে সরাসরি খুঁজুন
     if (!member) {
-        showToast('সদস্য পাওয়া যায়নি! ডেটা রিলোড করা হচ্ছে...', 'warning');
-        loadMembers();
-        setTimeout(() => {
-            const reloadedMember = membersData.find(m => m.member_id === memberId);
-            if (reloadedMember) {
-                showPendingMemberDetails(memberId);
-            } else {
-                showToast('সদস্য পাওয়া যায়নি!', 'error');
-            }
-        }, 1000);
+        showToast('⏳ সদস্যের তথ্য লোড হচ্ছে...', 'warning');
+        
+        const client = initSupabaseClient();
+        if (!client) {
+            showToast('সংযোগ সমস্যা!', 'error');
+            return;
+        }
+        
+        client.from('members')
+            .select('*')
+            .eq('member_id', memberId)
+            .single()
+            .then(({ data, error }) => {
+                if (error || !data) {
+                    showToast('❌ সদস্য পাওয়া যায়নি!', 'error');
+                    return;
+                }
+                // membersData আপডেট করুন
+                const existingIndex = membersData.findIndex(m => m.member_id === memberId);
+                if (existingIndex >= 0) {
+                    membersData[existingIndex] = data;
+                } else {
+                    membersData.push(data);
+                }
+                showPendingMemberDetailsModal(data);
+            })
+            .catch(err => {
+                console.error('❌ Error loading member:', err);
+                showToast('❌ সদস্যের তথ্য লোড করতে সমস্যা!', 'error');
+            });
         return;
     }
     
+    showPendingMemberDetailsModal(member);
+}
+
+// ===== SHOW PENDING MEMBER DETAILS MODAL =====
+function showPendingMemberDetailsModal(member) {
     const modal = document.getElementById('pendingMemberDetailsModal');
     if (!modal) {
         showToast('মডাল পাওয়া যায়নি!', 'error');
         return;
     }
+    
     const content = document.getElementById('pendingMemberDetailsContent');
+    if (!content) {
+        showToast('কন্টেন্ট এলিমেন্ট পাওয়া যায়নি!', 'error');
+        return;
+    }
     
     const totalProfit = (member.profit_balance_savings || 0) + (member.profit_balance_investment || 0) + (member.profit_balance_referral || 0);
     const totalFund = (member.balance || 0) + (member.referral_bonus || 0) + totalProfit;
@@ -3600,6 +3678,9 @@ function showPendingMemberDetails(memberId) {
     modal.classList.add('flex');
 }
 
+// ============================================================
+// ===== CLOSE PENDING MEMBER DETAILS MODAL =====
+// ============================================================
 function closePendingMemberDetailsModal() {
     const modal = document.getElementById('pendingMemberDetailsModal');
     if (modal) {
