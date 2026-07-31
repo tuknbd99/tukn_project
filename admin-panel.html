@@ -2376,22 +2376,38 @@ function renderMembersList() {
     </tr>`).join('');
 }
 
+// ============================================================
+// ===== RENDER PENDING MEMBERS LIST (FIXED) =====
+// ============================================================
 function renderPendingMembersList() {
     const tbody = document.getElementById('pendingMembersList');
     if (!tbody) return;
     
+    // শুধুমাত্র পেন্ডিং সদস্য ফিল্টার
     const pending = membersData.filter(m => m.status === 'pending');
     
     if (pending.length === 0) { 
-        tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4"><i class="fas fa-check-circle text-green-500 text-2xl"></i> কোনো পেন্ডিং সদস্য নেই</td></tr>'; 
+        tbody.innerHTML = `<tr>
+            <td colspan="8" class="text-center p-4">
+                <i class="fas fa-check-circle text-green-500 text-2xl"></i><br>
+                <span class="text-gray-500">কোনো পেন্ডিং সদস্য নেই</span>
+            </td>
+        </tr>`;
+        
+        // ব্যাজ আপডেট
+        const badge = document.getElementById('pendingMemberBadge');
+        if (badge) {
+            badge.style.display = 'none';
+        }
         return; 
     }
     
+    // পেন্ডিং সদস্যদের HTML তৈরি
     tbody.innerHTML = pending.map(m => `
         <tr>
             <td>${m.created_at ? new Date(m.created_at).toLocaleDateString('bn-BD') : '-'}</td>
-            <td>${m.full_name}</td>
-            <td>${m.mobile}</td>
+            <td><span class="font-medium">${m.full_name || '-'}</span></td>
+            <td>${m.mobile || '-'}</td>
             <td>${m.present_district || '-'}</td>
             <td class="text-right font-bold text-emerald-600">${(m.monthly_savings||500).toLocaleString()} টাকা</td>
             <td>
@@ -2399,10 +2415,25 @@ function renderPendingMembersList() {
                     <i class="fas fa-eye"></i>
                 </button>
             </td>
-            <td><button onclick="approveMember('${m.member_id}')" class="btn btn-success btn-sm">✅ অনুমোদন</button></td>
-            <td><button onclick="deleteMember('${m.member_id}')" class="btn btn-danger btn-sm">🗑️ বাতিল</button></td>
+            <td>
+                <button onclick="approveMember('${m.member_id}')" class="btn btn-success btn-sm" id="approveBtn_${m.member_id}">
+                    <i class="fas fa-check mr-1"></i> অনুমোদন
+                </button>
+            </td>
+            <td>
+                <button onclick="deleteMember('${m.member_id}')" class="btn btn-danger btn-sm">
+                    <i class="fas fa-trash mr-1"></i> বাতিল
+                </button>
+            </td>
         </tr>
     `).join('');
+    
+    // ব্যাজ আপডেট
+    const badge = document.getElementById('pendingMemberBadge');
+    if (badge) {
+        badge.innerText = pending.length;
+        badge.style.display = 'flex';
+    }
 }
 
 function renderDeletedMembersList() {
@@ -2420,9 +2451,8 @@ function renderDeletedMembersList() {
 }
 
 // ============================================================
-// ===== APPROVE MEMBER (FULLY FIXED) =====
+// ===== APPROVE MEMBER (COMPLETELY FIXED) =====
 // ============================================================
-
 async function approveMember(id) {
     if (!confirm('সদস্যকে অনুমোদন দেবেন?')) return;
     
@@ -2483,15 +2513,33 @@ async function approveMember(id) {
             }
         }
         
-        // 3. ডেটা রিলোড করুন
-        console.log('🔄 ডেটা রিলোড হচ্ছে...');
-        await loadMembers(); // This will refresh membersData and re-render
+        // 3. ডেটা রিলোড (সরাসরি DB থেকে)
+        const { data: freshData, error: loadError } = await client
+            .from('members')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (loadError) throw loadError;
+        
+        // 4. membersData আপডেট
+        membersData = freshData || [];
+        console.log('✅ membersData রিলোড:', membersData.length);
+        
+        // 5. UI রি-রেন্ডার (সব জায়গায়)
+        renderMembersList();
+        renderPendingMembersList();
+        renderDeletedMembersList();
         await updateAllBadges();
         await loadRealDashboard();
         await loadBranches();
         
-        // 4. পেন্ডিং লিস্ট রিফ্রেশ করুন (extra safety)
-        renderPendingMembersList();
+        // 6. pendingMemberBadge আপডেট
+        const pendingCount = membersData.filter(m => m.status === 'pending').length;
+        const badge = document.getElementById('pendingMemberBadge');
+        if (badge) {
+            badge.innerText = pendingCount;
+            badge.style.display = pendingCount > 0 ? 'flex' : 'none';
+        }
         
         showToast('✅ সদস্য সফলভাবে অনুমোদিত হয়েছে!', 'success');
         console.log('✅ অনুমোদন সম্পূর্ণ!');
@@ -2508,9 +2556,8 @@ async function approveMember(id) {
 }
 
 // ============================================================
-// ===== SHOW PENDING MEMBER DETAILS (FULLY FIXED) =====
+// ===== SHOW PENDING MEMBER DETAILS (FIXED) =====
 // ============================================================
-
 function showPendingMemberDetails(memberId) {
     console.log('🔍 সদস্য খোঁজা হচ্ছে:', memberId);
     
@@ -2557,6 +2604,9 @@ function showPendingMemberDetails(memberId) {
     showPendingMemberDetailsModal(member);
 }
 
+// ============================================================
+// ===== SHOW PENDING MEMBER DETAILS MODAL =====
+// ============================================================
 function showPendingMemberDetailsModal(member) {
     const modal = document.getElementById('pendingMemberDetailsModal');
     if (!modal) {
@@ -2603,9 +2653,15 @@ function showPendingMemberDetailsModal(member) {
             </div>
         </div>
         <div class="flex gap-2 justify-center no-print">
-            <button onclick="approveMember('${member.member_id}')" class="btn btn-success flex-1 py-2">✅ অনুমোদন দিন</button>
-            <button onclick="deleteMember('${member.member_id}')" class="btn btn-danger flex-1 py-2">❌ বাতিল করুন</button>
-            <button onclick="closePendingMemberDetailsModal()" class="btn btn-warning flex-1 py-2">বন্ধ করুন</button>
+            <button onclick="approveMember('${member.member_id}')" class="btn btn-success flex-1 py-2">
+                <i class="fas fa-check mr-1"></i> অনুমোদন দিন
+            </button>
+            <button onclick="deleteMember('${member.member_id}')" class="btn btn-danger flex-1 py-2">
+                <i class="fas fa-trash mr-1"></i> বাতিল করুন
+            </button>
+            <button onclick="closePendingMemberDetailsModal()" class="btn btn-warning flex-1 py-2">
+                <i class="fas fa-times mr-1"></i> বন্ধ করুন
+            </button>
         </div>
     `;
     
