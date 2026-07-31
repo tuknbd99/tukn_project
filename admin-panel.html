@@ -2115,19 +2115,14 @@
     </div>
 </div>
 
-<!-- ============================================================ -->
-<!-- ===== JAVASCRIPT - COMPLETE ===== -->
-<!-- ============================================================ -->
 <script>
-// ============================================================
-// COMPLETE JAVASCRIPT - ALL FUNCTIONS
-// ============================================================
 
 // ===== Supabase Configuration =====
 const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
 
 let supabaseClient = null;
+let supabaseInitialized = false;
 let currentAdmin = null;
 let membersData = [];
 let allProducts = [];
@@ -2144,12 +2139,21 @@ let pendingLoanPaymentsData = [];
 let slrViewMode = 'combined';
 let transferMemberData = null;
 
-// ===== Initialize Supabase =====
+// ===== Initialize Supabase (FIXED - Singleton Pattern) =====
 function initSupabaseClient() {
     if (supabaseClient) return supabaseClient;
+    if (supabaseInitialized) return supabaseClient;
+    
     try {
         if (typeof supabase !== 'undefined' && supabase.createClient) {
-            supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+                auth: {
+                    persistSession: true,
+                    autoRefreshToken: true,
+                    storageKey: 'tuknbd-auth-token'
+                }
+            });
+            supabaseInitialized = true;
             console.log("✅ Supabase client initialized");
         }
     } catch(e) { 
@@ -3365,6 +3369,13 @@ async function approveMember(id) {
         return;
     }
     
+    // লোডিং ইন্ডিকেটর
+    const btn = document.querySelector(`[onclick*="approveMember('${id}')"]`);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    }
+    
     try {
         // 1. সদস্যকে active করুন
         const { error: updateError } = await client
@@ -3378,7 +3389,7 @@ async function approveMember(id) {
         
         if (updateError) throw updateError;
         
-        // 2. সদস্যের জন্য branch_members এ এন্ট্রি তৈরি করুন (যদি না থাকে)
+        // 2. branch_members চেক করুন
         const { data: existingBranch } = await client
             .from('branch_members')
             .select('id')
@@ -3386,7 +3397,6 @@ async function approveMember(id) {
             .maybeSingle();
         
         if (!existingBranch) {
-            // ডিফল্ট ব্রাঞ্চ খুঁজুন (প্রথম active ব্রাঞ্চ)
             const { data: defaultBranch } = await client
                 .from('branches')
                 .select('id')
@@ -3406,17 +3416,33 @@ async function approveMember(id) {
             }
         }
         
-        // 3. লোড রিলেটেড ডেটা রিফ্রেশ করুন
+        // 3. ডেটা রিলোড
         await loadMembers();
         await updateAllBadges();
         await loadRealDashboard();
         await loadBranches();
+        
+        // 4. পেন্ডিং লিস্ট রিফ্রেশ
+        const tbody = document.getElementById('pendingMembersList');
+        if (tbody) {
+            const pending = membersData.filter(m => m.status === 'pending');
+            if (pending.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4"><i class="fas fa-check-circle text-green-500 text-2xl"></i> কোনো পেন্ডিং সদস্য নেই</td></tr>';
+            } else {
+                renderPendingMembersList();
+            }
+        }
         
         showToast('✅ সদস্য সফলভাবে অনুমোদিত হয়েছে!', 'success');
         
     } catch(e) {
         console.error('Approval error:', e);
         showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '✅ অনুমোদন';
+        }
     }
 }
 
@@ -3440,15 +3466,23 @@ function editMember(id) {
     setTimeout(() => selectMemberForFullInfo(id), 300);
 }
 
-// ============================================================
-// ===== PENDING MEMBER DETAILS =====
-// ============================================================
 function showPendingMemberDetails(memberId) {
+    // membersData রিফ্রেশ করুন
     const member = membersData.find(m => m.member_id === memberId);
     if (!member) {
-        showToast('সদস্য পাওয়া যায়নি!', 'error');
+        showToast('সদস্য পাওয়া যায়নি! ডেটা রিলোড করা হচ্ছে...', 'warning');
+        loadMembers();
+        setTimeout(() => {
+            const reloadedMember = membersData.find(m => m.member_id === memberId);
+            if (reloadedMember) {
+                showPendingMemberDetails(memberId);
+            } else {
+                showToast('সদস্য পাওয়া যায়নি!', 'error');
+            }
+        }, 1000);
         return;
     }
+    
     const modal = document.getElementById('pendingMemberDetailsModal');
     if (!modal) {
         showToast('মডাল পাওয়া যায়নি!', 'error');
