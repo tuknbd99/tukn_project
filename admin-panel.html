@@ -3198,13 +3198,25 @@ async function loadMembers() {
     const client = initSupabaseClient();
     if (!client) return;
     try {
-        const { data } = await client.from('members').select('*').order('created_at', { ascending: false });
+        const { data, error } = await client
+            .from('members')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        
         membersData = data || [];
         renderMembersList();
         renderPendingMembersList();
         renderDeletedMembersList();
         await updateAllBadges();
-    } catch(e) { console.error('Members load error:', e); }
+        
+        console.log('✅ সদস্য লোড সম্পূর্ণ:', membersData.length);
+        return membersData;
+    } catch(e) { 
+        console.error('Members load error:', e);
+        showToast('সদস্য লোড করতে সমস্যা!', 'error');
+    }
 }
 
 function renderMembersList() {
@@ -3270,11 +3282,67 @@ function renderDeletedMembersList() {
 }
 
 async function approveMember(id) {
+    if (!confirm('সদস্যকে অনুমোদন দেবেন?')) return;
+    
     const client = initSupabaseClient();
-    if (!client) return;
-    await client.from('members').update({ status: 'active', approved_at: new Date().toISOString() }).eq('member_id', id);
-    loadMembers();
-    showToast('✅ সদস্য অনুমোদিত হয়েছে');
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // 1. সদস্যকে active করুন
+        const { error: updateError } = await client
+            .from('members')
+            .update({ 
+                status: 'active', 
+                approved_at: new Date().toISOString(),
+                approved_by: currentAdmin?.username || 'system'
+            })
+            .eq('member_id', id);
+        
+        if (updateError) throw updateError;
+        
+        // 2. সদস্যের জন্য branch_members এ এন্ট্রি তৈরি করুন (যদি না থাকে)
+        const { data: existingBranch } = await client
+            .from('branch_members')
+            .select('id')
+            .eq('member_id', id)
+            .maybeSingle();
+        
+        if (!existingBranch) {
+            // ডিফল্ট ব্রাঞ্চ খুঁজুন (প্রথম active ব্রাঞ্চ)
+            const { data: defaultBranch } = await client
+                .from('branches')
+                .select('id')
+                .eq('status', 'active')
+                .limit(1)
+                .maybeSingle();
+            
+            if (defaultBranch) {
+                await client
+                    .from('branch_members')
+                    .insert([{
+                        branch_id: defaultBranch.id,
+                        member_id: id,
+                        joined_at: new Date().toISOString(),
+                        status: 'active'
+                    }]);
+            }
+        }
+        
+        // 3. লোড রিলেটেড ডেটা রিফ্রেশ করুন
+        await loadMembers();
+        await updateAllBadges();
+        await loadRealDashboard();
+        await loadBranches();
+        
+        showToast('✅ সদস্য সফলভাবে অনুমোদিত হয়েছে!', 'success');
+        
+    } catch(e) {
+        console.error('Approval error:', e);
+        showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
 }
 
 function deleteMember(id) {
