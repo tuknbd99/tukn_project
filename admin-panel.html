@@ -2816,96 +2816,6 @@ async function updateAllBadges() {
     } catch(e) { console.error('Badge update error:', e); }
 }
 
-// ============================================================
-// ===== PAYMENT FUNCTIONS =====
-// ============================================================
-
-async function loadPendingPayments() {
-    const loadingDiv = document.getElementById('paymentLoading');
-    const table = document.getElementById('paymentTable');
-    if (loadingDiv) loadingDiv.style.display = 'block';
-    if (table) table.style.display = 'none';
-    const client = initSupabaseClient();
-    if (!client) { if (loadingDiv) loadingDiv.innerHTML = '<div class="text-red-500 py-8">❌ সংযোগ সমস্যা!</div>'; return; }
-    const { data } = await client.from('payments').select('*').eq('status', 'pending').order('submitted_at', { ascending: false });
-    pendingPaymentsData = data || [];
-    if (loadingDiv) loadingDiv.style.display = 'none';
-    if (table) table.style.display = 'block';
-    renderPendingPaymentsList();
-    loadRealDashboard();
-    await updateAllBadges();
-}
-
-function renderPendingPaymentsList() {
-    const tbody = document.getElementById('pendingPaymentsList');
-    if (!tbody) return;
-    if (!pendingPaymentsData || pendingPaymentsData.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" class="text-center p-4"><i class="fas fa-check-circle text-green-500 text-2xl"></i> কোনো পেন্ডিং পেমেন্ট নেই</td></tr>';
-        return;
-    }
-    tbody.innerHTML = pendingPaymentsData.map(p => `
-        <tr>
-            <td>${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</td>
-            <td>${p.member_name || '-'}</td>
-            <td>${p.member_id || '-'}</td>
-            <td>${p.month || ''} ${p.year || ''}</td>
-            <td class="text-right font-bold text-emerald-600">${formatAmountWithText(p.amount)}</td>
-            <td><span class="px-2 py-1 rounded-full text-xs ${p.payment_method === 'bKash' ? 'bg-green-100 text-green-700' : p.payment_method === 'Nagad' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'}">${p.payment_method || 'cash'}</span></td>
-            <td>
-                <button onclick="showPaymentDetails('${p.id}')" class="btn btn-info btn-sm" title="বিস্তারিত"><i class="fas fa-eye"></i></button>
-            </td>
-            <td><button onclick="approvePayment('${p.id}')" class="btn btn-success btn-sm">✅ অনুমোদন</button></td>
-            <td><button onclick="rejectPayment('${p.id}')" class="btn btn-danger btn-sm">❌ বাতিল</button></td>
-        </tr>
-    `).join('');
-}
-
-function showPaymentDetails(paymentId) {
-    const payment = pendingPaymentsData.find(p => p.id == paymentId);
-    if (!payment) {
-        showToast('পেমেন্ট তথ্য পাওয়া যায়নি!', 'error');
-        return;
-    }
-    const modal = document.getElementById('paymentDetailsModal');
-    if (!modal) {
-        showToast('মডাল পাওয়া যায়নি!', 'error');
-        return;
-    }
-    const content = document.getElementById('paymentDetailsContent');
-    const methodColor = payment.payment_method === 'bKash' ? 'bg-green-100 text-green-700' :
-                       payment.payment_method === 'Nagad' ? 'bg-orange-100 text-orange-700' :
-                       payment.payment_method === 'Rocket' ? 'bg-purple-100 text-purple-700' :
-                       payment.payment_method === 'bank' ? 'bg-indigo-100 text-indigo-700' :
-                       'bg-blue-100 text-blue-700';
-    content.innerHTML = `
-        <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg border mb-4">
-            <h4 class="font-bold text-emerald-700 text-lg mb-3"><i class="fas fa-receipt mr-2"></i>সঞ্চয় পেমেন্ট বিস্তারিত</h4>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">পেমেন্ট আইডি</span><p class="font-semibold text-gray-800">#${payment.id}</p></div>
-                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য</span><p class="font-semibold text-gray-800">${payment.member_name || '-'}</p></div>
-                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য আইডি</span><p class="font-semibold text-gray-800">${payment.member_id || '-'}</p></div>
-                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">মাস</span><p class="font-semibold text-gray-800">${payment.month || ''} ${payment.year || ''}</p></div>
-                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">পরিমাণ</span><p class="font-bold text-emerald-600 text-lg">${formatAmountWithText(payment.amount)}</p></div>
-                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">পেমেন্ট পদ্ধতি</span><p><span class="px-2 py-1 rounded-full text-xs ${methodColor}">${payment.payment_method || 'cash'}</span></p></div>
-                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">লেনদেন আইডি</span><p class="font-semibold font-mono text-xs break-all">${payment.transaction_id || '-'}</p></div>
-                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">তারিখ</span><p class="font-semibold text-gray-800">${payment.submitted_at ? new Date(payment.submitted_at).toLocaleString('bn-BD') : '-'}</p></div>
-                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">স্ট্যাটাস</span><p><span class="px-2 py-1 rounded-full text-xs bg-amber-100 text-amber-700">⏳ যাচাইকরণে</span></p></div>
-                ${payment.sender_mobile ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সেন্ডার মোবাইল</span><p class="font-semibold text-gray-800">${payment.sender_mobile}</p></div>` : ''}
-                ${payment.bank_name ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">ব্যাংকের নাম</span><p class="font-semibold text-gray-800">${payment.bank_name}</p></div>` : ''}
-                ${payment.account_number ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">একাউন্ট নম্বর</span><p class="font-semibold text-gray-800">${payment.account_number}</p></div>` : ''}
-                ${payment.note ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">নোট</span><p class="font-semibold text-gray-800">${payment.note}</p></div>` : ''}
-                ${payment.reject_reason ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">বাতিলের কারণ</span><p class="font-semibold text-red-600">${payment.reject_reason}</p></div>` : ''}
-            </div>
-        </div>
-        <div class="flex gap-2 justify-center no-print">
-            <button onclick="approvePayment('${payment.id}')" class="btn btn-success flex-1 py-2">✅ অনুমোদন দিন</button>
-            <button onclick="rejectPayment('${payment.id}')" class="btn btn-danger flex-1 py-2">❌ বাতিল করুন</button>
-            <button onclick="closePaymentDetailsModal()" class="btn btn-warning flex-1 py-2">বন্ধ করুন</button>
-        </div>
-    `;
-    modal.classList.remove('hidden');
-    modal.classList.add('flex');
-}
 
 function closePaymentDetailsModal() {
     const modal = document.getElementById('paymentDetailsModal');
@@ -2915,37 +2825,381 @@ function closePaymentDetailsModal() {
     }
 }
 
+// ============================================================
+// পেমেন্ট অনুমোদন ফাংশন (সম্পূর্ণ ফিক্সড)
+// ============================================================
 async function approvePayment(paymentId) {
-    const payment = pendingPaymentsData.find(p => p.id == paymentId);
-    if (!payment) { showToast('পেমেন্ট পাওয়া যায়নি!', 'error'); return; }
+    // paymentId কে number এ কনভার্ট করুন
+    const id = parseInt(paymentId);
+    if (isNaN(id) || id <= 0) {
+        showToast('❌ ভুল পেমেন্ট আইডি!', 'error');
+        return;
+    }
+    
+    // pendingPaymentsData থেকে পেমেন্ট খুঁজুন
+    const payment = pendingPaymentsData.find(p => p.id === id);
+    if (!payment) { 
+        showToast('পেমেন্ট পাওয়া যায়নি!', 'error'); 
+        return; 
+    }
+    
     if (!confirm(`${payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদন দেবেন?`)) return;
+    
     const client = initSupabaseClient();
-    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    if (!client) { 
+        showToast('সংযোগ সমস্যা!', 'error'); 
+        return; 
+    }
+    
+    // লোডিং ইন্ডিকেটর
+    const btns = document.querySelectorAll(`[onclick*="approvePayment('${paymentId}')"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
     try {
-        const { data: member } = await client.from('members').select('balance').eq('member_id', payment.member_id).single();
-        const newBalance = (member?.balance || 0) + payment.amount;
-        await client.from('members').update({ balance: newBalance }).eq('member_id', payment.member_id);
-        await client.from('payments').update({ status: 'approved', approved_by: currentAdmin?.username || 'system', approved_at: new Date().toISOString() }).eq('id', paymentId);
-        pendingPaymentsData = pendingPaymentsData.filter(p => p.id != paymentId);
+        console.log('🔄 পেমেন্ট অনুমোদন শুরু:', id);
+        console.log('📋 পেমেন্ট ডেটা:', payment);
+        
+        // ========================================
+        // STEP 1: সদস্যের ব্যালেন্স আপডেট করুন
+        // ========================================
+        const { data: member, error: memberError } = await client
+            .from('members')
+            .select('balance')
+            .eq('member_id', payment.member_id)
+            .maybeSingle();  // single() এর পরিবর্তে maybeSingle() ব্যবহার করুন
+            
+        if (memberError) {
+            console.error('❌ Member fetch error:', memberError);
+            showToast(`সদস্য খুঁজতে সমস্যা: ${memberError.message}`, 'error');
+            return;
+        }
+        
+        const currentBalance = member?.balance || 0;
+        const newBalance = currentBalance + payment.amount;
+        
+        console.log(`💰 ব্যালেন্স আপডেট: ${currentBalance} → ${newBalance}`);
+        
+        // ব্যালেন্স আপডেট করুন
+        const { error: updateMemberError } = await client
+            .from('members')
+            .update({ balance: newBalance })
+            .eq('member_id', payment.member_id);
+            
+        if (updateMemberError) {
+            console.error('❌ Member update error:', updateMemberError);
+            showToast(`সদস্য ব্যালেন্স আপডেট করতে সমস্যা: ${updateMemberError.message}`, 'error');
+            return;
+        }
+        
+        console.log('✅ সদস্য ব্যালেন্স আপডেট হয়েছে');
+        
+        // ========================================
+        // STEP 2: পেমেন্ট স্ট্যাটাস আপডেট করুন
+        // ========================================
+        const updateData = {
+            status: 'approved',
+            approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+            approved_at: new Date().toISOString()
+        };
+        
+        console.log('📝 আপডেট ডেটা:', updateData);
+        
+        // প্রথমে পেমেন্টটি আছে কিনা চেক করুন
+        const { data: checkData, error: checkError } = await client
+            .from('payments')
+            .select('id, status')
+            .eq('id', id)
+            .maybeSingle();
+            
+        if (checkError) {
+            console.error('❌ Check error:', checkError);
+        }
+        
+        if (!checkData) {
+            showToast('❌ পেমেন্ট রেকর্ড পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        console.log('📋 পেমেন্ট চেক:', checkData);
+        
+        // পেমেন্ট আপডেট করুন
+        const { data: updateResult, error: updateError } = await client
+            .from('payments')
+            .update(updateData)
+            .eq('id', id)
+            .select();
+            
+        if (updateError) {
+            console.error('❌ Payment update error:', updateError);
+            console.error('Error details:', updateError.message, updateError.details);
+            showToast(`❌ পেমেন্ট আপডেট ব্যর্থ: ${updateError.message}`, 'error');
+            return;
+        }
+        
+        console.log('✅ পেমেন্ট অনুমোদিত হয়েছে:', updateResult);
+        
+        // ========================================
+        // STEP 3: লোকাল ডেটা আপডেট করুন
+        // ========================================
+        pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
         renderPendingPaymentsList();
         loadRealDashboard();
         await updateAllBadges();
-        showToast(`✅ ${payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদিত হয়েছে!`);
-    } catch(e) { showToast('অনুমোদন ব্যর্থ!', 'error'); }
+        
+        showToast(`✅ ${payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদিত হয়েছে!`, 'success');
+        
+    } catch(e) {
+        console.error('❌ Approval error:', e);
+        showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        // বাটন রিস্টোর করুন
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '✅ অনুমোদন';
+        });
+    }
 }
 
+// ============================================================
+// পেমেন্ট বাতিল ফাংশন (সম্পূর্ণ ফিক্সড)
+// ============================================================
 async function rejectPayment(paymentId) {
+    const id = parseInt(paymentId);
+    if (isNaN(id) || id <= 0) {
+        showToast('❌ ভুল পেমেন্ট আইডি!', 'error');
+        return;
+    }
+    
     const reason = prompt('বাতিলের কারণ লিখুন:');
     if (!reason) return;
+    
     const client = initSupabaseClient();
-    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-    await client.from('payments').update({ status: 'rejected', reject_reason: reason, rejected_at: new Date().toISOString() }).eq('id', paymentId);
-    pendingPaymentsData = pendingPaymentsData.filter(p => p.id != paymentId);
-    renderPendingPaymentsList();
-    loadRealDashboard();
-    await updateAllBadges();
-    showToast('পেমেন্ট বাতিল করা হয়েছে!');
+    if (!client) { 
+        showToast('সংযোগ সমস্যা!', 'error'); 
+        return; 
+    }
+    
+    // লোডিং ইন্ডিকেটর
+    const btns = document.querySelectorAll(`[onclick*="rejectPayment('${paymentId}')"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
+    try {
+        const updateData = {
+            status: 'rejected',
+            reject_reason: reason,
+            rejected_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+            rejected_at: new Date().toISOString()
+        };
+        
+        console.log('📝 বাতিল ডেটা:', updateData);
+        
+        const { data: updateResult, error: updateError } = await client
+            .from('payments')
+            .update(updateData)
+            .eq('id', id)
+            .select();
+            
+        if (updateError) {
+            console.error('❌ Reject error:', updateError);
+            showToast(`❌ বাতিল করতে সমস্যা: ${updateError.message}`, 'error');
+            return;
+        }
+        
+        console.log('✅ পেমেন্ট বাতিল হয়েছে:', updateResult);
+        
+        pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
+        renderPendingPaymentsList();
+        loadRealDashboard();
+        await updateAllBadges();
+        showToast('✅ পেমেন্ট বাতিল করা হয়েছে!', 'warning');
+        
+    } catch(e) {
+        console.error('❌ Reject error:', e);
+        showToast(`❌ বাতিল ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '❌ বাতিল';
+        });
+    }
 }
+
+// ============================================================
+// পেমেন্ট ডিটেইলস দেখানোর ফাংশন (আপডেটেড)
+// ============================================================
+function showPaymentDetails(paymentId) {
+    const id = parseInt(paymentId);
+    const payment = pendingPaymentsData.find(p => p.id === id);
+    if (!payment) {
+        showToast('পেমেন্ট তথ্য পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    const modal = document.getElementById('paymentDetailsModal');
+    if (!modal) {
+        showToast('মডাল পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    const content = document.getElementById('paymentDetailsContent');
+    const methodColor = payment.payment_method === 'bKash' ? 'bg-green-100 text-green-700' :
+                       payment.payment_method === 'Nagad' ? 'bg-orange-100 text-orange-700' :
+                       payment.payment_method === 'Rocket' ? 'bg-purple-100 text-purple-700' :
+                       payment.payment_method === 'bank' ? 'bg-indigo-100 text-indigo-700' :
+                       'bg-blue-100 text-blue-700';
+    
+    content.innerHTML = `
+        <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg border mb-4">
+            <h4 class="font-bold text-emerald-700 text-lg mb-3"><i class="fas fa-receipt mr-2"></i>সঞ্চয় পেমেন্ট বিস্তারিত</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <div class="bg-white p-3 rounded-lg shadow-sm">
+                    <span class="text-gray-500">পেমেন্ট আইডি</span>
+                    <p class="font-semibold text-gray-800">#${payment.id}</p>
+                </div>
+                <div class="bg-white p-3 rounded-lg shadow-sm">
+                    <span class="text-gray-500">সদস্য</span>
+                    <p class="font-semibold text-gray-800">${payment.member_name || '-'}</p>
+                </div>
+                <div class="bg-white p-3 rounded-lg shadow-sm">
+                    <span class="text-gray-500">সদস্য আইডি</span>
+                    <p class="font-semibold text-gray-800">${payment.member_id || '-'}</p>
+                </div>
+                <div class="bg-white p-3 rounded-lg shadow-sm">
+                    <span class="text-gray-500">মাস</span>
+                    <p class="font-semibold text-gray-800">${payment.month || ''} ${payment.year || ''}</p>
+                </div>
+                <div class="bg-white p-3 rounded-lg shadow-sm">
+                    <span class="text-gray-500">পরিমাণ</span>
+                    <p class="font-bold text-emerald-600 text-lg">${formatAmountWithText(payment.amount)}</p>
+                </div>
+                <div class="bg-white p-3 rounded-lg shadow-sm">
+                    <span class="text-gray-500">পেমেন্ট পদ্ধতি</span>
+                    <p><span class="px-2 py-1 rounded-full text-xs ${methodColor}">${payment.payment_method || 'cash'}</span></p>
+                </div>
+                <div class="bg-white p-3 rounded-lg shadow-sm">
+                    <span class="text-gray-500">লেনদেন আইডি</span>
+                    <p class="font-semibold font-mono text-xs break-all">${payment.transaction_id || '-'}</p>
+                </div>
+                <div class="bg-white p-3 rounded-lg shadow-sm">
+                    <span class="text-gray-500">তারিখ</span>
+                    <p class="font-semibold text-gray-800">${payment.submitted_at ? new Date(payment.submitted_at).toLocaleString('bn-BD') : '-'}</p>
+                </div>
+                <div class="bg-white p-3 rounded-lg shadow-sm">
+                    <span class="text-gray-500">স্ট্যাটাস</span>
+                    <p><span class="px-2 py-1 rounded-full text-xs bg-amber-100 text-amber-700">⏳ যাচাইকরণে</span></p>
+                </div>
+                ${payment.sender_mobile ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সেন্ডার মোবাইল</span><p class="font-semibold text-gray-800">${payment.sender_mobile}</p></div>` : ''}
+                ${payment.bank_name ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">ব্যাংকের নাম</span><p class="font-semibold text-gray-800">${payment.bank_name}</p></div>` : ''}
+                ${payment.account_number ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">একাউন্ট নম্বর</span><p class="font-semibold text-gray-800">${payment.account_number}</p></div>` : ''}
+                ${payment.note ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">নোট</span><p class="font-semibold text-gray-800">${payment.note}</p></div>` : ''}
+            </div>
+        </div>
+        <div class="flex gap-2 justify-center no-print">
+            <button onclick="approvePayment('${payment.id}')" class="btn btn-success flex-1 py-2">
+                <i class="fas fa-check mr-1"></i> অনুমোদন দিন
+            </button>
+            <button onclick="rejectPayment('${payment.id}')" class="btn btn-danger flex-1 py-2">
+                <i class="fas fa-times mr-1"></i> বাতিল করুন
+            </button>
+            <button onclick="closePaymentDetailsModal()" class="btn btn-warning flex-1 py-2">
+                <i class="fas fa-times mr-1"></i> বন্ধ করুন
+            </button>
+        </div>
+    `;
+    
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+// ============================================================
+// পেমেন্ট লোড করার ফাংশন (আপডেটেড)
+// ============================================================
+async function loadPendingPayments() {
+    const loadingDiv = document.getElementById('paymentLoading');
+    const table = document.getElementById('paymentTable');
+    if (loadingDiv) loadingDiv.style.display = 'block';
+    if (table) table.style.display = 'none';
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        if (loadingDiv) loadingDiv.innerHTML = '<div class="text-red-500 py-8">❌ সংযোগ সমস্যা!</div>'; 
+        return; 
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('status', 'pending')
+            .order('submitted_at', { ascending: false });
+            
+        if (error) {
+            console.error('❌ Payment load error:', error);
+            showToast('পেমেন্ট লোড করতে সমস্যা!', 'error');
+            return;
+        }
+        
+        pendingPaymentsData = data || [];
+        console.log('✅ পেমেন্ট লোড সম্পূর্ণ:', pendingPaymentsData.length);
+        
+        if (loadingDiv) loadingDiv.style.display = 'none';
+        if (table) table.style.display = 'block';
+        
+        renderPendingPaymentsList();
+        loadRealDashboard();
+        await updateAllBadges();
+        
+    } catch(e) {
+        console.error('❌ Load error:', e);
+        if (loadingDiv) loadingDiv.innerHTML = '<div class="text-red-500 py-8">❌ পেমেন্ট লোড করতে সমস্যা!</div>';
+    }
+}
+
+// ============================================================
+// পেমেন্ট লিস্ট রেন্ডার করার ফাংশন (আপডেটেড)
+// ============================================================
+function renderPendingPaymentsList() {
+    const tbody = document.getElementById('pendingPaymentsList');
+    if (!tbody) return;
+    
+    if (!pendingPaymentsData || pendingPaymentsData.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center p-4"><i class="fas fa-check-circle text-green-500 text-2xl"></i><br><span class="text-gray-500">কোনো পেন্ডিং পেমেন্ট নেই</span></td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = pendingPaymentsData.map(p => `
+        <tr>
+            <td>${p.submitted_at ? new Date(p.submitted_at).toLocaleDateString('bn-BD') : '-'}</td>
+            <td><span class="font-medium">${p.member_name || '-'}</span></td>
+            <td class="text-sm">${p.member_id || '-'}</td>
+            <td>${p.month || ''} ${p.year || ''}</td>
+            <td class="text-right font-bold text-emerald-600">${formatAmountWithText(p.amount)}</td>
+            <td><span class="px-2 py-1 rounded-full text-xs ${p.payment_method === 'bKash' ? 'bg-green-100 text-green-700' : p.payment_method === 'Nagad' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'}">${p.payment_method || 'cash'}</span></td>
+            <td>
+                <button onclick="showPaymentDetails('${p.id}')" class="btn btn-info btn-sm" title="বিস্তারিত">
+                    <i class="fas fa-eye"></i>
+                </button>
+            </td>
+            <td>
+                <button onclick="approvePayment('${p.id}')" class="btn btn-success btn-sm" id="approveBtn_${p.id}">
+                    <i class="fas fa-check mr-1"></i> অনুমোদন
+                </button>
+            </td>
+            <td>
+                <button onclick="rejectPayment('${p.id}')" class="btn btn-danger btn-sm" id="rejectBtn_${p.id}">
+                    <i class="fas fa-times mr-1"></i> বাতিল
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
 
 // ============================================================
 // ===== REJECTED PAYMENTS =====
