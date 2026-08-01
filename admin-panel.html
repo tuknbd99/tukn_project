@@ -2825,18 +2825,13 @@ function closePaymentDetailsModal() {
     }
 }
 
-// ============================================================
-// পেমেন্ট অনুমোদন ফাংশন (সম্পূর্ণ ফিক্সড)
-// ============================================================
 async function approvePayment(paymentId) {
-    // paymentId কে number এ কনভার্ট করুন
     const id = parseInt(paymentId);
     if (isNaN(id) || id <= 0) {
         showToast('❌ ভুল পেমেন্ট আইডি!', 'error');
         return;
     }
     
-    // pendingPaymentsData থেকে পেমেন্ট খুঁজুন
     const payment = pendingPaymentsData.find(p => p.id === id);
     if (!payment) { 
         showToast('পেমেন্ট পাওয়া যায়নি!', 'error'); 
@@ -2851,7 +2846,6 @@ async function approvePayment(paymentId) {
         return; 
     }
     
-    // লোডিং ইন্ডিকেটর
     const btns = document.querySelectorAll(`[onclick*="approvePayment('${paymentId}')"]`);
     btns.forEach(btn => {
         btn.disabled = true;
@@ -2862,14 +2856,12 @@ async function approvePayment(paymentId) {
         console.log('🔄 পেমেন্ট অনুমোদন শুরু:', id);
         console.log('📋 পেমেন্ট ডেটা:', payment);
         
-        // ========================================
-        // STEP 1: সদস্যের ব্যালেন্স আপডেট করুন
-        // ========================================
+        // STEP 1: সদস্যের ব্যালেন্স আপডেট
         const { data: member, error: memberError } = await client
             .from('members')
             .select('balance')
             .eq('member_id', payment.member_id)
-            .maybeSingle();  // single() এর পরিবর্তে maybeSingle() ব্যবহার করুন
+            .maybeSingle();
             
         if (memberError) {
             console.error('❌ Member fetch error:', memberError);
@@ -2882,7 +2874,6 @@ async function approvePayment(paymentId) {
         
         console.log(`💰 ব্যালেন্স আপডেট: ${currentBalance} → ${newBalance}`);
         
-        // ব্যালেন্স আপডেট করুন
         const { error: updateMemberError } = await client
             .from('members')
             .update({ balance: newBalance })
@@ -2896,18 +2887,17 @@ async function approvePayment(paymentId) {
         
         console.log('✅ সদস্য ব্যালেন্স আপডেট হয়েছে');
         
-        // ========================================
-        // STEP 2: পেমেন্ট স্ট্যাটাস আপডেট করুন
-        // ========================================
+        // STEP 2: পেমেন্ট স্ট্যাটাস আপডেট (updated_at সহ)
         const updateData = {
             status: 'approved',
             approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
-            approved_at: new Date().toISOString()
+            approved_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()  // ← updated_at যোগ করুন
         };
         
         console.log('📝 আপডেট ডেটা:', updateData);
         
-        // প্রথমে পেমেন্টটি আছে কিনা চেক করুন
+        // পেমেন্ট চেক করুন
         const { data: checkData, error: checkError } = await client
             .from('payments')
             .select('id, status')
@@ -2935,15 +2925,36 @@ async function approvePayment(paymentId) {
         if (updateError) {
             console.error('❌ Payment update error:', updateError);
             console.error('Error details:', updateError.message, updateError.details);
-            showToast(`❌ পেমেন্ট আপডেট ব্যর্থ: ${updateError.message}`, 'error');
-            return;
+            
+            // যদি updated_at না থাকে, তাহলে updated_at ছাড়া চেষ্টা করুন
+            if (updateError.code === '42703') {
+                console.log('⚠️ updated_at কলাম নেই, updated_at ছাড়া চেষ্টা করছি...');
+                const fallbackData = {
+                    status: 'approved',
+                    approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+                    approved_at: new Date().toISOString()
+                };
+                
+                const { error: fallbackError } = await client
+                    .from('payments')
+                    .update(fallbackData)
+                    .eq('id', id);
+                    
+                if (fallbackError) {
+                    showToast(`❌ পেমেন্ট আপডেট ব্যর্থ: ${fallbackError.message}`, 'error');
+                    return;
+                }
+                
+                console.log('✅ পেমেন্ট অনুমোদিত হয়েছে (updated_at ছাড়া)!');
+            } else {
+                showToast(`❌ পেমেন্ট আপডেট ব্যর্থ: ${updateError.message}`, 'error');
+                return;
+            }
+        } else {
+            console.log('✅ পেমেন্ট অনুমোদিত হয়েছে:', updateResult);
         }
         
-        console.log('✅ পেমেন্ট অনুমোদিত হয়েছে:', updateResult);
-        
-        // ========================================
-        // STEP 3: লোকাল ডেটা আপডেট করুন
-        // ========================================
+        // STEP 3: লোকাল ডেটা আপডেট
         pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
         renderPendingPaymentsList();
         loadRealDashboard();
@@ -2955,10 +2966,100 @@ async function approvePayment(paymentId) {
         console.error('❌ Approval error:', e);
         showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
     } finally {
-        // বাটন রিস্টোর করুন
         btns.forEach(btn => {
             btn.disabled = false;
             btn.innerHTML = '✅ অনুমোদন';
+        });
+    }
+}
+
+// ============================================================
+// Reject Payment ফাংশন (updated_at সহ)
+// ============================================================
+async function rejectPayment(paymentId) {
+    const id = parseInt(paymentId);
+    if (isNaN(id) || id <= 0) {
+        showToast('❌ ভুল পেমেন্ট আইডি!', 'error');
+        return;
+    }
+    
+    const reason = prompt('বাতিলের কারণ লিখুন:');
+    if (!reason) return;
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        showToast('সংযোগ সমস্যা!', 'error'); 
+        return; 
+    }
+    
+    const btns = document.querySelectorAll(`[onclick*="rejectPayment('${paymentId}')"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
+    try {
+        const updateData = {
+            status: 'rejected',
+            reject_reason: reason,
+            rejected_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+            rejected_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        };
+        
+        console.log('📝 বাতিল ডেটা:', updateData);
+        
+        const { data: updateResult, error: updateError } = await client
+            .from('payments')
+            .update(updateData)
+            .eq('id', id)
+            .select();
+            
+        if (updateError) {
+            console.error('❌ Reject error:', updateError);
+            
+            // যদি updated_at না থাকে, তাহলে updated_at ছাড়া চেষ্টা করুন
+            if (updateError.code === '42703') {
+                console.log('⚠️ updated_at কলাম নেই, updated_at ছাড়া চেষ্টা করছি...');
+                const fallbackData = {
+                    status: 'rejected',
+                    reject_reason: reason,
+                    rejected_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+                    rejected_at: new Date().toISOString()
+                };
+                
+                const { error: fallbackError } = await client
+                    .from('payments')
+                    .update(fallbackData)
+                    .eq('id', id);
+                    
+                if (fallbackError) {
+                    showToast(`❌ বাতিল করতে সমস্যা: ${fallbackError.message}`, 'error');
+                    return;
+                }
+                
+                console.log('✅ পেমেন্ট বাতিল হয়েছে (updated_at ছাড়া)!');
+            } else {
+                showToast(`❌ বাতিল করতে সমস্যা: ${updateError.message}`, 'error');
+                return;
+            }
+        } else {
+            console.log('✅ পেমেন্ট বাতিল হয়েছে:', updateResult);
+        }
+        
+        pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
+        renderPendingPaymentsList();
+        loadRealDashboard();
+        await updateAllBadges();
+        showToast('✅ পেমেন্ট বাতিল করা হয়েছে!', 'warning');
+        
+    } catch(e) {
+        console.error('❌ Reject error:', e);
+        showToast(`❌ বাতিল ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '❌ বাতিল';
         });
     }
 }
@@ -3030,11 +3131,8 @@ async function rejectPayment(paymentId) {
     }
 }
 
-// ============================================================
-// পেমেন্ট ডিটেইলস দেখানোর ফাংশন (আপডেটেড)
-// ============================================================
 function showPaymentDetails(paymentId) {
-    const id = parseInt(paymentId);
+    const id = parseInt(paymentId);  // ← parseInt যোগ করুন
     const payment = pendingPaymentsData.find(p => p.id === id);
     if (!payment) {
         showToast('পেমেন্ট তথ্য পাওয়া যায়নি!', 'error');
@@ -3098,6 +3196,7 @@ function showPaymentDetails(paymentId) {
                 ${payment.bank_name ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">ব্যাংকের নাম</span><p class="font-semibold text-gray-800">${payment.bank_name}</p></div>` : ''}
                 ${payment.account_number ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">একাউন্ট নম্বর</span><p class="font-semibold text-gray-800">${payment.account_number}</p></div>` : ''}
                 ${payment.note ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">নোট</span><p class="font-semibold text-gray-800">${payment.note}</p></div>` : ''}
+                ${payment.reject_reason ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">বাতিলের কারণ</span><p class="font-semibold text-red-600">${payment.reject_reason}</p></div>` : ''}
             </div>
         </div>
         <div class="flex gap-2 justify-center no-print">
