@@ -121,6 +121,8 @@
             z-index: 1000;
             animation: slideIn 0.3s ease;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            max-width: 400px;
+            word-wrap: break-word;
         }
         @keyframes slideIn {
             from { transform: translateX(100%); opacity: 0; }
@@ -427,6 +429,38 @@
         .loan-slip-status-approved { background: #d1fae5; color: #065f46; }
         .loan-slip-status-pending { background: #fed7aa; color: #9a3412; }
         .loan-slip-status-rejected { background: #fee2e2; color: #991b1b; }
+        
+        /* Upcoming Due Notification Styles */
+        .due-notification {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        .due-notification.warning {
+            background: #fee2e2;
+            border-left-color: #ef4444;
+        }
+        .due-notification .due-title {
+            font-weight: 600;
+            color: #92400e;
+            font-size: 14px;
+        }
+        .due-notification.warning .due-title {
+            color: #991b1b;
+        }
+        .due-notification .due-details {
+            font-size: 13px;
+            color: #78350f;
+        }
+        .due-notification.warning .due-details {
+            color: #7f1d1d;
+        }
+        .due-notification .due-amount {
+            font-weight: 700;
+            color: #dc2626;
+        }
     </style>
 </head>
     
@@ -502,7 +536,7 @@
                 </div>
                 <div class="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded-lg">
                     <i class="fas fa-calendar-alt text-emerald-600 text-sm"></i>
-                    <span class="text-gray-600 text-sm">জয়েন:</span> <br>
+                    <span class="text-gray-600 text-sm">জয়েন:</span>
                     <span id="joinDateDisplay" class="font-bold text-gray-800 text-sm">-</span>
                 </div>
                 <div class="flex items-center gap-1 bg-green-50 px-2 py-1 rounded-lg">
@@ -512,7 +546,7 @@
                 </div>
             </div>
             
-            <!-- ✅ মেয়াদ শেষের কাউন্টডাউন - "মেয়াদ শেষ হতে বাকি:" শুধু একবার -->
+            <!-- ✅ মেয়াদ শেষের কাউন্টডাউন -->
             <div class="bg-gradient-to-r from-amber-50 to-orange-50 rounded-lg p-3 mt-2 text-center border border-amber-200">
                 <div class="flex items-center justify-center gap-2 flex-wrap">
                     <i class="fas fa-hourglass-half text-amber-600"></i>
@@ -521,7 +555,7 @@
                 </div>
             </div>
             
-            <!-- ✅ আমাদের সাথে রয়েছেন -->
+            <!-- ✅ আমাদের সাথে রয়েছেন - বছর, মাস, দিন হিসেবে দেখানো হবে -->
             <div class="bg-gradient-to-r from-emerald-600 to-emerald-700 rounded-xl py-2 px-3 shadow-lg mt-3">
                 <div class="flex items-center justify-between">
                     <div>
@@ -535,6 +569,9 @@
             </div>
         </div>
     </div>
+
+    <!-- বকেয়া/আসন্ন পরিশোধ নোটিফিকেশন -->
+    <div id="dueNotificationsContainer" class="mb-4"></div>
 
     <!-- ঠিকানা বিভাগ -->
     <div class="bg-white rounded-xl shadow-md p-4 mb-6">
@@ -1348,8 +1385,49 @@ function getGreeting() {
 }
 
 // ============================================================
-// ✅ FIXED: মেয়াদ শেষের কাউন্টডাউন - "মেয়াদ শেষ হতে বাকি:" শুধু একবার
+// ✅ FIXED: সময় গণনা - বছর, মাস, দিন হিসেবে দেখানো
 // ============================================================
+
+// সময় পার্থক্যকে বছর, মাস, দিনে রূপান্তর
+function formatTimeDuration(startDate, endDate) {
+    if (!startDate) return 'শুরু হয়নি';
+    
+    const start = new Date(startDate);
+    const end = endDate ? new Date(endDate) : new Date();
+    
+    if (isNaN(start.getTime())) return 'তারিখ ত্রুটিপূর্ণ';
+    if (end < start) return 'শুরু হয়নি';
+    
+    let years = end.getFullYear() - start.getFullYear();
+    let months = end.getMonth() - start.getMonth();
+    let days = end.getDate() - start.getDate();
+    
+    if (days < 0) {
+        months--;
+        const prevMonth = new Date(end.getFullYear(), end.getMonth(), 0);
+        days += prevMonth.getDate();
+    }
+    
+    if (months < 0) {
+        years--;
+        months += 12;
+    }
+    
+    // নেগেটিভ মান এড়ানো
+    if (years < 0) years = 0;
+    if (months < 0) months = 0;
+    if (days < 0) days = 0;
+    
+    let result = [];
+    if (years > 0) result.push(`${years} বছর`);
+    if (months > 0) result.push(`${months} মাস`);
+    if (days > 0) result.push(`${days} দিন`);
+    if (result.length === 0) result.push('০ দিন');
+    
+    return result.join(' ');
+}
+
+// মেয়াদ শেষের কাউন্টডাউন - বছর, মাস, দিন হিসেবে
 function calculateMembershipExpiry() {
     if (!currentUser) return;
     const expiryElement = document.getElementById('membershipExpiry');
@@ -1357,7 +1435,6 @@ function calculateMembershipExpiry() {
     
     let memberTerm = parseInt(currentUser.memberTerm) || 0;
     
-    // মেয়াদহীন (কারেন্ট) সদস্য
     if (memberTerm === 0) {
         expiryElement.innerHTML = `
             <span class="text-green-600 font-bold text-base">
@@ -1368,7 +1445,6 @@ function calculateMembershipExpiry() {
         return;
     }
     
-    // startDate নির্ধারণ
     let startDate = null;
     if (currentUser.approved_at && currentUser.approved_at !== 'null' && currentUser.approved_at !== 'undefined') {
         startDate = new Date(currentUser.approved_at);
@@ -1391,7 +1467,6 @@ function calculateMembershipExpiry() {
     
     let now = new Date();
     
-    // মেয়াদ উত্তীর্ণ
     if (now >= expiryDate) {
         expiryElement.innerHTML = `
             <span class="text-red-600 font-bold text-base">
@@ -1402,49 +1477,35 @@ function calculateMembershipExpiry() {
         return;
     }
     
-    // বাকি সময় গণনা
-    let diff = expiryDate - now;
+    let years = expiryDate.getFullYear() - now.getFullYear();
+    let months = expiryDate.getMonth() - now.getMonth();
+    let days = expiryDate.getDate() - now.getDate();
     
-    const msPerYear = 365.25 * 24 * 60 * 60 * 1000;
-    const msPerMonth = 30.44 * 24 * 60 * 60 * 1000;
-    const msPerDay = 24 * 60 * 60 * 1000;
-    const msPerHour = 60 * 60 * 1000;
-    const msPerMinute = 60 * 1000;
-    const msPerSecond = 1000;
+    if (days < 0) {
+        months--;
+        const prevMonth = new Date(expiryDate.getFullYear(), expiryDate.getMonth(), 0);
+        days += prevMonth.getDate();
+    }
     
-    let years = Math.floor(diff / msPerYear);
-    diff -= years * msPerYear;
+    if (months < 0) {
+        years--;
+        months += 12;
+    }
     
-    let months = Math.floor(diff / msPerMonth);
-    diff -= months * msPerMonth;
+    if (years < 0) years = 0;
+    if (months < 0) months = 0;
+    if (days < 0) days = 0;
     
-    let days = Math.floor(diff / msPerDay);
-    diff -= days * msPerDay;
-    
-    let hours = Math.floor(diff / msPerHour);
-    diff -= hours * msPerHour;
-    
-    let minutes = Math.floor(diff / msPerMinute);
-    diff -= minutes * msPerMinute;
-    
-    let seconds = Math.floor(diff / msPerSecond);
-    
-    // ✅ শুধু সংখ্যা দেখানো হবে ("মেয়াদ শেষ হতে বাকি:" HTML-এ already আছে)
     let text = '';
     if (years > 0) text += `<strong>${years}</strong> বছর `;
     if (months > 0) text += `<strong>${months}</strong> মাস `;
     if (days > 0) text += `<strong>${days}</strong> দিন `;
-    if (hours > 0) text += `<strong>${hours}</strong> ঘন্টা `;
-    if (minutes > 0) text += `<strong>${minutes}</strong> মিনিট `;
-    text += `<strong>${seconds}</strong> সেকেন্ড`;
+    if (text === '') text = `<strong>০</strong> দিন`;
     
-    // ✅ HTML-এ "মেয়াদ শেষ হতে বাকি:" টেক্সট আছে, তাই শুধু সংখ্যা দেখাব
     expiryElement.innerHTML = text;
 }
 
-// ============================================================
-// ✅ FIXED: সদস্যপদকাল - "অনুমোদিত হয়নি" সমস্যা সমাধান
-// ============================================================
+// সদস্যপদকাল - বছর, মাস, দিন হিসেবে
 function startMembershipTimer(approvedAt) {
     if (!approvedAt) {
         if (currentUser && currentUser.joinDate) {
@@ -1464,51 +1525,231 @@ function startMembershipTimer(approvedAt) {
     }
     
     function updateTimer() {
-        const now = new Date();
-        const diff = now - startDate;
-        
-        if (diff < 0) {
-            document.getElementById('membershipDuration').innerHTML = 'শুরু হয়নি';
-            return;
-        }
-        
+        const duration = formatTimeDuration(startDate);
         const memberTerm = parseInt(currentUser.memberTerm) || 0;
         
         if (memberTerm === 0) {
-            const days = Math.floor(diff / (24 * 60 * 60 * 1000));
-            const hours = Math.floor((diff % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-            const minutes = Math.floor((diff % (60 * 60 * 1000)) / (60 * 1000));
-            const seconds = Math.floor((diff % (60 * 1000)) / 1000);
-            
-            let text = '';
-            if (days > 0) text += `${days} দিন `;
-            if (hours > 0 || days > 0) text += `${hours} ঘণ্টা `;
-            if (minutes > 0 || hours > 0 || days > 0) text += `${minutes} মিনিট `;
-            text += `${seconds} সেকেন্ড`;
-            
-            document.getElementById('membershipDuration').innerHTML = 
-                `✅ কারেন্ট সদস্য (${text})`;
-            return;
+            document.getElementById('membershipDuration').innerHTML = `✅ কারেন্ট সদস্য (${duration})`;
+        } else {
+            document.getElementById('membershipDuration').innerHTML = `📅 সদস্য হিসেবে রয়েছেন (${duration})`;
         }
-        
-        const days = Math.floor(diff / (24 * 60 * 60 * 1000));
-        const hours = Math.floor((diff % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-        const minutes = Math.floor((diff % (60 * 60 * 1000)) / (60 * 1000));
-        const seconds = Math.floor((diff % (60 * 1000)) / 1000);
-        
-        let text = '';
-        if (days > 0) text += `${days} দিন `;
-        if (hours > 0 || days > 0) text += `${hours} ঘণ্টা `;
-        if (minutes > 0 || hours > 0 || days > 0) text += `${minutes} মিনিট `;
-        text += `${seconds} সেকেন্ড`;
-        
-        document.getElementById('membershipDuration').innerHTML = 
-            `📅 সদস্য হিসেবে রয়েছেন (${text})`;
     }
     
     updateTimer();
     if (durationInterval) clearInterval(durationInterval);
     durationInterval = setInterval(updateTimer, 1000);
+}
+
+// ============================================================
+// লোনের বকেয়া ও আসন্ন পরিশোধ নোটিফিকেশন
+// ============================================================
+
+async function checkDueNotifications() {
+    const container = document.getElementById('dueNotificationsContainer');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    let hasNotification = false;
+    
+    // 1. মাসিক সঞ্চয় বকেয়া চেক
+    await checkMonthlySavingsDue(container);
+    
+    // 2. লোনের কিস্তি বকেয়া/আসন্ন চেক
+    await checkLoanInstallmentsDue(container);
+    
+    // যদি কোনো নোটিফিকেশন না থাকে, তাহলে ডিফল্ট মেসেজ দেখাবো না
+    // container.innerHTML = ''; // খালি রাখবো
+}
+
+async function checkMonthlySavingsDue(container) {
+    if (!currentUser) return;
+    
+    const client = await initSupabase();
+    if (!client) return;
+    
+    try {
+        const now = new Date();
+        const currentMonth = banglaMonths[now.getMonth()];
+        const currentYear = now.getFullYear();
+        
+        // চলতি মাসের পেমেন্ট চেক
+        const { data: payment } = await client
+            .from('payments')
+            .select('id, status, submitted_at')
+            .eq('member_id', currentUser.id)
+            .eq('month', currentMonth)
+            .eq('year', currentYear.toString())
+            .order('submitted_at', { ascending: false })
+            .limit(1);
+        
+        const today = now.getDate();
+        const isDue = today >= 25; // ২৫ তারিখ থেকে নোটিফিকেশন দেখাবে
+        const isOverdue = today >= 30; // ৩০ তারিখ থেকে বকেয়া দেখাবে
+        
+        if (payment && payment.length > 0 && payment[0].status === 'approved') {
+            // ইতিমধ্যে পরিশোধ করা হয়েছে
+            return;
+        }
+        
+        if (payment && payment.length > 0 && payment[0].status === 'pending') {
+            // বিচারাধীন
+            if (isOverdue) {
+                const dueEl = document.createElement('div');
+                dueEl.className = 'due-notification warning';
+                dueEl.innerHTML = `
+                    <div class="due-title">⚠️ জরুরি: আপনার ${currentMonth} মাসের সঞ্চয় জমা বিচারাধীন!</div>
+                    <div class="due-details">আপনি ${currentMonth} মাসের সঞ্চয় জমা দিয়েছেন কিন্তু এখনও অনুমোদিত হয়নি। অ্যাডমিনের সাথে যোগাযোগ করুন।</div>
+                `;
+                container.appendChild(dueEl);
+                hasNotification = true;
+            }
+            return;
+        }
+        
+        // পেমেন্ট নেই
+        if (isOverdue) {
+            const dueEl = document.createElement('div');
+            dueEl.className = 'due-notification warning';
+            dueEl.innerHTML = `
+                <div class="due-title">❌ বকেয়া: ${currentMonth} মাসের সঞ্চয় জমা দেননি!</div>
+                <div class="due-details">আপনার ${currentMonth} মাসের সঞ্চয় (${currentUser.monthlySavings || 500} টাকা) জমা বাকি রয়েছে। দ্রুত জমা দিন।</div>
+            `;
+            container.appendChild(dueEl);
+            hasNotification = true;
+        } else if (isDue) {
+            const dueEl = document.createElement('div');
+            dueEl.className = 'due-notification';
+            dueEl.innerHTML = `
+                <div class="due-title">⏰ স্মারক: ${currentMonth} মাসের সঞ্চয় জমার সময়!</div>
+                <div class="due-details">${currentMonth} মাসের সঞ্চয় (${currentUser.monthlySavings || 500} টাকা) জমা দিতে ভুলবেন না। মাসের শেষ তারিখের আগে জমা দিন।</div>
+            `;
+            container.appendChild(dueEl);
+            hasNotification = true;
+        }
+        
+    } catch(e) {
+        console.error('মাসিক সঞ্চয় চেক error:', e);
+    }
+}
+
+async function checkLoanInstallmentsDue(container) {
+    if (!currentUser) return;
+    
+    const client = await initSupabase();
+    if (!client) return;
+    
+    try {
+        // অনুমোদিত লোন পাওয়া
+        const { data: loans } = await client
+            .from('loan_applications')
+            .select('*')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved')
+            .order('approved_at', { ascending: false });
+        
+        if (!loans || loans.length === 0) return;
+        
+        const loan = loans[0];
+        const startDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
+        const totalEmi = loan.duration_months || 12;
+        const emiAmount = loan.emi_amount || (loan.amount / totalEmi);
+        const gracePeriod = loan.grace_period_days || 5;
+        const lateFeePercent = loan.late_fee_percent || 0;
+        
+        // লোনের পেমেন্ট ইতিহাস
+        const { data: payments } = await client
+            .from('loan_payments')
+            .select('*')
+            .eq('loan_id', loan.id)
+            .order('installment_no', { ascending: true });
+        
+        const paymentMap = {};
+        if (payments) {
+            payments.forEach(p => {
+                paymentMap[p.installment_no] = p;
+            });
+        }
+        
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        let notifications = [];
+        
+        for (let i = 1; i <= totalEmi; i++) {
+            let dueDate = new Date(startDate);
+            dueDate.setMonth(startDate.getMonth() + i);
+            dueDate.setHours(0, 0, 0, 0);
+            
+            const payment = paymentMap[i];
+            if (payment && (payment.status === 'approved' || payment.status === 'paid')) {
+                continue; // পরিশোধিত
+            }
+            
+            const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+            
+            // ৭ দিন আগে থেকে নোটিফিকেশন
+            if (daysUntilDue <= 7 && daysUntilDue >= 0) {
+                notifications.push({
+                    installmentNo: i,
+                    dueDate: dueDate,
+                    daysUntilDue: daysUntilDue,
+                    emiAmount: emiAmount,
+                    status: 'upcoming',
+                    title: daysUntilDue === 0 ? 'আজ শেষ তারিখ!' : `${daysUntilDue} দিন বাকি`,
+                    message: `কিস্তি #${i} পরিশোধের শেষ তারিখ ${dueDate.toLocaleDateString('bn-BD')}। পরিমাণ: ${emiAmount.toFixed(2)} টাকা।`
+                });
+            }
+            
+            // বিলম্বিত
+            if (daysUntilDue < 0) {
+                const daysOverdue = Math.abs(daysUntilDue);
+                const monthsOverdue = Math.ceil(daysOverdue / 30);
+                const lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
+                
+                notifications.push({
+                    installmentNo: i,
+                    dueDate: dueDate,
+                    daysOverdue: daysOverdue,
+                    emiAmount: emiAmount,
+                    lateFee: lateFee,
+                    status: 'overdue',
+                    title: `⚠️ বিলম্বিত (${daysOverdue} দিন)`,
+                    message: `কিস্তি #${i} ${daysOverdue} দিন বিলম্বিত! পরিমাণ: ${emiAmount.toFixed(2)} টাকা, বিলম্ব ফি: ${lateFee.toFixed(2)} টাকা। দ্রুত পরিশোধ করুন।`
+                });
+            }
+        }
+        
+        // সর্বোচ্চ ৩টি নোটিফিকেশন দেখাবো (জরুরি আগে)
+        notifications.sort((a, b) => {
+            if (a.status === 'overdue' && b.status !== 'overdue') return -1;
+            if (a.status !== 'overdue' && b.status === 'overdue') return 1;
+            return a.daysUntilDue - b.daysUntilDue;
+        });
+        
+        const topNotifications = notifications.slice(0, 3);
+        
+        topNotifications.forEach(n => {
+            const dueEl = document.createElement('div');
+            dueEl.className = n.status === 'overdue' ? 'due-notification warning' : 'due-notification';
+            
+            let actionBtn = '';
+            if (n.status === 'overdue' || n.daysUntilDue <= 3) {
+                actionBtn = `<button onclick="openLoanRepaymentModal()" class="bg-rose-600 text-white px-3 py-1 rounded text-xs hover:bg-rose-700 transition mt-1">
+                    💳 এখন পরিশোধ করুন
+                </button>`;
+            }
+            
+            dueEl.innerHTML = `
+                <div class="due-title">${n.status === 'overdue' ? '❌' : '⏰'} ${n.title}</div>
+                <div class="due-details">${n.message}</div>
+                ${actionBtn}
+            `;
+            container.appendChild(dueEl);
+            hasNotification = true;
+        });
+        
+    } catch(e) {
+        console.error('লোন কিস্তি চেক error:', e);
+    }
 }
 
 // ============================================================
@@ -1601,10 +1842,8 @@ async function initSupabase() {
         return; 
     }
     
-    // ✅ FIXED: approved_at সঠিকভাবে সেট করা
     let approvedAt = parsed.approved_at || parsed.approvedAt || null;
     
-    // যদি approved_at না থাকে কিন্তু status approved হয়, তাহলে join_date ব্যবহার করব
     if (!approvedAt && (parsed.status === 'approved' || parsed.status === 'active')) {
         approvedAt = parsed.join_date || parsed.joinDate || parsed.created_at || null;
     }
@@ -1679,7 +1918,6 @@ async function updateUI() {
     
     updateReferralLink();
     
-    // ✅ FIXED: approved_at বা joinDate ব্যবহার করে টাইমার শুরু
     const timerStartDate = currentUser.approved_at || currentUser.joinDate;
     if (timerStartDate) {
         startMembershipTimer(timerStartDate);
@@ -1707,6 +1945,9 @@ async function updateUI() {
     setupTimeIntervals();
 
     setDefaultDates();
+    
+    // নোটিফিকেশন চেক
+    await checkDueNotifications();
 }
 
 function updateMembershipTypeDisplay() {
@@ -1780,6 +2021,11 @@ function setupTimeIntervals() {
         }
     }, 1000);
     expiryInterval = setInterval(calculateMembershipExpiry, 1000);
+    
+    // প্রতি ৫ মিনিটে নোটিফিকেশন চেক
+    setInterval(() => {
+        checkDueNotifications();
+    }, 5 * 60 * 1000);
 }
 
 // ============================================================
@@ -1801,11 +2047,9 @@ async function refreshMemberDataFromSupabase() {
             if(data.profile_image) currentUser.profileImage = data.profile_image;
             if(data.member_term !== undefined) currentUser.memberTerm = data.member_term;
             
-            // ✅ FIXED: approved_at আপডেট করা
             if(data.approved_at) {
                 currentUser.approved_at = data.approved_at;
             } else if(data.created_at) {
-                // যদি approved_at না থাকে কিন্তু created_at থাকে
                 currentUser.approved_at = data.created_at;
             }
             
@@ -2484,6 +2728,7 @@ async function submitPayment() {
         await loadPaymentHistory();
         await loadUserFunds();
         await loadSavingsData();
+        await checkDueNotifications();
     } catch(e) { 
         console.error('❌ পেমেন্ট এরর:', e); 
         showToast('পেমেন্ট জমা দিতে ব্যর্থ: ' + e.message, 'error'); 
@@ -3016,6 +3261,7 @@ document.getElementById('loanForm')?.addEventListener('submit', async function(e
         closeLoanApplicationModal();
         document.getElementById('loanForm').reset();
         await loadLoanHistory();
+        await checkDueNotifications();
     }
 });
 
@@ -4021,6 +4267,7 @@ async function submitLoanRepayment() {
         closeLoanRepaymentModal();
         await loadLoanHistory();
         await loadUserFunds();
+        await checkDueNotifications();
         showLoanPaymentSlip(loanData.loan.id);
         
     } catch(e) {
@@ -5934,4 +6181,4 @@ document.addEventListener('DOMContentLoaded', async function() {
 });
 </script>
 </body>
-</html>
+</html>‌
