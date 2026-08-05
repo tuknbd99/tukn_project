@@ -7131,7 +7131,229 @@ function closeCustomModal() {
     if (modal) modal.classList.remove('active');
 }
 
+    // ============================================================
+// ===== APPROVE WITHDRAWAL WITH NOTE (COMPLETE) =====
+// ============================================================
+
+async function approveWithdrawalWithNote(id, amount, memberId, type) {
+    // নোট ইনপুট নিন - যদি প্রম্পট থেকে আসে
+    let noteText = '';
     
+    // চেক করুন localStorage এ নোট আছে কিনা (approveWithdrawal থেকে আসা)
+    const tempKey = 'temp_withdrawal_note_' + id;
+    const savedNote = localStorage.getItem(tempKey);
+    if (savedNote) {
+        noteText = savedNote;
+        localStorage.removeItem(tempKey);
+    } else {
+        // যদি নোট না থাকে, তাহলে প্রম্পট দেখান
+        const note = prompt('📝 উত্তোলন অনুমোদনের নোট লিখুন (ঐচ্ছিক):\n\nউদাহরণ: bKash 018XXXXXXXX এ পাঠানো হয়েছে', '');
+        if (note === null) {
+            showToast('অপারেশন বাতিল করা হয়েছে', 'warning');
+            return;
+        }
+        noteText = note.trim() || '';
+    }
+    
+    // কনফার্মেশন মেসেজ
+    const confirmMsg = `${formatAmount(amount)} টাকা উত্তোলন অনুমোদন দেবেন?\n\n📌 ধরন: ${type || 'মূলধন'}\n👤 সদস্য: ${memberId}${noteText ? '\n📝 নোট: ' + noteText : ''}`;
+    if (!confirm(confirmMsg)) return;
+    
+    // Supabase ক্লায়েন্ট ইনিশিয়ালাইজ
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    // লোডিং ইন্ডিকেটর
+    const btns = document.querySelectorAll(`[onclick*="approveWithdrawalWithNote('${id}'"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
+    try {
+        // টাইপ নর্মালাইজ করুন
+        let normalizedType = type || '';
+        let updateField = 'balance';
+        
+        if (normalizedType.includes('রেফারেল বোনাস')) {
+            updateField = 'referral_bonus';
+            normalizedType = 'রেফারেল বোনাস';
+        } else if (normalizedType.includes('সঞ্চয় লভ্যাংশ') || normalizedType.includes('সঞ্চয় লভ্যাংশ')) {
+            updateField = 'profit_balance_savings';
+            normalizedType = 'সঞ্চয় লভ্যাংশ';
+        } else if (normalizedType.includes('বিনিয়োগ লভ্যাংশ') || normalizedType.includes('বিনিয়োগ লভ্যাংশ')) {
+            updateField = 'profit_balance_investment';
+            normalizedType = 'বিনিয়োগ লভ্যাংশ';
+        } else if (normalizedType.includes('রেফারেল লভ্যাংশ')) {
+            updateField = 'profit_balance_referral';
+            normalizedType = 'রেফারেল লভ্যাংশ';
+        } else if (normalizedType.includes('মূলধন')) {
+            updateField = 'balance';
+            normalizedType = 'মূলধন';
+        } else if (normalizedType.includes('সব লভ্যাংশ')) {
+            // সব লভ্যাংশ একসাথে উত্তোলন
+            await approveAllProfitWithdrawal(id, amount, memberId, noteText);
+            return;
+        } else {
+            updateField = 'balance';
+            normalizedType = 'মূলধন';
+        }
+        
+        // সদস্যের বর্তমান ব্যালেন্স চেক করুন
+        const { data: member, error: memberError } = await client
+            .from('members')
+            .select(updateField)
+            .eq('member_id', memberId)
+            .single();
+        
+        if (memberError) throw memberError;
+        
+        const currentAmount = member?.[updateField] || 0;
+        
+        // ব্যালেন্স যথেষ্ট কিনা চেক করুন
+        if (currentAmount < amount) {
+            showToast(`❌ ব্যালেন্স ${formatAmount(currentAmount)} টাকা। এর বেশি উত্তোলন সম্ভব নয়!`, 'error');
+            return;
+        }
+        
+        // সদস্যের ব্যালেন্স আপডেট করুন
+        const { error: updateMemberError } = await client
+            .from('members')
+            .update({ [updateField]: currentAmount - amount })
+            .eq('member_id', memberId);
+        
+        if (updateMemberError) throw updateMemberError;
+        
+        // উইথড্রয়াল স্ট্যাটাস আপডেট করুন
+        const { error: updateWithdrawalError } = await client
+            .from('withdrawals')
+            .update({
+                status: 'approved',
+                approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+                approved_at: new Date().toISOString(),
+                note: noteText || null,
+                rejection_reason: null
+            })
+            .eq('id', id);
+        
+        if (updateWithdrawalError) throw updateWithdrawalError;
+        
+        // লোকাল ডেটা আপডেট করুন
+        pendingWithdrawalsData = pendingWithdrawalsData.filter(w => w.id != id);
+        
+        // UI রিফ্রেশ করুন
+        loadPendingWithdrawals();
+        await updateAllBadges();
+        await loadRealDashboard();
+        
+        // সাফল্যের মেসেজ
+        showToast(`✅ ${formatAmount(amount)} টাকা উত্তোলন অনুমোদিত হয়েছে! (${normalizedType})${noteText ? '\n📝 নোট: ' + noteText : ''}`, 'success');
+        
+    } catch(e) {
+        console.error('Withdrawal approval error:', e);
+        showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '✅ অনুমোদন';
+        });
+    }
+}
+
+// ============================================================
+// ===== APPROVE ALL PROFIT WITHDRAWAL (সব লভ্যাংশ) =====
+// ============================================================
+
+async function approveAllProfitWithdrawal(id, amount, memberId, noteText) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // সদস্যের সব লভ্যাংশের ব্যালেন্স নিন
+        const { data: member, error: memberError } = await client
+            .from('members')
+            .select('profit_balance_savings, profit_balance_investment, profit_balance_referral')
+            .eq('member_id', memberId)
+            .single();
+        
+        if (memberError) throw memberError;
+        
+        let remaining = amount;
+        const updates = {};
+        
+        // সঞ্চয় লভ্যাংশ থেকে কাটুন
+        const savings = member.profit_balance_savings || 0;
+        if (remaining > 0 && savings > 0) {
+            const deduct = Math.min(remaining, savings);
+            updates.profit_balance_savings = savings - deduct;
+            remaining -= deduct;
+        }
+        
+        // বিনিয়োগ লভ্যাংশ থেকে কাটুন
+        const investment = member.profit_balance_investment || 0;
+        if (remaining > 0 && investment > 0) {
+            const deduct = Math.min(remaining, investment);
+            updates.profit_balance_investment = investment - deduct;
+            remaining -= deduct;
+        }
+        
+        // রেফারেল লভ্যাংশ থেকে কাটুন
+        const referral = member.profit_balance_referral || 0;
+        if (remaining > 0 && referral > 0) {
+            const deduct = Math.min(remaining, referral);
+            updates.profit_balance_referral = referral - deduct;
+            remaining -= deduct;
+        }
+        
+        // যদি এখনও ব্যালেন্স যথেষ্ট না হয়
+        if (remaining > 0) {
+            showToast(`❌ পর্যাপ্ত লভ্যাংশ নেই! বাকি: ${formatAmount(remaining)} টাকা`, 'error');
+            return;
+        }
+        
+        // সদস্যের লভ্যাংশ আপডেট করুন
+        await client.from('members').update(updates).eq('member_id', memberId);
+        
+        // উইথড্রয়াল স্ট্যাটাস আপডেট করুন
+        await client.from('withdrawals').update({
+            status: 'approved',
+            approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+            approved_at: new Date().toISOString(),
+            note: noteText || null,
+            rejection_reason: null
+        }).eq('id', id);
+        
+        // লোকাল ডেটা আপডেট করুন
+        pendingWithdrawalsData = pendingWithdrawalsData.filter(w => w.id != id);
+        
+        // UI রিফ্রেশ করুন
+        loadPendingWithdrawals();
+        await updateAllBadges();
+        await loadRealDashboard();
+        
+        showToast(`✅ ${formatAmount(amount)} টাকা উত্তোলন অনুমোদিত হয়েছে! (সব লভ্যাংশ)${noteText ? '\n📝 নোট: ' + noteText : ''}`, 'success');
+        
+    } catch(e) {
+        console.error('All profit withdrawal error:', e);
+        showToast(`❌ লভ্যাংশ উত্তোলন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ===== WINDOW EXPOSE =====
+// ============================================================
+
+window.approveWithdrawalWithNote = approveWithdrawalWithNote;
+window.approveAllProfitWithdrawal = approveAllProfitWithdrawal;
+
+console.log('✅ approveWithdrawalWithNote ফাংশন লোড হয়েছে!');
+console.log('📝 উত্তোলন অনুমোদনের সময় নোট লেখার সুবিধা সক্রিয়!');
 
 // ============================================================
 // ===== INITIALIZE =====
