@@ -702,6 +702,27 @@
         </div>
     </div>
 
+    <!-- ===== উত্তোলন স্লিপ মডাল ===== -->
+    <div id="withdrawalSlipModal" class="fixed inset-0 z-50 items-center justify-center p-4 bg-black/50 overflow-y-auto" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:99999;" onclick="closeWithdrawalSlipModalOnOverlay(event)">
+        <div class="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" style="margin:auto; position:relative; z-index:100000;">
+            <div class="sticky top-0 bg-white border-b p-4 flex justify-between items-center">
+                <h2 class="text-2xl font-bold text-emerald-700"><i class="fas fa-receipt mr-2"></i>উত্তোলন স্লিপ</h2>
+                <button onclick="closeWithdrawalSlipModal()" class="text-gray-500 hover:text-red-500 text-2xl modal-close-btn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="p-6">
+                <div id="withdrawalSlipPrintArea"></div>
+            </div>
+            <div class="flex gap-3 justify-center p-4 no-print border-t flex-wrap">
+                <button onclick="downloadWithdrawalSlipPDF()" class="bg-emerald-600 text-white px-5 py-2 rounded-lg hover:bg-emerald-700 transition"><i class="fas fa-file-pdf mr-1"></i>পিডিএফ</button>
+                <button onclick="printWithdrawalSlip()" class="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 transition"><i class="fas fa-print mr-1"></i>প্রিন্ট</button>
+                <button onclick="shareWithdrawalSlipWhatsApp()" class="bg-green-600 text-white px-5 py-2 rounded-lg hover:bg-green-700 transition"><i class="fab fa-whatsapp mr-1"></i>হোয়াটসঅ্যাপ</button>
+                <button onclick="closeWithdrawalSlipModal()" class="bg-red-500 text-white px-5 py-2 rounded-lg hover:bg-red-600 transition"><i class="fas fa-times mr-1"></i>বন্ধ</button>
+            </div>
+        </div>
+    </div>
+    
     <!-- নোটিশ সেকশন -->
     <div class="bg-white rounded-xl shadow-md p-4 mb-6">
         <h3 class="font-bold text-emerald-700 mb-2"><i class="fas fa-bullhorn mr-2"></i>নোটিশ বোর্ড</h3>
@@ -1443,7 +1464,9 @@ function formatTimeDurationFull(startDate, endDate) {
     return result.join(' ');
 }
 
-// মেয়াদ শেষের কাউন্টডাউন - বছর, মাস, দিন, ঘন্টা, মিনিট, সেকেন্ড হিসেবে
+// ============================================================
+// মেয়াদ শেষের কাউন্টডাউন - মেয়াদী সদস্যদের জন্য
+// ============================================================
 function calculateMembershipExpiry() {
     if (!currentUser) return;
     const expiryElement = document.getElementById('membershipExpiry');
@@ -1987,6 +2010,9 @@ function updateMembershipTypeDisplay() {
     }
 }
 
+// ============================================================
+// মেয়াদী সদস্য স্ট্যাটাস আপডেট
+// ============================================================
 function updateMembershipStatus() {
     const statusElement = document.getElementById('memberStatusBadge');
     if (!statusElement) return;
@@ -1999,10 +2025,39 @@ function updateMembershipStatus() {
             🟢 কারেন্ট সদস্য
         `;
     } else {
-        statusElement.innerHTML = `
-            <i class="fas fa-clock text-amber-600 mr-1"></i>
-            📌 মেয়াদি সদস্য (${memberTerm} বছর)
-        `;
+        // মেয়াদ শেষের তারিখ চেক
+        let startDate = null;
+        if (currentUser.approved_at && currentUser.approved_at !== 'null' && currentUser.approved_at !== 'undefined') {
+            startDate = new Date(currentUser.approved_at);
+        } else if (currentUser.joinDate) {
+            startDate = new Date(currentUser.joinDate);
+        }
+        
+        let expiryDate = null;
+        if (startDate && !isNaN(startDate.getTime())) {
+            expiryDate = new Date(startDate);
+            expiryDate.setFullYear(startDate.getFullYear() + memberTerm);
+        }
+        
+        let isExpired = false;
+        if (expiryDate) {
+            const now = new Date();
+            if (now >= expiryDate) {
+                isExpired = true;
+            }
+        }
+        
+        if (isExpired) {
+            statusElement.innerHTML = `
+                <i class="fas fa-exclamation-triangle text-red-600 mr-1"></i>
+                🔴 মেয়াদ উত্তীর্ণ
+            `;
+        } else {
+            statusElement.innerHTML = `
+                <i class="fas fa-clock text-amber-600 mr-1"></i>
+                📌 মেয়াদি সদস্য (${memberTerm} বছর)
+            `;
+        }
     }
 }
 
@@ -2809,7 +2864,7 @@ function deselectAllMonths() {
 }
 
 // ============================================================
-// উত্তোলন মডাল খোলা
+// উত্তোলন মডাল খোলা - মেয়াদী সদস্য চেক সহ
 // ============================================================
 function openWithdrawModal(type) {
     let title = '', balance = 0, fieldLabel = '';
@@ -2845,77 +2900,194 @@ function openWithdrawModal(type) {
         fieldLabel = '';
     }
     
-    document.getElementById('modalTitle').innerHTML = title;
-    document.getElementById('withdrawContent').innerHTML = `
-        <div class="bg-emerald-50 p-3 rounded-lg mb-3">
-            <p class="text-sm text-gray-600">আপনার বর্তমান <strong>${fieldLabel}</strong> ব্যালেন্স:</p>
-            <p class="text-2xl font-bold text-emerald-600">${balance.toFixed(2)} টাকা</p>
-        </div>
-        ${balance === 0 ? '<div class="bg-red-50 p-3 rounded-lg mb-3"><p class="text-red-600 text-sm">⚠️ আপনার কোন ব্যালেন্স নেই!</p></div>' : ''}
-        
-        <div class="mb-3">
-            <label class="block text-gray-700 font-semibold mb-1">উত্তোলনের মাধ্যম <span class="text-red-500">*</span></label>
-            <select id="withdrawMethod" class="w-full p-2 border rounded-lg" onchange="toggleWithdrawMethodFields()">
-                <option value="">নির্বাচন করুন</option>
-                <option value="bkash">বিকাশ (bKash)</option>
-                <option value="nagad">নগদ (Nagad)</option>
-                <option value="rocket">রকেট (Rocket)</option>
-                <option value="bank">ব্যাংক</option>
-                <option value="cash">ক্যাশ (নগদ)</option>
-            </select>
-        </div>
-        
-        <div id="withdrawMobileField" style="display:none;">
-            <div class="mb-3">
-                <label class="block text-gray-700 font-semibold mb-1">মোবাইল নম্বর <span class="text-red-500">*</span></label>
-                <input type="tel" id="withdrawMobileNumber" placeholder="01XXXXXXXXX" class="w-full p-2 border rounded-lg">
-            </div>
-        </div>
-        
-        <div id="withdrawBankField" class="hidden" style="display:none;">
-            <div class="mb-3">
-                <label class="block text-gray-700 font-semibold mb-1">ব্যাংকের নাম <span class="text-red-500">*</span></label>
-                <input type="text" id="withdrawBankName" placeholder="ব্যাংকের নাম" class="w-full p-2 border rounded-lg">
-            </div>
-            <div class="mb-3">
-                <label class="block text-gray-700 font-semibold mb-1">একাউন্ট নম্বর <span class="text-red-500">*</span></label>
-                <input type="text" id="withdrawAccountNo" placeholder="একাউন্ট নম্বর" class="w-full p-2 border rounded-lg">
-            </div>
-            <div class="mb-3">
-                <label class="block text-gray-700 font-semibold mb-1">একাউন্টের নাম <span class="text-red-500">*</span></label>
-                <input type="text" id="withdrawAccountName" placeholder="একাউন্টের নাম" class="w-full p-2 border rounded-lg">
-            </div>
-        </div>
-        
-        <div id="withdrawCashField" class="hidden" style="display:none;">
-            <div class="bg-yellow-50 border border-yellow-200 p-3 rounded-lg mb-3">
-                <p class="text-yellow-700 text-sm font-semibold"><i class="fas fa-user-check mr-1"></i> ক্যাশ উত্তোলনের জন্য গ্রহীতার তথ্য দিন</p>
-            </div>
-            <div class="mb-3">
-                <label class="block text-gray-700 font-semibold mb-1">গ্রহীতার নাম <span class="text-red-500">*</span></label>
-                <input type="text" id="withdrawReceiverName" placeholder="গ্রহীতার পূর্ণ নাম" class="w-full p-2 border rounded-lg">
-            </div>
-            <div class="mb-3">
-                <label class="block text-gray-700 font-semibold mb-1">গ্রহীতার মোবাইল <span class="text-red-500">*</span></label>
-                <input type="tel" id="withdrawReceiverMobile" placeholder="01XXXXXXXXX" class="w-full p-2 border rounded-lg">
-            </div>
-            <div class="mb-3">
-                <label class="block text-gray-700 font-semibold mb-1">গ্রহীতার আইডি (ঐচ্ছিক)</label>
-                <input type="text" id="withdrawReceiverId" placeholder="আইডি (যদি থাকে)" class="w-full p-2 border rounded-lg">
-            </div>
-        </div>
-        
-        <div class="mb-3">
-            <label class="block text-gray-700 font-semibold mb-1">উত্তোলনের পরিমাণ <span class="text-red-500">*</span></label>
-            <input type="number" id="withdrawAmount" placeholder="টাকার পরিমাণ" class="w-full p-2 border rounded-lg" max="${balance}" step="1">
-            <p class="text-xs text-gray-500 mt-1">সর্বোচ্চ উত্তোলন: ${balance.toFixed(2)} টাকা</p>
-        </div>
-        
-        <button onclick="submitWithdraw('${type}')" class="w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition font-semibold" ${balance === 0 ? 'disabled' : ''}>
-            <i class="fas fa-check mr-1"></i> উত্তোলন করুন
-        </button>
-    `;
+    // ✅ মেয়াদী সদস্য চেক (শুধুমাত্র মূলধন উত্তোলনের জন্য)
+    let isTermMember = parseInt(currentUser.memberTerm) > 0;
+    let isCapitalWithdrawal = (type === 'capital');
+    let isBlocked = false;
+    let expiryMessage = '';
     
+    if (isTermMember && isCapitalWithdrawal) {
+        isBlocked = true;
+        
+        // মেয়াদ শেষের কাউন্টডাউন তৈরি করুন
+        let startDate = null;
+        if (currentUser.approved_at && currentUser.approved_at !== 'null' && currentUser.approved_at !== 'undefined') {
+            startDate = new Date(currentUser.approved_at);
+        } else if (currentUser.joinDate) {
+            startDate = new Date(currentUser.joinDate);
+        }
+        
+        let expiryDate = null;
+        if (startDate && !isNaN(startDate.getTime())) {
+            expiryDate = new Date(startDate);
+            expiryDate.setFullYear(startDate.getFullYear() + parseInt(currentUser.memberTerm));
+        }
+        
+        let timeLeft = '';
+        if (expiryDate) {
+            const now = new Date();
+            if (now < expiryDate) {
+                let years = expiryDate.getFullYear() - now.getFullYear();
+                let months = expiryDate.getMonth() - now.getMonth();
+                let days = expiryDate.getDate() - now.getDate();
+                
+                if (days < 0) {
+                    months--;
+                    const prevMonth = new Date(expiryDate.getFullYear(), expiryDate.getMonth(), 0);
+                    days += prevMonth.getDate();
+                }
+                if (months < 0) {
+                    years--;
+                    months += 12;
+                }
+                if (years < 0) years = 0;
+                if (months < 0) months = 0;
+                if (days < 0) days = 0;
+                
+                const diffMs = expiryDate - now;
+                const totalSeconds = Math.floor(diffMs / 1000);
+                const hours = Math.floor((totalSeconds % 86400) / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = totalSeconds % 60;
+                
+                let parts = [];
+                if (years > 0) parts.push(`${years} বছর`);
+                if (months > 0) parts.push(`${months} মাস`);
+                if (days > 0) parts.push(`${days} দিন`);
+                if (hours > 0) parts.push(`${hours} ঘন্টা`);
+                if (minutes > 0) parts.push(`${minutes} মিনিট`);
+                if (seconds > 0) parts.push(`${seconds} সেকেন্ড`);
+                
+                timeLeft = parts.join(', ');
+            } else {
+                timeLeft = 'মেয়াদ শেষ হয়েছে';
+            }
+        } else {
+            timeLeft = 'তারিখ পাওয়া যায়নি';
+        }
+        
+        expiryMessage = `
+            <div class="bg-red-50 border border-red-200 p-4 rounded-lg mb-3">
+                <div class="flex items-start gap-2">
+                    <i class="fas fa-exclamation-circle text-red-600 text-xl mt-1"></i>
+                    <div>
+                        <p class="text-red-700 font-bold text-base">⚠️ আপনি একজন মেয়াদী সদস্য!</p>
+                        <p class="text-red-600 text-sm mt-1">মেয়াদ শেষ হওয়ার আগে <strong>মূলধন উত্তোলন</strong> করতে পারবেন না।</p>
+                        <div class="bg-amber-50 border border-amber-200 p-3 rounded-lg mt-2">
+                            <p class="text-amber-700 font-semibold text-sm">
+                                <i class="fas fa-clock mr-2"></i>
+                                মেয়াদ শেষ হতে বাকি: 
+                                <span class="font-bold text-amber-800">${timeLeft}</span>
+                            </p>
+                            <p class="text-xs text-amber-600 mt-1">মেয়াদ শেষের পর মূলধন উত্তোলন করতে পারবেন।</p>
+                        </div>
+                        <div class="mt-2 text-xs text-green-600 bg-green-50 p-2 rounded">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            <strong>আপনি করতে পারেন:</strong> রেফারেল বোনাস, সঞ্চয় লভ্যাংশ, বিনিয়োগ লভ্যাংশ, রেফারেল লভ্যাংশ উত্তোলন
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    document.getElementById('modalTitle').innerHTML = title;
+    
+    let contentHTML = '';
+    
+    if (isBlocked) {
+        // ✅ মেয়াদী সদস্যের জন্য ব্লক করা মডাল
+        contentHTML = `
+            ${expiryMessage}
+            <div class="bg-gray-50 p-3 rounded-lg mb-3">
+                <p class="text-sm text-gray-600">আপনার বর্তমান <strong>${fieldLabel}</strong> ব্যালেন্স:</p>
+                <p class="text-2xl font-bold text-emerald-600">${balance.toFixed(2)} টাকা</p>
+            </div>
+            <div class="bg-red-50 p-3 rounded-lg mb-3 border border-red-200">
+                <p class="text-red-600 text-sm font-semibold">
+                    <i class="fas fa-lock mr-2"></i>
+                    ❌ মূলধন উত্তোলন ব্লক করা হয়েছে
+                </p>
+                <p class="text-xs text-red-500 mt-1">মেয়াদ শেষ হওয়ার পর আবার চেষ্টা করুন।</p>
+            </div>
+            <button onclick="closeWithdrawModal()" class="w-full bg-gray-500 text-white py-2 rounded-lg hover:bg-gray-600 transition">
+                <i class="fas fa-times mr-1"></i> বন্ধ করুন
+            </button>
+        `;
+    } else {
+        // ✅ স্বাভাবিক উত্তোলন মডাল
+        contentHTML = `
+            <div class="bg-emerald-50 p-3 rounded-lg mb-3">
+                <p class="text-sm text-gray-600">আপনার বর্তমান <strong>${fieldLabel}</strong> ব্যালেন্স:</p>
+                <p class="text-2xl font-bold text-emerald-600">${balance.toFixed(2)} টাকা</p>
+            </div>
+            ${balance === 0 ? '<div class="bg-red-50 p-3 rounded-lg mb-3"><p class="text-red-600 text-sm">⚠️ আপনার কোন ব্যালেন্স নেই!</p></div>' : ''}
+            
+            <div class="mb-3">
+                <label class="block text-gray-700 font-semibold mb-1">উত্তোলনের মাধ্যম <span class="text-red-500">*</span></label>
+                <select id="withdrawMethod" class="w-full p-2 border rounded-lg" onchange="toggleWithdrawMethodFields()">
+                    <option value="">নির্বাচন করুন</option>
+                    <option value="bkash">বিকাশ (bKash)</option>
+                    <option value="nagad">নগদ (Nagad)</option>
+                    <option value="rocket">রকেট (Rocket)</option>
+                    <option value="bank">ব্যাংক</option>
+                    <option value="cash">ক্যাশ (নগদ)</option>
+                </select>
+            </div>
+            
+            <div id="withdrawMobileField" style="display:none;">
+                <div class="mb-3">
+                    <label class="block text-gray-700 font-semibold mb-1">মোবাইল নম্বর <span class="text-red-500">*</span></label>
+                    <input type="tel" id="withdrawMobileNumber" placeholder="01XXXXXXXXX" class="w-full p-2 border rounded-lg">
+                </div>
+            </div>
+            
+            <div id="withdrawBankField" class="hidden" style="display:none;">
+                <div class="mb-3">
+                    <label class="block text-gray-700 font-semibold mb-1">ব্যাংকের নাম <span class="text-red-500">*</span></label>
+                    <input type="text" id="withdrawBankName" placeholder="ব্যাংকের নাম" class="w-full p-2 border rounded-lg">
+                </div>
+                <div class="mb-3">
+                    <label class="block text-gray-700 font-semibold mb-1">একাউন্ট নম্বর <span class="text-red-500">*</span></label>
+                    <input type="text" id="withdrawAccountNo" placeholder="একাউন্ট নম্বর" class="w-full p-2 border rounded-lg">
+                </div>
+                <div class="mb-3">
+                    <label class="block text-gray-700 font-semibold mb-1">একাউন্টের নাম <span class="text-red-500">*</span></label>
+                    <input type="text" id="withdrawAccountName" placeholder="একাউন্টের নাম" class="w-full p-2 border rounded-lg">
+                </div>
+            </div>
+            
+            <div id="withdrawCashField" class="hidden" style="display:none;">
+                <div class="bg-yellow-50 border border-yellow-200 p-3 rounded-lg mb-3">
+                    <p class="text-yellow-700 text-sm font-semibold"><i class="fas fa-user-check mr-1"></i> ক্যাশ উত্তোলনের জন্য গ্রহীতার তথ্য দিন</p>
+                </div>
+                <div class="mb-3">
+                    <label class="block text-gray-700 font-semibold mb-1">গ্রহীতার নাম <span class="text-red-500">*</span></label>
+                    <input type="text" id="withdrawReceiverName" placeholder="গ্রহীতার পূর্ণ নাম" class="w-full p-2 border rounded-lg">
+                </div>
+                <div class="mb-3">
+                    <label class="block text-gray-700 font-semibold mb-1">গ্রহীতার মোবাইল <span class="text-red-500">*</span></label>
+                    <input type="tel" id="withdrawReceiverMobile" placeholder="01XXXXXXXXX" class="w-full p-2 border rounded-lg">
+                </div>
+                <div class="mb-3">
+                    <label class="block text-gray-700 font-semibold mb-1">গ্রহীতার আইডি (ঐচ্ছিক)</label>
+                    <input type="text" id="withdrawReceiverId" placeholder="আইডি (যদি থাকে)" class="w-full p-2 border rounded-lg">
+                </div>
+            </div>
+            
+            <div class="mb-3">
+                <label class="block text-gray-700 font-semibold mb-1">উত্তোলনের পরিমাণ <span class="text-red-500">*</span></label>
+                <input type="number" id="withdrawAmount" placeholder="টাকার পরিমাণ" class="w-full p-2 border rounded-lg" max="${balance}" step="1">
+                <p class="text-xs text-gray-500 mt-1">সর্বোচ্চ উত্তোলন: ${balance.toFixed(2)} টাকা</p>
+            </div>
+            
+            <button onclick="submitWithdraw('${type}')" class="w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition font-semibold" ${balance === 0 ? 'disabled' : ''}>
+                <i class="fas fa-check mr-1"></i> উত্তোলন করুন
+            </button>
+        `;
+    }
+    
+    document.getElementById('withdrawContent').innerHTML = contentHTML;
     document.getElementById('withdrawModal').classList.remove('hidden');
     document.getElementById('withdrawModal').classList.add('flex');
 }
@@ -2951,13 +3123,31 @@ function toggleWithdrawMethodFields() {
     }
 }
 
+// ============================================================
+// সব লভ্যাংশ একসাথে উত্তোলন - মেয়াদী সদস্যদের জন্য অনুমোদিত
+// ============================================================
 function openWithdrawAllModal() {
     const savingsProfit = userFunds.savingsProfit || 0;
     const investmentProfit = userFunds.investmentProfit || 0;
     const referralProfit = userFunds.referralProfit || 0;
     const total = savingsProfit + investmentProfit + referralProfit;
+    
+    // ✅ মেয়াদী সদস্য চেক (শুধু তথ্যের জন্য, ব্লক নয়)
+    let isTermMember = parseInt(currentUser.memberTerm) > 0;
+    let termMessage = '';
+    
+    if (isTermMember) {
+        termMessage = `
+            <div class="bg-blue-50 border border-blue-200 p-2 rounded-lg mb-2 text-xs">
+                <i class="fas fa-info-circle text-blue-600 mr-1"></i>
+                <span class="text-blue-700">ℹ️ আপনি মেয়াদী সদস্য। লভ্যাংশ উত্তোলন করতে পারবেন।</span>
+            </div>
+        `;
+    }
+    
     document.getElementById('modalTitle').innerHTML = 'সব লভ্যাংশ একসাথে উত্তোলন';
     document.getElementById('withdrawContent').innerHTML = `
+        ${termMessage}
         <div class="bg-emerald-50 p-3 rounded-lg mb-3"><p class="text-sm text-gray-600">আপনার মোট লভ্যাংশ:</p><p class="text-2xl font-bold text-emerald-600">${total.toFixed(2)} টাকা</p></div>
         <div class="bg-gray-50 p-3 rounded-lg mb-3 text-sm">
             <p><span class="font-semibold">সঞ্চয় লভ্যাংশ:</span> ${savingsProfit.toFixed(2)} টাকা</p>
@@ -2994,9 +3184,85 @@ function openWithdrawAllModal() {
 }
 
 // ============================================================
-// উত্তোলন সাবমিট
+// উত্তোলন সাবমিট - মেয়াদী সদস্য চেক সহ (পূর্ণাঙ্গ)
 // ============================================================
 function submitWithdraw(type) {
+    // ✅ মেয়াদী সদস্য চেক (শুধুমাত্র মূলধন উত্তোলনের জন্য)
+    let isTermMember = parseInt(currentUser.memberTerm) > 0;
+    let isCapitalWithdrawal = (type === 'capital');
+    
+    if (isTermMember && isCapitalWithdrawal) {
+        // মেয়াদ শেষের কাউন্টডাউন তৈরি করুন
+        let startDate = null;
+        if (currentUser.approved_at && currentUser.approved_at !== 'null' && currentUser.approved_at !== 'undefined') {
+            startDate = new Date(currentUser.approved_at);
+        } else if (currentUser.joinDate) {
+            startDate = new Date(currentUser.joinDate);
+        }
+        
+        let expiryDate = null;
+        if (startDate && !isNaN(startDate.getTime())) {
+            expiryDate = new Date(startDate);
+            expiryDate.setFullYear(startDate.getFullYear() + parseInt(currentUser.memberTerm));
+        }
+        
+        let timeLeft = '';
+        if (expiryDate) {
+            const now = new Date();
+            if (now < expiryDate) {
+                let years = expiryDate.getFullYear() - now.getFullYear();
+                let months = expiryDate.getMonth() - now.getMonth();
+                let days = expiryDate.getDate() - now.getDate();
+                
+                if (days < 0) {
+                    months--;
+                    const prevMonth = new Date(expiryDate.getFullYear(), expiryDate.getMonth(), 0);
+                    days += prevMonth.getDate();
+                }
+                if (months < 0) {
+                    years--;
+                    months += 12;
+                }
+                if (years < 0) years = 0;
+                if (months < 0) months = 0;
+                if (days < 0) days = 0;
+                
+                const diffMs = expiryDate - now;
+                const totalSeconds = Math.floor(diffMs / 1000);
+                const hours = Math.floor((totalSeconds % 86400) / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = totalSeconds % 60;
+                
+                let parts = [];
+                if (years > 0) parts.push(`${years} বছর`);
+                if (months > 0) parts.push(`${months} মাস`);
+                if (days > 0) parts.push(`${days} দিন`);
+                if (hours > 0) parts.push(`${hours} ঘন্টা`);
+                if (minutes > 0) parts.push(`${minutes} মিনিট`);
+                if (seconds > 0) parts.push(`${seconds} সেকেন্ড`);
+                
+                timeLeft = parts.join(', ');
+            } else {
+                timeLeft = 'মেয়াদ শেষ হয়েছে';
+            }
+        } else {
+            timeLeft = 'তারিখ পাওয়া যায়নি';
+        }
+        
+        showToast(`
+❌ আপনি একজন মেয়াদী সদস্য!
+
+⏳ মেয়াদ শেষ হতে বাকি: ${timeLeft}
+
+⚠️ মেয়াদ শেষ হওয়ার আগে মূলধন উত্তোলন করতে পারবেন না।
+
+✅ আপনি লভ্যাংশ ও বোনাস উত্তোলন করতে পারবেন।`,
+            'error'
+        );
+        return;
+    }
+    
+    // ১. উত্তোলনের মাধ্যম ও পরিমাণ নিন
     const method = document.getElementById('withdrawMethod')?.value;
     const amount = parseFloat(document.getElementById('withdrawAmount')?.value || 0);
     
@@ -3009,6 +3275,7 @@ function submitWithdraw(type) {
         return; 
     }
     
+    // ২. সর্বোচ্চ ব্যালেন্স নির্ধারণ
     let maxBalance = 0;
     let typeName = '';
 
@@ -3037,11 +3304,13 @@ function submitWithdraw(type) {
         typeName = 'সব লভ্যাংশ';
     }
     
+    // ৩. ব্যালেন্স চেক
     if(amount > maxBalance) {
         showToast(`আপনার ব্যালেন্স ${maxBalance.toFixed(2)} টাকা, আপনি ${amount.toFixed(2)} টাকা উত্তোলন করতে পারবেন না!`, 'error');
         return;
     }
     
+    // ৪. গ্রহীতার তথ্য সংগ্রহ
     let receiverInfo = '';
     let receiverDetails = {};
     
@@ -3082,10 +3351,70 @@ function submitWithdraw(type) {
         receiverDetails = { mobile, method };
     }
     
+    // ৫. কনফার্মেশন
     if(confirm(`আপনি কি ${amount.toFixed(2)} টাকা ${typeName} থেকে উত্তোলন করতে চান?\n\nগ্রহীতা: ${receiverInfo}`)) {
         saveWithdrawRequest(type, amount, method, receiverDetails, typeName);
         showToast(`✅ ${typeName} উত্তোলনের অনুরোধ জমা হয়েছে! পরিমাণ: ${amount.toFixed(2)} টাকা\n⏳ অনুমোদনের জন্য অপেক্ষা করুন।`, 'success');
         closeWithdrawModal();
+    }
+}
+
+// ============================================================
+// উত্তোলন রিকোয়েস্ট সংরক্ষণ
+// ============================================================
+async function saveWithdrawRequest(type, amount, method, receiverDetails, typeName) {
+    const client = await initSupabase();
+    if(!client) {
+        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    try {
+        let normalizedType = typeName;
+        normalizedType = normalizedType.replace(/ উত্তোলন/g, '');
+        
+        const withdrawData = {
+            member_id: currentUser.id,
+            member_name: currentUser.name,
+            mobile: currentUser.mobile,
+            type: normalizedType,
+            amount: amount,
+            status: 'pending',
+            requested_at: new Date().toISOString(),
+            payment_method: method
+        };
+        
+        if (method === 'cash') {
+            withdrawData.receiver_name = receiverDetails.receiverName || null;
+            withdrawData.receiver_mobile = receiverDetails.receiverMobile || null;
+            withdrawData.receiver_id = receiverDetails.receiverId || null;
+        } else if (method === 'bank') {
+            withdrawData.bank_name = receiverDetails.bankName || null;
+            withdrawData.account_number = receiverDetails.accountNo || null;
+            withdrawData.account_name = receiverDetails.accountName || null;
+        } else {
+            withdrawData.sender_mobile = receiverDetails.mobile || null;
+        }
+        
+        console.log('📤 উত্তোলন ডাটা:', withdrawData);
+        
+        const { data, error } = await client
+            .from('withdrawals')
+            .insert([withdrawData]);
+            
+        if(error) {
+            console.error('❌ উত্তোলন রিকোয়েস্ট সেভ error:', error);
+            showToast('উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ!', 'error');
+        } else {
+            console.log('✅ উত্তোলন রিকোয়েস্ট সেভ হয়েছে:', data);
+            await loadWithdrawalHistory();
+            await refreshMemberDataFromSupabase();
+            await loadUserFunds();
+            await updateFundsDisplay();
+            showToast('✅ উত্তোলনের অনুরোধ জমা হয়েছে!', 'success');
+        }
+    } catch(e) {
+        console.error('❌ saveWithdrawRequest error:', e);
+        showToast('উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ!', 'error');
     }
 }
 
@@ -3151,7 +3480,7 @@ function closeWithdrawModal() {
 }
 
 // ============================================================
-// LOAD WITHDRAWAL HISTORY - TABLE FORMAT
+// LOAD WITHDRAWAL HISTORY WITH SLIP BUTTON
 // ============================================================
 async function loadWithdrawalHistory() {
     let client = await initSupabase();
@@ -3172,87 +3501,163 @@ async function loadWithdrawalHistory() {
         if(!container) return;
         
         if(data && data.length > 0) {
-            let html = `
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm border-collapse">
-                    <thead>
-                        <tr class="bg-amber-50 border-b-2 border-amber-200">
-                            <th class="p-2 text-center">তারিখ</th>
-                            <th class="p-2 text-center">ধরন</th>
-                            <th class="p-2 text-right">পরিমাণ</th>
-                            <th class="p-2 text-center">মাধ্যম</th>
-                            <th class="p-2 text-center">স্ট্যাটাস</th>
-                            <th class="p-2 text-center">অনুমোদনকারী</th>
-                            <th class="p-2 text-center">লেনদেন ID</th>
-                            <th class="p-2 text-center">বিস্তারিত</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            `;
-            
-            data.forEach(w => {
+            container.innerHTML = data.map(w => {
+                // স্ট্যাটাস নির্ধারণ
                 let statusClass = '', statusIcon = '', statusText = '';
+                let isApproved = false, isPending = false, isRejected = false;
+                
                 if(w.status === 'approved') {
                     statusClass = 'status-approved';
                     statusIcon = '✅';
                     statusText = 'অনুমোদিত';
+                    isApproved = true;
                 } else if(w.status === 'rejected') {
                     statusClass = 'status-rejected';
                     statusIcon = '❌';
                     statusText = 'বাতিল';
+                    isRejected = true;
                 } else {
                     statusClass = 'status-pending';
                     statusIcon = '⏳';
                     statusText = 'বিচারাধীন';
+                    isPending = true;
                 }
                 
+                // উত্তোলনের ধরন ক্লিন করুন
                 let cleanType = w.type ? w.type.replace(/ উত্তোলন/g, '') : 'উত্তোলন';
+                
+                // মাধ্যম নির্ধারণ
                 let methodDisplay = w.payment_method || '-';
-                if(methodDisplay === 'bkash' || methodDisplay === 'bKash') methodDisplay = '💚 bKash';
-                else if(methodDisplay === 'nagad' || methodDisplay === 'Nagad') methodDisplay = '🧡 Nagad';
-                else if(methodDisplay === 'rocket' || methodDisplay === 'Rocket') methodDisplay = '💜 Rocket';
-                else if(methodDisplay === 'bank' || methodDisplay === 'ব্যাংক') methodDisplay = '🏦 ব্যাংক';
-                else if(methodDisplay === 'cash' || methodDisplay === 'ক্যাশ') methodDisplay = '💵 ক্যাশ';
+                let methodIcon = '';
+                if(methodDisplay === 'bkash' || methodDisplay === 'bKash') {
+                    methodIcon = '💚';
+                    methodDisplay = 'bKash';
+                } else if(methodDisplay === 'nagad' || methodDisplay === 'Nagad') {
+                    methodIcon = '🧡';
+                    methodDisplay = 'Nagad';
+                } else if(methodDisplay === 'rocket' || methodDisplay === 'Rocket') {
+                    methodIcon = '💜';
+                    methodDisplay = 'Rocket';
+                } else if(methodDisplay === 'bank' || methodDisplay === 'ব্যাংক') {
+                    methodIcon = '🏦';
+                    methodDisplay = 'ব্যাংক';
+                } else if(methodDisplay === 'cash' || methodDisplay === 'ক্যাশ') {
+                    methodIcon = '💵';
+                    methodDisplay = 'ক্যাশ';
+                }
                 
+                // অনুমোদনকারী
                 let approvedBy = w.approved_by || '⏳ অপেক্ষমান';
+                let approvedAt = w.approved_at ? formatDateTimeBD(w.approved_at) : '-';
+                
+                // লেনদেন আইডি
                 let transactionId = w.transaction_id || '-';
-                let requestDate = formatDateTimeBD(w.requested_at);
                 
-                // বিস্তারিত তথ্য
-                let details = [];
-                if(w.receiver_name) details.push(`👤 ${w.receiver_name}`);
-                if(w.receiver_mobile) details.push(`📱 ${w.receiver_mobile}`);
-                if(w.bank_name) details.push(`🏦 ${w.bank_name}`);
-                if(w.account_number) details.push(`🔢 ${w.account_number}`);
-                if(w.sender_mobile) details.push(`📱 প্রেরক: ${w.sender_mobile}`);
-                if(w.note) details.push(`📝 ${w.note}`);
-                if(w.rejection_reason) details.push(`❌ ${w.rejection_reason}`);
+                // গ্রহীতার তথ্য
+                let receiverInfo = '';
+                if(w.receiver_name) {
+                    receiverInfo += `<span class="text-xs text-gray-500">👤 গ্রহীতা: ${w.receiver_name}</span>`;
+                }
+                if(w.receiver_mobile) {
+                    receiverInfo += `<span class="text-xs text-gray-500 ml-2">📱 ${w.receiver_mobile}</span>`;
+                }
+                if(w.receiver_id) {
+                    receiverInfo += `<span class="text-xs text-gray-500 ml-2">🆔 ${w.receiver_id}</span>`;
+                }
                 
-                let detailsText = details.length > 0 ? details.join(' | ') : '-';
+                // ব্যাংক তথ্য
+                let bankInfo = '';
+                if(w.bank_name) {
+                    bankInfo += `<span class="text-xs text-gray-500">🏦 ${w.bank_name}</span>`;
+                }
+                if(w.account_number) {
+                    bankInfo += `<span class="text-xs text-gray-500 ml-2">🔢 ${w.account_number}</span>`;
+                }
+                if(w.account_name) {
+                    bankInfo += `<span class="text-xs text-gray-500 ml-2">👤 ${w.account_name}</span>`;
+                }
                 
-                html += `
-                    <tr class="border-b hover:bg-gray-50">
-                        <td class="p-2 text-center text-xs">${requestDate}</td>
-                        <td class="p-2 text-center font-medium">${cleanType}</td>
-                        <td class="p-2 text-right font-bold ${w.status === 'approved' ? 'text-emerald-600' : w.status === 'rejected' ? 'text-red-600' : 'text-amber-600'}">
-                            ${Number(w.amount || 0).toLocaleString()} টাকা
-                        </td>
-                        <td class="p-2 text-center text-sm">${methodDisplay}</td>
-                        <td class="p-2 text-center"><span class="${statusClass} text-xs px-2 py-0.5 rounded-full">${statusIcon} ${statusText}</span></td>
-                        <td class="p-2 text-center text-xs">${approvedBy}</td>
-                        <td class="p-2 text-center text-xs font-mono">${transactionId}</td>
-                        <td class="p-2 text-center text-xs max-w-[150px] truncate" title="${detailsText}">${detailsText}</td>
-                    </tr>
+                // সেন্ডার মোবাইল
+                let senderInfo = '';
+                if(w.sender_mobile) {
+                    senderInfo = `<span class="text-xs text-gray-500">📱 প্রেরক: ${w.sender_mobile}</span>`;
+                }
+                
+                // নোট
+                let noteHtml = '';
+                if(w.note) {
+                    noteHtml = `<div class="text-xs text-amber-600 bg-amber-50 p-1 rounded mt-1">📝 নোট: ${w.note}</div>`;
+                }
+                
+                // বাতিলের কারণ
+                let rejectHtml = '';
+                if(w.rejection_reason) {
+                    rejectHtml = `<div class="text-xs text-red-600 bg-red-50 p-1 rounded mt-1">❌ বাতিলের কারণ: ${w.rejection_reason}</div>`;
+                }
+                
+                const requestDate = formatDateTimeBD(w.requested_at);
+                const amount = Number(w.amount || 0).toLocaleString();
+                
+                return `
+                <div class="border rounded-lg p-3 mb-2 hover:shadow-md transition ${isApproved ? 'bg-green-50/50' : isRejected ? 'bg-red-50/50' : 'bg-amber-50/50'}">
+                    <div class="flex flex-wrap justify-between items-start gap-2">
+                        <div class="flex-1 min-w-[200px]">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <p class="font-semibold text-gray-800">${cleanType}</p>
+                                <span class="${statusClass} text-xs px-2 py-0.5 rounded-full">${statusIcon} ${statusText}</span>
+                            </div>
+                            
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-1 mt-2 text-sm">
+                                <div>
+                                    <span class="text-gray-500">📅 আবেদন:</span>
+                                    <span class="font-medium text-gray-700">${requestDate}</span>
+                                </div>
+                                ${isApproved ? `
+                                <div>
+                                    <span class="text-gray-500">✅ অনুমোদন:</span>
+                                    <span class="font-medium text-green-700">${approvedAt}</span>
+                                </div>
+                                ` : ''}
+                                <div>
+                                    <span class="text-gray-500">💳 মাধ্যম:</span>
+                                    <span class="font-medium">${methodIcon} ${methodDisplay}</span>
+                                </div>
+                                ${transactionId !== '-' ? `
+                                <div>
+                                    <span class="text-gray-500">📝 লেনদেন ID:</span>
+                                    <span class="font-medium font-mono text-xs text-blue-600">${transactionId}</span>
+                                </div>
+                                ` : ''}
+                                <div>
+                                    <span class="text-gray-500">👤 অনুমোদনকারী:</span>
+                                    <span class="font-medium">${approvedBy}</span>
+                                </div>
+                            </div>
+                            
+                            ${senderInfo ? `<div class="mt-1">${senderInfo}</div>` : ''}
+                            ${receiverInfo ? `<div class="mt-1">${receiverInfo}</div>` : ''}
+                            ${bankInfo ? `<div class="mt-1">${bankInfo}</div>` : ''}
+                            ${noteHtml}
+                            ${rejectHtml}
+                        </div>
+                        
+                        <div class="text-right min-w-[140px]">
+                            <p class="text-xl font-bold ${isApproved ? 'text-emerald-600' : isRejected ? 'text-red-600' : 'text-amber-600'}">
+                                ${amount} টাকা
+                            </p>
+                            ${isApproved ? '<p class="text-xs text-green-600 mt-1">✅ উত্তোলন সম্পন্ন হয়েছে</p>' : ''}
+                            ${isPending ? '<p class="text-xs text-amber-600 mt-1">⏳ অনুমোদনের অপেক্ষায়</p>' : ''}
+                            ${isRejected ? '<p class="text-xs text-red-600 mt-1">❌ বাতিল হয়েছে</p>' : ''}
+                            ${isApproved ? `
+                            <button onclick="viewWithdrawalSlip('${w.id}')" class="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700 transition mt-1">
+                                <i class="fas fa-receipt mr-1"></i> স্লিপ দেখুন
+                            </button>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>
                 `;
-            });
-            
-            html += `
-                    </tbody>
-                </table>
-            </div>
-            `;
-            
-            container.innerHTML = html;
+            }).join('');
         } else {
             container.innerHTML = '<div class="text-center text-gray-400 py-4">📭 কোনো উত্তোলন ইতিহাস নেই</div>';
         }
@@ -6331,6 +6736,406 @@ document.addEventListener('DOMContentLoaded', async function() {
     document.getElementById('paymentMethod')?.addEventListener('change', togglePaymentFields);
     togglePaymentFields();
 });
+
+    // ============================================================
+// ===== WITHDRAWAL SLIP FUNCTIONS (NEW) =====
+// ============================================================
+
+let currentWithdrawalSlipData = null;
+
+async function viewWithdrawalSlip(withdrawalId) {
+    if (!withdrawalId) {
+        showToast('উত্তোলন আইডি পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    const client = await initSupabase();
+    if (!client) {
+        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: withdrawal, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('id', withdrawalId)
+            .single();
+            
+        if (error || !withdrawal) {
+            showToast('উত্তোলন তথ্য পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        const now = getCurrentBangladeshTime();
+        const slipDate = now.toLocaleDateString('bn-BD', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+        const slipTime = now.toLocaleTimeString('bn-BD', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+        });
+        
+        const slipNumber = `WTH-${String(withdrawal.id).padStart(6, '0')}-${Date.now().toString().slice(-4)}`;
+        
+        let statusText = 'বিচারাধীন';
+        let statusIcon = '⏳';
+        let statusBg = '#fed7aa';
+        let statusColor = '#9a3412';
+        
+        if (withdrawal.status === 'approved') {
+            statusText = 'অনুমোদিত';
+            statusIcon = '✅';
+            statusBg = '#d1fae5';
+            statusColor = '#065f46';
+        } else if (withdrawal.status === 'rejected') {
+            statusText = 'বাতিল';
+            statusIcon = '❌';
+            statusBg = '#fee2e2';
+            statusColor = '#991b1b';
+        }
+        
+        let cleanType = withdrawal.type ? withdrawal.type.replace(/ উত্তোলন/g, '') : 'উত্তোলন';
+        
+        let methodDisplay = withdrawal.payment_method || '-';
+        let methodIcon = '';
+        if(methodDisplay === 'bkash' || methodDisplay === 'bKash') {
+            methodIcon = '💚';
+            methodDisplay = 'bKash';
+        } else if(methodDisplay === 'nagad' || methodDisplay === 'Nagad') {
+            methodIcon = '🧡';
+            methodDisplay = 'Nagad';
+        } else if(methodDisplay === 'rocket' || methodDisplay === 'Rocket') {
+            methodIcon = '💜';
+            methodDisplay = 'Rocket';
+        } else if(methodDisplay === 'bank' || methodDisplay === 'ব্যাংক') {
+            methodIcon = '🏦';
+            methodDisplay = 'ব্যাংক';
+        } else if(methodDisplay === 'cash' || methodDisplay === 'ক্যাশ') {
+            methodIcon = '💵';
+            methodDisplay = 'ক্যাশ';
+        }
+        
+        let paymentDetailsHtml = '';
+        if (withdrawal.payment_method === 'bkash' || withdrawal.payment_method === 'nagad' || withdrawal.payment_method === 'rocket' || 
+            withdrawal.payment_method === 'bKash' || withdrawal.payment_method === 'Nagad' || withdrawal.payment_method === 'Rocket') {
+            paymentDetailsHtml = `
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">📱 সেন্ডার মোবাইল</span>
+                    <span class="slip-detail-value">${withdrawal.sender_mobile || '-'}</span>
+                </div>
+            `;
+        } else if (withdrawal.payment_method === 'bank' || withdrawal.payment_method === 'ব্যাংক') {
+            paymentDetailsHtml = `
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">🏦 ব্যাংকের নাম</span>
+                    <span class="slip-detail-value">${withdrawal.bank_name || '-'}</span>
+                </div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">🔢 একাউন্ট নম্বর</span>
+                    <span class="slip-detail-value">${withdrawal.account_number || '-'}</span>
+                </div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">👤 একাউন্টের নাম</span>
+                    <span class="slip-detail-value">${withdrawal.account_name || '-'}</span>
+                </div>
+            `;
+        } else if (withdrawal.payment_method === 'cash' || withdrawal.payment_method === 'ক্যাশ') {
+            paymentDetailsHtml = `
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">👤 গ্রহীতার নাম</span>
+                    <span class="slip-detail-value">${withdrawal.receiver_name || '-'}</span>
+                </div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">📱 গ্রহীতার মোবাইল</span>
+                    <span class="slip-detail-value">${withdrawal.receiver_mobile || '-'}</span>
+                </div>
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">🆔 গ্রহীতার আইডি</span>
+                    <span class="slip-detail-value">${withdrawal.receiver_id || '-'}</span>
+                </div>
+            `;
+        }
+        
+        let rejectionHtml = '';
+        if (withdrawal.status === 'rejected' && withdrawal.rejection_reason) {
+            rejectionHtml = `
+                <div style="background:#fee2e2; padding:5px 8px; margin-top:5px; border-radius:6px;">
+                    <div class="slip-detail-row">
+                        <span class="slip-detail-label" style="color:#dc2626;">❌ বাতিলের কারণ</span>
+                        <span style="color:#991b1b; font-weight:500;">${withdrawal.rejection_reason}</span>
+                    </div>
+                </div>
+            `;
+        }
+        
+        let noteHtml = '';
+        if (withdrawal.note) {
+            noteHtml = `
+                <div class="slip-detail-row">
+                    <span class="slip-detail-label">📝 নোট</span>
+                    <span class="slip-detail-value">${withdrawal.note}</span>
+                </div>
+            `;
+        }
+        
+        const slipHTML = `
+        <div style="max-width:550px; margin:0 auto; background:white; border:1px solid #e5e7eb; position:relative; overflow:hidden; font-family:'Noto Sans Bengali', sans-serif;">
+            <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%) rotate(-30deg); font-size:80px; font-weight:800; color:rgba(5,150,105,0.04); white-space:nowrap; pointer-events:none; z-index:0; font-family:Arial,sans-serif;">TUKNBD</div>
+            
+            <div style="background:linear-gradient(135deg, #064e3b, #059669); padding:14px 18px; text-align:center; color:white; position:relative; border-bottom:3px solid #fcd34d;">
+                <div style="display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                    <img src="images/logo.png" style="width:55px; height:55px; margin-bottom:6px; border:2px solid rgba(255,255,255,0.3); border-radius:50%; object-fit:cover;" onerror="this.src='https://placehold.co/55x55/059669/white?text=T'">
+                    <h3 style="font-size:17px; margin:0;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক</h3>
+                    <p style="font-size:11px; margin:3px 0 0; opacity:0.9;">উত্তোলন স্লিপ / ভাউচার</p>
+                </div>
+            </div>
+            
+            <div style="background:#f8fafc; padding:8px 14px; font-size:11px; border-bottom:1px solid #e5e7eb; display:grid; grid-template-columns:1fr 1fr; gap:3px 12px;">
+                <div><span style="font-weight:600;">স্লিপ নং</span> <span style="color:#059669; font-weight:bold;">${slipNumber}</span></div>
+                <div><span style="font-weight:600;">উত্তোলনের তারিখ</span> <span>${withdrawal.requested_at ? formatDateTimeBD(withdrawal.requested_at) : '-'}</span></div>
+                <div><span style="font-weight:600;">জেনারেটের তারিখ</span> <span>${slipDate}</span></div>
+                <div><span style="font-weight:600;">জেনারেটের সময়</span> <span>${slipTime}</span></div>
+                ${withdrawal.approved_at ? `<div><span style="font-weight:600;">অনুমোদনের তারিখ</span> <span>${formatDateTimeBD(withdrawal.approved_at)}</span></div>` : ''}
+            </div>
+            
+            <div style="padding:12px; font-size:14px;">
+                <div style="background:#f8fafc; padding:10px; margin-bottom:8px; border:1px solid #e5e7eb; border-radius:8px;">
+                    <div style="font-size:13px; font-weight:700; color:#064e3b; border-bottom:2px solid #fcd34d; display:inline-block; padding-bottom:2px; margin-bottom:6px;">👤 সদস্য তথ্য</div>
+                    <div class="slip-detail-row"><span class="slip-detail-label">সদস্য আইডি</span><span class="slip-detail-value">${withdrawal.member_id}</span></div>
+                    <div class="slip-detail-row"><span class="slip-detail-label">নাম</span><span class="slip-detail-value">${withdrawal.member_name}</span></div>
+                    <div class="slip-detail-row"><span class="slip-detail-label">মোবাইল</span><span class="slip-detail-value">${withdrawal.mobile || '-'}</span></div>
+                </div>
+                
+                <div style="background:#f8fafc; padding:10px; margin-bottom:8px; border:1px solid #e5e7eb; border-radius:8px;">
+                    <div style="font-size:13px; font-weight:700; color:#064e3b; border-bottom:2px solid #fcd34d; display:inline-block; padding-bottom:2px; margin-bottom:6px;">💳 উত্তোলন তথ্য</div>
+                    <div class="slip-detail-row"><span class="slip-detail-label">ধরন</span><span class="slip-detail-value">${cleanType}</span></div>
+                    <div class="slip-detail-row"><span class="slip-detail-label">পরিমাণ</span><span class="slip-detail-value" style="color:#059669; font-weight:bold;">${Number(withdrawal.amount || 0).toLocaleString()} টাকা</span></div>
+                    <div class="slip-detail-row"><span class="slip-detail-label">মাধ্যম</span><span class="slip-detail-value">${methodIcon} ${methodDisplay}</span></div>
+                    ${withdrawal.transaction_id ? `
+                    <div class="slip-detail-row">
+                        <span class="slip-detail-label">📝 লেনদেন আইডি</span>
+                        <span class="slip-detail-value font-mono text-xs">${withdrawal.transaction_id}</span>
+                    </div>
+                    ` : ''}
+                    ${paymentDetailsHtml}
+                    ${noteHtml}
+                    ${rejectionHtml}
+                </div>
+                
+                <div style="background:#eef2ff; padding:10px; border:1px solid #c7d2fe; border-radius:8px;">
+                    <div style="font-size:13px; font-weight:700; color:#1e40af; border-bottom:2px solid #fcd34d; display:inline-block; padding-bottom:2px; margin-bottom:6px;">📋 স্ট্যাটাস</div>
+                    <div class="slip-detail-row">
+                        <span class="slip-detail-label">বর্তমান অবস্থা</span>
+                        <span style="background:${statusBg}; color:${statusColor}; padding:2px 8px; font-size:11px; font-weight:600; border-radius:20px; display:inline-block;">${statusIcon} ${statusText}</span>
+                    </div>
+                    ${withdrawal.approved_by ? `
+                    <div class="slip-detail-row">
+                        <span class="slip-detail-label">✅ অনুমোদনকারী</span>
+                        <span class="slip-detail-value">${withdrawal.approved_by}</span>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>
+            
+            <div style="background:#f9fafb; padding:8px 14px; text-align:center; font-size:9px; border-top:1px solid #e5e7eb; color:#6b7280;">
+                <i class="fas fa-robot"></i> স্বয়ংক্রিয় জেনারেটেড স্লিপ | <i class="fas fa-check-circle" style="color:#059669;"></i> উত্তোলনের রেকর্ড
+            </div>
+        </div>
+        `;
+        
+        const styleTag = document.createElement('style');
+        styleTag.id = 'withdrawalSlipStyle';
+        styleTag.innerHTML = `
+            .slip-detail-row {
+                display: flex;
+                justify-content: space-between;
+                padding: 4px 0;
+                border-bottom: 1px solid #f3f4f6;
+            }
+            .slip-detail-row:last-child {
+                border-bottom: none;
+            }
+            .slip-detail-label {
+                font-weight: 600;
+                color: #4b5563;
+                font-size: 13px;
+            }
+            .slip-detail-value {
+                font-weight: 500;
+                color: #1f2937;
+                font-size: 13px;
+            }
+        `;
+        
+        const printArea = document.getElementById('withdrawalSlipPrintArea');
+        printArea.innerHTML = styleTag.outerHTML + slipHTML;
+        
+        currentWithdrawalSlipData = {
+            slipNumber: slipNumber,
+            withdrawalId: withdrawal.id,
+            memberName: withdrawal.member_name,
+            memberId: withdrawal.member_id,
+            amount: withdrawal.amount,
+            type: cleanType,
+            status: withdrawal.status
+        };
+        
+        const modal = document.getElementById('withdrawalSlipModal');
+        if (modal) {
+            modal.style.display = 'flex';
+            modal.style.visibility = 'visible';
+            modal.style.opacity = '1';
+            modal.style.zIndex = '99999';
+            modal.style.position = 'fixed';
+            modal.style.top = '0';
+            modal.style.left = '0';
+            modal.style.right = '0';
+            modal.style.bottom = '0';
+            modal.style.backgroundColor = 'rgba(0,0,0,0.7)';
+            modal.style.overflowY = 'auto';
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            
+            const content = modal.querySelector('.bg-white');
+            if (content) {
+                content.style.display = 'block';
+                content.style.visibility = 'visible';
+                content.style.opacity = '1';
+                content.style.margin = 'auto';
+                content.style.maxHeight = '90vh';
+                content.style.overflowY = 'auto';
+                content.style.position = 'relative';
+                content.style.zIndex = '100000';
+                content.style.width = '100%';
+                content.style.maxWidth = '56rem';
+            }
+            document.body.style.overflow = 'hidden';
+        }
+        showToast('✅ উত্তোলন স্লিপ লোড সম্পূর্ণ!', 'success');
+        
+    } catch(e) {
+        console.error('❌ viewWithdrawalSlip error:', e);
+        showToast('স্লিপ লোড করতে ব্যর্থ!', 'error');
+    }
+}
+
+function closeWithdrawalSlipModal() {
+    const modal = document.getElementById('withdrawalSlipModal');
+    if(modal) {
+        modal.style.display = 'none';
+        modal.style.visibility = 'hidden';
+        modal.style.opacity = '0';
+        modal.style.zIndex = '-1';
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        document.body.style.overflow = '';
+    }
+    document.getElementById('withdrawalSlipPrintArea').innerHTML = '';
+    currentWithdrawalSlipData = null;
+}
+
+function closeWithdrawalSlipModalOnOverlay(e) {
+    if(e.target === e.currentTarget) {
+        closeWithdrawalSlipModal();
+    }
+}
+
+function downloadWithdrawalSlipPDF() {
+    const el = document.getElementById('withdrawalSlipPrintArea');
+    if(!el) {
+        showToast('স্লিপ ডাটা নেই!', 'error');
+        return;
+    }
+    
+    const printContent = el.innerHTML;
+    const style = `
+        <style>
+            body { font-family: 'Noto Sans Bengali', sans-serif; padding: 20px; background: white; }
+            .slip-detail-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #f3f4f6; }
+            .slip-detail-row:last-child { border-bottom: none; }
+            .slip-detail-label { font-weight: 600; color: #4b5563; font-size: 13px; }
+            .slip-detail-value { font-weight: 500; color: #1f2937; font-size: 13px; }
+            @media print { body * { visibility: visible; } }
+        </style>
+    `;
+    
+    const element = document.createElement('div');
+    element.innerHTML = style + printContent;
+    element.style.padding = '20px';
+    element.style.background = 'white';
+    
+    html2pdf().set({
+        margin: 0.5,
+        filename: `TUKNBD_Withdrawal_Slip_${currentWithdrawalSlipData?.slipNumber || Date.now()}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, logging: false },
+        jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
+    }).from(element).save();
+    
+    showToast('✅ পিডিএফ ডাউনলোড শুরু হয়েছে!', 'success');
+}
+
+function printWithdrawalSlip() {
+    const content = document.getElementById('withdrawalSlipPrintArea');
+    if(!content) {
+        showToast('স্লিপ ডাটা নেই!', 'error');
+        return;
+    }
+    
+    const win = window.open('', '_blank');
+    win.document.write(`
+        <html>
+        <head>
+            <title>উত্তোলন স্লিপ | TUKNBD</title>
+            <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+            <style>
+                * { font-family: 'Noto Sans Bengali', sans-serif; }
+                body { padding: 20px; background: white; }
+                .slip-detail-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #f3f4f6; }
+                .slip-detail-row:last-child { border-bottom: none; }
+                .slip-detail-label { font-weight: 600; color: #4b5563; font-size: 13px; }
+                .slip-detail-value { font-weight: 500; color: #1f2937; font-size: 13px; }
+                @media print { body { padding: 0.1in; } .no-print { display: none !important; } }
+            </style>
+        </head>
+        <body>
+            ${content.innerHTML}
+            <div class="no-print" style="text-align:center; margin-top:10px;">
+                <button onclick="window.print()" style="background:#059669; color:white; border:none; padding:8px 20px; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600;">🖨️ প্রিন্ট করুন</button>
+                <button onclick="window.close()" style="background:#6b7280; color:white; border:none; padding:8px 20px; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600; margin-left:10px;">❌ বন্ধ করুন</button>
+            </div>
+        </body>
+        </html>
+    `);
+    win.document.close();
+    setTimeout(() => { win.print(); }, 500);
+}
+
+function shareWithdrawalSlipWhatsApp() {
+    const data = currentWithdrawalSlipData;
+    if(!data) {
+        showToast('স্লিপ ডাটা নেই!', 'error');
+        return;
+    }
+    
+    const text = `📄 TUKNBD উত্তোলন স্লিপ\n━━━━━━━━━━━━━━━━━━━\n🆔 স্লিপ নং: ${data.slipNumber}\n👤 সদস্য: ${data.memberName} (${data.memberId})\n💰 পরিমাণ: ${Number(data.amount || 0).toLocaleString()} টাকা\n📋 ধরন: ${data.type}\n📅 তারিখ: ${new Date().toLocaleDateString('bn-BD')}\n━━━━━━━━━━━━━━━━━━━\n🔗 TUKNBD - ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+}
+
+// window এ এক্সপোজ করুন
+window.viewWithdrawalSlip = viewWithdrawalSlip;
+window.closeWithdrawalSlipModal = closeWithdrawalSlipModal;
+window.closeWithdrawalSlipModalOnOverlay = closeWithdrawalSlipModalOnOverlay;
+window.downloadWithdrawalSlipPDF = downloadWithdrawalSlipPDF;
+window.printWithdrawalSlip = printWithdrawalSlip;
+window.shareWithdrawalSlipWhatsApp = shareWithdrawalSlipWhatsApp;
+
+console.log('✅ উত্তোলন স্লিপ ফাংশন লোড হয়েছে!');
 </script>
 </body>
 </html>
