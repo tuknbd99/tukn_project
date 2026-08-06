@@ -12,6 +12,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     
     <style>
+        
         /* সকল উত্তোলন টেবিল ফিক্স */
 #allWithdrawalsTab {
     display: block !important;
@@ -3433,11 +3434,285 @@ function quickStatement() {
     showTab('statement');
     setTimeout(() => loadStatement(), 300);
 }
+// ============================================================
+// PERMISSION SYSTEM (INTEGER ID Support)
+// ============================================================
 
+class PermissionManager {
+    constructor() {
+        this.currentUser = null;
+        this.permissions = {};
+        this.loadUserPermissions();
+    }
+    
+    async loadUserPermissions() {
+        const user = localStorage.getItem('currentAdmin');
+        if (!user) return;
+        
+        try {
+            this.currentUser = JSON.parse(user);
+            
+            // Super Admin: সব Permission True
+            if (this.currentUser.role === 'super_admin') {
+                this.permissions = { all: true };
+                return;
+            }
+            
+            // Load permissions from database
+            const client = initSupabaseClient();
+            if (!client) return;
+            
+            const { data, error } = await client
+                .from('roles')
+                .select('permissions')
+                .eq('name', this.currentUser.role)
+                .single();
+            
+            if (error) throw error;
+            this.permissions = data?.permissions || {};
+            
+        } catch(e) {
+            console.error('Permission load error:', e);
+        }
+    }
+    
+    hasPermission(module, action) {
+        if (this.permissions?.all === true) return true;
+        return this.permissions?.[module]?.[action] === true;
+    }
+    
+    can(module, action) {
+        return this.hasPermission(module, action);
+    }
+}
+
+// ============================================================
+// AUDIT LOGGER (INTEGER ID Support)
+// ============================================================
+
+class AuditLogger {
+    constructor() {
+        this.client = initSupabaseClient();
+        this.currentAdmin = JSON.parse(localStorage.getItem('currentAdmin') || '{}');
+    }
+    
+    async log(action, module, recordId, oldData = null, newData = null) {
+        try {
+            const changes = this.getChanges(oldData, newData);
+            
+            const { error } = await this.client
+                .from('audit_logs')
+                .insert([{
+                    admin_id: this.currentAdmin?.id || null,
+                    admin_name: this.currentAdmin?.full_name || this.currentAdmin?.username || 'System',
+                    action: action,
+                    module: module,
+                    table_name: module,
+                    record_id: String(recordId),
+                    old_data: oldData,
+                    new_data: newData,
+                    changes: changes,
+                    created_at: new Date().toISOString()
+                }]);
+            
+            if (error) console.error('Audit log error:', error);
+        } catch(e) {
+            console.error('Audit log error:', e);
+        }
+    }
+    
+    getChanges(oldData, newData) {
+        if (!oldData || !newData) return null;
+        
+        const changes = {};
+        for (const key in newData) {
+            if (oldData[key] !== newData[key]) {
+                changes[key] = {
+                    old: oldData[key],
+                    new: newData[key]
+                };
+            }
+        }
+        return Object.keys(changes).length > 0 ? changes : null;
+    }
+    
+    // Shortcut methods
+    async logCreate(module, recordId, data) {
+        return this.log('CREATE', module, recordId, null, data);
+    }
+    
+    async logUpdate(module, recordId, oldData, newData) {
+        return this.log('UPDATE', module, recordId, oldData, newData);
+    }
+    
+    async logDelete(module, recordId, data) {
+        return this.log('DELETE', module, recordId, data, null);
+    }
+    
+    async logApprove(module, recordId, data) {
+        return this.log('APPROVE', module, recordId, null, data);
+    }
+    
+    async logReject(module, recordId, data) {
+        return this.log('REJECT', module, recordId, null, data);
+    }
+}
+
+// ============================================================
+// TRANSACTION MANAGER (INTEGER ID Support)
+// ============================================================
+
+class TransactionManager {
+    constructor() {
+        this.client = initSupabaseClient();
+        this.currentAdmin = JSON.parse(localStorage.getItem('currentAdmin') || '{}');
+    }
+    
+    async createDeposit(memberId, amount, paymentMethod, transactionId) {
+        const { data: payment, error } = await this.client
+            .from('payments')
+            .insert([{
+                member_id: memberId,
+                user_id: this.currentAdmin?.id,
+                amount: amount,
+                payment_method: paymentMethod,
+                transaction_id: transactionId,
+                status: 'pending',
+                submitted_at: new Date().toISOString()
+            }])
+            .select()
+            .single();
+        
+        if (error) throw error;
+        
+        await this.client.rpc('add_ledger_entry', {
+            p_member_id: memberId,
+            p_transaction_type: 'deposit',
+            p_amount: amount,
+            p_reference_id: String(payment.id),
+            p_description: `Deposit via ${paymentMethod}`,
+            p_created_by: this.currentAdmin?.id
+        });
+        
+        // Log audit
+        const auditLogger = new AuditLogger();
+        await auditLogger.logCreate('payments', payment.id, payment);
+        
+        return payment;
+    }
+    
+    async approveDeposit(paymentId) {
+        const { data: payment, error: getError } = await this.client
+            .from('payments')
+            .select('*')
+            .eq('id', paymentId)
+            .single();
+        
+        if (getError) throw getError;
+        if (payment.status !== 'pending') throw new Error('Payment already processed');
+        
+        const { error: updateError } = await this.client
+            .from('payments')
+            .update({
+                status: 'approved',
+                approved_by: this.currentAdmin?.id,
+                approved_at: new Date().toISOString()
+            })
+            .eq('id', paymentId);
+        
+        if (updateError) throw updateError;
+        
+        await this.client
+            .from('ledger')
+            .update({
+                status: 'approved',
+                approved_by: this.currentAdmin?.id,
+                approved_at: new Date().toISOString()
+            })
+            .eq('reference_id', String(paymentId))
+            .eq('transaction_type', 'deposit');
+        
+        await this.updateMemberBalance(payment.member_id);
+        
+        // Log audit
+        const auditLogger = new AuditLogger();
+        await auditLogger.logApprove('payments', paymentId, payment);
+        
+        return { success: true, payment };
+    }
+    
+    async updateMemberBalance(memberId) {
+        const { data, error } = await this.client
+            .from('ledger')
+            .select('balance_after')
+            .eq('member_id', memberId)
+            .eq('status', 'approved')
+            .order('created_at', { ascending: false })
+            .limit(1);
+        
+        if (error) throw error;
+        
+        const balance = data?.[0]?.balance_after || 0;
+        
+        await this.client
+            .from('members')
+            .update({ balance: balance })
+            .eq('member_id', memberId);
+        
+        return balance;
+    }
+}
+
+// ============================================================
+// Initialize
+// ============================================================
+const permission = new PermissionManager();
+const auditLogger = new AuditLogger();
+const transactionManager = new TransactionManager();
+
+// ============================================================
+// Usage Examples
+// ============================================================
+// Check permission
+// if (permission.can('payments', 'approve')) {
+//     // Show approve button
+// }
+
+// Log audit
+// await auditLogger.logCreate('members', memberId, memberData);
+// await auditLogger.logUpdate('members', memberId, oldData, newData);
+// await auditLogger.logDelete('members', memberId, memberData);
+// await auditLogger.logApprove('payments', paymentId, paymentData);
 // ============================================================
 // ===== EVENTS FUNCTIONS (COMPLETE) =====
 // ============================================================
+// ============================================================
+// Example: Show/Hide Buttons based on Permission
+// ============================================================
 
+// Check if user can approve payments
+if (permission.can('payments', 'approve')) {
+    document.querySelectorAll('.approve-payment-btn').forEach(btn => {
+        btn.style.display = 'inline-block';
+    });
+}
+
+// Check if user can delete members
+if (permission.can('members', 'delete')) {
+    document.querySelectorAll('.delete-member-btn').forEach(btn => {
+        btn.style.display = 'inline-block';
+    });
+}
+
+// Check if user can distribute profits
+if (permission.can('profits', 'distribute')) {
+    document.querySelector('.profit-distribution-section').style.display = 'block';
+}
+
+// Check if user can manage admins
+if (permission.can('admins', 'create') || permission.can('admins', 'delete')) {
+    document.querySelector('.admin-management-section').style.display = 'block';
+}
 // ===== ইভেন্ট যোগ করার ফাংশন =====
 async function addEvent() {
     const title = document.getElementById('eventTitle').value.trim();
