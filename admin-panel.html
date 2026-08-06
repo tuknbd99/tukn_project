@@ -9755,7 +9755,163 @@ function exportLoansGivenExcel() {
     a.click();
     showToast('✅ লোন প্রদান এক্সপোর্ট সম্পূর্ণ!');
 }
+// ============================================================
+// PERMISSION SYSTEM - Frontend Integration
+// ============================================================
 
+class PermissionManager {
+    constructor() {
+        this.currentUser = null;
+        this.permissions = {};
+        this.userRole = null;
+        this.loadUserPermissions();
+    }
+    
+    async loadUserPermissions() {
+        const user = localStorage.getItem('currentAdmin');
+        if (!user) {
+            console.warn('No user logged in');
+            return;
+        }
+        
+        try {
+            this.currentUser = JSON.parse(user);
+            this.userRole = this.currentUser.role || 'admin';
+            
+            // Super Admin: সব Permission True
+            if (this.userRole === 'super_admin') {
+                this.permissions = { all: true };
+                console.log('✅ Super Admin: All permissions granted');
+                return;
+            }
+            
+            // Load permissions from database
+            const client = initSupabaseClient();
+            if (!client) return;
+            
+            const { data, error } = await client
+                .from('roles')
+                .select('permissions')
+                .eq('name', this.userRole)
+                .single();
+            
+            if (error) throw error;
+            this.permissions = data?.permissions || {};
+            console.log(`✅ Permissions loaded for role: ${this.userRole}`);
+            
+        } catch(e) {
+            console.error('Permission load error:', e);
+        }
+    }
+    
+    // Check if user has permission
+    hasPermission(module, action) {
+        if (this.permissions?.all === true) return true;
+        return this.permissions?.[module]?.[action] === true;
+    }
+    
+    // Shortcut methods
+    can(module, action) { return this.hasPermission(module, action); }
+    canCreate(module) { return this.hasPermission(module, 'create'); }
+    canRead(module) { return this.hasPermission(module, 'read'); }
+    canUpdate(module) { return this.hasPermission(module, 'update'); }
+    canDelete(module) { return this.hasPermission(module, 'delete'); }
+    canApprove(module) { return this.hasPermission(module, 'approve'); }
+    
+    isSuperAdmin() { return this.userRole === 'super_admin'; }
+    isAdmin() { return this.userRole === 'admin' || this.userRole === 'super_admin'; }
+}
+
+// ============================================================
+// Initialize
+// ============================================================
+
+const permission = new PermissionManager();
+
+// ============================================================
+// UI Updates based on Permissions
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(() => {
+        // Payment Approve Button
+        if (permission.canApprove('payments')) {
+            document.querySelectorAll('.approve-payment-btn').forEach(btn => {
+                btn.style.display = 'inline-block';
+            });
+        }
+        
+        // Withdrawal Approve Button (Only Super Admin)
+        if (permission.canApprove('withdrawals')) {
+            document.querySelectorAll('.approve-withdrawal-btn').forEach(btn => {
+                btn.style.display = 'inline-block';
+            });
+        } else {
+            document.querySelectorAll('.approve-withdrawal-btn').forEach(btn => {
+                btn.style.display = 'none';
+            });
+        }
+        
+        // Member Delete Button
+        if (permission.canDelete('members')) {
+            document.querySelectorAll('.delete-member-btn').forEach(btn => {
+                btn.style.display = 'inline-block';
+            });
+        }
+        
+        // Admin Management (Only Super Admin)
+        if (permission.isSuperAdmin()) {
+            document.querySelector('.admin-management-section')?.style.setProperty('display', 'block');
+        }
+        
+        // Profit Distribution (Only Super Admin)
+        if (permission.can('profits', 'distribute')) {
+            document.querySelector('.profit-distribution-section')?.style.setProperty('display', 'block');
+        }
+        
+        // Audit Logs (Admin & Super Admin)
+        if (permission.canRead('audit_logs')) {
+            document.querySelector('.audit-logs-section')?.style.setProperty('display', 'block');
+        }
+        
+        console.log('✅ Permission UI applied');
+        console.log(`👤 Current Role: ${permission.userRole}`);
+        console.log(`🔑 Super Admin: ${permission.isSuperAdmin()}`);
+        
+    }, 500);
+});
+
+// ============================================================
+// Permission Check Examples for Functions
+// ============================================================
+
+// Example: Approve Payment with Permission Check
+async function approvePaymentWithPermission(paymentId) {
+    if (!permission.canApprove('payments')) {
+        showToast('❌ আপনার এই কাজ করার অনুমতি নেই!', 'error');
+        return;
+    }
+    await approvePayment(paymentId);
+}
+
+// Example: Approve Withdrawal with Permission Check (Super Admin only)
+async function approveWithdrawalWithPermission(id, amount, memberId, type) {
+    if (!permission.canApprove('withdrawals')) {
+        showToast('❌ শুধুমাত্র সুপার অ্যাডমিন উত্তোলন অনুমোদন করতে পারেন!', 'error');
+        return;
+    }
+    await approveWithdrawal(id, amount, memberId, type);
+}
+
+// Example: Delete Member with Permission Check
+async function deleteMemberWithPermission(memberId) {
+    if (!permission.canDelete('members')) {
+        showToast('❌ আপনার সদস্য ডিলিট করার অনুমতি নেই!', 'error');
+        return;
+    }
+    if (!confirm('সদস্য ডিলিট করবেন?')) return;
+    await deleteMember(memberId);
+}
 // ============================================================
 // ===== WINDOW এক্সপোজ =====
 // ============================================================
