@@ -2532,7 +2532,332 @@ function closeSidebar() {
     overlay.classList.remove('active');
     document.body.style.overflow = '';
 }
+// ============================================================
+// ===== viewWithdrawalDetails - উত্তোলন বিস্তারিত দেখান =====
+// ============================================================
 
+function viewWithdrawalDetails(id) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    // pendingWithdrawalsData থেকে খুঁজুন
+    let withdrawal = pendingWithdrawalsData.find(w => w.id == id);
+    
+    // যদি না পাওয়া যায়, সরাসরি DB থেকে খুঁজুন
+    if (!withdrawal) {
+        client.from('withdrawals')
+            .select('*')
+            .eq('id', id)
+            .single()
+            .then(({ data, error }) => {
+                if (error || !data) {
+                    showToast('উত্তোলন তথ্য পাওয়া যায়নি!', 'error');
+                    return;
+                }
+                showWithdrawalDetailModal(data);
+            })
+            .catch(e => {
+                console.error('View withdrawal error:', e);
+                showToast('❌ উত্তোলন তথ্য লোড করতে সমস্যা!', 'error');
+            });
+        return;
+    }
+    
+    showWithdrawalDetailModal(withdrawal);
+}
+
+// ============================================================
+// ===== showWithdrawalDetailModal - মডাল দেখান =====
+// ============================================================
+
+function showWithdrawalDetailModal(withdrawal) {
+    const modal = document.getElementById('withdrawalDetailsModal');
+    if (!modal) {
+        showToast('মডাল পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    const content = document.getElementById('withdrawalDetailsContent');
+    if (!content) {
+        showToast('কন্টেন্ট এলিমেন্ট পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    let cleanType = (withdrawal.type || 'মূলধন').replace(/ উত্তোলন/g, '');
+    
+    const statusClass = withdrawal.status === 'approved' ? 'status-approved' :
+                       withdrawal.status === 'pending' ? 'status-pending' : 'status-rejected';
+    const statusText = withdrawal.status === 'approved' ? '✅ অনুমোদিত' :
+                      withdrawal.status === 'pending' ? '⏳ পেন্ডিং' : '❌ বাতিল';
+    
+    const methodColor = withdrawal.payment_method === 'bKash' ? 'bg-green-100 text-green-700' :
+                       withdrawal.payment_method === 'Nagad' ? 'bg-orange-100 text-orange-700' :
+                       withdrawal.payment_method === 'Rocket' ? 'bg-purple-100 text-purple-700' :
+                       withdrawal.payment_method === 'bank' ? 'bg-indigo-100 text-indigo-700' :
+                       'bg-blue-100 text-blue-700';
+    
+    const methodIcon = withdrawal.payment_method === 'bKash' ? '💚' :
+                      withdrawal.payment_method === 'Nagad' ? '🧡' :
+                      withdrawal.payment_method === 'Rocket' ? '💜' :
+                      withdrawal.payment_method === 'bank' ? '🏦' : '💵';
+    
+    let contactInfo = '';
+    if (withdrawal.sender_mobile) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📱 সেন্ডার মোবাইল</span><p class="font-semibold text-gray-800">${withdrawal.sender_mobile}</p></div>`;
+    }
+    if (withdrawal.bank_name) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">🏦 ব্যাংকের নাম</span><p class="font-semibold text-gray-800">${withdrawal.bank_name}</p></div>`;
+    }
+    if (withdrawal.account_number) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">🔢 একাউন্ট নম্বর</span><p class="font-semibold text-gray-800 font-mono">${withdrawal.account_number}</p></div>`;
+    }
+    if (withdrawal.account_holder_name) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">👤 একাউন্ট হোল্ডার</span><p class="font-semibold text-gray-800">${withdrawal.account_holder_name}</p></div>`;
+    }
+    if (withdrawal.receiver_name) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">👤 গ্রহীতার নাম</span><p class="font-semibold text-gray-800">${withdrawal.receiver_name}</p></div>`;
+    }
+    if (withdrawal.receiver_mobile) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📱 গ্রহীতার মোবাইল</span><p class="font-semibold text-gray-800">${withdrawal.receiver_mobile}</p></div>`;
+    }
+    
+    content.innerHTML = `
+        <div class="bg-gradient-to-r from-amber-50 to-red-50 p-4 rounded-lg border mb-4">
+            <h4 class="font-bold text-amber-700 text-lg mb-3"><i class="fas fa-money-bill-transfer mr-2"></i>উত্তোলন বিস্তারিত</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">উত্তোলন আইডি</span><p class="font-semibold text-gray-800">#${withdrawal.id}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য</span><p class="font-semibold text-gray-800">${withdrawal.member_name || '-'}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য আইডি</span><p class="font-semibold text-gray-800">${withdrawal.member_id || '-'}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">উত্তোলনের ধরন</span><p class="font-semibold text-emerald-600">${cleanType}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">💰 পরিমাণ</span><p class="font-bold text-red-600 text-2xl">${formatAmountWithText(withdrawal.amount)}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📅 আবেদনের তারিখ</span><p class="font-semibold text-gray-800">${withdrawal.requested_at ? new Date(withdrawal.requested_at).toLocaleString('bn-BD') : '-'}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">⏳ স্ট্যাটাস</span><p><span class="status-badge ${statusClass}">${statusText}</span></p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">💳 পেমেন্ট মাধ্যম</span><p><span class="px-2 py-1 rounded-full text-xs ${methodColor}">${methodIcon} ${withdrawal.payment_method || 'cash'}</span></p></div>
+                ${withdrawal.transaction_id ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📝 লেনদেন আইডি</span><p class="font-semibold font-mono text-xs break-all">${withdrawal.transaction_id}</p></div>` : ''}
+                ${contactInfo}
+                ${withdrawal.note ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">📝 নোট</span><p class="font-semibold text-gray-800">${withdrawal.note}</p></div>` : ''}
+                ${withdrawal.rejection_reason ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">❌ বাতিলের কারণ</span><p class="font-semibold text-red-600">${withdrawal.rejection_reason}</p></div>` : ''}
+                ${withdrawal.approved_by ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">✅ অনুমোদনকারী</span><p class="font-semibold text-gray-800">${withdrawal.approved_by}</p></div>` : ''}
+                ${withdrawal.approved_at ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📅 অনুমোদনের তারিখ</span><p class="font-semibold text-gray-800">${new Date(withdrawal.approved_at).toLocaleString('bn-BD')}</p></div>` : ''}
+            </div>
+        </div>
+        <div class="flex gap-2 justify-center flex-wrap no-print">
+            ${withdrawal.status === 'pending' ? `
+                <button onclick="approveWithdrawal('${withdrawal.id}', ${withdrawal.amount}, '${withdrawal.member_id}', '${cleanType}')" class="btn btn-success flex-1 py-2 min-w-[120px]">
+                    ✅ অনুমোদন দিন
+                </button>
+                <button onclick="rejectWithdrawal('${withdrawal.id}')" class="btn btn-danger flex-1 py-2 min-w-[120px]">
+                    ❌ বাতিল করুন
+                </button>
+            ` : ''}
+            <button onclick="closeWithdrawalDetailsModal()" class="btn btn-warning flex-1 py-2 min-w-[120px]">
+                <i class="fas fa-times mr-1"></i> বন্ধ করুন
+            </button>
+        </div>
+    `;
+    
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+// ============================================================
+// ===== viewLoanDetails - লোন বিস্তারিত দেখান =====
+// ============================================================
+
+function viewLoanDetails(loanId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    // allLoansData থেকে খুঁজুন
+    let loan = allLoansData.find(l => l.id == loanId);
+    
+    // যদি না পাওয়া যায়, সরাসরি DB থেকে খুঁজুন
+    if (!loan) {
+        client.from('loan_applications')
+            .select('*')
+            .eq('id', loanId)
+            .single()
+            .then(({ data, error }) => {
+                if (error || !data) {
+                    showToast('লোন তথ্য পাওয়া যায়নি!', 'error');
+                    return;
+                }
+                showLoanDetailModal(data);
+            })
+            .catch(e => {
+                console.error('View loan error:', e);
+                showToast('❌ লোন তথ্য লোড করতে সমস্যা!', 'error');
+            });
+        return;
+    }
+    
+    showLoanDetailModal(loan);
+}
+
+// ============================================================
+// ===== showLoanDetailModal - লোন মডাল দেখান =====
+// ============================================================
+
+function showLoanDetailModal(loan) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const modal = document.getElementById('pendingLoanDetailsModal');
+    if (!modal) {
+        showToast('মডাল পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    const content = document.getElementById('pendingLoanDetailsContent');
+    if (!content) {
+        showToast('কন্টেন্ট এলিমেন্ট পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    // পেমেন্টের ইতিহাস লোড করুন
+    client.from('loan_payments')
+        .select('*')
+        .eq('loan_id', loan.id)
+        .order('installment_no', { ascending: true })
+        .then(({ data: payments }) => {
+            const statusClass = loan.status === 'approved' ? 'status-approved' :
+                               loan.status === 'pending' ? 'status-pending' : 'status-rejected';
+            const statusText = loan.status === 'approved' ? '✅ অনুমোদিত' :
+                              loan.status === 'pending' ? '⏳ পেন্ডিং' : '❌ বাতিল';
+            
+            let paymentsHtml = '';
+            if (payments && payments.length > 0) {
+                paymentsHtml = `
+                    <div class="mt-4">
+                        <h5 class="font-bold text-gray-700 mb-2"><i class="fas fa-history mr-2"></i>📋 কিস্তির ইতিহাস</h5>
+                        <div class="table-scroll max-h-60">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>কিস্তি #</th>
+                                        <th class="text-left">পরিমাণ</th>
+                                        <th class="text-left">বিলম্ব ফি</th>
+                                        <th class="text-left">মোট</th>
+                                        <th>স্ট্যাটাস</th>
+                                        <th>তারিখ</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${payments.map(p => `
+                                        <tr>
+                                            <td class="text-center font-bold">${p.installment_no || '-'}</td>
+                                            <td class="text-left">${formatAmountWithText(p.emi_amount)}</td>
+                                            <td class="text-left">${formatAmountWithText(p.late_fee)}</td>
+                                            <td class="text-left font-bold text-emerald-600">${formatAmountWithText(p.total_amount)}</td>
+                                            <td><span class="status-badge ${p.status === 'approved' ? 'status-approved' : p.status === 'pending_verification' ? 'status-pending' : 'status-rejected'}">${p.status === 'approved' ? '✅ পরিশোধিত' : p.status === 'pending_verification' ? '⏳ যাচাইকরণে' : '❌ বাতিল'}</span></td>
+                                            <td class="text-xs">${p.payment_date ? new Date(p.payment_date).toLocaleDateString('bn-BD') : '-'}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            } else {
+                paymentsHtml = `<p class="text-sm text-gray-400 mt-2">📭 এখনও কোনো কিস্তি পরিশোধ করা হয়নি</p>`;
+            }
+            
+            const totalPaid = payments ? payments.filter(p => p.status === 'approved').reduce((sum, p) => sum + (p.total_amount || 0), 0) : 0;
+            const remainingBalance = (loan.amount || 0) - totalPaid;
+            
+            content.innerHTML = `
+                <div class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border mb-4">
+                    <h4 class="font-bold text-indigo-700 text-lg mb-3"><i class="fas fa-hand-holding-usd mr-2"></i>লোন বিস্তারিত</h4>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">লোন আইডি</span><p class="font-semibold text-gray-800">#${loan.id}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য</span><p class="font-semibold text-gray-800">${loan.member_name || '-'}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য আইডি</span><p class="font-semibold text-gray-800">${loan.member_id || '-'}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">লোনের ধরন</span><p class="font-semibold text-gray-800">${loan.loan_type || '-'}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">💰 পরিমাণ</span><p class="font-bold text-emerald-600 text-2xl">${formatAmountWithText(loan.amount)}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">মেয়াদ</span><p class="font-semibold text-gray-800">${loan.duration_months || loan.duration || '-'} মাস</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">⏳ স্ট্যাটাস</span><p><span class="status-badge ${statusClass}">${statusText}</span></p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📥 পরিশোধিত</span><p class="font-bold text-emerald-600">${formatAmountWithText(totalPaid)}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">⏳ বাকি ব্যালেন্স</span><p class="font-bold ${remainingBalance > 0 ? 'text-red-600' : 'text-emerald-600'}">${formatAmountWithText(remainingBalance)}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📅 আবেদনের তারিখ</span><p class="font-semibold text-gray-800">${loan.submitted_at ? new Date(loan.submitted_at).toLocaleString('bn-BD') : '-'}</p></div>
+                        ${loan.branch_name ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">🏢 ব্রাঞ্চ</span><p class="font-semibold text-gray-800">${loan.branch_name}</p></div>` : ''}
+                        ${loan.approved_by ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">✅ অনুমোদনকারী</span><p class="font-semibold text-gray-800">${loan.approved_by}</p></div>` : ''}
+                        ${loan.approved_at ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📅 অনুমোদনের তারিখ</span><p class="font-semibold text-gray-800">${new Date(loan.approved_at).toLocaleString('bn-BD')}</p></div>` : ''}
+                        ${loan.reject_reason ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">❌ বাতিলের কারণ</span><p class="font-semibold text-red-600">${loan.reject_reason}</p></div>` : ''}
+                        ${loan.special_note ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">📝 বিশেষ নোট</span><p class="font-semibold text-gray-800">${loan.special_note}</p></div>` : ''}
+                    </div>
+                    ${paymentsHtml}
+                </div>
+                <div class="flex gap-2 justify-center flex-wrap no-print">
+                    ${loan.status === 'pending' ? `
+                        <button onclick="approveLoan('${loan.id}')" class="btn btn-success flex-1 py-2 min-w-[120px]">
+                            ✅ অনুমোদন দিন
+                        </button>
+                        <button onclick="rejectLoan('${loan.id}')" class="btn btn-danger flex-1 py-2 min-w-[120px]">
+                            ❌ বাতিল করুন
+                        </button>
+                    ` : ''}
+                    ${loan.status === 'approved' && remainingBalance > 0 ? `
+                        <button onclick="openLoanRepaymentModal()" class="btn btn-warning flex-1 py-2 min-w-[120px]">
+                            💳 কিস্তি পরিশোধ
+                        </button>
+                    ` : ''}
+                    <button onclick="closePendingLoanDetailsModal()" class="btn btn-info flex-1 py-2 min-w-[120px]">
+                        <i class="fas fa-times mr-1"></i> বন্ধ করুন
+                    </button>
+                </div>
+            `;
+            
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        })
+        .catch(e => {
+            console.error('Load payments error:', e);
+            // পেমেন্ট না থাকলেও লোনের তথ্য দেখান
+            content.innerHTML = `
+                <div class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border mb-4">
+                    <h4 class="font-bold text-indigo-700 text-lg mb-3"><i class="fas fa-hand-holding-usd mr-2"></i>লোন বিস্তারিত</h4>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">লোন আইডি</span><p class="font-semibold text-gray-800">#${loan.id}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য</span><p class="font-semibold text-gray-800">${loan.member_name || '-'}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য আইডি</span><p class="font-semibold text-gray-800">${loan.member_id || '-'}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">পরিমাণ</span><p class="font-bold text-emerald-600">${formatAmountWithText(loan.amount)}</p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">স্ট্যাটাস</span><p><span class="status-badge ${loan.status === 'approved' ? 'status-approved' : loan.status === 'pending' ? 'status-pending' : 'status-rejected'}">${loan.status === 'approved' ? '✅ অনুমোদিত' : loan.status === 'pending' ? '⏳ পেন্ডিং' : '❌ বাতিল'}</span></p></div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">তারিখ</span><p class="font-semibold text-gray-800">${loan.submitted_at ? new Date(loan.submitted_at).toLocaleString('bn-BD') : '-'}</p></div>
+                    </div>
+                    <p class="text-sm text-gray-400 mt-2">📭 কোনো কিস্তি পরিশোধের ইতিহাস নেই</p>
+                </div>
+                <div class="flex gap-2 justify-center no-print">
+                    <button onclick="closePendingLoanDetailsModal()" class="btn btn-warning flex-1 py-2">
+                        <i class="fas fa-times mr-1"></i> বন্ধ করুন
+                    </button>
+                </div>
+            `;
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        });
+}
+
+// ============================================================
+// ===== closeWithdrawalDetailsModal - মডাল বন্ধ =====
+// ============================================================
+
+function closeWithdrawalDetailsModal() {
+    const modal = document.getElementById('withdrawalDetailsModal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+    
 // ============================================================
 // ===== LOAD ALL DATA (COMPLETE) =====
 // ============================================================
@@ -7876,7 +8201,7 @@ console.log('📝 Withdrawal note feature enabled!');
 console.log('📅 Event management system active!');
 
 // ============================================================
-// ===== সকল উত্তোলন লোড করুন (আপডেটেড) =====
+// ===== loadAllWithdrawals - সকল উত্তোলন লোড করুন =====
 // ============================================================
 
 async function loadAllWithdrawals() {
@@ -7926,6 +8251,9 @@ async function loadAllWithdrawals() {
         
         // সারাংশ আপডেট
         updateWithdrawalSummary(withdrawals);
+        
+        // পেন্ডিং ডেটা আপডেট (মডালের জন্য)
+        pendingWithdrawalsData = withdrawals.filter(w => w.status === 'pending');
         
         // টেবিল তৈরি
         let html = `
@@ -8021,10 +8349,19 @@ async function loadAllWithdrawals() {
 }
 
 // ============================================================
-// ===== উত্তোলন সারাংশ আপডেট =====
+// ===== updateWithdrawalSummary - উত্তোলন সারাংশ আপডেট =====
 // ============================================================
 
 function updateWithdrawalSummary(withdrawals) {
+    if (!withdrawals || withdrawals.length === 0) {
+        document.getElementById('totalWithdrawalAmount').innerHTML = '০ টাকা';
+        document.getElementById('totalPendingWithdrawals').innerHTML = '০ টি';
+        document.getElementById('totalApprovedWithdrawals').innerHTML = '০ টি';
+        document.getElementById('totalRejectedWithdrawals').innerHTML = '০ টি';
+        document.getElementById('avgWithdrawalAmount').innerHTML = '০ টাকা';
+        return;
+    }
+    
     const totalAmount = withdrawals.reduce((sum, w) => sum + (w.amount || 0), 0);
     const pendingCount = withdrawals.filter(w => w.status === 'pending').length;
     const approvedCount = withdrawals.filter(w => w.status === 'approved').length;
@@ -8039,12 +8376,15 @@ function updateWithdrawalSummary(withdrawals) {
 }
 
 // ============================================================
-// ===== সকল লোন প্রদান লোড করুন =====
+// ===== loadAllLoansGiven - সকল লোন প্রদান লোড করুন =====
 // ============================================================
 
 async function loadAllLoansGiven() {
     const container = document.getElementById('allLoansGivenContainer');
-    if (!container) return;
+    if (!container) {
+        console.log('❌ allLoansGivenContainer পাওয়া যায়নি');
+        return;
+    }
     
     container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>';
     
@@ -8058,17 +8398,30 @@ async function loadAllLoansGiven() {
     const toDate = document.getElementById('loanGivenToDate')?.value || '';
     
     try {
-        let query = client.from('loan_applications').select('*').order('submitted_at', { ascending: false });
+        console.log('⏳ লোন প্রদান ডেটা লোড হচ্ছে...');
+        
+        let query = client.from('loan_applications')
+            .select('*')
+            .order('submitted_at', { ascending: false });
         
         if (fromDate) query = query.gte('submitted_at', fromDate);
         if (toDate) query = query.lte('submitted_at', toDate + 'T23:59:59');
         
         const { data: loans, error } = await query;
         
-        if (error) throw error;
+        if (error) {
+            console.error('❌ Query error:', error);
+            throw error;
+        }
+        
+        console.log(`📋 মোট লোন পাওয়া গেছে: ${loans?.length || 0}`);
         
         if (!loans || loans.length === 0) {
-            container.innerHTML = '<div class="text-center text-gray-500 py-8"><i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i><p>কোনো লোন প্রদান নেই</p></div>';
+            container.innerHTML = `<div class="text-center text-gray-500 py-8">
+                <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                <p>কোনো লোন প্রদান নেই</p>
+                <p class="text-sm text-gray-400 mt-2">${fromDate || toDate ? 'ফিল্টার মেলে কোনো ডেটা নেই' : 'এখনও কোনো লোন প্রদান করা হয়নি'}</p>
+            </div>`;
             updateLoanGivenSummary([]);
             return;
         }
@@ -8076,22 +8429,26 @@ async function loadAllLoansGiven() {
         // সারাংশ আপডেট
         updateLoanGivenSummary(loans);
         
+        // সব লোন ডেটা আপডেট (মডালের জন্য)
+        allLoansData = loans;
+        
         // টেবিল তৈরি
         let html = `
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>তারিখ</th>
-                        <th>সদস্য</th>
-                        <th>আইডি</th>
-                        <th>লোনের ধরন</th>
-                        <th class="text-left">পরিমাণ</th>
-                        <th>ব্রাঞ্চ</th>
-                        <th>স্ট্যাটাস</th>
-                        <th>অ্যাকশন</th>
-                    </tr>
-                </thead>
-                <tbody>
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>তারিখ</th>
+                            <th>সদস্য</th>
+                            <th>আইডি</th>
+                            <th>লোনের ধরন</th>
+                            <th class="text-left">পরিমাণ</th>
+                            <th>মেয়াদ</th>
+                            <th>স্ট্যাটাস</th>
+                            <th>অ্যাকশন</th>
+                        </tr>
+                    </thead>
+                    <tbody>
         `;
         
         loans.forEach(l => {
@@ -8102,14 +8459,22 @@ async function loadAllLoansGiven() {
                               l.status === 'pending' ? '⏳ পেন্ডিং' :
                               '❌ বাতিল';
             
+            const dateStr = l.submitted_at ? new Date(l.submitted_at).toLocaleDateString('bn-BD', { 
+                year: 'numeric', 
+                month: 'short', 
+                day: 'numeric' 
+            }) : '-';
+            
+            const durationText = l.duration_months ? `${l.duration_months} মাস` : (l.duration || '-');
+            
             html += `
                 <tr>
-                    <td class="text-xs whitespace-nowrap">${l.submitted_at ? new Date(l.submitted_at).toLocaleDateString('bn-BD') : '-'}</td>
+                    <td class="text-xs whitespace-nowrap">${dateStr}</td>
                     <td><span class="font-medium">${l.member_name || '-'}</span></td>
                     <td class="text-xs">${l.member_id || '-'}</td>
-                    <td><span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">${l.loan_type || '-'}</span></td>
+                    <td><span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">${l.loan_type || 'সাধারণ'}</span></td>
                     <td class="text-left font-bold ${l.status === 'approved' ? 'text-blue-600' : 'text-gray-600'}">${formatAmountWithText(l.amount)}</td>
-                    <td class="text-xs">${l.branch_name || '-'}</td>
+                    <td class="text-xs">${durationText}</td>
                     <td><span class="status-badge ${statusClass}">${statusText}</span></td>
                     <td>
                         <button onclick="viewLoanDetails('${l.id}')" class="btn btn-info btn-xs" title="বিস্তারিত">
@@ -8123,29 +8488,49 @@ async function loadAllLoansGiven() {
                                 <i class="fas fa-times"></i>
                             </button>
                         ` : ''}
+                        ${l.status === 'approved' ? `
+                            <button onclick="viewLoanDetail('${l.id}')" class="btn btn-purple btn-xs" title="কিস্তির বিবরণ">
+                                <i class="fas fa-list"></i>
+                            </button>
+                        ` : ''}
                     </td>
                 </tr>
             `;
         });
         
         html += `
-                </tbody>
-            </table>
+                    </tbody>
+                </table>
+            </div>
         `;
         
         container.innerHTML = html;
+        console.log('✅ লোন প্রদান টেবিল রেন্ডার সম্পূর্ণ!');
         
     } catch(e) {
-        console.error('Load loans error:', e);
-        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ লোন লোড করতে সমস্যা!</div>';
+        console.error('❌ Load loans error:', e);
+        container.innerHTML = `<div class="text-red-500 p-4 text-center">
+            <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+            <p>❌ লোন লোড করতে সমস্যা!</p>
+            <p class="text-sm text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+            <button onclick="loadAllLoansGiven()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+        </div>`;
     }
 }
 
 // ============================================================
-// ===== লোন প্রদান সারাংশ আপডেট =====
+// ===== updateLoanGivenSummary - লোন সারাংশ আপডেট =====
 // ============================================================
 
 function updateLoanGivenSummary(loans) {
+    if (!loans || loans.length === 0) {
+        document.getElementById('totalLoanGivenAmount').innerHTML = '০ টাকা';
+        document.getElementById('totalPendingLoans').innerHTML = '০ টি';
+        document.getElementById('totalApprovedLoans').innerHTML = '০ টি';
+        document.getElementById('totalRejectedLoans').innerHTML = '০ টি';
+        return;
+    }
+    
     const totalAmount = loans.reduce((sum, l) => sum + (l.amount || 0), 0);
     const pendingCount = loans.filter(l => l.status === 'pending').length;
     const approvedCount = loans.filter(l => l.status === 'approved').length;
@@ -8158,7 +8543,7 @@ function updateLoanGivenSummary(loans) {
 }
 
 // ============================================================
-// ===== ফিল্টার রিসেট =====
+// ===== resetWithdrawalFilters - উত্তোলন ফিল্টার রিসেট =====
 // ============================================================
 
 function resetWithdrawalFilters() {
@@ -8167,6 +8552,10 @@ function resetWithdrawalFilters() {
     loadAllWithdrawals();
 }
 
+// ============================================================
+// ===== resetLoanGivenFilters - লোন ফিল্টার রিসেট =====
+// ============================================================
+
 function resetLoanGivenFilters() {
     document.getElementById('loanGivenFromDate').value = '';
     document.getElementById('loanGivenToDate').value = '';
@@ -8174,12 +8563,15 @@ function resetLoanGivenFilters() {
 }
 
 // ============================================================
-// ===== এক্সপোর্ট ফাংশন =====
+// ===== exportWithdrawalsExcel - উত্তোলন এক্সপোর্ট =====
 // ============================================================
 
 function exportWithdrawalsExcel() {
     const table = document.querySelector('#allWithdrawalsContainer table');
-    if (!table) { showToast('কোনো ডেটা নেই!', 'error'); return; }
+    if (!table) { 
+        showToast('কোনো ডেটা নেই!', 'error'); 
+        return; 
+    }
     
     let csv = "তারিখ,সদস্য,আইডি,উত্তোলনের ধরন,পরিমাণ,পেমেন্ট মাধ্যম,স্ট্যাটাস,নোট\n";
     const rows = table.querySelectorAll('tbody tr');
@@ -8198,11 +8590,18 @@ function exportWithdrawalsExcel() {
     showToast('✅ উত্তোলন এক্সপোর্ট সম্পূর্ণ!');
 }
 
+// ============================================================
+// ===== exportLoansGivenExcel - লোন প্রদান এক্সপোর্ট =====
+// ============================================================
+
 function exportLoansGivenExcel() {
     const table = document.querySelector('#allLoansGivenContainer table');
-    if (!table) { showToast('কোনো ডেটা নেই!', 'error'); return; }
+    if (!table) { 
+        showToast('কোনো ডেটা নেই!', 'error'); 
+        return; 
+    }
     
-    let csv = "তারিখ,সদস্য,আইডি,লোনের ধরন,পরিমাণ,ব্রাঞ্চ,স্ট্যাটাস\n";
+    let csv = "তারিখ,সদস্য,আইডি,লোনের ধরন,পরিমাণ,মেয়াদ,স্ট্যাটাস\n";
     const rows = table.querySelectorAll('tbody tr');
     rows.forEach(row => {
         const cells = row.querySelectorAll('td');
