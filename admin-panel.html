@@ -11101,8 +11101,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-    // ============================================================
-// LOAN EMI CALCULATOR - FRONTEND (মুনাফা ভিত্তিক)
+// ============================================================
+// LOAN EMI CALCULATOR - COMPLETE FIXED CLASS
 // ============================================================
 
 class LoanEMICalculator {
@@ -11126,11 +11126,20 @@ class LoanEMICalculator {
             });
         }
         
-        // Loan selection change
+        // Loan selection change - ✅ FIXED: loadLoanDetails ব্যবহার করুন
         const loanSelect = document.getElementById('emiLoanSelect');
         if (loanSelect) {
-            loanSelect.addEventListener('change', () => {
-                this.loadLoanDetails(loanSelect.value);
+            loanSelect.addEventListener('change', function() {
+                const loanId = this.value;
+                if (loanId) {
+                    // গ্লোবাল ফাংশন কল করুন
+                    if (typeof loanEMICalculator !== 'undefined' && loanEMICalculator) {
+                        loanEMICalculator.viewLoanDetails(loanId);
+                    } else {
+                        console.error('❌ loanEMICalculator not defined');
+                        showToast('লোন ক্যালকুলেটর লোড হচ্ছে না!', 'error');
+                    }
+                }
             });
         }
         
@@ -11139,14 +11148,6 @@ class LoanEMICalculator {
         if (searchBtn) {
             searchBtn.addEventListener('click', () => {
                 this.searchMemberLoans();
-            });
-        }
-        
-        // Print amortization
-        const printBtn = document.getElementById('printAmortizationBtn');
-        if (printBtn) {
-            printBtn.addEventListener('click', () => {
-                this.printAmortization();
             });
         }
     }
@@ -11171,15 +11172,25 @@ class LoanEMICalculator {
         }
         
         try {
-            const { data, error } = await this.client.rpc('calculate_emi', {
-                p_loan_amount: amount,
-                p_profit_rate: profitRate,
-                p_tenure_months: tenure
-            });
+            // RPC কল করার চেষ্টা
+            let result = null;
+            try {
+                const { data, error } = await this.client.rpc('calculate_emi', {
+                    p_loan_amount: amount,
+                    p_profit_rate: profitRate,
+                    p_tenure_months: tenure
+                });
+                if (!error && data) {
+                    result = data;
+                }
+            } catch(e) {
+                console.warn('RPC error, using fallback:', e);
+            }
             
-            if (error) throw error;
-            
-            const result = data || {};
+            // Fallback: সরাসরি ক্যালকুলেশন
+            if (!result) {
+                result = this.calculateEMIFallback(amount, profitRate, tenure);
+            }
             
             // Update results
             document.getElementById('emiResultMonthly').textContent = this.formatCurrency(result.monthly_emi || 0);
@@ -11192,11 +11203,35 @@ class LoanEMICalculator {
             
             // Show results container
             document.getElementById('emiResults').style.display = 'block';
+            document.getElementById('amortizationContainer').style.display = 'block';
             
         } catch(e) {
             console.error('EMI calculation error:', e);
             showToast('EMI ক্যালকুলেশন ব্যর্থ!', 'error');
         }
+    }
+    
+    // ===== Fallback EMI Calculation =====
+    calculateEMIFallback(amount, profitRate, tenure) {
+        const monthlyRate = (profitRate / 100) / 12;
+        let monthlyEmi = 0;
+        
+        if (monthlyRate > 0) {
+            monthlyEmi = (amount * monthlyRate * Math.pow(1 + monthlyRate, tenure)) / 
+                         (Math.pow(1 + monthlyRate, tenure) - 1);
+        } else {
+            monthlyEmi = amount / tenure;
+        }
+        
+        const totalPayment = monthlyEmi * tenure;
+        const totalProfit = totalPayment - amount;
+        
+        return {
+            monthly_emi: monthlyEmi,
+            total_profit: totalProfit,
+            total_payment: totalPayment,
+            monthly_profit_rate: monthlyRate * 100
+        };
     }
     
     // ===== Load Amortization Schedule =====
@@ -11205,17 +11240,28 @@ class LoanEMICalculator {
         if (!container) return;
         
         try {
-            const { data, error } = await this.client.rpc('get_loan_amortization', {
-                p_loan_amount: amount,
-                p_profit_rate: profitRate,
-                p_tenure_months: tenure
-            });
+            let schedule = null;
             
-            if (error) throw error;
+            // RPC কল করার চেষ্টা
+            try {
+                const { data, error } = await this.client.rpc('get_loan_amortization', {
+                    p_loan_amount: amount,
+                    p_profit_rate: profitRate,
+                    p_tenure_months: tenure
+                });
+                if (!error && data && data.length > 0) {
+                    schedule = data;
+                }
+            } catch(e) {
+                console.warn('Amortization RPC error, using fallback:', e);
+            }
             
-            const schedule = data || [];
+            // Fallback: সরাসরি ক্যালকুলেশন
+            if (!schedule) {
+                schedule = this.calculateAmortizationFallback(amount, profitRate, tenure);
+            }
             
-            if (schedule.length === 0) {
+            if (!schedule || schedule.length === 0) {
                 container.innerHTML = '<div class="text-center text-gray-500 py-4">কোনো ডেটা নেই</div>';
                 return;
             }
@@ -11238,7 +11284,7 @@ class LoanEMICalculator {
             schedule.forEach(s => {
                 html += `
                     <tr>
-                        <td class="text-center font-bold">${s.installment_no}</td>
+                        <td class="text-center font-bold">${s.installment_no || s.installment_no}</td>
                         <td class="text-left font-bold text-emerald-600">${this.formatCurrency(s.emi_amount)}</td>
                         <td class="text-left text-amber-600">${this.formatCurrency(s.profit_amount)}</td>
                         <td class="text-left text-blue-600">${this.formatCurrency(s.principal_amount)}</td>
@@ -11261,6 +11307,41 @@ class LoanEMICalculator {
         }
     }
     
+    // ===== Fallback Amortization =====
+    calculateAmortizationFallback(amount, profitRate, tenure) {
+        const monthlyRate = (profitRate / 100) / 12;
+        let monthlyEmi = 0;
+        
+        if (monthlyRate > 0) {
+            monthlyEmi = (amount * monthlyRate * Math.pow(1 + monthlyRate, tenure)) / 
+                         (Math.pow(1 + monthlyRate, tenure) - 1);
+        } else {
+            monthlyEmi = amount / tenure;
+        }
+        
+        let balance = amount;
+        const schedule = [];
+        
+        for (let i = 1; i <= tenure; i++) {
+            const profit = balance * monthlyRate;
+            const principal = monthlyEmi - profit;
+            const finalPrincipal = i === tenure ? balance : principal;
+            const finalProfit = i === tenure ? monthlyEmi - finalPrincipal : profit;
+            
+            balance = Math.max(0, balance - finalPrincipal);
+            
+            schedule.push({
+                installment_no: i,
+                emi_amount: monthlyEmi,
+                profit_amount: finalProfit,
+                principal_amount: finalPrincipal,
+                remaining_balance: balance
+            });
+        }
+        
+        return schedule;
+    }
+    
     // ===== Load Active Loans =====
     async loadActiveLoans() {
         const container = document.getElementById('activeLoansList');
@@ -11269,15 +11350,57 @@ class LoanEMICalculator {
         container.innerHTML = '<div class="text-center text-gray-500 py-4"><i class="fas fa-spinner fa-spin mr-2"></i>লোড হচ্ছে...</div>';
         
         try {
-            const { data, error } = await this.client.rpc('get_active_loans', {
-                p_member_id: null
-            });
+            let loans = [];
             
-            if (error) throw error;
+            // RPC কল করার চেষ্টা
+            try {
+                const { data, error } = await this.client.rpc('get_active_loans', {
+                    p_member_id: null
+                });
+                if (!error && data) {
+                    loans = data;
+                }
+            } catch(e) {
+                console.warn('Active loans RPC error, using fallback:', e);
+            }
             
-            const loans = data || [];
+            // Fallback: সরাসরি কোয়েরি
+            if (!loans || loans.length === 0) {
+                const { data, error } = await this.client
+                    .from('loan_applications')
+                    .select('*')
+                    .in('status', ['approved', 'pending'])
+                    .order('submitted_at', { ascending: false });
+                
+                if (error) throw error;
+                
+                // পেমেন্টের তথ্য যোগ করুন
+                loans = await Promise.all((data || []).map(async (loan) => {
+                    const { data: payments } = await this.client
+                        .from('loan_payments')
+                        .select('total_amount, emi_amount')
+                        .eq('loan_id', loan.id)
+                        .eq('status', 'approved');
+                    
+                    const paidAmount = payments ? payments.reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0) : 0;
+                    
+                    return {
+                        loan_id: loan.id,
+                        member_id: loan.member_id,
+                        member_name: loan.member_name,
+                        loan_type: loan.loan_type || 'সাধারণ',
+                        amount: loan.amount,
+                        paid_amount: paidAmount,
+                        due_amount: loan.amount - paidAmount,
+                        status: loan.status,
+                        paid_installments: payments ? payments.length : 0,
+                        total_installments: loan.duration_months || 12,
+                        next_payment_due: null
+                    };
+                }));
+            }
             
-            if (loans.length === 0) {
+            if (!loans || loans.length === 0) {
                 container.innerHTML = `
                     <div class="text-center text-gray-500 py-8">
                         <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
@@ -11300,9 +11423,7 @@ class LoanEMICalculator {
             }
             
             // Render loans list
-            let html = `
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            `;
+            let html = `<div class="grid grid-cols-1 md:grid-cols-2 gap-3">`;
             
             loans.forEach(loan => {
                 const dueAmount = loan.due_amount || 0;
@@ -11332,22 +11453,14 @@ class LoanEMICalculator {
                             </div>
                             <p class="text-xs text-gray-400 mt-1">${paidPercent}% পরিশোধিত</p>
                         </div>
-                        ${loan.next_payment_due ? `
-                            <div class="mt-2 text-xs text-gray-400">
-                                📅 পরবর্তী কিস্তি: ${new Date(loan.next_payment_due).toLocaleDateString('bn-BD')}
-                            </div>
-                        ` : ''}
-                        <button onclick="loanEMICalculator.viewLoanDetails(${loan.loan_id})" class="btn btn-info btn-sm w-full mt-2">
+                        <button onclick="if(window.loanEMICalculator) { window.loanEMICalculator.viewLoanDetails(${loan.loan_id}); }" class="btn btn-info btn-sm w-full mt-2">
                             <i class="fas fa-eye mr-1"></i> বিস্তারিত
                         </button>
                     </div>
                 `;
             });
             
-            html += `
-                </div>
-            `;
-            
+            html += `</div>`;
             container.innerHTML = html;
             
         } catch(e) {
@@ -11356,131 +11469,162 @@ class LoanEMICalculator {
         }
     }
     
-// ===== View Loan Details (with Fallback) =====
-async viewLoanDetails(loanId) {
-    try {
-        const { data, error } = await this.client.rpc('calculate_loan_emi', {
-            p_loan_id: loanId
-        });
-        
-        if (error) {
-            console.warn('RPC error, using fallback calculation:', error);
+    // ===== View Loan Details (with Fallback) =====
+    async viewLoanDetails(loanId) {
+        try {
+            let details = null;
+            
+            // RPC কল করার চেষ্টা
+            try {
+                const { data, error } = await this.client.rpc('calculate_loan_emi', {
+                    p_loan_id: loanId
+                });
+                if (!error && data) {
+                    details = data;
+                }
+            } catch(e) {
+                console.warn('RPC error, using fallback calculation:', e);
+            }
+            
             // Fallback: সরাসরি লোন ডেটা লোড করুন
-            await this.viewLoanDetailsFallback(loanId);
-            return;
+            if (!details) {
+                details = await this.viewLoanDetailsFallback(loanId);
+            }
+            
+            if (details) {
+                this.showLoanDetailsUI(details);
+            }
+            
+        } catch(e) {
+            console.error('Loan details error:', e);
+            showToast('লোন বিস্তারিত লোড করতে সমস্যা!', 'error');
         }
-        
-        const details = data || {};
-        this.showLoanDetailsUI(details);
-        
-    } catch(e) {
-        console.error('Loan details error:', e);
-        // Fallback
-        await this.viewLoanDetailsFallback(loanId);
     }
-}
-
-// ===== Fallback: সরাসরি লোন ডেটা লোড =====
-async viewLoanDetailsFallback(loanId) {
-    try {
-        const { data: loan, error } = await this.client
-            .from('loan_applications')
-            .select('*')
-            .eq('id', loanId)
-            .single();
-        
-        if (error || !loan) {
-            showToast('লোন তথ্য পাওয়া যায়নি!', 'error');
-            return;
-        }
-        
-        // পেমেন্টের ইতিহাস
-        const { data: payments } = await this.client
-            .from('loan_payments')
-            .select('*')
-            .eq('loan_id', loanId)
-            .eq('status', 'approved');
-        
-        const totalPaid = payments ? payments.reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0) : 0;
-        const remainingBalance = loan.amount - totalPaid;
-        
-        // EMI ক্যালকুলেশন (সরল)
-        const monthlyRate = (loan.profit_rate || 12) / 100 / 12;
-        const tenure = loan.duration_months || 12;
-        let monthlyEmi = 0;
-        if (monthlyRate > 0) {
-            monthlyEmi = (remainingBalance * monthlyRate * Math.pow(1 + monthlyRate, tenure)) / 
-                         (Math.pow(1 + monthlyRate, tenure) - 1);
-        } else {
-            monthlyEmi = remainingBalance / tenure;
-        }
-        const totalPayment = monthlyEmi * tenure;
-        const totalProfit = totalPayment - remainingBalance;
-        
-        const details = {
-            loan_id: loan.id,
-            loan_amount: loan.amount,
-            remaining_balance: remainingBalance,
-            monthly_emi: monthlyEmi,
-            profit_rate: loan.profit_rate || 12,
-            total_profit: totalProfit,
-            total_payment: totalPayment,
-            tenure_months: tenure
-        };
-        
-        this.showLoanDetailsUI(details);
-        
-    } catch(e) {
-        console.error('Fallback error:', e);
-        showToast('লোন বিস্তারিত লোড করতে সমস্যা!', 'error');
-    }
-}
-
-// ===== Show Loan Details UI =====
-showLoanDetailsUI(details) {
-    const container = document.getElementById('loanDetailsContainer');
-    if (!container) return;
     
-    container.innerHTML = `
-        <div class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border mb-4">
-            <h4 class="font-bold text-indigo-700 text-lg mb-3"><i class="fas fa-hand-holding-usd mr-2"></i>লোন বিস্তারিত</h4>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">লোন আইডি</span>
-                    <p class="font-semibold text-gray-800">#${details.loan_id}</p>
+    // ===== Fallback: সরাসরি লোন ডেটা লোড =====
+    async viewLoanDetailsFallback(loanId) {
+        try {
+            const { data: loan, error } = await this.client
+                .from('loan_applications')
+                .select('*')
+                .eq('id', loanId)
+                .single();
+            
+            if (error || !loan) {
+                showToast('লোন তথ্য পাওয়া যায়নি!', 'error');
+                return null;
+            }
+            
+            // পেমেন্টের ইতিহাস
+            const { data: payments } = await this.client
+                .from('loan_payments')
+                .select('*')
+                .eq('loan_id', loanId)
+                .eq('status', 'approved');
+            
+            const totalPaid = payments ? payments.reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0) : 0;
+            const remainingBalance = loan.amount - totalPaid;
+            
+            // EMI ক্যালকুলেশন (সরল)
+            const profitRate = loan.profit_rate || 12;
+            const tenure = loan.duration_months || 12;
+            const monthlyRate = profitRate / 100 / 12;
+            let monthlyEmi = 0;
+            
+            if (monthlyRate > 0 && remainingBalance > 0) {
+                monthlyEmi = (remainingBalance * monthlyRate * Math.pow(1 + monthlyRate, tenure)) / 
+                             (Math.pow(1 + monthlyRate, tenure) - 1);
+            } else if (remainingBalance > 0) {
+                monthlyEmi = remainingBalance / tenure;
+            }
+            
+            const totalPayment = monthlyEmi * tenure;
+            const totalProfit = totalPayment - remainingBalance;
+            
+            return {
+                loan_id: loan.id,
+                loan_amount: loan.amount,
+                remaining_balance: remainingBalance,
+                monthly_emi: monthlyEmi,
+                profit_rate: profitRate,
+                total_profit: totalProfit,
+                total_payment: totalPayment,
+                tenure_months: tenure
+            };
+            
+        } catch(e) {
+            console.error('Fallback error:', e);
+            showToast('লোন বিস্তারিত লোড করতে সমস্যা!', 'error');
+            return null;
+        }
+    }
+    
+    // ===== Show Loan Details UI =====
+    showLoanDetailsUI(details) {
+        const container = document.getElementById('loanDetailsContainer');
+        if (!container) return;
+        
+        if (!details) {
+            container.innerHTML = `
+                <div class="text-center text-red-500 py-4">
+                    <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                    <p>লোন তথ্য পাওয়া যায়নি!</p>
                 </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">মূল পরিমাণ</span>
-                    <p class="font-bold text-blue-600">${this.formatCurrency(details.loan_amount)}</p>
+            `;
+            return;
+        }
+        
+        container.innerHTML = `
+            <div class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border mb-4">
+                <h4 class="font-bold text-indigo-700 text-lg mb-3"><i class="fas fa-hand-holding-usd mr-2"></i>লোন বিস্তারিত</h4>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">লোন আইডি</span>
+                        <p class="font-semibold text-gray-800">#${details.loan_id}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">মূল পরিমাণ</span>
+                        <p class="font-bold text-blue-600">${this.formatCurrency(details.loan_amount)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">বাকি ব্যালেন্স</span>
+                        <p class="font-bold text-red-600">${this.formatCurrency(details.remaining_balance)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">মাসিক EMI</span>
+                        <p class="font-bold text-emerald-600">${this.formatCurrency(details.monthly_emi)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">মুনাফার হার</span>
+                        <p class="font-semibold text-gray-800">${details.profit_rate}%</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">মোট মুনাফা</span>
+                        <p class="font-bold text-amber-600">${this.formatCurrency(details.total_profit)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">মোট পরিশোধ</span>
+                        <p class="font-bold text-purple-600">${this.formatCurrency(details.total_payment)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">মেয়াদ</span>
+                        <p class="font-semibold text-gray-800">${details.tenure_months} মাস</p>
+                    </div>
                 </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">বাকি ব্যালেন্স</span>
-                    <p class="font-bold text-red-600">${this.formatCurrency(details.remaining_balance)}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">মাসিক EMI</span>
-                    <p class="font-bold text-emerald-600">${this.formatCurrency(details.monthly_emi)}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">মুনাফার হার</span>
-                    <p class="font-semibold text-gray-800">${details.profit_rate}%</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">মোট মুনাফা</span>
-                    <p class="font-bold text-amber-600">${this.formatCurrency(details.total_profit)}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">মোট পরিশোধ</span>
-                    <p class="font-bold text-purple-600">${this.formatCurrency(details.total_payment)}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">মেয়াদ</span>
-                    <p class="font-semibold text-gray-800">${details.tenure_months} মাস</p>
-                </div>
+                ${details.remaining_balance > 0 ? `
+                    <div class="mt-3 text-center">
+                        <button onclick="loanEMICalculator.loadAmortizationSchedule(${details.remaining_balance}, ${details.profit_rate}, ${details.tenure_months})" class="btn btn-info btn-sm">
+                            <i class="fas fa-table mr-1"></i> কিস্তি বিবরণী দেখুন
+                        </button>
+                    </div>
+                ` : `
+                    <div class="mt-3 text-center text-emerald-600 font-bold">
+                        ✅ এই লোন সম্পূর্ণ পরিশোধিত হয়েছে!
+                    </div>
+                `}
             </div>
-        </div>
-    `;
-}
+        `;
+    }
     
     // ===== Search Member Loans =====
     async searchMemberLoans() {
@@ -11491,90 +11635,124 @@ showLoanDetailsUI(details) {
         }
         
         try {
-            const { data, error } = await this.client.rpc('get_active_loans', {
-                p_member_id: searchTerm
-            });
+            let loans = [];
             
-            if (error) throw error;
-            
-            const loans = data || [];
-            
-            const container = document.getElementById('memberLoanResults');
-            if (container) {
-                if (loans.length === 0) {
-                    container.innerHTML = `
-                        <div class="text-center text-gray-500 py-4">
-                            <i class="fas fa-search text-4xl block mb-3 text-gray-300"></i>
-                            <p>এই সদস্যের কোনো লোন নেই</p>
-                        </div>
-                    `;
-                    return;
-                }
-                
-                // Get member summary
-                const { data: summary } = await this.client.rpc('get_member_loan_summary', {
+            // RPC কল করার চেষ্টা
+            try {
+                const { data, error } = await this.client.rpc('get_active_loans', {
                     p_member_id: searchTerm
                 });
-                
-                let html = `
-                    <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg border mb-4">
-                        <h4 class="font-bold text-emerald-700 mb-2">📊 লোন সারাংশ</h4>
-                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                            <div class="bg-white p-3 rounded-lg shadow-sm">
-                                <span class="text-gray-500">মোট লোন</span>
-                                <p class="font-bold text-blue-600">${this.formatCurrency(summary?.total_loan || 0)}</p>
-                            </div>
-                            <div class="bg-white p-3 rounded-lg shadow-sm">
-                                <span class="text-gray-500">পরিশোধিত</span>
-                                <p class="font-bold text-emerald-600">${this.formatCurrency(summary?.total_paid || 0)}</p>
-                            </div>
-                            <div class="bg-white p-3 rounded-lg shadow-sm">
-                                <span class="text-gray-500">বাকি</span>
-                                <p class="font-bold text-red-600">${this.formatCurrency(summary?.total_due || 0)}</p>
-                            </div>
-                            <div class="bg-white p-3 rounded-lg shadow-sm">
-                                <span class="text-gray-500">সক্রিয় লোন</span>
-                                <p class="font-bold text-purple-600">${summary?.active_loans || 0}</p>
-                            </div>
-                        </div>
-                        ${summary?.last_payment ? `
-                            <div class="mt-2 text-sm text-gray-500">
-                                📅 শেষ পেমেন্ট: ${new Date(summary.last_payment).toLocaleDateString('bn-BD')}
-                            </div>
-                        ` : ''}
-                    </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                `;
-                
-                loans.forEach(loan => {
-                    html += `
-                        <div class="border rounded-lg p-3 hover:shadow-md transition">
-                            <div class="flex justify-between items-start">
-                                <div>
-                                    <p class="font-bold text-gray-800">${loan.loan_type || 'সাধারণ'}</p>
-                                    <p class="text-xs text-gray-500">#${loan.loan_id}</p>
-                                </div>
-                                <span class="text-xs px-2 py-1 rounded-full ${loan.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">
-                                    ${loan.status === 'approved' ? '✅ সক্রিয়' : '⏳ বিচারাধীন'}
-                                </span>
-                            </div>
-                            <div class="mt-2 grid grid-cols-2 gap-1 text-sm">
-                                <div><span class="text-gray-500">পরিমাণ:</span> <span class="font-bold">${this.formatCurrency(loan.amount)}</span></div>
-                                <div><span class="text-gray-500">বাকি:</span> <span class="font-bold ${(loan.due_amount || 0) > 0 ? 'text-red-600' : 'text-emerald-600'}">${this.formatCurrency(loan.due_amount || 0)}</span></div>
-                            </div>
-                            <button onclick="loanEMICalculator.viewLoanDetails(${loan.loan_id})" class="btn btn-info btn-sm w-full mt-2">
-                                <i class="fas fa-eye mr-1"></i> বিস্তারিত
-                            </button>
-                        </div>
-                    `;
-                });
-                
-                html += `
-                    </div>
-                `;
-                
-                container.innerHTML = html;
+                if (!error && data) {
+                    loans = data;
+                }
+            } catch(e) {
+                console.warn('Search RPC error, using fallback:', e);
             }
+            
+            // Fallback: সরাসরি কোয়েরি
+            if (!loans || loans.length === 0) {
+                const { data, error } = await this.client
+                    .from('loan_applications')
+                    .select('*')
+                    .eq('member_id', searchTerm)
+                    .in('status', ['approved', 'pending']);
+                
+                if (error) throw error;
+                
+                loans = await Promise.all((data || []).map(async (loan) => {
+                    const { data: payments } = await this.client
+                        .from('loan_payments')
+                        .select('total_amount, emi_amount')
+                        .eq('loan_id', loan.id)
+                        .eq('status', 'approved');
+                    
+                    const paidAmount = payments ? payments.reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0) : 0;
+                    
+                    return {
+                        loan_id: loan.id,
+                        member_id: loan.member_id,
+                        member_name: loan.member_name,
+                        loan_type: loan.loan_type || 'সাধারণ',
+                        amount: loan.amount,
+                        paid_amount: paidAmount,
+                        due_amount: loan.amount - paidAmount,
+                        status: loan.status,
+                        paid_installments: payments ? payments.length : 0,
+                        total_installments: loan.duration_months || 12,
+                        next_payment_due: null
+                    };
+                }));
+            }
+            
+            const container = document.getElementById('memberLoanResults');
+            if (!container) return;
+            
+            if (!loans || loans.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-4">
+                        <i class="fas fa-search text-4xl block mb-3 text-gray-300"></i>
+                        <p>এই সদস্যের কোনো লোন নেই</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Member summary
+            const totalLoan = loans.reduce((sum, l) => sum + l.amount, 0);
+            const totalPaid = loans.reduce((sum, l) => sum + (l.paid_amount || 0), 0);
+            const totalDue = loans.reduce((sum, l) => sum + (l.due_amount || 0), 0);
+            
+            let html = `
+                <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg border mb-4">
+                    <h4 class="font-bold text-emerald-700 mb-2">📊 লোন সারাংশ</h4>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">মোট লোন</span>
+                            <p class="font-bold text-blue-600">${this.formatCurrency(totalLoan)}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">পরিশোধিত</span>
+                            <p class="font-bold text-emerald-600">${this.formatCurrency(totalPaid)}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">বাকি</span>
+                            <p class="font-bold text-red-600">${this.formatCurrency(totalDue)}</p>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg shadow-sm">
+                            <span class="text-gray-500">সক্রিয় লোন</span>
+                            <p class="font-bold text-purple-600">${loans.filter(l => l.status === 'approved').length}</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            `;
+            
+            loans.forEach(loan => {
+                const dueAmount = loan.due_amount || 0;
+                html += `
+                    <div class="border rounded-lg p-3 hover:shadow-md transition">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="font-bold text-gray-800">${loan.loan_type || 'সাধারণ'}</p>
+                                <p class="text-xs text-gray-500">#${loan.loan_id}</p>
+                            </div>
+                            <span class="text-xs px-2 py-1 rounded-full ${loan.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">
+                                ${loan.status === 'approved' ? '✅ সক্রিয়' : '⏳ বিচারাধীন'}
+                            </span>
+                        </div>
+                        <div class="mt-2 grid grid-cols-2 gap-1 text-sm">
+                            <div><span class="text-gray-500">পরিমাণ:</span> <span class="font-bold">${this.formatCurrency(loan.amount)}</span></div>
+                            <div><span class="text-gray-500">বাকি:</span> <span class="font-bold ${dueAmount > 0 ? 'text-red-600' : 'text-emerald-600'}">${this.formatCurrency(dueAmount)}</span></div>
+                        </div>
+                        <button onclick="loanEMICalculator.viewLoanDetails(${loan.loan_id})" class="btn btn-info btn-sm w-full mt-2">
+                            <i class="fas fa-eye mr-1"></i> বিস্তারিত
+                        </button>
+                    </div>
+                `;
+            });
+            
+            html += `</div>`;
+            container.innerHTML = html;
             
         } catch(e) {
             console.error('Search error:', e);
@@ -11634,6 +11812,20 @@ showLoanDetailsUI(details) {
         return amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' টাকা';
     }
 }
+
+// ============================================================
+// Initialize Loan EMI Calculator (SINGLE INSTANCE)
+// ============================================================
+
+if (typeof loanEMICalculator === 'undefined' || loanEMICalculator === null) {
+    var loanEMICalculator = new LoanEMICalculator();
+    console.log('✅ LoanEMICalculator initialized');
+} else {
+    console.log('ℹ️ LoanEMICalculator already exists');
+}
+
+// গ্লোবাল এক্সপোজ
+window.loanEMICalculator = loanEMICalculator;
 
 // ============================================================
 // Initialize Loan EMI Calculator
