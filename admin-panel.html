@@ -11343,31 +11343,511 @@ class LoanEMICalculator {
     }
     
 // ===== LOAD ACTIVE LOANS =====
+// ============================================================
+// ===== LOAD ACTIVE LOANS (COMPLETE - FINAL VERSION) =====
+// ============================================================
+
 async loadActiveLoans() {
+    const container = document.getElementById('activeLoansList');
+    if (!container) {
+        console.warn('⚠️ activeLoansList container not found');
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="text-center text-gray-500 py-4">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="mt-2">লোন লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    try {
+        let loans = [];
+        let rpcWorked = false;
+        
+        // ===== ১. RPC কল করার চেষ্টা =====
+        try {
+            console.log('🔄 RPC: get_active_loans() কল হচ্ছে...');
+            
+            const { data, error } = await this.client.rpc('get_active_loans');
+            
+            if (error) {
+                console.warn('⚠️ RPC Error:', error.message || error);
+                
+                // যদি ফাংশন না পাওয়া যায়, Fallback ব্যবহার করুন
+                if (error.code === 'PGRST202' || error.message?.includes('Could not find')) {
+                    console.log('🔄 RPC ফাংশন পাওয়া যায়নি, Fallback ব্যবহার করা হবে');
+                } else {
+                    console.error('❌ RPC Error:', error);
+                }
+            } else if (data && data.length > 0) {
+                loans = data;
+                rpcWorked = true;
+                console.log('✅ RPC থেকে লোন পাওয়া গেছে:', loans.length);
+            } else if (data && data.length === 0) {
+                console.log('ℹ️ RPC থেকে কোনো লোন পাওয়া যায়নি');
+                rpcWorked = true;
+            }
+            
+        } catch(rpcError) {
+            console.warn('⚠️ RPC Exception:', rpcError.message);
+        }
+        
+        // ===== ২. Fallback: সরাসরি কোয়েরি =====
+        if (!rpcWorked || loans.length === 0) {
+            console.log('🔄 Fallback: সরাসরি কোয়েরি থেকে লোন লোড হচ্ছে...');
+            
+            try {
+                const { data: loanData, error: loanError } = await this.client
+                    .from('loan_applications')
+                    .select(`
+                        id,
+                        member_id,
+                        member_name,
+                        loan_type,
+                        amount,
+                        profit_rate,
+                        duration_months,
+                        status,
+                        submitted_at,
+                        loan_payments!left(
+                            total_amount,
+                            emi_amount,
+                            status
+                        )
+                    `)
+                    .in('status', ['approved', 'pending'])
+                    .order('submitted_at', { ascending: false });
+                
+                if (loanError) {
+                    console.error('❌ Fallback query error:', loanError);
+                    throw loanError;
+                }
+                
+                if (!loanData || loanData.length === 0) {
+                    console.log('ℹ️ কোনো লোন নেই');
+                    loans = [];
+                } else {
+                    console.log(`📋 ${loanData.length} টি লোন পাওয়া গেছে, প্রসেসিং হচ্ছে...`);
+                    
+                    loans = loanData.map(loan => {
+                        const payments = loan.loan_payments || [];
+                        const approvedPayments = payments.filter(p => p.status === 'approved');
+                        
+                        const paidAmount = approvedPayments.reduce((sum, p) => {
+                            return sum + (p.total_amount || p.emi_amount || 0);
+                        }, 0);
+                        
+                        return {
+                            loan_id: loan.id,
+                            member_id: loan.member_id || '',
+                            member_name: loan.member_name || 'অজানা',
+                            loan_type: loan.loan_type || 'সাধারণ',
+                            amount: loan.amount || 0,
+                            paid_amount: paidAmount,
+                            due_amount: (loan.amount || 0) - paidAmount,
+                            status: loan.status || 'pending',
+                            paid_installments: approvedPayments.length,
+                            total_installments: loan.duration_months || 12,
+                            profit_rate: loan.profit_rate || 12,
+                            submitted_at: loan.submitted_at
+                        };
+                    });
+                    
+                    console.log('✅ Fallback থেকে লোন প্রসেস সম্পূর্ণ:', loans.length);
+                }
+                
+            } catch(fallbackError) {
+                console.error('❌ Fallback error:', fallbackError);
+                
+                // Fallback ২: আরও সরল কোয়েরি
+                console.log('🔄 Fallback ২: সরল কোয়েরি চেষ্টা...');
+                
+                try {
+                    const { data: simpleLoans, error: simpleError } = await this.client
+                        .from('loan_applications')
+                        .select('*')
+                        .in('status', ['approved', 'pending'])
+                        .order('submitted_at', { ascending: false });
+                    
+                    if (simpleError) throw simpleError;
+                    
+                    if (simpleLoans && simpleLoans.length > 0) {
+                        loans = simpleLoans.map(loan => ({
+                            loan_id: loan.id,
+                            member_id: loan.member_id || '',
+                            member_name: loan.member_name || 'অজানা',
+                            loan_type: loan.loan_type || 'সাধারণ',
+                            amount: loan.amount || 0,
+                            paid_amount: 0,
+                            due_amount: loan.amount || 0,
+                            status: loan.status || 'pending',
+                            paid_installments: 0,
+                            total_installments: loan.duration_months || 12,
+                            profit_rate: loan.profit_rate || 12,
+                            submitted_at: loan.submitted_at
+                        }));
+                        
+                        // প্রতিটি লোনের জন্য পেমেন্ট আলাদাভাবে লোড করুন
+                        for (let i = 0; i < loans.length; i++) {
+                            try {
+                                const { data: paymentData } = await this.client
+                                    .from('loan_payments')
+                                    .select('total_amount, emi_amount, status')
+                                    .eq('loan_id', loans[i].loan_id);
+                                
+                                if (paymentData) {
+                                    const approved = paymentData.filter(p => p.status === 'approved');
+                                    const paid = approved.reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0);
+                                    loans[i].paid_amount = paid;
+                                    loans[i].due_amount = loans[i].amount - paid;
+                                    loans[i].paid_installments = approved.length;
+                                }
+                            } catch(e) {
+                                console.warn(`⚠️ লোন #${loans[i].loan_id} এর পেমেন্ট লোড করতে সমস্যা`);
+                            }
+                        }
+                        
+                        console.log('✅ Fallback ২ থেকে লোন পাওয়া গেছে:', loans.length);
+                    }
+                    
+                } catch(simpleError) {
+                    console.error('❌ সব Fallback ব্যর্থ:', simpleError);
+                    
+                    container.innerHTML = `
+                        <div class="text-center text-red-500 py-8">
+                            <i class="fas fa-exclamation-circle text-4xl block mb-3"></i>
+                            <p class="font-bold">❌ লোন লোড করতে সমস্যা!</p>
+                            <p class="text-sm text-gray-500 mt-2">${simpleError.message || 'অজানা ত্রুটি'}</p>
+                            <button onclick="loanEMICalculator.loadActiveLoans()" class="btn btn-info btn-sm mt-4">
+                                <i class="fas fa-sync-alt mr-2"></i> পুনরায় চেষ্টা করুন
+                            </button>
+                        </div>
+                    `;
+                    return;
+                }
+            }
+        }
+        
+        // ===== ৩. লোন রেন্ডার করুন =====
+        this.renderActiveLoans(loans);
+        
+    } catch(e) {
+        console.error('❌ loadActiveLoans সম্পূর্ণ ব্যর্থ:', e);
+        
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-4xl block mb-3"></i>
+                <p class="font-bold">❌ লোন লোড করতে সমস্যা!</p>
+                <p class="text-sm text-gray-500 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="loanEMICalculator.loadActiveLoans()" class="btn btn-info btn-sm mt-4">
+                    <i class="fas fa-sync-alt mr-2"></i> পুনরায় চেষ্টা করুন
+                </button>
+            </div>
+        `;
+    }
+}
+
+// ============================================================
+// ===== RENDER ACTIVE LOANS (COMPLETE) =====
+// ============================================================
+
+renderActiveLoans(loans) {
     const container = document.getElementById('activeLoansList');
     if (!container) return;
     
-    container.innerHTML = '<div class="text-center text-gray-500 py-4"><i class="fas fa-spinner fa-spin mr-2"></i>লোড হচ্ছে...</div>';
+    // লোন সেলেক্ট ড্রপডাউন আপডেট
+    const select = document.getElementById('emiLoanSelect');
+    if (select) {
+        select.innerHTML = '<option value="">-- লোন নির্বাচন করুন --</option>';
+        if (loans && loans.length > 0) {
+            loans.forEach(loan => {
+                const option = document.createElement('option');
+                option.value = loan.loan_id;
+                const memberName = loan.member_name || 'অজানা';
+                const amount = this.formatCurrency(loan.amount);
+                option.textContent = `${memberName} - ${amount} (${loan.loan_type})`;
+                select.appendChild(option);
+            });
+        }
+    }
+    
+    // activeLoansCount আপডেট
+    const countEl = document.getElementById('activeLoansCount');
+    if (countEl) {
+        countEl.textContent = loans && loans.length > 0 ? `(${loans.length} টি লোন)` : '(০ টি লোন)';
+    }
+    
+    // কোনো লোন নেই
+    if (!loans || loans.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-gray-500 py-8">
+                <i class="fas fa-inbox text-5xl block mb-3 text-gray-300"></i>
+                <p class="text-lg">কোনো সক্রিয় লোন নেই</p>
+                <p class="text-sm text-gray-400 mt-1">নতুন লোন তৈরি করতে লোন ফর্ম ব্যবহার করুন</p>
+            </div>
+        `;
+        return;
+    }
+    
+    // লোনের তালিকা রেন্ডার
+    let html = `<div class="grid grid-cols-1 md:grid-cols-2 gap-4">`;
+    
+    // সাজান: বকেয়া বেশি যাদের তারা আগে
+    const sortedLoans = [...loans].sort((a, b) => b.due_amount - a.due_amount);
+    
+    sortedLoans.forEach((loan, index) => {
+        const dueAmount = loan.due_amount || 0;
+        const paidPercent = loan.amount > 0 ? ((loan.paid_amount || 0) / loan.amount * 100).toFixed(1) : 0;
+        const statusColor = loan.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700';
+        const statusText = loan.status === 'approved' ? '✅ সক্রিয়' : '⏳ বিচারাধীন';
+        const dueClass = dueAmount > 0 ? 'text-red-600' : 'text-emerald-600';
+        const isFullyPaid = dueAmount <= 0;
+        
+        html += `
+            <div class="border rounded-lg p-4 hover:shadow-md transition-all duration-200 bg-white ${isFullyPaid ? 'border-green-300' : 'border-gray-200'}">
+                <div class="flex justify-between items-start">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-2">
+                            <p class="font-bold text-gray-800 text-lg">${loan.member_name || '-'}</p>
+                            ${isFullyPaid ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">✅ সম্পূর্ণ পরিশোধিত</span>' : ''}
+                        </div>
+                        <p class="text-xs text-gray-500">🆔 ${loan.member_id || '-'}</p>
+                        <p class="text-sm text-gray-600 mt-1">📋 ${loan.loan_type || 'সাধারণ'}</p>
+                    </div>
+                    <span class="text-xs px-2 py-1 rounded-full ${statusColor}">${statusText}</span>
+                </div>
+                
+                <div class="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                        <span class="text-gray-500">পরিমাণ:</span>
+                        <span class="font-bold text-blue-600">${this.formatCurrency(loan.amount)}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500">পরিশোধিত:</span>
+                        <span class="font-bold text-emerald-600">${this.formatCurrency(loan.paid_amount || 0)}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500">বাকি:</span>
+                        <span class="font-bold ${dueClass}">${this.formatCurrency(dueAmount)}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500">কিস্তি:</span>
+                        <span class="font-bold">${loan.paid_installments || 0}/${loan.total_installments || 0}</span>
+                    </div>
+                </div>
+                
+                <div class="mt-2">
+                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        <div class="bg-emerald-500 h-2.5 rounded-full transition-all duration-500" style="width: ${Math.min(paidPercent, 100)}%"></div>
+                    </div>
+                    <div class="flex justify-between text-xs text-gray-400 mt-1">
+                        <span>${paidPercent}% পরিশোধিত</span>
+                        <span>${loan.profit_rate || 12}% মুনাফা</span>
+                    </div>
+                </div>
+                
+                <div class="mt-3 flex gap-2">
+                    <button onclick="loanEMICalculator.viewLoanDetails(${loan.loan_id})" class="btn btn-info btn-sm flex-1">
+                        <i class="fas fa-eye mr-1"></i> বিস্তারিত
+                    </button>
+                    ${loan.status === 'approved' && dueAmount > 0 ? `
+                        <button onclick="loanEMICalculator.showRepaymentModal(${loan.loan_id})" class="btn btn-success btn-sm flex-1">
+                            <i class="fas fa-hand-holding-usd mr-1"></i> কিস্তি দাও
+                        </button>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += `</div>`;
+    container.innerHTML = html;
+    
+    console.log(`✅ ${sortedLoans.length} টি সক্রিয় লোন রেন্ডার করা হয়েছে`);
+}
+
+// ============================================================
+// ===== SHOW REPAYMENT MODAL (কিস্তি পরিশোধ) =====
+// ============================================================
+
+showRepaymentModal(loanId) {
+    // খুঁজুন লোনটি
+    const container = document.getElementById('activeLoansList');
+    if (!container) return;
+    
+    // লোনের তথ্য নিন
+    this.client
+        .from('loan_applications')
+        .select('*, loan_payments(total_amount, emi_amount, status)')
+        .eq('id', loanId)
+        .single()
+        .then(({ data: loan, error }) => {
+            if (error || !loan) {
+                showToast('লোন তথ্য পাওয়া যায়নি!', 'error');
+                return;
+            }
+            
+            const payments = loan.loan_payments || [];
+            const paidAmount = payments
+                .filter(p => p.status === 'approved')
+                .reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0);
+            const dueAmount = loan.amount - paidAmount;
+            
+            // সিম্পল মডাল
+            const modalHtml = `
+                <div class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" id="repaymentModal">
+                    <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl">
+                        <div class="flex justify-between items-center border-b pb-3 mb-4">
+                            <h3 class="text-xl font-bold text-emerald-700">
+                                <i class="fas fa-hand-holding-usd mr-2"></i>কিস্তি পরিশোধ
+                            </h3>
+                            <button onclick="document.getElementById('repaymentModal').remove()" class="text-gray-400 hover:text-red-500 text-2xl">&times;</button>
+                        </div>
+                        
+                        <div class="space-y-3">
+                            <div class="bg-gray-50 p-3 rounded-lg">
+                                <p class="text-sm text-gray-500">সদস্য</p>
+                                <p class="font-bold">${loan.member_name}</p>
+                            </div>
+                            <div class="bg-gray-50 p-3 rounded-lg">
+                                <p class="text-sm text-gray-500">লোন পরিমাণ</p>
+                                <p class="font-bold text-blue-600">${this.formatCurrency(loan.amount)}</p>
+                            </div>
+                            <div class="bg-gray-50 p-3 rounded-lg">
+                                <p class="text-sm text-gray-500">বাকি ব্যালেন্স</p>
+                                <p class="font-bold text-red-600">${this.formatCurrency(dueAmount)}</p>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">পরিশোধের পরিমাণ (টাকা)</label>
+                                <input type="number" id="repaymentAmount" class="w-full border rounded-lg p-2" placeholder="${dueAmount}" value="${Math.min(dueAmount, Math.ceil(dueAmount / (loan.duration_months || 12)))}">
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">পেমেন্ট পদ্ধতি</label>
+                                <select id="repaymentMethod" class="w-full border rounded-lg p-2">
+                                    <option value="cash">💵 নগদ</option>
+                                    <option value="bKash">💚 bKash</option>
+                                    <option value="Nagad">🧡 Nagad</option>
+                                    <option value="Rocket">💜 Rocket</option>
+                                    <option value="bank">🏦 ব্যাংক</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div class="flex gap-3 mt-6">
+                            <button onclick="loanEMICalculator.submitRepayment(${loanId})" class="btn btn-success flex-1 py-2.5">
+                                <i class="fas fa-check mr-2"></i> জমা দিন
+                            </button>
+                            <button onclick="document.getElementById('repaymentModal').remove()" class="btn btn-danger flex-1 py-2.5">
+                                বাতিল
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+        })
+        .catch(e => {
+            console.error('Show repayment modal error:', e);
+            showToast('লোন তথ্য লোড করতে সমস্যা!', 'error');
+        });
+}
+
+// ============================================================
+// ===== SUBMIT REPAYMENT (কিস্তি জমা) =====
+// ============================================================
+
+async submitRepayment(loanId) {
+    const amountInput = document.getElementById('repaymentAmount');
+    const methodSelect = document.getElementById('repaymentMethod');
+    
+    if (!amountInput || !methodSelect) {
+        showToast('ফর্ম ডেটা পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    const amount = parseFloat(amountInput.value);
+    const method = methodSelect.value;
+    
+    if (!amount || amount <= 0) {
+        showToast('সঠিক পরিমাণ দিন!', 'error');
+        return;
+    }
+    
+    // কনফার্মেশন
+    if (!confirm(`${this.formatCurrency(amount)} টাকা কিস্তি হিসেবে জমা দেবেন?`)) return;
     
     try {
-        // ✅ প্যারামিটার ছাড়া কল করুন (ডিফল্ট NULL ব্যবহার করবে)
-        const { data, error } = await this.client.rpc('get_active_loans');
+        // লোনের তথ্য নিন
+        const { data: loan, error: loanError } = await this.client
+            .from('loan_applications')
+            .select('amount, member_id, member_name, duration_months')
+            .eq('id', loanId)
+            .single();
         
-        if (error) {
-            console.error('RPC Error:', error);
-            // Fallback
-            const loans = await this.loadActiveLoansFallback();
-            this.renderActiveLoans(loans);
-            return;
+        if (loanError) throw loanError;
+        
+        // কিস্তি নম্বর নির্ধারণ
+        const { data: existingPayments } = await this.client
+            .from('loan_payments')
+            .select('installment_no')
+            .eq('loan_id', loanId)
+            .order('installment_no', { ascending: false })
+            .limit(1);
+        
+        const nextInstallment = (existingPayments && existingPayments.length > 0) 
+            ? (existingPayments[0].installment_no || 0) + 1 
+            : 1;
+        
+        // পেমেন্ট জমা দিন
+        const { error: insertError } = await this.client
+            .from('loan_payments')
+            .insert([{
+                loan_id: loanId,
+                member_id: loan.member_id,
+                installment_no: nextInstallment,
+                emi_amount: amount,
+                total_amount: amount,
+                payment_method: method,
+                payment_date: new Date().toISOString(),
+                status: 'approved',
+                approved_by: currentAdmin?.username || 'সুপার অ্যাডমিন',
+                approved_at: new Date().toISOString()
+            }]);
+        
+        if (insertError) throw insertError;
+        
+        // মডাল বন্ধ করুন
+        const modal = document.getElementById('repaymentModal');
+        if (modal) modal.remove();
+        
+        showToast(`✅ ${this.formatCurrency(amount)} টাকা কিস্তি জমা হয়েছে!`, 'success');
+        
+        // ডেটা রিফ্রেশ
+        await this.loadActiveLoans();
+        
+        // লোন ডিটেইলস রিফ্রেশ
+        const loanDetailsContainer = document.getElementById('loanDetailsContainer');
+        if (loanDetailsContainer) {
+            loanDetailsContainer.innerHTML = '';
         }
         
-        this.renderActiveLoans(data || []);
-        
     } catch(e) {
-        console.error('Load error:', e);
-        const loans = await this.loadActiveLoansFallback();
-        this.renderActiveLoans(loans);
+        console.error('Submit repayment error:', e);
+        showToast(`❌ কিস্তি জমা দিতে সমস্যা: ${e.message || 'অজানা ত্রুটি'}`, 'error');
     }
+}
+
+// ============================================================
+// ===== FORMAT CURRENCY (Utility) =====
+// ============================================================
+
+formatCurrency(amount) {
+    if (typeof amount !== 'number' || isNaN(amount)) return '০ টাকা';
+    return amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' টাকা';
 }
 
 // ===== SEARCH MEMBER LOANS =====
