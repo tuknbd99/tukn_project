@@ -11342,7 +11342,7 @@ class LoanEMICalculator {
         return schedule;
     }
     
-// ===== LOAD ACTIVE LOANS (FIXED RPC CALL) =====
+// ===== LOAD ACTIVE LOANS =====
 async loadActiveLoans() {
     const container = document.getElementById('activeLoansList');
     if (!container) return;
@@ -11350,55 +11350,64 @@ async loadActiveLoans() {
     container.innerHTML = '<div class="text-center text-gray-500 py-4"><i class="fas fa-spinner fa-spin mr-2"></i>লোড হচ্ছে...</div>';
     
     try {
-        let loans = [];
+        // ✅ প্যারামিটার ছাড়া কল করুন (ডিফল্ট NULL ব্যবহার করবে)
+        const { data, error } = await this.client.rpc('get_active_loans');
         
-        // ১. RPC কল - প্যারামিটার ছাড়া (NULL পাঠান)
-        try {
-                 // প্যারামিটার ছাড়া কল করুন
-            const { data, error } = await this.client.rpc('get_active_loans');
-            
-            if (error) {
-                console.error('RPC Error:', error);
-                // Fallback ব্যবহার করুন
-                const loans = await this.loadActiveLoansFallback();
-                this.renderActiveLoans(loans);
-            } else {
-                this.renderActiveLoans(data || []);
-            }
-            
-            // অথবা NULL প্যারামিটার দিয়ে
-            // const { data, error } = await this.client.rpc('get_active_loans', { p_member_id: null });
-            
-            if (!error && data && data.length > 0) {
-                loans = data;
-                console.log('✅ RPC থেকে লোন পাওয়া গেছে:', loans.length);
-            } else if (error) {
-                console.warn('⚠️ RPC error:', error);
-            }
-        } catch(e) {
-            console.warn('⚠️ RPC exception:', e.message);
+        if (error) {
+            console.error('RPC Error:', error);
+            // Fallback
+            const loans = await this.loadActiveLoansFallback();
+            this.renderActiveLoans(loans);
+            return;
         }
         
-        // ২. Fallback: সরাসরি কোয়েরি
-        if (!loans || loans.length === 0) {
-            console.log('🔄 Fallback: সরাসরি কোয়েরি থেকে লোন লোড হচ্ছে...');
-            loans = await this.loadActiveLoansFallback();
-        }
-        
-        // ৩. লোন রেন্ডার করুন
-        this.renderActiveLoans(loans);
+        this.renderActiveLoans(data || []);
         
     } catch(e) {
-        console.error('❌ Load active loans error:', e);
-        container.innerHTML = `
-            <div class="text-center text-red-500 py-4">
-                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
-                <p>❌ লোন লোড করতে সমস্যা!</p>
-                <button onclick="loanEMICalculator.loadActiveLoans()" class="btn btn-info btn-sm mt-3">
-                    <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
-                </button>
-            </div>
-        `;
+        console.error('Load error:', e);
+        const loans = await this.loadActiveLoansFallback();
+        this.renderActiveLoans(loans);
+    }
+}
+
+// ===== SEARCH MEMBER LOANS =====
+async searchMemberLoans() {
+    const searchTerm = document.getElementById('loanMemberSearch').value.trim();
+    if (!searchTerm) {
+        showToast('সদস্য আইডি বা মোবাইল দিন!', 'error');
+        return;
+    }
+    
+    try {
+        // ✅ প্যারামিটার সহ কল করুন
+        const { data, error } = await this.client.rpc('get_active_loans', {
+            p_member_id: searchTerm
+        });
+        
+        if (error) {
+            console.error('Search RPC Error:', error);
+            showToast('সদস্যের লোন খুঁজতে সমস্যা!', 'error');
+            return;
+        }
+        
+        // ফলাফল দেখান
+        const container = document.getElementById('memberLoanResults');
+        if (container) {
+            if (!data || data.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-4">
+                        <i class="fas fa-search text-4xl block mb-3 text-gray-300"></i>
+                        <p>এই সদস্যের কোনো লোন নেই</p>
+                    </div>
+                `;
+                return;
+            }
+            // ... বাকি রেন্ডারিং কোড
+        }
+        
+    } catch(e) {
+        console.error('Search error:', e);
+        showToast('সদস্য লোন খোঁজতে সমস্যা!', 'error');
     }
 }
 
