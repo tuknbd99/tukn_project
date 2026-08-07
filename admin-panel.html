@@ -10114,25 +10114,62 @@ class ReportDashboard {
         }
     }
     
-    // ===== Load Monthly Collection =====
-    async loadMonthlyCollection() {
-        const year = document.getElementById('reportYear')?.value || new Date().getFullYear();
+  // ===== Load Monthly Collection (Direct Query - No RPC) =====
+async loadMonthlyCollection() {
+    const year = parseInt(document.getElementById('reportYear')?.value || new Date().getFullYear());
+    
+    try {
+        const client = initSupabaseClient();
+        if (!client) return;
         
-        try {
-            const { data, error } = await this.client.rpc('get_monthly_collection_report', {
-                p_year: parseInt(year),
-                p_month: null
+        // মাসের নামের তালিকা
+        const monthNames = ['জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 
+                           'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'];
+        
+        // সরাসরি কোয়েরি
+        const { data, error } = await client
+            .from('payments')
+            .select('amount, submitted_at')
+            .eq('status', 'approved')
+            .gte('submitted_at', `${year}-01-01`)
+            .lte('submitted_at', `${year}-12-31`);
+        
+        if (error) throw error;
+        
+        // মাস অনুযায়ী গ্রুপ করা
+        const monthlyData = Array(12).fill(0);
+        const monthlyCount = Array(12).fill(0);
+        
+        if (data && data.length > 0) {
+            data.forEach(payment => {
+                if (payment.submitted_at) {
+                    const month = new Date(payment.submitted_at).getMonth();
+                    monthlyData[month] += (payment.amount || 0);
+                    monthlyCount[month] += 1;
+                }
             });
-            
-            if (error) throw error;
-            
-            const chartData = data || [];
-            this.renderMonthlyChart(chartData);
-            
-        } catch(e) {
-            console.error('Monthly collection error:', e);
         }
+        
+        // চার্টের জন্য ডেটা ফরম্যাট
+        const chartData = monthlyData.map((amount, index) => ({
+            month_name: monthNames[index],
+            total_amount: amount,
+            payment_count: monthlyCount[index]
+        }));
+        
+        this.renderMonthlyChart(chartData);
+        
+    } catch(e) {
+        console.error('Monthly collection error:', e);
+        // চার্টে খালি ডেটা দেখান
+        this.renderMonthlyChart(Array(12).fill(0).map((_, i) => ({
+            month_name: ['জানু', 'ফেব্রু', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 
+                        'জুলাই', 'আগস্ট', 'সেপ্টে', 'অক্টো', 'নভে', 'ডিসে'][i],
+            total_amount: 0,
+            payment_count: 0
+        })));
     }
+}
     
     // ===== Load Payment Methods =====
     async loadPaymentMethods() {
