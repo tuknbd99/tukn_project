@@ -12,6 +12,57 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     
     <style>
+        /* Modal fix */
+.modal.fade {
+    display: none !important;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+}
+.modal.fade.show {
+    display: flex !important;
+}
+.modal-dialog {
+    background: white;
+    border-radius: 12px;
+    max-width: 600px;
+    width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 24px;
+}
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+}
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    border-top: 1px solid #e5e7eb;
+    padding-top: 16px;
+    margin-top: 16px;
+}
+.btn-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #6b7280;
+}
+.btn-close:hover {
+    color: #ef4444;
+}
         /* সকল উত্তোলন টেবিল ফিক্স */
         #allWithdrawalsTab {
             display: block !important;
@@ -886,7 +937,62 @@
     </style>
 </head>
 <body>
-
+<!-- Edit Admin Permissions Modal - FIXED -->
+<div class="modal fade" id="editAdminPermissionsModal" tabindex="-1" style="display:none;">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">প্রশাসকের পারমিশন</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" onclick="closeEditAdminModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="editAdminId">
+                <div class="mb-3">
+                    <label><strong>নাম:</strong> <span id="editAdminName"></span></label>
+                </div>
+                <div class="mb-3">
+                    <label><strong>ফোন:</strong> <span id="editAdminPhone"></span></label>
+                </div>
+                <div class="mb-3">
+                    <label><strong>শাখা:</strong> <span id="editAdminBranch"></span></label>
+                </div>
+                <hr>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="editPermCanAddMember">
+                    <label class="form-check-label">সদস্য যোগ করতে পারবে</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="editPermCanEditMember">
+                    <label class="form-check-label">সদস্য এডিট করতে পারবে</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="editPermCanDeleteMember">
+                    <label class="form-check-label">সদস্য ডিলিট করতে পারবে</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="editPermCanApproveWithdrawal">
+                    <label class="form-check-label">উত্তোলন অনুমোদন করতে পারবে</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="editPermCanApproveLoan">
+                    <label class="form-check-label">লোন অনুমোদন করতে পারবে</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="editPermCanViewReports">
+                    <label class="form-check-label">রিপোর্ট দেখতে পারবে</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="editPermCanManageBranch">
+                    <label class="form-check-label">শাখা পরিচালনা করতে পারবে</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeEditAdminModal()">বাতিল</button>
+                <button type="button" class="btn btn-primary" onclick="updateAdminPermissions()">সেভ করুন</button>
+            </div>
+        </div>
+    </div>
+</div>
     <!-- ===== SIDEBAR OVERLAY ===== -->
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 
@@ -2692,6 +2798,114 @@
     <!-- ===== JAVASCRIPT - COMPLETE ===== -->
     <!-- ============================================================ -->
     <script>
+        // ===== CLOSE EDIT ADMIN MODAL =====
+function closeEditAdminModal() {
+    const modal = document.getElementById('editAdminPermissionsModal');
+    if (modal) {
+        modal.classList.remove('show');
+        modal.style.display = 'none';
+    }
+}
+
+// ===== SHOW EDIT ADMIN MODAL =====
+function showEditAdminModal(adminId) {
+    const modal = document.getElementById('editAdminPermissionsModal');
+    if (!modal) {
+        showToast('মডাল পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    // প্রশাসকের তথ্য লোড করুন
+    loadAdminData(adminId);
+    
+    modal.style.display = 'flex';
+    setTimeout(() => {
+        modal.classList.add('show');
+    }, 10);
+}
+
+// ===== LOAD ADMIN DATA FOR EDIT =====
+async function loadAdminData(adminId) {
+    try {
+        const client = initSupabaseClient();
+        if (!client) return;
+        
+        const { data: admin, error } = await client
+            .from('branch_admins')
+            .select('*')
+            .eq('id', adminId)
+            .single();
+        
+        if (error) throw error;
+        
+        if (!admin) {
+            showToast('প্রশাসক পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        // ডেটা সেট করুন
+        document.getElementById('editAdminId').value = admin.id;
+        document.getElementById('editAdminName').textContent = admin.full_name || admin.name || '-';
+        document.getElementById('editAdminPhone').textContent = admin.phone || admin.mobile || '-';
+        document.getElementById('editAdminBranch').textContent = admin.branch_name || admin.branch || '-';
+        
+        // পারমিশন সেট করুন
+        const perms = admin.permissions || {};
+        document.getElementById('editPermCanAddMember').checked = perms.canAddMember || false;
+        document.getElementById('editPermCanEditMember').checked = perms.canEditMember || false;
+        document.getElementById('editPermCanDeleteMember').checked = perms.canDeleteMember || false;
+        document.getElementById('editPermCanApproveWithdrawal').checked = perms.canApproveWithdrawal || false;
+        document.getElementById('editPermCanApproveLoan').checked = perms.canApproveLoan || false;
+        document.getElementById('editPermCanViewReports').checked = perms.canViewReports || false;
+        document.getElementById('editPermCanManageBranch').checked = perms.canManageBranch || false;
+        
+    } catch(e) {
+        console.error('Load admin error:', e);
+        showToast('প্রশাসক তথ্য লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ===== UPDATE ADMIN PERMISSIONS =====
+async function updateAdminPermissions() {
+    const adminId = document.getElementById('editAdminId').value;
+    if (!adminId) {
+        showToast('প্রশাসক আইডি পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    const permissions = {
+        canAddMember: document.getElementById('editPermCanAddMember').checked,
+        canEditMember: document.getElementById('editPermCanEditMember').checked,
+        canDeleteMember: document.getElementById('editPermCanDeleteMember').checked,
+        canApproveWithdrawal: document.getElementById('editPermCanApproveWithdrawal').checked,
+        canApproveLoan: document.getElementById('editPermCanApproveLoan').checked,
+        canViewReports: document.getElementById('editPermCanViewReports').checked,
+        canManageBranch: document.getElementById('editPermCanManageBranch').checked
+    };
+    
+    try {
+        const client = initSupabaseClient();
+        if (!client) {
+            showToast('সংযোগ সমস্যা!', 'error');
+            return;
+        }
+        
+        const { error } = await client
+            .from('branch_admins')
+            .update({ permissions: permissions })
+            .eq('id', adminId);
+        
+        if (error) throw error;
+        
+        showToast('✅ পারমিশন আপডেট করা হয়েছে!', 'success');
+        closeEditAdminModal();
+        loadBranchAdmins(); // রিলোড
+        
+    } catch(e) {
+        console.error('Update permissions error:', e);
+        showToast('❌ পারমিশন আপডেট ব্যর্থ: ' + (e.message || 'অজানা ত্রুটি'), 'error');
+    }
+}
     // ট্রান্সফারের জন্য সদস্য খোঁজার ফাংশন
     function searchMemberForTransfer() {
         const searchInput = document.getElementById('transferSearch');
