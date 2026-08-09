@@ -12947,9 +12947,10 @@ if (typeof approveWithdrawalWithNote !== 'function') {
 }
 
 // ============================================================
-// ===== editBranchAdminPermissions (গ্যারান্টিড ওয়ার্কিং) =====
+// ===== EMERGENCY FIX: সব ফাংশন রিলোড =====
 // ============================================================
 
+// ===== ১. editBranchAdminPermissions (ফোর্সড) =====
 window.editBranchAdminPermissions = function(adminId) {
     console.log('🔧 editBranchAdminPermissions called for:', adminId);
     
@@ -12965,12 +12966,9 @@ window.editBranchAdminPermissions = function(adminId) {
         .single()
         .then(({ data, error }) => {
             if (error || !data) {
-                console.error('❌ Admin not found:', error);
                 showToast('অ্যাডমিন পাওয়া যায়নি!', 'error');
                 return;
             }
-            
-            console.log('✅ Admin data loaded:', data);
             
             const modal = document.getElementById('addBranchAdminModal');
             if (!modal) {
@@ -12978,7 +12976,6 @@ window.editBranchAdminPermissions = function(adminId) {
                 return;
             }
             
-            // ফর্মে ডেটা পপুলেট করুন
             document.getElementById('baFullName').value = data.full_name || '';
             document.getElementById('baUsername').value = data.username || '';
             document.getElementById('baPassword').value = data.password || '123456';
@@ -12987,7 +12984,6 @@ window.editBranchAdminPermissions = function(adminId) {
             document.getElementById('baBranch').value = data.branch_id || '';
             document.getElementById('baRole').value = data.role || 'branch_officer';
             
-            // Edit মোডে submit বাটন পরিবর্তন
             const form = document.getElementById('addBranchAdminForm');
             if (form) {
                 form.dataset.editId = adminId;
@@ -12997,7 +12993,6 @@ window.editBranchAdminPermissions = function(adminId) {
                 }
             }
             
-            // পারমিশন লোড করুন
             if (data.permissions) {
                 renderPermissionGrid(data.permissions);
             } else {
@@ -13011,6 +13006,152 @@ window.editBranchAdminPermissions = function(adminId) {
             showToast('❌ অ্যাডমিন তথ্য লোড করতে সমস্যা!', 'error');
         });
 };
+
+// ===== ২. deleteBranchAdmin =====
+window.deleteBranchAdmin = async function(adminId) {
+    if (!confirm('এই ব্রাঞ্চ অ্যাডমিনকে ডিলিট করবেন?')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { error } = await client
+            .from('branch_admins')
+            .delete()
+            .eq('id', adminId);
+        
+        if (error) throw error;
+        
+        showToast('✅ ব্রাঞ্চ অ্যাডমিন ডিলিট করা হয়েছে!', 'success');
+        loadBranchAdmins();
+        
+    } catch(e) {
+        console.error('Delete admin error:', e);
+        showToast('❌ ডিলিট ব্যর্থ!', 'error');
+    }
+};
+
+// ===== ৩. toggleBranchAdminStatus =====
+window.toggleBranchAdminStatus = async function(adminId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: admin } = await client
+            .from('branch_admins')
+            .select('status')
+            .eq('id', adminId)
+            .single();
+        
+        const newStatus = admin.status === 'active' ? 'inactive' : 'active';
+        
+        await client
+            .from('branch_admins')
+            .update({ status: newStatus })
+            .eq('id', adminId);
+        
+        showToast(`✅ অ্যাডমিন ${newStatus === 'active' ? 'সক্রিয়' : 'নিষ্ক্রিয়'} করা হয়েছে!`, 'success');
+        loadBranchAdmins();
+        
+    } catch(e) {
+        console.error('Toggle status error:', e);
+        showToast('❌ স্ট্যাটাস পরিবর্তন ব্যর্থ!', 'error');
+    }
+};
+
+// ===== ৪. ReportDashboard ফিক্স =====
+if (typeof reportDashboardInstance === 'undefined' || reportDashboardInstance === null) {
+    var reportDashboardInstance = new ReportDashboard();
+    console.log('✅ ReportDashboard initialized successfully');
+}
+window.reportDashboard = reportDashboardInstance;
+
+// ===== ৫. সব ফাংশন চেক =====
+console.log('✅ All functions reloaded:');
+console.log('  - editBranchAdminPermissions:', typeof window.editBranchAdminPermissions);
+console.log('  - deleteBranchAdmin:', typeof window.deleteBranchAdmin);
+console.log('  - toggleBranchAdminStatus:', typeof window.toggleBranchAdminStatus);
+console.log('  - reportDashboard:', typeof window.reportDashboard);
+
+// ===== ৬. showAddBranchAdminModal ওভাররাইড =====
+window.showAddBranchAdminModal = function() {
+    const modal = document.getElementById('addBranchAdminModal');
+    if (!modal) {
+        showToast('মডাল পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    modal.classList.add('active');
+    
+    const form = document.getElementById('addBranchAdminForm');
+    if (form) {
+        form.reset();
+        form.dataset.editId = '';
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.textContent = '✅ তৈরি করুন';
+    }
+    
+    const roleSelect = document.getElementById('baRole');
+    if (roleSelect) {
+        loadRolePermissions(roleSelect.value || 'branch_officer');
+    }
+    
+    setTimeout(() => {
+        loadBranchesForAdminSelect();
+    }, 300);
+};
+
+// ===== ৭. closeAddBranchAdminModal =====
+window.closeAddBranchAdminModal = function() {
+    const modal = document.getElementById('addBranchAdminModal');
+    if (modal) modal.classList.remove('active');
+};
+
+// ===== ৮. loadBranchesForAdminSelect (নিশ্চিত) =====
+window.loadBranchesForAdminSelect = async function() {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('branches')
+            .select('id, branch_name, branch_code')
+            .eq('status', 'active')
+            .order('branch_name');
+        
+        if (error) throw error;
+        
+        const select = document.getElementById('baBranch');
+        if (!select) return;
+        
+        select.innerHTML = '<option value="">-- ব্রাঞ্চ নির্বাচন করুন --</option>';
+        if (data && data.length > 0) {
+            data.forEach(branch => {
+                const option = document.createElement('option');
+                option.value = branch.id;
+                const displayText = branch.branch_name && branch.branch_code ? 
+                    `${branch.branch_name} (${branch.branch_code})` : 
+                    branch.branch_name || branch.branch_code || 'ব্রাঞ্চ';
+                option.textContent = displayText;
+                select.appendChild(option);
+            });
+        }
+    } catch(e) {
+        console.error('Load branches error:', e);
+        showToast('ব্রাঞ্চ লোড করতে সমস্যা!', 'error');
+    }
+};
+
+console.log('✅ All emergency fixes applied!');
 
 // ============================================================
 // ===== deleteBranchAdmin (গ্যারান্টিড) =====
