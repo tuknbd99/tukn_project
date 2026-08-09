@@ -6940,177 +6940,222 @@ async function approvePayment(paymentId) {
         } catch(e) { console.error('Error:', e); container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ লোড করতে সমস্যা!</div>'; }
     }
 
-    function showAddBranchAdminModal() {
-        const modal = document.getElementById('addBranchAdminModal');
-        if (!modal) {
-            showToast('মডাল পাওয়া যায়নি!', 'error');
-            return;
+function showAddBranchAdminModal() {
+    const modal = document.getElementById('addBranchAdminModal');
+    if (!modal) {
+        showToast('মডাল পাওয়া যায়নি!', 'error');
+        return;
+    }
+    // প্রথমে মডাল দেখান
+    modal.classList.add('active');
+    
+    const form = document.getElementById('addBranchAdminForm');
+    if (form) {
+        form.reset();
+        form.dataset.editId = '';
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.textContent = '✅ তৈরি করুন';
+    }
+    
+    // ব্রাঞ্চ লোড করার জন্য কিছুটা সময় দিন
+    setTimeout(() => {
+        loadBranchesForAdminSelect();
+    }, 300);
+}
+
+async function loadBranchesForAdminSelect() {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    try {
+        const { data, error } = await client
+            .from('branches')
+            .select('id, branch_name, branch_code')
+            .eq('status', 'active')
+            .order('branch_name');
+            
+        if (error) throw error;
+        
+        const select = document.getElementById('baBranch');
+        if (!select) return;
+        
+        // পুরনো অপশন ক্লিয়ার করুন
+        select.innerHTML = '<option value="">-- ব্রাঞ্চ নির্বাচন করুন --</option>';
+        
+        if (data && data.length > 0) {
+            data.forEach(branch => {
+                const option = document.createElement('option');
+                option.value = branch.id;
+                const displayText = branch.branch_name && branch.branch_code ? 
+                    `${branch.branch_name} (${branch.branch_code})` : 
+                    branch.branch_name || branch.branch_code || 'ব্রাঞ্চ';
+                option.textContent = displayText;
+                select.appendChild(option);
+            });
+            console.log('✅ ব্রাঞ্চ লোড সম্পূর্ণ:', data.length);
+        } else {
+            // কোনো ব্রাঞ্চ না থাকলে মেসেজ দেখান
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '⚠️ কোনো সক্রিয় ব্রাঞ্চ নেই';
+            option.disabled = true;
+            select.appendChild(option);
+            showToast('⚠️ কোনো সক্রিয় ব্রাঞ্চ নেই! প্রথমে ব্রাঞ্চ তৈরি করুন।', 'warning');
         }
-        modal.classList.add('active');
+    } catch(e) {
+        console.error('Load branches error:', e);
+        showToast('ব্রাঞ্চ লোড করতে সমস্যা!', 'error');
+    }
+}
+
+function closeAddBranchAdminModal() { 
+    const modal = document.getElementById('addBranchAdminModal');
+    if (modal) {
+        modal.classList.remove('active');
+        // ফর্ম রিসেট করুন
         const form = document.getElementById('addBranchAdminForm');
         if (form) {
             form.reset();
             form.dataset.editId = '';
             const submitBtn = form.querySelector('button[type="submit"]');
-            if (submitBtn) submitBtn.textContent = '✅ তৈরি করুন';
-        }
-        setTimeout(() => {
-            loadBranchesForAdminSelect();
-        }, 500);
-    }
-
-    async function loadBranchesForAdminSelect() {
-        const client = initSupabaseClient();
-        if (!client) {
-            showToast('সংযোগ সমস্যা!', 'error');
-            return;
-        }
-        try {
-            const { data, error } = await client
-                .from('branches')
-                .select('id, branch_name, branch_code')
-                .eq('status', 'active')
-                .order('branch_name');
-            if (error) throw error;
-            const select = document.getElementById('baBranch');
-            if (!select) return;
-            select.innerHTML = '<option value="">-- ব্রাঞ্চ নির্বাচন করুন --</option>';
-            if (data && data.length > 0) {
-                data.forEach(branch => {
-                    const option = document.createElement('option');
-                    option.value = branch.id;
-                    const displayText = branch.branch_name && branch.branch_code ? 
-                        `${branch.branch_name} (${branch.branch_code})` : 
-                        branch.branch_name || branch.branch_code || 'ব্রাঞ্চ';
-                    option.textContent = displayText;
-                    select.appendChild(option);
-                });
-            }
-        } catch(e) {
-            console.error('Load branches error:', e);
-            showToast('ব্রাঞ্চ লোড করতে সমস্যা!', 'error');
-        }
-    }
-
-    function closeAddBranchAdminModal() { 
-        const modal = document.getElementById('addBranchAdminModal');
-        if (modal) modal.classList.remove('active');
-    }
-
-    // ============================================================
-    // ===== ADD BRANCH FORM =====
-    // ============================================================
-    document.getElementById('addBranchForm')?.addEventListener('submit', async function(e) {
-        e.preventDefault();
-        
-        const branchName = document.getElementById('branchName')?.value?.trim();
-        const branchCode = document.getElementById('branchCode')?.value?.trim();
-        const district = document.getElementById('branchDistrict')?.value?.trim();
-        const managerName = document.getElementById('branchManager')?.value?.trim();
-        const phone = document.getElementById('branchPhone')?.value?.trim();
-        const email = document.getElementById('branchEmail')?.value?.trim();
-        const address = document.getElementById('branchAddress')?.value?.trim();
-        
-        if (!branchName) {
-            showToast('❌ ব্রাঞ্চ নাম দিন!', 'error');
-            document.getElementById('branchName')?.focus();
-            return;
-        }
-        if (!branchCode) {
-            showToast('❌ ব্রাঞ্চ কোড দিন!', 'error');
-            document.getElementById('branchCode')?.focus();
-            return;
-        }
-        
-        const branchData = {
-            branch_name: branchName,
-            branch_code: branchCode,
-            district: district || '',
-            manager_name: managerName || '',
-            phone: phone || '',
-            email: email || '',
-            address: address || '',
-            status: 'active',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-        };
-        
-        const client = initSupabaseClient();
-        if (!client) {
-            showToast('❌ সংযোগ সমস্যা!', 'error');
-            return;
-        }
-        
-        const submitBtn = this.querySelector('button[type="submit"]');
-        const originalText = submitBtn?.innerHTML || '✅ তৈরি করুন';
-        if (submitBtn) {
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> তৈরি হচ্ছে...';
-        }
-        
-        try {
-            const { data, error } = await client
-                .from('branches')
-                .insert([branchData])
-                .select();
-            
-            if (error) {
-                console.error('❌ Insert error:', error);
-                if (error.code === '23505') {
-                    showToast(`❌ "${branchCode}" এই কোডটি ইতিমধ্যে ব্যবহার করা হয়েছে!`, 'error');
-                } else {
-                    showToast(`❌ ব্রাঞ্চ তৈরি ব্যর্থ: ${error.message || 'অজানা ত্রুটি'}`, 'error');
-                }
-                return;
-            }
-            
-            if (data && data[0]) {
-                const newBranchId = data[0].id;
-                const { error: balanceError } = await client
-                    .from('branch_balances')
-                    .insert([{
-                        branch_id: newBranchId,
-                        total_savings: 0,
-                        total_loan_given: 0,
-                        total_loan_collected: 0,
-                        total_withdrawal: 0,
-                        total_profit: 0,
-                        total_welfare: 0,
-                        net_balance: 0,
-                        updated_at: new Date().toISOString()
-                    }]);
-                
-                if (balanceError) {
-                    console.warn('⚠️ ব্যালেন্স তৈরি ব্যর্থ:', balanceError);
-                }
-                
-                showToast(`✅ "${branchName}" ব্রাঞ্চ তৈরি হয়েছে!`, 'success');
-                closeAddBranchModal();
-                loadBranches();
-                
-                setTimeout(() => {
-                    loadBranchesForAdminSelect();
-                    populateBranchSelectors([]);
-                    const branchViewSelector = document.getElementById('branchViewSelector');
-                    if (branchViewSelector) {
-                        loadBranches();
-                    }
-                }, 500);
-                
-                this.reset();
-            } else {
-                showToast('❌ ব্রাঞ্চ তৈরি ব্যর্থ!', 'error');
-            }
-        } catch(e) {
-            console.error('❌ ব্রাঞ্চ তৈরি error:', e);
-            showToast(`❌ ব্রাঞ্চ তৈরি ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
-        } finally {
             if (submitBtn) {
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = originalText;
+                submitBtn.textContent = '✅ তৈরি করুন';
             }
         }
-    });
+    }
+}
+
+// ===== ADD BRANCH FORM =====
+document.getElementById('addBranchForm')?.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const branchName = document.getElementById('branchName')?.value?.trim();
+    const branchCode = document.getElementById('branchCode')?.value?.trim();
+    const district = document.getElementById('branchDistrict')?.value?.trim();
+    const managerName = document.getElementById('branchManager')?.value?.trim();
+    const phone = document.getElementById('branchPhone')?.value?.trim();
+    const email = document.getElementById('branchEmail')?.value?.trim();
+    const address = document.getElementById('branchAddress')?.value?.trim();
+    
+    if (!branchName) {
+        showToast('❌ ব্রাঞ্চ নাম দিন!', 'error');
+        document.getElementById('branchName')?.focus();
+        return;
+    }
+    if (!branchCode) {
+        showToast('❌ ব্রাঞ্চ কোড দিন!', 'error');
+        document.getElementById('branchCode')?.focus();
+        return;
+    }
+    
+    const branchData = {
+        branch_name: branchName,
+        branch_code: branchCode,
+        district: district || '',
+        manager_name: managerName || '',
+        phone: phone || '',
+        email: email || '',
+        address: address || '',
+        status: 'active',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+    };
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn?.innerHTML || '✅ তৈরি করুন';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> তৈরি হচ্ছে...';
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('branches')
+            .insert([branchData])
+            .select();
+        
+        if (error) {
+            console.error('❌ Insert error:', error);
+            if (error.code === '23505') {
+                showToast(`❌ "${branchCode}" এই কোডটি ইতিমধ্যে ব্যবহার করা হয়েছে!`, 'error');
+            } else {
+                showToast(`❌ ব্রাঞ্চ তৈরি ব্যর্থ: ${error.message || 'অজানা ত্রুটি'}`, 'error');
+            }
+            return;
+        }
+        
+        // ============================================================
+        // 🔥 ৬ নম্বর ফাংশন: ব্রাঞ্চ তৈরির পর ব্রাঞ্চ লোড ফাংশন কল
+        // ============================================================
+        if (data && data[0]) {
+            const newBranchId = data[0].id;
+            
+            // ব্যালেন্স তৈরি করুন
+            const { error: balanceError } = await client
+                .from('branch_balances')
+                .insert([{
+                    branch_id: newBranchId,
+                    total_savings: 0,
+                    total_loan_given: 0,
+                    total_loan_collected: 0,
+                    total_withdrawal: 0,
+                    total_profit: 0,
+                    total_welfare: 0,
+                    net_balance: 0,
+                    updated_at: new Date().toISOString()
+                }]);
+            
+            if (balanceError) {
+                console.warn('⚠️ ব্যালেন্স তৈরি ব্যর্থ:', balanceError);
+            }
+            
+            showToast(`✅ "${branchName}" ব্রাঞ্চ তৈরি হয়েছে!`, 'success');
+            closeAddBranchModal();
+            
+            // ১. ব্রাঞ্চ লিস্ট রিলোড
+            loadBranches();
+            
+            // ২. ব্রাঞ্চ এডমিন মডালের সিলেক্ট আপডেট
+            setTimeout(() => {
+                loadBranchesForAdminSelect();
+            }, 300);
+            
+            // ৩. ব্রাঞ্চ ভিউ ও রিপোর্ট সিলেক্ট আপডেট
+            setTimeout(() => {
+                populateBranchSelectors([]);
+            }, 400);
+            
+            // ৪. ব্রাঞ্চ ভিউ রিলোড
+            setTimeout(() => {
+                const branchViewSelector = document.getElementById('branchViewSelector');
+                if (branchViewSelector) {
+                    loadBranches();
+                }
+            }, 500);
+            // ============================================================
+            
+            this.reset();
+        } else {
+            showToast('❌ ব্রাঞ্চ তৈরি ব্যর্থ!', 'error');
+        }
+    } catch(e) {
+        console.error('❌ ব্রাঞ্চ তৈরি error:', e);
+        showToast(`❌ ব্রাঞ্চ তৈরি ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalText;
+        }
+    }
+});
 
     async function showAddBranchModal() {
         const modal = document.getElementById('addBranchModal');
@@ -7489,57 +7534,66 @@ async function approvePayment(paymentId) {
         if (modal) modal.classList.remove('active');
     }
 
-    // ============================================================
-    // ===== EDIT BRANCH ADMIN PERMISSIONS =====
-    // ============================================================
-    function editBranchAdminPermissions(adminId) {
-        console.log('🔧 editBranchAdminPermissions called for:', adminId);
-        const client = initSupabaseClient();
-        if (!client) {
-            showToast('সংযোগ সমস্যা!', 'error');
-            return;
-        }
-        client.from('branch_admins')
-            .select('*')
-            .eq('id', adminId)
-            .single()
-            .then(({ data, error }) => {
-                if (error || !data) {
-                    showToast('অ্যাডমিন পাওয়া যায়নি!', 'error');
-                    return;
-                }
-                const modal = document.getElementById('addBranchAdminModal');
-                if (!modal) {
-                    showToast('মডাল পাওয়া যায়নি!', 'error');
-                    return;
-                }
-                document.getElementById('baFullName').value = data.full_name || '';
-                document.getElementById('baUsername').value = data.username || '';
-                document.getElementById('baPassword').value = data.password || '123456';
-                document.getElementById('baEmail').value = data.email || '';
-                document.getElementById('baPhone').value = data.phone || '';
-                document.getElementById('baBranch').value = data.branch_id || '';
-                document.getElementById('baRole').value = data.role || 'branch_officer';
-                const form = document.getElementById('addBranchAdminForm');
-                if (form) {
-                    form.dataset.editId = adminId;
-                    const submitBtn = form.querySelector('button[type="submit"]');
-                    if (submitBtn) {
-                        submitBtn.textContent = '💾 আপডেট করুন';
-                    }
-                }
-                if (data.permissions) {
-                    renderPermissionGrid(data.permissions);
-                } else {
-                    loadRolePermissions(data.role || 'branch_officer');
-                }
-                modal.classList.add('active');
-            })
-            .catch(e => {
-                console.error('Edit admin error:', e);
-                showToast('❌ অ্যাডমিন তথ্য লোড করতে সমস্যা!', 'error');
-            });
+function editBranchAdminPermissions(adminId) {
+    console.log('🔧 editBranchAdminPermissions called for:', adminId);
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
     }
+    client.from('branch_admins')
+        .select('*')
+        .eq('id', adminId)
+        .single()
+        .then(({ data, error }) => {
+            if (error || !data) {
+                showToast('অ্যাডমিন পাওয়া যায়নি!', 'error');
+                return;
+            }
+            const modal = document.getElementById('addBranchAdminModal');
+            if (!modal) {
+                showToast('মডাল পাওয়া যায়নি!', 'error');
+                return;
+            }
+            
+            // ফর্ম ডেটা পপুলেট করুন
+            document.getElementById('baFullName').value = data.full_name || '';
+            document.getElementById('baUsername').value = data.username || '';
+            document.getElementById('baPassword').value = data.password || '123456';
+            document.getElementById('baEmail').value = data.email || '';
+            document.getElementById('baPhone').value = data.phone || '';
+            document.getElementById('baBranch').value = data.branch_id || '';
+            document.getElementById('baRole').value = data.role || 'branch_officer';
+            
+            const form = document.getElementById('addBranchAdminForm');
+            if (form) {
+                form.dataset.editId = adminId;
+                const submitBtn = form.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.textContent = '💾 আপডেট করুন';
+                }
+            }
+            
+            // পারমিশন লোড করুন
+            if (data.permissions) {
+                renderPermissionGrid(data.permissions);
+            } else {
+                loadRolePermissions(data.role || 'branch_officer');
+            }
+            
+            // মডাল দেখান
+            modal.classList.add('active');
+            
+            // ব্রাঞ্চ সিলেক্ট রিফ্রেশ করুন
+            setTimeout(() => {
+                loadBranchesForAdminSelect();
+            }, 300);
+        })
+        .catch(e => {
+            console.error('Edit admin error:', e);
+            showToast('❌ অ্যাডমিন তথ্য লোড করতে সমস্যা!', 'error');
+        });
+}
 
     // ============================================================
     // ===== DELETE BRANCH ADMIN =====
