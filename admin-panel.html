@@ -4414,45 +4414,62 @@
         } catch(e) { console.error('Badge update error:', e); }
     }
 
-    // ============================================================
-    // ===== PAYMENT FUNCTIONS =====
-    // ============================================================
-    async function loadPendingPayments() {
-        const loadingDiv = document.getElementById('paymentLoading');
-        const table = document.getElementById('paymentTable');
-        if (loadingDiv) loadingDiv.style.display = 'block';
-        if (table) table.style.display = 'none';
+async function loadPendingPayments() {
+    const loadingDiv = document.getElementById('paymentLoading');
+    const table = document.getElementById('paymentTable');
+    if (loadingDiv) loadingDiv.style.display = 'block';
+    if (table) table.style.display = 'none';
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        if (loadingDiv) loadingDiv.innerHTML = '<div class="text-red-500 py-8">❌ সংযোগ সমস্যা!</div>'; 
+        return; 
+    }
+    
+    try {
+        // ✅ প্রথমে সক্রিয় সদস্যদের আইডি বের করুন
+        const { data: activeMembers, error: memberError } = await client
+            .from('members')
+            .select('member_id')
+            .eq('status', 'active');
         
-        const client = initSupabaseClient();
-        if (!client) { 
-            if (loadingDiv) loadingDiv.innerHTML = '<div class="text-red-500 py-8">❌ সংযোগ সমস্যা!</div>'; 
-            return; 
-        }
+        if (memberError) throw memberError;
         
-        try {
-            const { data, error } = await client
-                .from('payments')
-                .select('*')
-                .eq('status', 'pending')
-                .order('submitted_at', { ascending: false });
-                
-            if (error) throw error;
-            
-            pendingPaymentsData = data || [];
-            console.log('✅ পেমেন্ট লোড সম্পূর্ণ:', pendingPaymentsData.length);
-            
+        if (!activeMembers || activeMembers.length === 0) {
+            pendingPaymentsData = [];
             if (loadingDiv) loadingDiv.style.display = 'none';
             if (table) table.style.display = 'block';
-            
             renderPendingPaymentsList();
-            loadRealDashboard();
-            await updateAllBadges();
-            
-        } catch(e) {
-            console.error('❌ Load error:', e);
-            if (loadingDiv) loadingDiv.innerHTML = '<div class="text-red-500 py-8">❌ পেমেন্ট লোড করতে সমস্যা!</div>';
+            return;
         }
+        
+        const activeMemberIds = activeMembers.map(m => m.member_id);
+        
+        // ✅ শুধু সক্রিয় সদস্যদের পেন্ডিং পেমেন্ট
+        const { data, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('status', 'pending')
+            .in('member_id', activeMemberIds)
+            .order('submitted_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        pendingPaymentsData = data || [];
+        console.log('✅ পেমেন্ট লোড সম্পূর্ণ:', pendingPaymentsData.length);
+        
+        if (loadingDiv) loadingDiv.style.display = 'none';
+        if (table) table.style.display = 'block';
+        
+        renderPendingPaymentsList();
+        loadRealDashboard();
+        await updateAllBadges();
+        
+    } catch(e) {
+        console.error('❌ Load error:', e);
+        if (loadingDiv) loadingDiv.innerHTML = '<div class="text-red-500 py-8">❌ পেমেন্ট লোড করতে সমস্যা!</div>';
     }
+}
 
     function renderPendingPaymentsList() {
         const tbody = document.getElementById('pendingPaymentsList');
@@ -4478,80 +4495,87 @@
         `).join('');
     }
 
-    async function approvePayment(paymentId) {
-        const id = parseInt(paymentId);
-        if (isNaN(id) || id <= 0) {
-            showToast('❌ ভুল পেমেন্ট আইডি!', 'error');
+async function approvePayment(paymentId) {
+    const id = parseInt(paymentId);
+    if (isNaN(id) || id <= 0) {
+        showToast('❌ ভুল পেমেন্ট আইডি!', 'error');
+        return;
+    }
+    
+    const payment = pendingPaymentsData.find(p => p.id === id);
+    if (!payment) { 
+        showToast('পেমেন্ট পাওয়া যায়নি!', 'error'); 
+        return; 
+    }
+    
+    if (!confirm(`${payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদন দেবেন?`)) return;
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        showToast('সংযোগ সমস্যা!', 'error'); 
+        return; 
+    }
+    
+    const btns = document.querySelectorAll(`[onclick*="approvePayment('${paymentId}')"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
+    try {
+        console.log('🔄 পেমেন্ট অনুমোদন শুরু:', id);
+        
+        // ✅ সদস্য সক্রিয় কিনা রি-চেক
+        const { data: member, error: memberStatusError } = await client
+            .from('members')
+            .select('balance, status')
+            .eq('member_id', payment.member_id)
+            .single();
+        
+        if (memberStatusError) throw memberStatusError;
+        
+        if (member.status !== 'active') {
+            showToast('⚠️ এই সদস্য সক্রিয় নয়! পেমেন্ট অনুমোদন সম্ভব নয়।', 'error');
             return;
         }
         
-        const payment = pendingPaymentsData.find(p => p.id === id);
-        if (!payment) { 
-            showToast('পেমেন্ট পাওয়া যায়নি!', 'error'); 
-            return; 
-        }
+        const currentBalance = member?.balance || 0;
+        const newBalance = currentBalance + payment.amount;
         
-        if (!confirm(`${payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদন দেবেন?`)) return;
+        // ✅ ব্যালেন্স আপডেট
+        await client
+            .from('members')
+            .update({ balance: newBalance })
+            .eq('member_id', payment.member_id);
         
-        const client = initSupabaseClient();
-        if (!client) { 
-            showToast('সংযোগ সমস্যা!', 'error'); 
-            return; 
-        }
-        
-        const btns = document.querySelectorAll(`[onclick*="approvePayment('${paymentId}')"]`);
-        btns.forEach(btn => {
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-        });
-        
-        try {
-            console.log('🔄 পেমেন্ট অনুমোদন শুরু:', id);
-            
-            const { data: member, error: memberError } = await client
-                .from('members')
-                .select('balance')
-                .eq('member_id', payment.member_id)
-                .maybeSingle();
-                
-            if (memberError) throw memberError;
-            
-            const currentBalance = member?.balance || 0;
-            const newBalance = currentBalance + payment.amount;
-            
-            await client
-                .from('members')
-                .update({ balance: newBalance })
-                .eq('member_id', payment.member_id);
-            
-            const updateData = {
+        // ✅ পেমেন্ট স্ট্যাটাস আপডেট
+        await client
+            .from('payments')
+            .update({
                 status: 'approved',
                 approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
                 approved_at: new Date().toISOString()
-            };
-            
-            await client
-                .from('payments')
-                .update(updateData)
-                .eq('id', id);
-            
-            pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
-            renderPendingPaymentsList();
-            loadRealDashboard();
-            await updateAllBadges();
-            
-            showToast(`✅ ${payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদিত হয়েছে!`, 'success');
-            
-        } catch(e) {
-            console.error('❌ Approval error:', e);
-            showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
-        } finally {
-            btns.forEach(btn => {
-                btn.disabled = false;
-                btn.innerHTML = '✅ অনুমোদন';
-            });
-        }
+            })
+            .eq('id', id);
+        
+        // ✅ পেন্ডিং লিস্ট থেকে রিমুভ
+        pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
+        renderPendingPaymentsList();
+        loadRealDashboard();
+        await updateAllBadges();
+        
+        showToast(`✅ ${payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদিত হয়েছে!`, 'success');
+        
+    } catch(e) {
+        console.error('❌ Approval error:', e);
+        showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '✅ অনুমোদন';
+        });
     }
+}
 
     async function rejectPayment(paymentId) {
         const id = parseInt(paymentId);
@@ -7844,62 +7868,62 @@
         } catch (error) { console.error('Chart update error:', error); }
     }
 
-    // ============================================================
-    // ===== DIRECT DEPOSIT =====
-    // ============================================================
-    function searchMemberForDeposit() {
-        const searchTerm = document.getElementById('memberSearchInput').value.trim();
-        if (!searchTerm) { showToast('আইডি বা মোবাইল নম্বর দিন!', 'error'); return; }
-        const member = membersData.find(m => m.member_id === searchTerm || m.mobile === searchTerm);
-        const resultsDiv = document.getElementById('memberSearchResults');
-        if (!member) { 
-            resultsDiv.innerHTML = '<div class="text-red-500 p-2 border rounded-lg">❌ সদস্য পাওয়া যায়নি!</div>'; 
-            resultsDiv.classList.remove('hidden'); 
-            return; 
-        }
-        resultsDiv.innerHTML = `<div class="p-3 border rounded-lg bg-green-50 cursor-pointer" onclick="selectMemberForDeposit('${member.member_id}')"><div class="font-bold">${member.full_name}</div><div class="text-sm">আইডি: ${member.member_id} | ব্যালেন্স: ${formatAmountWithText(member.balance)}</div></div>`;
-        resultsDiv.classList.remove('hidden');
+document.getElementById('directDepositForm')?.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const memberId = document.getElementById('depositMemberId').value;
+    const amount = parseFloat(document.getElementById('depositAmount').value);
+    const month = document.getElementById('depositMonth').value;
+    
+    if (!amount || amount <= 0) { 
+        showToast('সঠিক পরিমাণ দিন!', 'error'); 
+        return; 
     }
-
-    function selectMemberForDeposit(memberId) {
-        const member = membersData.find(m => m.member_id === memberId);
-        if (!member) return;
-        document.getElementById('depositMemberId').value = member.member_id;
-        document.getElementById('depositMemberName').value = member.full_name;
-        document.getElementById('depositCurrentBalance').value = formatAmountWithText(member.balance);
-        document.getElementById('depositFormSection').classList.remove('hidden');
-        document.getElementById('memberSearchResults').classList.add('hidden');
+    
+    const [year, monthNum] = month.split('-');
+    const monthName = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'][parseInt(monthNum)-1];
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        showToast('সংযোগ সমস্যা!', 'error'); 
+        return; 
     }
-
-    document.getElementById('directDepositForm')?.addEventListener('submit', async function(e) {
-        e.preventDefault();
-        const memberId = document.getElementById('depositMemberId').value;
-        const amount = parseFloat(document.getElementById('depositAmount').value);
-        const month = document.getElementById('depositMonth').value;
-        if (!amount || amount <= 0) { showToast('সঠিক পরিমাণ দিন!', 'error'); return; }
-        const [year, monthNum] = month.split('-');
-        const monthName = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'][parseInt(monthNum)-1];
-        const client = initSupabaseClient();
-        if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-        const { data: member } = await client.from('members').select('balance').eq('member_id', memberId).single();
-        const newBalance = (member?.balance || 0) + amount;
-        await client.from('members').update({ balance: newBalance }).eq('member_id', memberId);
-        await client.from('payments').insert([{ 
-            member_id: memberId, 
-            member_name: document.getElementById('depositMemberName').value, 
-            year, month: monthName, 
-            amount, 
-            payment_method: document.getElementById('depositMethod').value, 
-            status: 'approved', 
-            approved_by: currentAdmin?.username || 'system', 
-            approved_at: new Date().toISOString(), 
-            submitted_at: new Date().toISOString() 
-        }]);
-        showToast(`${formatAmount(amount)} টাকা জমা হয়েছে!`, 'success');
-        document.getElementById('depositFormSection').classList.add('hidden');
-        document.getElementById('directDepositForm').reset();
-        loadRealDashboard();
-    });
+    
+    // ✅ সদস্য সক্রিয় কিনা চেক করুন
+    const { data: member, error: memberError } = await client
+        .from('members')
+        .select('balance, status')
+        .eq('member_id', memberId)
+        .single();
+    
+    if (memberError || !member) {
+        showToast('সদস্য পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    if (member.status !== 'active') {
+        showToast('⚠️ শুধুমাত্র সক্রিয় সদস্যরা সঞ্চয় জমা দিতে পারেন!', 'error');
+        return;
+    }
+    
+    // ✅ pending হিসেবে পেমেন্ট তৈরি করুন
+    await client.from('payments').insert([{ 
+        member_id: memberId, 
+        member_name: document.getElementById('depositMemberName').value, 
+        year, 
+        month: monthName, 
+        amount, 
+        payment_method: document.getElementById('depositMethod').value, 
+        status: 'pending',  // ✅ pending (অ্যাডমিন অনুমোদনের জন্য)
+        submitted_at: new Date().toISOString() 
+    }]);
+    
+    showToast(`✅ ${formatAmount(amount)} টাকা জমার জন্য পেন্ডিং লিস্টে যোগ হয়েছে!`, 'success');
+    
+    document.getElementById('depositFormSection').classList.add('hidden');
+    document.getElementById('directDepositForm').reset();
+    loadPendingPayments();  // পেন্ডিং লিস্ট রিফ্রেশ করুন
+    loadRealDashboard();
+});
 
     // ============================================================
     // ===== SEARCH MEMBER FOR TRANSFER =====
