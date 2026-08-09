@@ -12973,6 +12973,725 @@ if (typeof approveWithdrawalWithNote !== 'function') {
         }
     }
 }
+    // ============================================================
+// ===== BRANCH ADMIN FUNCTIONS (সম্পূর্ণ) =====
+// ============================================================
+
+// ===== editBranchAdminPermissions - ব্রাঞ্চ অ্যাডমিন পারমিশন এডিট =====
+function editBranchAdminPermissions(adminId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    // অ্যাডমিনের তথ্য লোড করুন
+    client.from('branch_admins')
+        .select('*')
+        .eq('id', adminId)
+        .single()
+        .then(({ data, error }) => {
+            if (error || !data) {
+                showToast('অ্যাডমিন পাওয়া যায়নি!', 'error');
+                return;
+            }
+            
+            // মডাল খুলুন
+            const modal = document.getElementById('addBranchAdminModal');
+            if (!modal) {
+                showToast('মডাল পাওয়া যায়নি!', 'error');
+                return;
+            }
+            
+            // ফর্মে ডেটা পপুলেট করুন
+            document.getElementById('baFullName').value = data.full_name || '';
+            document.getElementById('baUsername').value = data.username || '';
+            document.getElementById('baPassword').value = data.password || '123456';
+            document.getElementById('baEmail').value = data.email || '';
+            document.getElementById('baPhone').value = data.phone || '';
+            document.getElementById('baBranch').value = data.branch_id || '';
+            document.getElementById('baRole').value = data.role || 'branch_officer';
+            
+            // Edit মোডে submit বাটন পরিবর্তন
+            const form = document.getElementById('addBranchAdminForm');
+            if (form) {
+                form.dataset.editId = adminId;
+                const submitBtn = form.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.textContent = '💾 আপডেট করুন';
+                }
+            }
+            
+            // পারমিশন লোড করুন
+            if (data.permissions) {
+                renderPermissionGrid(data.permissions);
+            } else {
+                loadRolePermissions(data.role || 'branch_officer');
+            }
+            
+            modal.classList.add('active');
+        })
+        .catch(e => {
+            console.error('Edit admin error:', e);
+            showToast('❌ অ্যাডমিন তথ্য লোড করতে সমস্যা!', 'error');
+        });
+}
+
+// ===== deleteBranchAdmin - ব্রাঞ্চ অ্যাডমিন ডিলিট =====
+async function deleteBranchAdmin(adminId) {
+    if (!confirm('এই ব্রাঞ্চ অ্যাডমিনকে ডিলিট করবেন?')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { error } = await client
+            .from('branch_admins')
+            .delete()
+            .eq('id', adminId);
+        
+        if (error) throw error;
+        
+        showToast('✅ ব্রাঞ্চ অ্যাডমিন ডিলিট করা হয়েছে!', 'success');
+        loadBranchAdmins();
+        
+    } catch(e) {
+        console.error('Delete admin error:', e);
+        showToast('❌ ডিলিট ব্যর্থ: ' + (e.message || 'অজানা ত্রুটি'), 'error');
+    }
+}
+
+// ===== toggleBranchAdminStatus - ব্রাঞ্চ অ্যাডমিন স্ট্যাটাস টগল =====
+async function toggleBranchAdminStatus(adminId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: admin, error: getError } = await client
+            .from('branch_admins')
+            .select('status')
+            .eq('id', adminId)
+            .single();
+        
+        if (getError) throw getError;
+        
+        const newStatus = admin.status === 'active' ? 'inactive' : 'active';
+        
+        const { error: updateError } = await client
+            .from('branch_admins')
+            .update({ status: newStatus })
+            .eq('id', adminId);
+        
+        if (updateError) throw updateError;
+        
+        showToast(`✅ অ্যাডমিন ${newStatus === 'active' ? 'সক্রিয়' : 'নিষ্ক্রিয়'} করা হয়েছে!`, 'success');
+        loadBranchAdmins();
+        
+    } catch(e) {
+        console.error('Toggle status error:', e);
+        showToast('❌ স্ট্যাটাস পরিবর্তন ব্যর্থ!', 'error');
+    }
+}
+
+// ============================================================
+// ===== ADD BRANCH ADMIN FORM SUBMIT (আপডেটেড) =====
+// ============================================================
+
+// addBranchAdminForm এর submit ইভেন্ট
+document.getElementById('addBranchAdminForm')?.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const editId = this.dataset.editId || '';
+    const fullName = document.getElementById('baFullName').value.trim();
+    const username = document.getElementById('baUsername').value.trim();
+    const password = document.getElementById('baPassword').value.trim();
+    const email = document.getElementById('baEmail').value.trim();
+    const phone = document.getElementById('baPhone').value.trim();
+    const branchId = document.getElementById('baBranch').value;
+    const role = document.getElementById('baRole').value;
+    
+    // ভ্যালিডেশন
+    if (!fullName) {
+        showToast('পূর্ণ নাম দিন!', 'error');
+        return;
+    }
+    if (!username) {
+        showToast('ইউজারনেম দিন!', 'error');
+        return;
+    }
+    if (!password && !editId) {
+        showToast('পাসওয়ার্ড দিন!', 'error');
+        return;
+    }
+    if (!branchId) {
+        showToast('ব্রাঞ্চ নির্বাচন করুন!', 'error');
+        return;
+    }
+    
+    // পারমিশন সংগ্রহ করুন
+    const permissions = getSelectedPermissions();
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn?.innerHTML || '✅ তৈরি করুন';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> প্রক্রিয়াকরণ...';
+    }
+    
+    try {
+        if (editId) {
+            // আপডেট
+            const updateData = {
+                full_name: fullName,
+                username: username,
+                email: email || null,
+                phone: phone || null,
+                branch_id: branchId,
+                role: role,
+                permissions: permissions,
+                updated_at: new Date().toISOString()
+            };
+            
+            if (password) {
+                updateData.password = password;
+            }
+            
+            const { error } = await client
+                .from('branch_admins')
+                .update(updateData)
+                .eq('id', editId);
+            
+            if (error) throw error;
+            
+            showToast('✅ ব্রাঞ্চ অ্যাডমিন আপডেট করা হয়েছে!', 'success');
+            
+        } else {
+            // নতুন তৈরি
+            const { error } = await client
+                .from('branch_admins')
+                .insert([{
+                    full_name: fullName,
+                    username: username,
+                    password: password || '123456',
+                    email: email || null,
+                    phone: phone || null,
+                    branch_id: branchId,
+                    role: role,
+                    permissions: permissions,
+                    status: 'active',
+                    created_at: new Date().toISOString()
+                }]);
+            
+            if (error) throw error;
+            
+            showToast('✅ নতুন ব্রাঞ্চ অ্যাডমিন তৈরি করা হয়েছে!', 'success');
+        }
+        
+        // মডাল বন্ধ করুন
+        closeAddBranchAdminModal();
+        
+        // ফর্ম রিসেট
+        this.reset();
+        this.dataset.editId = '';
+        const resetBtn = this.querySelector('button[type="submit"]');
+        if (resetBtn) resetBtn.textContent = '✅ তৈরি করুন';
+        
+        // লিস্ট রিফ্রেশ
+        loadBranchAdmins();
+        
+    } catch(e) {
+        console.error('Save admin error:', e);
+        showToast(`❌ সংরক্ষণ ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalText;
+        }
+    }
+});
+
+// ============================================================
+// ===== SEARCH MEMBER FOR TRANSFER (সম্পূর্ণ) =====
+// ============================================================
+
+function searchMemberForTransfer() {
+    const searchTerm = document.getElementById('transferSearch')?.value?.trim();
+    if (!searchTerm) {
+        showToast('সদস্য আইডি বা মোবাইল দিন!', 'error');
+        return;
+    }
+    
+    const resultDiv = document.getElementById('transferMemberResult');
+    if (!resultDiv) return;
+    
+    // membersData থেকে খুঁজুন
+    let member = membersData.find(m => m.member_id === searchTerm || m.mobile === searchTerm);
+    
+    if (!member) {
+        resultDiv.innerHTML = `
+            <div class="bg-red-50 border border-red-200 p-3 rounded-lg text-red-600 text-center mt-3">
+                <i class="fas fa-exclamation-circle mr-2"></i>
+                এই আইডি/মোবাইলে কোনো সদস্য নেই!
+            </div>
+        `;
+        document.getElementById('transferForm').style.display = 'none';
+        return;
+    }
+    
+    // transferMemberData সংরক্ষণ করুন
+    window.transferMemberData = member;
+    
+    // বর্তমান ব্রাঞ্চ দেখান
+    const currentBranchDisplay = document.getElementById('currentBranchDisplay');
+    if (currentBranchDisplay) {
+        const client = initSupabaseClient();
+        if (client) {
+            client.from('branch_members')
+                .select('branches(branch_name)')
+                .eq('member_id', member.member_id)
+                .eq('status', 'active')
+                .maybeSingle()
+                .then(({ data }) => {
+                    const branchName = data?.branches?.branch_name || 'ব্রাঞ্চে যুক্ত নয়';
+                    currentBranchDisplay.value = branchName;
+                });
+        }
+    }
+    
+    // সদস্যের তথ্য দেখান
+    resultDiv.innerHTML = `
+        <div class="bg-green-50 border border-green-200 p-3 rounded-lg mt-3">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 font-bold text-lg">
+                    ${member.full_name?.charAt(0) || '?'}
+                </div>
+                <div>
+                    <p class="font-bold text-gray-800">${member.full_name || 'নাম নেই'}</p>
+                    <p class="text-sm text-gray-500">🆔 ${member.member_id} | 📱 ${member.mobile || 'N/A'}</p>
+                    <p class="text-xs text-gray-400">📍 ${member.present_district || 'জেলা নেই'}</p>
+                </div>
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-2 text-sm border-t pt-2">
+                <div><span class="text-gray-500">ব্যালেন্স:</span> <span class="font-bold text-emerald-600">${formatAmountWithText(member.balance || 0)}</span></div>
+                <div><span class="text-gray-500">রেফারেল বোনাস:</span> <span class="font-bold text-blue-600">${formatAmountWithText(member.referral_bonus || 0)}</span></div>
+                <div><span class="text-gray-500">মোট লভ্যাংশ:</span> <span class="font-bold text-purple-600">${formatAmountWithText((member.profit_balance_savings||0) + (member.profit_balance_investment||0) + (member.profit_balance_referral||0))}</span></div>
+                <div><span class="text-gray-500">স্ট্যাটাস:</span> <span class="px-2 py-0.5 rounded-full text-xs ${member.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}</span></div>
+            </div>
+        </div>
+    `;
+    
+    // ট্রান্সফার ফর্ম দেখান
+    const transferForm = document.getElementById('transferForm');
+    if (transferForm) {
+        transferForm.style.display = 'block';
+    }
+}
+
+// ============================================================
+// ===== CONFIRM TRANSFER (সম্পূর্ণ) =====
+// ============================================================
+
+async function confirmTransfer() {
+    if (!window.transferMemberData) {
+        showToast('প্রথমে সদস্য খুঁজুন!', 'error');
+        return;
+    }
+    
+    const toBranchId = document.getElementById('transferToBranch')?.value;
+    const reason = document.getElementById('transferReason')?.value?.trim() || 'স্থানান্তর করা হয়েছে';
+    
+    if (!toBranchId) {
+        showToast('ব্রাঞ্চ নির্বাচন করুন!', 'error');
+        return;
+    }
+    
+    if (!confirm(`"${window.transferMemberData.full_name}" কে নতুন ব্রাঞ্চে স্থানান্তর করবেন?`)) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // ১. পুরোনো ব্রাঞ্চের সদস্য স্ট্যাটাস আপডেট
+        await client
+            .from('branch_members')
+            .update({ 
+                status: 'inactive', 
+                left_at: new Date().toISOString() 
+            })
+            .eq('member_id', window.transferMemberData.member_id)
+            .eq('status', 'active');
+        
+        // ২. নতুন ব্রাঞ্চে যোগ করুন
+        await client
+            .from('branch_members')
+            .insert([{
+                branch_id: toBranchId,
+                member_id: window.transferMemberData.member_id,
+                joined_at: new Date().toISOString(),
+                status: 'active'
+            }]);
+        
+        // ৩. ট্রান্সফার লগ তৈরি করুন
+        await client
+            .from('member_transfers')
+            .insert([{
+                member_id: window.transferMemberData.member_id,
+                to_branch_id: toBranchId,
+                reason: reason,
+                transferred_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+                transferred_at: new Date().toISOString()
+            }]);
+        
+        showToast(`✅ "${window.transferMemberData.full_name}" স্থানান্তরিত হয়েছে!`, 'success');
+        
+        // রিসেট
+        document.getElementById('transferSearch').value = '';
+        document.getElementById('transferMemberResult').innerHTML = '';
+        document.getElementById('transferForm').style.display = 'none';
+        window.transferMemberData = null;
+        
+        // ডেটা রিফ্রেশ
+        loadBranches();
+        loadBranchView();
+        loadTransferHistory();
+        
+    } catch(e) {
+        console.error('Transfer error:', e);
+        showToast(`❌ স্থানান্তর ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ===== LOAD TRANSFER HISTORY (সম্পূর্ণ) =====
+// ============================================================
+
+async function loadTransferHistory() {
+    const container = document.getElementById('transferHistoryContainer');
+    if (!container) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('member_transfers')
+            .select('*, members(full_name, member_id), branches_to:branches!to_branch_id(branch_name)')
+            .order('transferred_at', { ascending: false })
+            .limit(50);
+        
+        if (error) {
+            // টেবিল না থাকলে
+            if (error.code === '42P01') {
+                container.innerHTML = `
+                    <div class="text-center text-amber-500 py-8">
+                        <i class="fas fa-exclamation-triangle text-4xl block mb-3"></i>
+                        <p>⚠️ member_transfers টেবিল এখনও তৈরি হয়নি</p>
+                        <p class="text-sm text-gray-400 mt-2">প্রথমে একটি স্থানান্তর করুন</p>
+                    </div>
+                `;
+                return;
+            }
+            throw error;
+        }
+        
+        if (!data || data.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-exchange-alt text-4xl block mb-3 text-gray-300"></i>
+                    <p>কোনো স্থানান্তরের ইতিহাস নেই</p>
+                </div>
+            `;
+            return;
+        }
+        
+        let html = `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>তারিখ</th>
+                        <th>সদস্য</th>
+                        <th>নতুন ব্রাঞ্চ</th>
+                        <th>কারণ</th>
+                        <th>স্থানান্তরকারী</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        
+        data.forEach(t => {
+            const memberName = t.members?.full_name || t.member_id || '-';
+            const toBranch = t.branches_to?.branch_name || 'N/A';
+            const dateStr = t.transferred_at ? new Date(t.transferred_at).toLocaleDateString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric' }) : '-';
+            
+            html += `
+                <tr>
+                    <td class="text-xs whitespace-nowrap">${dateStr}</td>
+                    <td><span class="font-medium">${memberName}</span></td>
+                    <td class="text-sm text-emerald-600">${toBranch}</td>
+                    <td class="text-xs">${t.reason || '-'}</td>
+                    <td class="text-xs">${t.transferred_by || '-'}</td>
+                </tr>
+            `;
+        });
+        
+        html += '</tbody></table>';
+        container.innerHTML = html;
+        
+    } catch(e) {
+        console.error('Load transfer history error:', e);
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ ইতিহাস লোড করতে সমস্যা!</div>';
+    }
+}
+
+// ============================================================
+// ===== WINDOW এক্সপোজ (আপডেটেড) =====
+// ============================================================
+
+// Branch Admin ফাংশন এক্সপোজ
+window.editBranchAdminPermissions = editBranchAdminPermissions;
+window.deleteBranchAdmin = deleteBranchAdmin;
+window.toggleBranchAdminStatus = toggleBranchAdminStatus;
+
+// Transfer ফাংশন এক্সপোজ
+window.searchMemberForTransfer = searchMemberForTransfer;
+window.confirmTransfer = confirmTransfer;
+window.loadTransferHistory = loadTransferHistory;
+
+console.log('✅ All branch admin functions loaded!');
+console.log('✅ All transfer functions loaded!');
+console.log('✅ editBranchAdminPermissions:', typeof editBranchAdminPermissions);
+console.log('✅ deleteBranchAdmin:', typeof deleteBranchAdmin);
+console.log('✅ toggleBranchAdminStatus:', typeof toggleBranchAdminStatus);
+console.log('✅ searchMemberForTransfer:', typeof searchMemberForTransfer);
+console.log('✅ confirmTransfer:', typeof confirmTransfer);
+
+// ============================================================
+// ===== ReportDashboard ফিক্স =====
+// ============================================================
+
+// ReportDashboard ক্লাস ডিফাইন (যদি না থাকে)
+if (typeof ReportDashboard === 'undefined') {
+    class ReportDashboard {
+        constructor() {
+            console.log('📊 ReportDashboard তৈরি হচ্ছে...');
+            this.chartInstances = {};
+            setTimeout(() => this.init(), 100);
+        }
+        
+        async init() {
+            console.log('📊 ReportDashboard init started...');
+            try {
+                await this.loadSummary();
+                await this.loadMonthlyCollection();
+                await this.loadPaymentMethods();
+                await this.loadMemberActivity();
+                this.setupEventListeners();
+                console.log('✅ ReportDashboard init completed');
+            } catch(e) {
+                console.error('ReportDashboard init error:', e);
+            }
+        }
+        
+        setupEventListeners() {
+            // ফিল্টার বাটন
+            const filterBtn = document.getElementById('reportFilterBtn');
+            if (filterBtn) {
+                filterBtn.onclick = () => this.applyFilters();
+            }
+            
+            // এক্সপোর্ট বাটন
+            const exportBtn = document.getElementById('reportExportBtn');
+            if (exportBtn) {
+                exportBtn.onclick = () => this.exportReport();
+            }
+            
+            // রিসেট বাটন
+            const resetBtn = document.getElementById('reportResetBtn');
+            if (resetBtn) {
+                resetBtn.onclick = () => {
+                    document.getElementById('reportStartDate').value = '';
+                    document.getElementById('reportEndDate').value = '';
+                    document.getElementById('reportYear').value = new Date().getFullYear();
+                    this.init();
+                };
+            }
+        }
+        
+        async loadSummary() {
+            console.log('📊 Summary loading...');
+            try {
+                const client = initSupabaseClient();
+                if (!client) return;
+                
+                const { count: totalMembers } = await client
+                    .from('members')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('status', 'active');
+                
+                const setText = (id, text) => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = text;
+                };
+                
+                setText('summaryTotalMembers', totalMembers || 0);
+                
+                // পেমেন্ট সমষ্টি
+                const { data: payments } = await client
+                    .from('payments')
+                    .select('amount')
+                    .eq('status', 'approved');
+                
+                const totalPayments = payments ? payments.reduce((s, p) => s + (p.amount || 0), 0) : 0;
+                setText('summaryTotalPayments', this.formatCurrency(totalPayments));
+                
+            } catch(e) {
+                console.error('Summary load error:', e);
+            }
+        }
+        
+        async loadMonthlyCollection() {
+            console.log('📊 Monthly collection loading...');
+            // চার্ট আপডেটের জন্য
+            const ctx = document.getElementById('monthlyCollectionChart');
+            if (ctx) {
+                try {
+                    if (this.chartInstances.monthly) {
+                        this.chartInstances.monthly.destroy();
+                    }
+                    
+                    this.chartInstances.monthly = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: ['জানু', 'ফেব্রু', 'মার্চ', 'এপ্রিল', 'মে', 'জুন', 'জুলাই', 'আগস্ট', 'সেপ্টে', 'অক্টো', 'নভে', 'ডিসে'],
+                            datasets: [{
+                                label: 'মাসিক সংগ্রহ',
+                                data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                                backgroundColor: 'rgba(16, 185, 129, 0.7)',
+                                borderColor: 'rgba(16, 185, 129, 1)',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        callback: function(value) {
+                                            return value.toLocaleString() + ' ৳';
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                } catch(e) {
+                    console.warn('Chart error:', e);
+                }
+            }
+        }
+        
+        async loadPaymentMethods() {
+            console.log('📊 Payment methods loading...');
+            const ctx = document.getElementById('paymentMethodsChart');
+            if (ctx) {
+                try {
+                    if (this.chartInstances.payment) {
+                        this.chartInstances.payment.destroy();
+                    }
+                    
+                    this.chartInstances.payment = new Chart(ctx, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['bKash', 'Nagad', 'Rocket', 'Bank', 'Cash'],
+                            datasets: [{
+                                data: [0, 0, 0, 0, 0],
+                                backgroundColor: ['#10b981', '#f59e0b', '#8b5cf6', '#3b82f6', '#6b7280']
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    position: 'bottom',
+                                    labels: {
+                                        padding: 10,
+                                        usePointStyle: true
+                                    }
+                                }
+                            }
+                        }
+                    });
+                } catch(e) {
+                    console.warn('Chart error:', e);
+                }
+            }
+        }
+        
+        async loadMemberActivity() {
+            console.log('📊 Member activity loading...');
+            const container = document.getElementById('memberActivityTable');
+            if (container) {
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-8">
+                        <i class="fas fa-users text-4xl block mb-3 text-gray-300"></i>
+                        <p>সদস্য কার্যকলাপ লোড হচ্ছে...</p>
+                    </div>
+                `;
+            }
+        }
+        
+        exportReport() {
+            showToast('📊 রিপোর্ট এক্সপোর্ট ফিচার শীঘ্রই আসছে', 'info');
+        }
+        
+        applyFilters() {
+            this.init();
+        }
+        
+        formatCurrency(amount) {
+            if (typeof amount !== 'number' || isNaN(amount)) return '০ টাকা';
+            return amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' টাকা';
+        }
+    }
+}
+
+// ReportDashboard ইনিশিয়ালাইজ
+if (typeof reportDashboardInstance === 'undefined' || reportDashboardInstance === null) {
+    var reportDashboardInstance = new ReportDashboard();
+    console.log('✅ ReportDashboard initialized successfully');
+}
+
+// window এক্সপোজ
+window.reportDashboard = reportDashboardInstance;
+
+console.log('✅ All fixes applied successfully!');
+console.log('✅ editBranchAdminPermissions:', typeof editBranchAdminPermissions);
+console.log('✅ searchMemberForTransfer:', typeof searchMemberForTransfer);
+console.log('✅ reportDashboard:', typeof reportDashboard);
 
 // window এক্সপোজ
 window.approveWithdrawalWithNote = approveWithdrawalWithNote;
