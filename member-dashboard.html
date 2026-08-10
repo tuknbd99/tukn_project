@@ -8221,20 +8221,17 @@ async function fixAllWithdrawals() {
     }
 }
 
-// 3. নির্দিষ্ট সদস্যের উত্তোলন দেখার ফাংশন
 async function showMemberWithdrawals(memberId) {
-    console.log(`📊 সদস্য ${memberId} এর উত্তোলন দেখানো হচ্ছে...`);
-    
     if (!memberId) {
         console.error('❌ সদস্য আইডি দিন!');
-        showToast('❌ সদস্য আইডি দিন!', 'error');
         return;
     }
+    
+    console.log(`📊 সদস্য ${memberId} এর উত্তোলন দেখানো হচ্ছে...`);
     
     const client = await initSupabase();
     if (!client) {
         console.error('❌ Supabase client পাওয়া যায়নি!');
-        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
         return;
     }
     
@@ -8247,39 +8244,68 @@ async function showMemberWithdrawals(memberId) {
         
         if (error) {
             console.error('❌ ডাটাবেস error:', error);
-            showToast('❌ ডাটা লোড করতে ব্যর্থ!', 'error');
             return;
         }
         
         if (!withdrawals || withdrawals.length === 0) {
             console.log(`📭 সদস্য ${memberId} এর কোনো উত্তোলন নেই`);
-            showToast(`📭 সদস্য ${memberId} এর কোনো উত্তোলন নেই`, 'info');
             return;
         }
         
-        console.log(`📊 মোট উত্তোলন: ${withdrawals.length} টি`);
-        console.table(withdrawals.map(w => ({
-            'আইডি': w.id?.slice(0, 8) || '-',
-            'ধরন': w.type || '-',
-            'পরিমাণ': w.amount || 0,
-            'স্ট্যাটাস': w.status || 'pending',
-            'ব্যালেন্স আপডেট': w.balance_updated ? '✅' : '❌',
-            'তারিখ': w.approved_at ? new Date(w.approved_at).toLocaleDateString('bn-BD') : '-'
-        })));
+        // সদস্যের বর্তমান ব্যালেন্স
+        const { data: member } = await client
+            .from('members')
+            .select('balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
+            .eq('member_id', memberId)
+            .single();
         
-        // যাদের ব্যালেন্স আপডেট হয়নি তাদের দেখান
-        const pending = withdrawals.filter(w => w.status === 'approved' && !w.balance_updated);
-        if (pending.length > 0) {
-            console.log(`\n⚠️ ${pending.length} টি উত্তোলনের ব্যালেন্স আপডেট হয়নি`);
-            console.log('🔧 সমাধান: fixAllWithdrawals() চালান');
+        if (member) {
+            console.log('\n📊 বর্তমান ব্যালেন্স:');
+            console.log(`   💰 মূলধন: ${member.balance || 0} টাকা`);
+            console.log(`   🎁 রেফারেল বোনাস: ${member.referral_bonus || 0} টাকা`);
+            console.log(`   📈 সঞ্চয় লভ্যাংশ: ${member.profit_balance_savings || 0} টাকা`);
+            console.log(`   📈 বিনিয়োগ লভ্যাংশ: ${member.profit_balance_investment || 0} টাকা`);
+            console.log(`   📈 রেফারেল লভ্যাংশ: ${member.profit_balance_referral || 0} টাকা`);
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         }
         
-        showToast(`✅ ${withdrawals.length} টি উত্তোলন পাওয়া গেছে`, 'success');
+        console.log(`\n📋 ${withdrawals.length} টি উত্তোলন:`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        // ✅ ফিক্স: id কে string এ কনভার্ট করুন
+        withdrawals.forEach((w, i) => {
+            const idStr = String(w.id || '');
+            console.log(`\n${i+1}. ID: ${idStr.slice(0, 8)}`);
+            console.log(`   📋 ধরন: ${w.type || '-'}`);
+            console.log(`   💰 পরিমাণ: ${w.amount || 0} টাকা`);
+            console.log(`   📊 স্ট্যাটাস: ${w.status || 'pending'}`);
+            console.log(`   🔄 ব্যালেন্স আপডেট: ${w.balance_updated ? '✅' : '❌'}`);
+            console.log(`   📅 তারিখ: ${w.approved_at ? new Date(w.approved_at).toLocaleString('bn-BD') : 'অপেক্ষমান'}`);
+            if (w.payment_method) {
+                console.log(`   💳 মাধ্যম: ${w.payment_method}`);
+            }
+            if (w.transaction_id) {
+                console.log(`   📝 লেনদেন ID: ${w.transaction_id}`);
+            }
+        });
+        
+        const notUpdated = withdrawals.filter(w => w.status === 'approved' && !w.balance_updated);
+        if (notUpdated.length > 0) {
+            console.log(`\n⚠️ ${notUpdated.length} টি উত্তোলনের ব্যালেন্স আপডেট হয়নি`);
+            console.log('🔧 সমাধান: fixAllWithdrawals() চালান');
+            
+            // ডিটেইল দেখান
+            console.log('\n📋 ব্যালেন্স আপডেট হয়নি এমন উত্তোলন:');
+            notUpdated.forEach((w, i) => {
+                console.log(`   ${i+1}. ${w.member_name || w.member_id} - ${w.amount} টাকা (${w.type})`);
+                console.log(`      ID: ${w.id}`);
+            });
+        }
+        
         return withdrawals;
         
     } catch(e) {
         console.error('❌ showMemberWithdrawals error:', e);
-        showToast('❌ ডাটা লোড করতে ব্যর্থ!', 'error');
     }
 }
 
