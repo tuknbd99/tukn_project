@@ -8020,6 +8020,347 @@ console.log('💡 কনসোলে টাইপ করুন:');
 console.log('  processAllPendingWithdrawals() - সব পেন্ডিং উত্তোলন ফিক্স করতে');
 console.log('  fixMemberWithdrawals("মেম্বার_আইডি") - নির্দিষ্ট সদস্যের উত্তোলন ফিক্স করতে');
 console.log('  processWithdrawalApproval("উত্তোলন_আইডি") - নির্দিষ্ট উত্তোলন ফিক্স করতে');
+
+    // ============================================================
+// 🔧 উত্তোলন ফিক্স - সম্পূর্ণ সমাধান
+// ============================================================
+
+// 1. সব উত্তোলন দেখার ফাংশন
+async function showAllWithdrawals() {
+    console.log('📊 সব উত্তোলন দেখানো হচ্ছে...');
+    
+    const client = await initSupabase();
+    if (!client) {
+        console.error('❌ Supabase client পাওয়া যায়নি!');
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: withdrawals, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .order('requested_at', { ascending: false });
+        
+        if (error) {
+            console.error('❌ ডাটাবেস error:', error);
+            showToast('❌ ডাটা লোড করতে ব্যর্থ!', 'error');
+            return;
+        }
+        
+        if (!withdrawals || withdrawals.length === 0) {
+            console.log('📭 কোনো উত্তোলন নেই');
+            showToast('📭 কোনো উত্তোলন নেই', 'info');
+            return;
+        }
+        
+        console.log(`📊 মোট উত্তোলন: ${withdrawals.length} টি`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        // টেবিল ফরম্যাটে দেখান
+        console.table(withdrawals.map(w => ({
+            'আইডি': w.id?.slice(0, 8) || '-',
+            'সদস্য': w.member_name || w.member_id || '-',
+            'ধরন': w.type || '-',
+            'পরিমাণ': w.amount || 0,
+            'স্ট্যাটাস': w.status || 'pending',
+            'ব্যালেন্স আপডেট': w.balance_updated ? '✅' : '❌',
+            'তারিখ': w.approved_at ? new Date(w.approved_at).toLocaleDateString('bn-BD') : '-'
+        })));
+        
+        // যাদের ব্যালেন্স আপডেট হয়নি তাদের আলাদা দেখান
+        const pending = withdrawals.filter(w => w.status === 'approved' && !w.balance_updated);
+        if (pending.length > 0) {
+            console.log(`\n⚠️ ${pending.length} টি উত্তোলনের ব্যালেন্স আপডেট হয়নি:`);
+            console.table(pending.map(w => ({
+                'সদস্য': w.member_name || w.member_id,
+                'পরিমাণ': w.amount,
+                'ধরন': w.type,
+                'তারিখ': w.approved_at ? new Date(w.approved_at).toLocaleDateString('bn-BD') : '-'
+            })));
+        }
+        
+        showToast(`✅ ${withdrawals.length} টি উত্তোলন পাওয়া গেছে`, 'success');
+        return withdrawals;
+        
+    } catch(e) {
+        console.error('❌ showAllWithdrawals error:', e);
+        showToast('❌ ডাটা লোড করতে ব্যর্থ!', 'error');
+    }
+}
+
+// 2. সব পেন্ডিং উত্তোলন ফিক্স করার ফাংশন
+async function fixAllWithdrawals() {
+    console.log('🔧 সকল উত্তোলন ফিক্স করা হচ্ছে...');
+    showToast('⏳ উত্তোলন ফিক্স করা হচ্ছে...', 'info');
+    
+    const client = await initSupabase();
+    if (!client) {
+        console.error('❌ Supabase client পাওয়া যায়নি!');
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // সব approved কিন্তু balance_updated = false উত্তোলন খুঁজুন
+        const { data: pendingWithdrawals, error: wError } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('status', 'approved')
+            .eq('balance_updated', false)
+            .order('approved_at', { ascending: true });
+        
+        if (wError) {
+            console.error('❌ উত্তোলন লোড error:', wError);
+            showToast('❌ ডাটা লোড করতে ব্যর্থ!', 'error');
+            return;
+        }
+        
+        if (!pendingWithdrawals || pendingWithdrawals.length === 0) {
+            console.log('✅ কোনো পেন্ডিং উত্তোলন নেই');
+            showToast('✅ কোনো পেন্ডিং উত্তোলন নেই!', 'success');
+            return;
+        }
+        
+        console.log(`📊 ${pendingWithdrawals.length} টি উত্তোলন পেন্ডিং`);
+        showToast(`⏳ ${pendingWithdrawals.length} টি উত্তোলন প্রক্রিয়াকরণ হচ্ছে...`, 'info');
+        
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const withdrawal of pendingWithdrawals) {
+            console.log(`📤 প্রক্রিয়াকরণ: ${withdrawal.id} - ${withdrawal.member_id} - ${withdrawal.amount}`);
+            
+            try {
+                // সদস্যের ডাটা নিন
+                const { data: member, error: mError } = await client
+                    .from('members')
+                    .select('balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
+                    .eq('member_id', withdrawal.member_id)
+                    .single();
+                
+                if (mError || !member) {
+                    console.error(`❌ সদস্য পাওয়া যায়নি: ${withdrawal.member_id}`, mError);
+                    failCount++;
+                    continue;
+                }
+                
+                const amount = Number(withdrawal.amount) || 0;
+                let updateData = {};
+                let type = withdrawal.type || '';
+                
+                // উত্তোলনের ধরন অনুযায়ী ব্যালেন্স কমান
+                if (type.includes('রেফারেল বোনাস') || type.toLowerCase().includes('referral_bonus')) {
+                    updateData.referral_bonus = Math.max(0, (Number(member.referral_bonus) || 0) - amount);
+                } 
+                else if (type.includes('সঞ্চয় লভ্যাংশ') || type.toLowerCase().includes('savings_profit')) {
+                    updateData.profit_balance_savings = Math.max(0, (Number(member.profit_balance_savings) || 0) - amount);
+                }
+                else if (type.includes('বিনিয়োগ লভ্যাংশ') || type.toLowerCase().includes('investment_profit')) {
+                    updateData.profit_balance_investment = Math.max(0, (Number(member.profit_balance_investment) || 0) - amount);
+                }
+                else if (type.includes('রেফারেল লভ্যাংশ') || type.toLowerCase().includes('referral_profit')) {
+                    updateData.profit_balance_referral = Math.max(0, (Number(member.profit_balance_referral) || 0) - amount);
+                }
+                else {
+                    updateData.balance = Math.max(0, (Number(member.balance) || 0) - amount);
+                }
+                
+                // ডাটাবেস আপডেট করুন
+                const { error: updateError } = await client
+                    .from('members')
+                    .update(updateData)
+                    .eq('member_id', withdrawal.member_id);
+                
+                if (updateError) {
+                    console.error(`❌ ব্যালেন্স আপডেট error: ${withdrawal.id}`, updateError);
+                    failCount++;
+                    continue;
+                }
+                
+                // উত্তোলন রেকর্ড আপডেট করুন
+                await client
+                    .from('withdrawals')
+                    .update({ 
+                        balance_updated: true,
+                        balance_updated_at: new Date().toISOString()
+                    })
+                    .eq('id', withdrawal.id);
+                
+                successCount++;
+                console.log(`✅ উত্তোলন ${withdrawal.id} প্রক্রিয়াকরণ সম্পন্ন`);
+                
+            } catch(e) {
+                console.error(`❌ উত্তোলন ${withdrawal.id} প্রক্রিয়াকরণ ব্যর্থ:`, e);
+                failCount++;
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+        
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`✅ সম্পন্ন: ${successCount} সফল`);
+        console.log(`❌ ব্যর্থ: ${failCount} টি`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        showToast(`✅ ${successCount} টি উত্তোলন ফিক্স করা হয়েছে! ${failCount > 0 ? '❌ ' + failCount + ' টি ব্যর্থ' : ''}`, 'success');
+        
+        // ক্যাশ রিফ্রেশ করুন
+        if (currentUser) {
+            await refreshMemberDataFromSupabase();
+            await loadUserFunds();
+            updateFundsDisplay();
+        }
+        
+        return { successCount, failCount };
+        
+    } catch(e) {
+        console.error('❌ fixAllWithdrawals error:', e);
+        showToast('❌ প্রক্রিয়াকরণ ব্যর্থ!', 'error');
+        return { successCount: 0, failCount: 0 };
+    }
+}
+
+// 3. নির্দিষ্ট সদস্যের উত্তোলন দেখার ফাংশন
+async function showMemberWithdrawals(memberId) {
+    console.log(`📊 সদস্য ${memberId} এর উত্তোলন দেখানো হচ্ছে...`);
+    
+    if (!memberId) {
+        console.error('❌ সদস্য আইডি দিন!');
+        showToast('❌ সদস্য আইডি দিন!', 'error');
+        return;
+    }
+    
+    const client = await initSupabase();
+    if (!client) {
+        console.error('❌ Supabase client পাওয়া যায়নি!');
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: withdrawals, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('member_id', memberId)
+            .order('requested_at', { ascending: false });
+        
+        if (error) {
+            console.error('❌ ডাটাবেস error:', error);
+            showToast('❌ ডাটা লোড করতে ব্যর্থ!', 'error');
+            return;
+        }
+        
+        if (!withdrawals || withdrawals.length === 0) {
+            console.log(`📭 সদস্য ${memberId} এর কোনো উত্তোলন নেই`);
+            showToast(`📭 সদস্য ${memberId} এর কোনো উত্তোলন নেই`, 'info');
+            return;
+        }
+        
+        console.log(`📊 মোট উত্তোলন: ${withdrawals.length} টি`);
+        console.table(withdrawals.map(w => ({
+            'আইডি': w.id?.slice(0, 8) || '-',
+            'ধরন': w.type || '-',
+            'পরিমাণ': w.amount || 0,
+            'স্ট্যাটাস': w.status || 'pending',
+            'ব্যালেন্স আপডেট': w.balance_updated ? '✅' : '❌',
+            'তারিখ': w.approved_at ? new Date(w.approved_at).toLocaleDateString('bn-BD') : '-'
+        })));
+        
+        // যাদের ব্যালেন্স আপডেট হয়নি তাদের দেখান
+        const pending = withdrawals.filter(w => w.status === 'approved' && !w.balance_updated);
+        if (pending.length > 0) {
+            console.log(`\n⚠️ ${pending.length} টি উত্তোলনের ব্যালেন্স আপডেট হয়নি`);
+            console.log('🔧 সমাধান: fixAllWithdrawals() চালান');
+        }
+        
+        showToast(`✅ ${withdrawals.length} টি উত্তোলন পাওয়া গেছে`, 'success');
+        return withdrawals;
+        
+    } catch(e) {
+        console.error('❌ showMemberWithdrawals error:', e);
+        showToast('❌ ডাটা লোড করতে ব্যর্থ!', 'error');
+    }
+}
+
+// 4. রিপোর্ট জেনারেটর
+async function generateWithdrawalReport() {
+    console.log('📋 উত্তোলন রিপোর্ট জেনারেট করা হচ্ছে...');
+    
+    const client = await initSupabase();
+    if (!client) {
+        console.error('❌ Supabase client পাওয়া যায়নি!');
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: allWithdrawals, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .order('requested_at', { ascending: false });
+        
+        if (error) {
+            console.error('❌ ডাটাবেস error:', error);
+            return;
+        }
+        
+        const total = allWithdrawals?.length || 0;
+        const approved = allWithdrawals?.filter(w => w.status === 'approved').length || 0;
+        const pending = allWithdrawals?.filter(w => w.status === 'pending').length || 0;
+        const rejected = allWithdrawals?.filter(w => w.status === 'rejected').length || 0;
+        const balanceNotUpdated = allWithdrawals?.filter(w => w.status === 'approved' && !w.balance_updated).length || 0;
+        
+        const totalAmount = allWithdrawals?.reduce((sum, w) => sum + (Number(w.amount) || 0), 0) || 0;
+        const approvedAmount = allWithdrawals?.filter(w => w.status === 'approved').reduce((sum, w) => sum + (Number(w.amount) || 0), 0) || 0;
+        
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📊 উত্তোলন রিপোর্ট');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`📌 মোট উত্তোলন: ${total} টি`);
+        console.log(`✅ অনুমোদিত: ${approved} টি`);
+        console.log(`⏳ বিচারাধীন: ${pending} টি`);
+        console.log(`❌ বাতিল: ${rejected} টি`);
+        console.log(`⚠️ ব্যালেন্স আপডেট হয়নি: ${balanceNotUpdated} টি`);
+        console.log(`💰 মোট উত্তোলনের পরিমাণ: ${totalAmount.toFixed(2)} টাকা`);
+        console.log(`💰 অনুমোদিত উত্তোলন: ${approvedAmount.toFixed(2)} টাকা`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        if (balanceNotUpdated > 0) {
+            console.log(`\n⚠️ ${balanceNotUpdated} টি উত্তোলনের ব্যালেন্স আপডেট হয়নি!`);
+            console.log('🔧 সমাধান: fixAllWithdrawals() চালান');
+        }
+        
+        showToast(`📊 রিপোর্ট তৈরি হয়েছে! কনসোল দেখুন।`, 'success');
+        return { total, approved, pending, rejected, balanceNotUpdated, totalAmount, approvedAmount };
+        
+    } catch(e) {
+        console.error('❌ generateWithdrawalReport error:', e);
+        showToast('❌ রিপোর্ট তৈরি ব্যর্থ!', 'error');
+    }
+}
+
+// ============================================================
+// 🚀 কনসোলে এক্সপোজ করুন
+// ============================================================
+
+// উইন্ডোতে ফাংশনগুলো এক্সপোজ করুন
+window.showAllWithdrawals = showAllWithdrawals;
+window.showMemberWithdrawals = showMemberWithdrawals;
+window.fixAllWithdrawals = fixAllWithdrawals;
+window.generateWithdrawalReport = generateWithdrawalReport;
+
+// কনসোলে হেল্পার মেসেজ
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('💡 উত্তোলন ফিক্স কমান্ডসমূহ:');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('  showAllWithdrawals() - সব উত্তোলন দেখতে');
+console.log('  showMemberWithdrawals("আইডি") - নির্দিষ্ট সদস্যের উত্তোলন দেখতে');
+console.log('  fixAllWithdrawals() - সব পেন্ডিং উত্তোলন ফিক্স করতে');
+console.log('  generateWithdrawalReport() - রিপোর্ট দেখতে');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+console.log('✅ উত্তোলন ফিক্স কোড লোড হয়েছে!');
 </script>
 </body>
 </html>
