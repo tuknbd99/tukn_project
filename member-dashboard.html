@@ -7729,6 +7729,297 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('  forceBalanceUpdate() - শুধু ব্যালেন্স আপডেট করতে');
     console.log('  fixReferralCode() - শুধু রেফারেল কোড ফিক্স করতে');
 });
+    // ============================================================
+// ✅ উত্তোলন অনুমোদনের পর ব্যালেন্স কমানোর ফাংশন
+// ============================================================
+
+async function processWithdrawalApproval(withdrawalId) {
+    console.log('🔄 উত্তোলন প্রক্রিয়াকরণ:', withdrawalId);
+    
+    const client = await initSupabase();
+    if (!client) {
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return false;
+    }
+    
+    try {
+        // 1. উত্তোলন ডাটা চেক করুন
+        const { data: withdrawal, error: wError } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('id', withdrawalId)
+            .single();
+        
+        if (wError || !withdrawal) {
+            console.error('❌ উত্তোলন পাওয়া যায়নি:', wError);
+            return false;
+        }
+        
+        if (withdrawal.status !== 'approved') {
+            console.log('⏳ উত্তোলন এখনও অনুমোদিত হয়নি');
+            return false;
+        }
+        
+        console.log('📥 উত্তোলন ডাটা:', withdrawal);
+        
+        // 2. সদস্যের বর্তমান ব্যালেন্স চেক করুন
+        const { data: member, error: mError } = await client
+            .from('members')
+            .select('balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
+            .eq('member_id', withdrawal.member_id)
+            .single();
+        
+        if (mError || !member) {
+            console.error('❌ সদস্য পাওয়া যায়নি:', mError);
+            return false;
+        }
+        
+        console.log('📊 বর্তমান ব্যালেন্স:', member);
+        
+        // 3. উত্তোলনের ধরন অনুযায়ী ব্যালেন্স কমান
+        const amount = Number(withdrawal.amount) || 0;
+        let updateData = {};
+        let type = withdrawal.type || '';
+        
+        if (type.includes('রেফারেল বোনাস') || type.includes('referral_bonus')) {
+            const newBonus = Math.max(0, (Number(member.referral_bonus) || 0) - amount);
+            updateData.referral_bonus = newBonus;
+            console.log(`✅ রেফারেল বোনাস কমছে: ${member.referral_bonus} → ${newBonus}`);
+        } 
+        else if (type.includes('সঞ্চয় লভ্যাংশ') || type.includes('savings_profit')) {
+            const newProfit = Math.max(0, (Number(member.profit_balance_savings) || 0) - amount);
+            updateData.profit_balance_savings = newProfit;
+            console.log(`✅ সঞ্চয় লভ্যাংশ কমছে: ${member.profit_balance_savings} → ${newProfit}`);
+        }
+        else if (type.includes('বিনিয়োগ লভ্যাংশ') || type.includes('investment_profit')) {
+            const newProfit = Math.max(0, (Number(member.profit_balance_investment) || 0) - amount);
+            updateData.profit_balance_investment = newProfit;
+            console.log(`✅ বিনিয়োগ লভ্যাংশ কমছে: ${member.profit_balance_investment} → ${newProfit}`);
+        }
+        else if (type.includes('রেফারেল লভ্যাংশ') || type.includes('referral_profit')) {
+            const newProfit = Math.max(0, (Number(member.profit_balance_referral) || 0) - amount);
+            updateData.profit_balance_referral = newProfit;
+            console.log(`✅ রেফারেল লভ্যাংশ কমছে: ${member.profit_balance_referral} → ${newProfit}`);
+        }
+        else if (type.includes('মূলধন') || type.includes('capital') || type.includes('সঞ্চয়')) {
+            const newBalance = Math.max(0, (Number(member.balance) || 0) - amount);
+            updateData.balance = newBalance;
+            console.log(`✅ মূলধন কমছে: ${member.balance} → ${newBalance}`);
+        }
+        else {
+            // ডিফল্ট: balance থেকে কমান
+            const newBalance = Math.max(0, (Number(member.balance) || 0) - amount);
+            updateData.balance = newBalance;
+            console.log(`✅ ডিফল্ট: balance কমছে: ${member.balance} → ${newBalance}`);
+        }
+        
+        // 4. ডাটাবেস আপডেট করুন
+        const { error: updateError } = await client
+            .from('members')
+            .update(updateData)
+            .eq('member_id', withdrawal.member_id);
+        
+        if (updateError) {
+            console.error('❌ ব্যালেন্স আপডেট error:', updateError);
+            return false;
+        }
+        
+        console.log('✅ ব্যালেন্স আপডেট সম্পূর্ণ:', updateData);
+        
+        // 5. উত্তোলন ট্রানজেকশন রেকর্ড আপডেট করুন
+        const { error: txError } = await client
+            .from('withdrawals')
+            .update({ 
+                balance_updated: true,
+                balance_updated_at: new Date().toISOString()
+            })
+            .eq('id', withdrawalId);
+        
+        if (txError) {
+            console.error('❌ উত্তোলন আপডেট error:', txError);
+        }
+        
+        // 6. লোকাল ক্যাশ আপডেট করুন
+        if (currentUser && currentUser.id === withdrawal.member_id) {
+            await refreshMemberDataFromSupabase();
+            await loadUserFunds();
+            updateFundsDisplay();
+        }
+        
+        showToast(`✅ ${amount} টাকা উত্তোলন সম্পন্ন! ব্যালেন্স আপডেট করা হয়েছে।`, 'success');
+        return true;
+        
+    } catch(e) {
+        console.error('❌ processWithdrawalApproval error:', e);
+        showToast('❌ ব্যালেন্স আপডেট করতে ব্যর্থ!', 'error');
+        return false;
+    }
+}
+
+// ============================================================
+// ✅ সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ
+// ============================================================
+
+async function processAllPendingWithdrawals() {
+    console.log('🔄 সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ শুরু...');
+    
+    const client = await initSupabase();
+    if (!client) {
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // সব approved কিন্তু balance_updated = false উত্তোলন খুঁজুন
+        const { data: withdrawals, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('status', 'approved')
+            .eq('balance_updated', false)
+            .order('approved_at', { ascending: true });
+        
+        if (error) {
+            console.error('❌ উত্তোলন লোড error:', error);
+            return;
+        }
+        
+        if (!withdrawals || withdrawals.length === 0) {
+            console.log('✅ কোনো পেন্ডিং উত্তোলন নেই');
+            showToast('✅ কোনো পেন্ডিং উত্তোলন নেই!', 'success');
+            return;
+        }
+        
+        console.log(`📊 ${withdrawals.length} টি উত্তোলন পেন্ডিং`);
+        showToast(`⏳ ${withdrawals.length} টি উত্তোলন প্রক্রিয়াকরণ হচ্ছে...`, 'info');
+        
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const withdrawal of withdrawals) {
+            console.log(`📤 প্রক্রিয়াকরণ: ${withdrawal.id} - ${withdrawal.member_id} - ${withdrawal.amount}`);
+            const result = await processWithdrawalApproval(withdrawal.id);
+            if (result) {
+                successCount++;
+            } else {
+                failCount++;
+            }
+            // রেট লিমিট এড়ানোর জন্য সামান্য delay
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+        console.log(`✅ সম্পন্ন: ${successCount} সফল, ${failCount} ব্যর্থ`);
+        showToast(`✅ ${successCount} টি উত্তোলন প্রক্রিয়াকরণ সম্পন্ন! ${failCount > 0 ? '❌ ' + failCount + ' টি ব্যর্থ' : ''}`, 'success');
+        
+        // রিফ্রেশ
+        await refreshMemberDataFromSupabase();
+        await loadUserFunds();
+        updateFundsDisplay();
+        
+    } catch(e) {
+        console.error('❌ processAllPendingWithdrawals error:', e);
+        showToast('❌ প্রক্রিয়াকরণ ব্যর্থ!', 'error');
+    }
+}
+
+// ============================================================
+// ✅ নির্দিষ্ট সদস্যের সব উত্তোলন ফিক্স
+// ============================================================
+
+async function fixMemberWithdrawals(memberId) {
+    console.log(`🔧 সদস্য ${memberId} এর উত্তোলন ফিক্স করা হচ্ছে...`);
+    
+    const client = await initSupabase();
+    if (!client) {
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // সদস্যের সব approved উত্তোলন খুঁজুন
+        const { data: withdrawals, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('member_id', memberId)
+            .eq('status', 'approved')
+            .order('approved_at', { ascending: true });
+        
+        if (error) {
+            console.error('❌ উত্তোলন লোড error:', error);
+            return;
+        }
+        
+        if (!withdrawals || withdrawals.length === 0) {
+            console.log(`✅ ${memberId} এর কোনো উত্তোলন নেই`);
+            showToast(`✅ ${memberId} এর কোনো উত্তোলন নেই`, 'success');
+            return;
+        }
+        
+        console.log(`📊 ${withdrawals.length} টি উত্তোলন পাওয়া গেছে`);
+        
+        // মোট উত্তোলনের পরিমাণ বের করুন
+        let totalAmount = 0;
+        for (const w of withdrawals) {
+            totalAmount += Number(w.amount) || 0;
+        }
+        
+        console.log(`💰 মোট উত্তোলন: ${totalAmount} টাকা`);
+        
+        // বর্তমান ব্যালেন্স চেক করুন
+        const { data: member, error: mError } = await client
+            .from('members')
+            .select('balance, referral_bonus')
+            .eq('member_id', memberId)
+            .single();
+        
+        if (mError || !member) {
+            console.error('❌ সদস্য পাওয়া যায়নি:', mError);
+            return;
+        }
+        
+        console.log('📊 বর্তমান ব্যালেন্স:', member);
+        
+        // কনফার্মেশন
+        const confirmMsg = `সদস্য ${memberId} এর ${withdrawals.length} টি উত্তোলন (মোট ${totalAmount} টাকা) প্রক্রিয়াকরণ করবেন?\n\nবর্তমান ব্যালেন্স: ${member.balance} টাকা\nরেফারেল বোনাস: ${member.referral_bonus || 0} টাকা`;
+        
+        if (!confirm(confirmMsg)) {
+            console.log('❌ ব্যবহারকারী বাতিল করেছেন');
+            return;
+        }
+        
+        // প্রতিটি উত্তোলন প্রক্রিয়াকরণ করুন
+        let successCount = 0;
+        for (const withdrawal of withdrawals) {
+            const result = await processWithdrawalApproval(withdrawal.id);
+            if (result) successCount++;
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+        
+        console.log(`✅ ${successCount}/${withdrawals.length} টি উত্তোলন প্রক্রিয়াকরণ সম্পন্ন`);
+        showToast(`✅ ${successCount} টি উত্তোলন ফিক্স করা হয়েছে!`, 'success');
+        
+        // রিফ্রেশ
+        await refreshMemberDataFromSupabase();
+        await loadUserFunds();
+        updateFundsDisplay();
+        
+    } catch(e) {
+        console.error('❌ fixMemberWithdrawals error:', e);
+        showToast('❌ ফিক্স করতে ব্যর্থ!', 'error');
+    }
+}
+
+// ============================================================
+// ✅ কনসোলে এক্সপোজ করুন
+// ============================================================
+
+window.processAllPendingWithdrawals = processAllPendingWithdrawals;
+window.processWithdrawalApproval = processWithdrawalApproval;
+window.fixMemberWithdrawals = fixMemberWithdrawals;
+
+console.log('💡 কনসোলে টাইপ করুন:');
+console.log('  processAllPendingWithdrawals() - সব পেন্ডিং উত্তোলন ফিক্স করতে');
+console.log('  fixMemberWithdrawals("মেম্বার_আইডি") - নির্দিষ্ট সদস্যের উত্তোলন ফিক্স করতে');
+console.log('  processWithdrawalApproval("উত্তোলন_আইডি") - নির্দিষ্ট উত্তোলন ফিক্স করতে');
 </script>
 </body>
 </html>
