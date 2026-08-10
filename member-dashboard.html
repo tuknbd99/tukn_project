@@ -8387,6 +8387,164 @@ console.log('  generateWithdrawalReport() - রিপোর্ট দেখত�
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
 console.log('✅ উত্তোলন ফিক্স কোড লোড হয়েছে!');
+
+    // সম্পূর্ণ নতুন ফিক্স ফাংশন - সঠিকভাবে ব্যালেন্স কমানো হবে
+async function fixAllWithdrawalsCorrect() {
+    console.log('🔧 সঠিকভাবে সব উত্তোলন ফিক্স করা হচ্ছে...');
+    
+    const client = await initSupabase();
+    if (!client) {
+        console.error('❌ Supabase client পাওয়া যায়নি!');
+        return;
+    }
+    
+    try {
+        // সব পেন্ডিং উত্তোলন খুঁজুন
+        const { data: pendingWithdrawals, error: wError } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('status', 'approved')
+            .eq('balance_updated', false)
+            .order('approved_at', { ascending: true });
+        
+        if (wError) {
+            console.error('❌ উত্তোলন লোড error:', wError);
+            return;
+        }
+        
+        if (!pendingWithdrawals || pendingWithdrawals.length === 0) {
+            console.log('✅ কোনো পেন্ডিং উত্তোলন নেই');
+            return;
+        }
+        
+        console.log(`📊 ${pendingWithdrawals.length} টি উত্তোলন পেন্ডিং`);
+        
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const withdrawal of pendingWithdrawals) {
+            console.log(`\n📤 প্রক্রিয়াকরণ: ${withdrawal.id}`);
+            console.log(`   👤 সদস্য: ${withdrawal.member_name || withdrawal.member_id}`);
+            console.log(`   💰 পরিমাণ: ${withdrawal.amount} টাকা`);
+            console.log(`   📋 ধরন: ${withdrawal.type}`);
+            
+            try {
+                // সদস্যের ডাটা নিন
+                const { data: member, error: mError } = await client
+                    .from('members')
+                    .select('referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral, balance')
+                    .eq('member_id', withdrawal.member_id)
+                    .single();
+                
+                if (mError || !member) {
+                    console.error(`   ❌ সদস্য পাওয়া যায়নি:`, mError);
+                    failCount++;
+                    continue;
+                }
+                
+                const amount = Number(withdrawal.amount) || 0;
+                let updateData = {};
+                let fieldName = '';
+                let oldValue = 0;
+                
+                // উত্তোলনের ধরন অনুযায়ী ব্যালেন্স কমান
+                if (withdrawal.type && withdrawal.type.includes('রেফারেল বোনাস')) {
+                    fieldName = 'referral_bonus';
+                    oldValue = Number(member.referral_bonus) || 0;
+                    updateData.referral_bonus = Math.max(0, oldValue - amount);
+                } 
+                else if (withdrawal.type && withdrawal.type.includes('সঞ্চয় লভ্যাংশ')) {
+                    fieldName = 'profit_balance_savings';
+                    oldValue = Number(member.profit_balance_savings) || 0;
+                    updateData.profit_balance_savings = Math.max(0, oldValue - amount);
+                }
+                else if (withdrawal.type && withdrawal.type.includes('বিনিয়োগ লভ্যাংশ')) {
+                    fieldName = 'profit_balance_investment';
+                    oldValue = Number(member.profit_balance_investment) || 0;
+                    updateData.profit_balance_investment = Math.max(0, oldValue - amount);
+                }
+                else if (withdrawal.type && withdrawal.type.includes('রেফারেল লভ্যাংশ')) {
+                    fieldName = 'profit_balance_referral';
+                    oldValue = Number(member.profit_balance_referral) || 0;
+                    updateData.profit_balance_referral = Math.max(0, oldValue - amount);
+                }
+                else {
+                    fieldName = 'balance';
+                    oldValue = Number(member.balance) || 0;
+                    updateData.balance = Math.max(0, oldValue - amount);
+                }
+                
+                console.log(`   📊 ${fieldName}: ${oldValue} → ${updateData[fieldName]}`);
+                
+                // সদস্যের ব্যালেন্স আপডেট করুন
+                const { error: updateError } = await client
+                    .from('members')
+                    .update(updateData)
+                    .eq('member_id', withdrawal.member_id);
+                
+                if (updateError) {
+                    console.error(`   ❌ ব্যালেন্স আপডেট error:`, updateError);
+                    failCount++;
+                    continue;
+                }
+                
+                // উত্তোলন রেকর্ড আপডেট করুন
+                await client
+                    .from('withdrawals')
+                    .update({ 
+                        balance_updated: true,
+                        balance_updated_at: new Date().toISOString()
+                    })
+                    .eq('id', withdrawal.id);
+                
+                successCount++;
+                console.log(`   ✅ সম্পন্ন!`);
+                
+            } catch(e) {
+                console.error(`   ❌ ব্যর্থ:`, e);
+                failCount++;
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+        
+        console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`✅ সফল: ${successCount} টি`);
+        console.log(`❌ ব্যর্থ: ${failCount} টি`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        // রিফ্রেশ
+        await refreshMemberDataFromSupabase();
+        await loadUserFunds();
+        updateFundsDisplay();
+        
+        return { successCount, failCount };
+        
+    } catch(e) {
+        console.error('❌ fixAllWithdrawalsCorrect error:', e);
+    }
+}
+
+// চালান
+fixAllWithdrawalsCorrect()
+
+    // সব পেন্ডিং উত্তোলন দেখুন (যাদের balance_updated = false)
+async function checkAllPending() {
+    const client = await initSupabase();
+    
+    const { data } = await client
+        .from('withdrawals')
+        .select('id, member_id, member_name, amount, type, balance_updated')
+        .eq('status', 'approved')
+        .eq('balance_updated', false);
+    
+    console.log('📊 পেন্ডিং উত্তোলন:', data);
+    return data;
+}
+
+// চালান
+checkAllPending()
+    
 </script>
 </body>
 </html>
