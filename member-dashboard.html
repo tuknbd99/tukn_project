@@ -9517,7 +9517,278 @@ console.log('💡 কনসোলে টাইপ করুন:');
 console.log('  refreshBalanceWithAnimation() - অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ');
 // চালান
 checkAllPending()
+    // ============================================================
+// 🔥 ব্যালেন্স অটো যোগ হওয়া বন্ধ করার স্থায়ী সমাধান
+// ============================================================
+
+// ১. রেফারেল বোনাস ক্যালকুলেশন বন্ধ করুন (ডিবাগের জন্য)
+function disableAutoReferralBonus() {
+    console.log('🔧 রেফারেল বোনাস অটো আপডেট বন্ধ করা হচ্ছে...');
     
+    // loadReferralData ফাংশনটি ওভাররাইড করুন
+    const originalLoadReferral = window.loadReferralData;
+    
+    window.loadReferralData = async function() {
+        console.log('⏸️ রেফারেল বোনাস আপডেট বন্ধ আছে!');
+        // শুধু UI দেখান, কিন্তু ব্যালেন্স আপডেট করবেন না
+        showToast('⏸️ রেফারেল বোনাস আপডেট বন্ধ আছে', 'info');
+        return;
+    };
+    
+    // রিয়েল-টাইম চেক বন্ধ করুন
+    if (balanceCheckInterval) {
+        clearInterval(balanceCheckInterval);
+        balanceCheckInterval = null;
+        console.log('✅ রিয়েল-টাইম ব্যালেন্স চেক বন্ধ করা হয়েছে');
+    }
+    
+    showToast('✅ রেফারেল বোনাস অটো আপডেট বন্ধ করা হয়েছে!', 'success');
+}
+
+// ২. ব্যালেন্স রিসেট করুন (শুধু ম্যানুয়াল আপডেট)
+async function resetBalanceManually() {
+    console.log('🔄 ম্যানুয়াল ব্যালেন্স রিসেট...');
+    showToast('⏳ ব্যালেন্স রিসেট করা হচ্ছে...', 'info');
+    
+    // রিয়েল-টাইম চেক বন্ধ করুন
+    if (balanceCheckInterval) {
+        clearInterval(balanceCheckInterval);
+        balanceCheckInterval = null;
+    }
+    
+    // ডাটাবেস থেকে তাজা ডাটা নিন
+    await refreshMemberDataFromSupabase();
+    await loadUserFunds();
+    
+    // UI আপডেট করুন
+    updateFundsDisplay();
+    await loadWithdrawalHistory();
+    
+    // localStorage আপডেট করুন
+    try {
+        const storedUser = localStorage.getItem('tukn_logged_member') || sessionStorage.getItem('tukn_logged_member');
+        if (storedUser) {
+            const user = JSON.parse(storedUser);
+            user.balance = userFunds.monthlySavings;
+            user.referral_bonus = userFunds.referralBonus;
+            user.profit_balance_savings = userFunds.savingsProfit;
+            user.profit_balance_investment = userFunds.investmentProfit;
+            user.profit_balance_referral = userFunds.referralProfit;
+            localStorage.setItem('tukn_logged_member', JSON.stringify(user));
+            sessionStorage.setItem('tukn_logged_member', JSON.stringify(user));
+        }
+    } catch(e) {}
+    
+    console.log('✅ ব্যালেন্স রিসেট সম্পূর্ণ:', userFunds);
+    showToast('✅ ব্যালেন্স রিসেট সম্পূর্ণ!', 'success');
+}
+
+// ৩. শুধু রেফারেল ডাটা লোড বন্ধ করুন (UI দেখাবে কিন্তু ব্যালেন্স আপডেট করবে না)
+function fixReferralDisplayOnly() {
+    console.log('🔧 রেফারেল ডিসপ্লে ফিক্স...');
+    
+    // loadReferralData ফাংশনটি রিপ্লেস করুন
+    window.loadReferralData = async function() {
+        console.log('📊 রেফারেল ডাটা লোড হচ্ছে (শুধু ডিসপ্লে)...');
+        
+        // UI তে "লোড হচ্ছে" দেখান
+        for(let i=1; i<=10; i++) {
+            const container = document.getElementById(`level${i}List`);
+            if(container) container.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-emerald-600"></i> লোড হচ্ছে...</div>';
+        }
+        
+        try {
+            const client = await initSupabase();
+            if (!client) return;
+            
+            const { data: allMembers, error } = await client.from('members')
+                .select('member_id, full_name, mobile, monthly_savings, referred_by, refer_code, status');
+            
+            if (error || !allMembers) {
+                console.log('❌ রেফারেল ডাটা লোড ব্যর্থ');
+                return;
+            }
+            
+            // শুধু ডিসপ্লের জন্য ডাটা প্রসেস করুন (ব্যালেন্স আপডেট করবেন না)
+            const commissionRates = {1:0.15,2:0.10,3:0.05,4:0.05,5:0.05,6:0.05,7:0.05,8:0.05,9:0.05,10:0.05};
+            
+            const normalizedMembers = allMembers.map(member => {
+                let refCode = member.refer_code;
+                let refBy = member.referred_by;
+                if(refCode && typeof refCode === 'string') {
+                    const match = refCode.match(/\d+/);
+                    if(match) refCode = match[0];
+                }
+                if(refBy && typeof refBy === 'string') {
+                    const match = refBy.match(/\d+/);
+                    if(match) refBy = match[0];
+                }
+                return { ...member, refer_code_normalized: refCode, referred_by_normalized: refBy };
+            });
+            
+            let myReferCode = currentUser.referId || currentUser.refer_code;
+            if(myReferCode && typeof myReferCode === 'string') {
+                const match = myReferCode.match(/\d+/);
+                if(match) myReferCode = match[0];
+            }
+            
+            if(!myReferCode) {
+                for(let i=1; i<=10; i++) {
+                    const container = document.getElementById(`level${i}List`);
+                    if(container) container.innerHTML = '<p class="text-gray-500 text-center py-4">আপনার কোনো রেফারেল কোড নেই</p>';
+                }
+                return;
+            }
+            
+            const levelReferrals = {1:[],2:[],3:[],4:[],5:[],6:[],7:[],8:[],9:[],10:[]};
+            const visited = new Set();
+            
+            levelReferrals[1] = normalizedMembers.filter(m => 
+                m.referred_by_normalized === myReferCode && 
+                m.member_id !== currentUser.id &&
+                (m.status === 'active' || m.status === 'approved')
+            );
+            visited.add(myReferCode);
+            levelReferrals[1].forEach(m => {
+                if(m.member_id) visited.add(m.member_id);
+            });
+            
+            let currentLevelMembers = [...levelReferrals[1]];
+            for(let level = 2; level <= 10; level++) {
+                const nextLevelMembers = [];
+                for(const member of currentLevelMembers) {
+                    let memberReferCode = member.refer_code_normalized;
+                    if(memberReferCode && !visited.has(memberReferCode) && memberReferCode !== myReferCode) {
+                        const childRefs = normalizedMembers.filter(m => 
+                            m.referred_by_normalized === memberReferCode && 
+                            !visited.has(m.member_id) && 
+                            (m.status === 'active' || m.status === 'approved') &&
+                            m.member_id !== currentUser.id
+                        );
+                        for(const child of childRefs) {
+                            if(!visited.has(child.member_id)) {
+                                visited.add(child.member_id);
+                                nextLevelMembers.push(child);
+                            }
+                        }
+                    }
+                }
+                levelReferrals[level] = nextLevelMembers;
+                currentLevelMembers = nextLevelMembers;
+            }
+            
+            let totalReferrals = 0;
+            let totalCommission = 0;
+            
+            for(let level = 1; level <= 10; level++) {
+                const levelCount = levelReferrals[level].length;
+                totalReferrals += levelCount;
+                let levelCommission = 0;
+                const rate = commissionRates[level];
+                for(const ref of levelReferrals[level]) {
+                    const monthlyAmount = ref.monthly_savings || 500;
+                    levelCommission += monthlyAmount * rate;
+                }
+                totalCommission += levelCommission;
+                
+                const countEl = document.getElementById(`level${level}Count`);
+                const commissionEl = document.getElementById(`level${level}Commission`);
+                if(countEl) countEl.innerText = levelCount;
+                if(commissionEl) commissionEl.innerText = Math.floor(levelCommission).toLocaleString();
+                
+                // UI আপডেট করুন (ব্যালেন্স ছাড়া)
+                updateLevelListDisplay(level, levelReferrals[level], rate * 100);
+            }
+            
+            document.getElementById('totalReferrals').innerText = totalReferrals;
+            document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
+            
+            const activeReferrals = levelReferrals[1].filter(r => r.status === 'active' || r.status === 'approved').length;
+            document.getElementById('activeReferrals').innerText = activeReferrals;
+            
+            console.log('✅ রেফারেল ডিসপ্লে আপডেট সম্পন্ন (ব্যালেন্স অপরিবর্তিত)');
+            showToast('✅ রেফারেল ডিসপ্লে আপডেট করা হয়েছে', 'success');
+            
+        } catch(error) {
+            console.error('❌ রেফারেল ডিসপ্লে error:', error);
+        }
+    };
+    
+    showToast('✅ রেফারেল ডিসপ্লে ফিক্স করা হয়েছে!', 'success');
+}
+
+// ৪. UI আপডেট ফাংশন (ব্যালেন্স ছাড়া)
+function updateLevelListDisplay(level, referrals, rate) {
+    const container = document.getElementById(`level${level}List`);
+    if(!container) return;
+    if(!referrals || referrals.length === 0) {
+        container.innerHTML = `<div class="text-center text-gray-400 py-3 text-sm">📭 Level ${level} - কোনো রেফারেল নেই</div>`;
+        return;
+    }
+    const colors = {1:'emerald',2:'blue',3:'amber',4:'purple',5:'pink',6:'indigo',7:'red',8:'teal',9:'orange',10:'cyan'};
+    const color = colors[level] || 'gray';
+    let html = '';
+    for(const ref of referrals) {
+        const joinDate = ref.created_at ? formatDateBD(ref.created_at) : '-';
+        const monthlyAmount = ref.monthly_savings || 500;
+        const commission = monthlyAmount * (rate / 100);
+        html += `
+            <div class="bg-white p-3 rounded-lg border hover:shadow-md transition mb-2">
+                <div class="flex justify-between items-start flex-wrap gap-2">
+                    <div>
+                        <p class="font-semibold text-gray-800">${ref.full_name || 'নাম নেই'}</p>
+                        <p class="text-xs text-gray-500"><i class="fas fa-mobile-alt"></i> ${ref.mobile || 'মোবাইল নেই'}</p>
+                        <p class="text-xs text-${color}-600"><i class="fas fa-id-card"></i> ${ref.member_id}</p>
+                        <p class="text-xs text-gray-400"><i class="fas fa-calendar-alt"></i> সদস্য: ${joinDate}</p>
+                    </div>
+                    <div class="text-right bg-amber-50 px-3 py-2 rounded-lg">
+                        <p class="text-sm font-semibold text-amber-700">💰 মাসিক সঞ্চয়: ${monthlyAmount.toLocaleString()} টাকা</p>
+                        <p class="text-xs font-semibold text-emerald-600">🎁 কমিশন: ${Math.floor(commission)} টাকা (${rate}%)</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    container.innerHTML = html;
+}
+
+// ৫. সব চেক বন্ধ করে শুধু ম্যানুয়াল মোড
+function setManualMode() {
+    console.log('🔧 ম্যানুয়াল মোড সক্রিয়...');
+    
+    // রিয়েল-টাইম চেক বন্ধ
+    if (balanceCheckInterval) {
+        clearInterval(balanceCheckInterval);
+        balanceCheckInterval = null;
+    }
+    
+    // রেফারেল অটো লোড বন্ধ
+    disableAutoReferralBonus();
+    
+    // সব interval ক্লিয়ার
+    if (durationInterval) clearInterval(durationInterval);
+    if (clockInterval) clearInterval(clockInterval);
+    if (expiryInterval) clearInterval(expiryInterval);
+    
+    // শুধু ডিজিটাল ক্লক চালু রাখুন
+    clockInterval = setInterval(updateDigitalClock, 1000);
+    
+    showToast('✅ ম্যানুয়াল মোড সক্রিয়! ব্যালেন্স অটো পরিবর্তন হবে না।', 'success');
+    console.log('💡 ব্যালেন্স আপডেট করতে কনসোলে টাইপ করুন: resetBalanceManually()');
+}
+
+// ৬. কনসোলে এক্সপোজ
+window.disableAutoReferralBonus = disableAutoReferralBonus;
+window.resetBalanceManually = resetBalanceManually;
+window.fixReferralDisplayOnly = fixReferralDisplayOnly;
+window.setManualMode = setManualMode;
+
+console.log('✅ ব্যালেন্স ফিক্স লোড হয়েছে!');
+console.log('💡 কনসোলে টাইপ করুন:');
+console.log('  setManualMode() - অটো আপডেট বন্ধ করে ম্যানুয়াল মোড চালু');
+console.log('  resetBalanceManually() - ম্যানুয়ালি ব্যালেন্স রিসেট');
+console.log('  fixReferralDisplayOnly() - শুধু রেফারেল ডিসপ্লে ফিক্স');
+console.log('  disableAutoReferralBonus() - রেফারেল বোনাস অটো আপডেট বন্ধ');
 </script>
 </body>
 </html>
