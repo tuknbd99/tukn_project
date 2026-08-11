@@ -8542,6 +8542,192 @@ async function checkAllPending() {
     return data;
 }
 
+    // ============================================================
+// সুপারবেস রিয়েল-টাইম সাবস্ক্রিপশন
+// ============================================================
+
+let withdrawalSubscription = null;
+
+function startRealtimeWithdrawalListener() {
+    if (!currentUser) return;
+    
+    const client = await initSupabase();
+    if (!client) return;
+    
+    // আগের সাবস্ক্রিপশন বন্ধ করুন
+    if (withdrawalSubscription) {
+        withdrawalSubscription.unsubscribe();
+    }
+    
+    // withdrawals টেবিলের পরিবর্তন শুনুন
+    withdrawalSubscription = client
+        .channel('withdrawals_changes')
+        .on(
+            'postgres_changes',
+            {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'withdrawals',
+                filter: `member_id=eq.${currentUser.id}`
+            },
+            (payload) => {
+                console.log('🔄 উত্তোলন আপডেট:', payload);
+                
+                // যদি উত্তোলন approved হয় এবং balance_updated true হয়
+                if (payload.new.status === 'approved' && payload.new.balance_updated === true) {
+                    console.log('✅ উত্তোলন অনুমোদিত এবং ব্যালেন্স আপডেট হয়েছে!');
+                    
+                    // অ্যানিমেশন সহ ব্যালেন্স আপডেট
+                    refreshBalanceWithAnimation();
+                    
+                    // টোস্ট নোটিফিকেশন
+                    showToast(`✅ ${payload.new.amount} টাকা উত্তোলন সম্পন্ন হয়েছে!`, 'success');
+                    
+                    // অডিও নোটিফিকেশন (ঐচ্ছিক)
+                    playNotificationSound();
+                }
+            }
+        )
+        .subscribe();
+    
+    console.log('✅ রিয়েল-টাইম উত্তোলন লিসেনার সক্রিয়!');
+}
+
+// ============================================================
+// অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ
+// ============================================================
+
+async function refreshBalanceWithAnimation() {
+    console.log('🔄 অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ...');
+    
+    // পুরনো ব্যালেন্স সংরক্ষণ
+    const oldBalances = {...userFunds};
+    
+    // নতুন ব্যালেন্স লোড
+    await refreshMemberDataFromSupabase();
+    await loadUserFunds();
+    
+    // কাউন্ট-আপ অ্যানিমেশন দেখান
+    animateBalanceUpdate('monthlySavingsFund', oldBalances.monthlySavings, userFunds.monthlySavings);
+    animateBalanceUpdate('savingsProfitFund', oldBalances.savingsProfit, userFunds.savingsProfit);
+    animateBalanceUpdate('investmentProfitFund', oldBalances.investmentProfit, userFunds.investmentProfit);
+    animateBalanceUpdate('referralProfitFund', oldBalances.referralProfit, userFunds.referralProfit);
+    animateBalanceUpdate('referralBonusFund', oldBalances.referralBonus, userFunds.referralBonus);
+    
+    // টোটাল আপডেট
+    const total = userFunds.monthlySavings + userFunds.savingsProfit + userFunds.investmentProfit + 
+                  userFunds.referralProfit + userFunds.referralBonus;
+    document.getElementById('totalFunds').innerText = total.toLocaleString() + ' টাকা';
+    
+    // হিস্ট্রি রিফ্রেশ
+    await loadWithdrawalHistory();
+    
+    // localStorage আপডেট
+    updateLocalStorage();
+    
+    console.log('✅ ব্যালেন্স রিফ্রেশ সম্পূর্ণ:', userFunds);
+}
+
+// ============================================================
+// অ্যানিমেশন ফাংশন
+// ============================================================
+
+function animateBalanceUpdate(elementId, oldValue, newValue) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    
+    if (oldValue === newValue) return;
+    
+    // ফ্ল্যাশ ইফেক্ট
+    element.style.transition = 'all 0.3s ease';
+    element.style.transform = 'scale(1.15)';
+    element.style.color = '#059669';
+    element.style.fontWeight = '900';
+    
+    // কাউন্ট-আপ এফেক্ট (যদি সংখ্যা পরিবর্তন হয়)
+    const duration = 600;
+    const startTime = performance.now();
+    const diff = newValue - oldValue;
+    
+    function updateNumber(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const currentValue = oldValue + (diff * eased);
+        
+        if (Number.isInteger(newValue)) {
+            element.innerText = Math.round(currentValue).toLocaleString() + ' টাকা';
+        } else {
+            element.innerText = currentValue.toFixed(2) + ' টাকা';
+        }
+        
+        if (progress < 1) {
+            requestAnimationFrame(updateNumber);
+        } else {
+            // ফ্ল্যাশ ইফেক্ট রিমুভ
+            setTimeout(() => {
+                element.style.transform = 'scale(1)';
+                element.style.color = '';
+                element.style.fontWeight = '';
+            }, 300);
+        }
+    }
+    
+    requestAnimationFrame(updateNumber);
+}
+
+// ============================================================
+// লোকাল স্টোরেজ আপডেট
+// ============================================================
+
+function updateLocalStorage() {
+    try {
+        const storedUser = localStorage.getItem('tukn_logged_member') || 
+                          sessionStorage.getItem('tukn_logged_member');
+        if (storedUser) {
+            const user = JSON.parse(storedUser);
+            user.balance = userFunds.monthlySavings;
+            user.referral_bonus = userFunds.referralBonus;
+            user.profit_balance_savings = userFunds.savingsProfit;
+            user.profit_balance_investment = userFunds.investmentProfit;
+            user.profit_balance_referral = userFunds.referralProfit;
+            localStorage.setItem('tukn_logged_member', JSON.stringify(user));
+            sessionStorage.setItem('tukn_logged_member', JSON.stringify(user));
+        }
+    } catch(e) {
+        console.log('localStorage আপডেট ব্যর্থ:', e);
+    }
+}
+
+// ============================================================
+// অডিও নোটিফিকেশন (ঐচ্ছিক)
+// ============================================================
+
+function playNotificationSound() {
+    try {
+        const audio = new Audio('data:audio/wav;base64,UklGRlwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YVoAAACBhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqF');
+        audio.volume = 0.3;
+        audio.play().catch(() => {});
+    } catch(e) {}
+}
+
+// ============================================================
+// কনসোলে হেল্পার ফাংশন
+// ============================================================
+
+window.startRealtimeWithdrawalListener = startRealtimeWithdrawalListener;
+window.refreshBalanceWithAnimation = refreshBalanceWithAnimation;
+
+// DOM লোড হলে শুরু করুন
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(() => {
+        startRealtimeWithdrawalListener();
+    }, 3000);
+});
+
+console.log('✅ সম্পূর্ণ অটোমেটিক উত্তোলন সিস্টেম লোড হয়েছে!');
+console.log('💡 কনসোলে টাইপ করুন:');
+console.log('  refreshBalanceWithAnimation() - অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ');
 // চালান
 checkAllPending()
     
