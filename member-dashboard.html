@@ -7729,10 +7729,12 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('  forceBalanceUpdate() - শুধু ব্যালেন্স আপডেট করতে');
     console.log('  fixReferralCode() - শুধু রেফারেল কোড ফিক্স করতে');
 });
+
     // ============================================================
-// ✅ উত্তোলন অনুমোদনের পর ব্যালেন্স কমানোর ফাংশন
+// ✅ উত্তোলন পর ব্যালেন্স আপডেট - সম্পূর্ণ সমাধান
 // ============================================================
 
+// 1. উত্তোলন অনুমোদন প্রক্রিয়াকরণ (ব্যালেন্স কর্তন)
 async function processWithdrawalApproval(withdrawalId) {
     console.log('🔄 উত্তোলন প্রক্রিয়াকরণ:', withdrawalId);
     
@@ -7743,7 +7745,7 @@ async function processWithdrawalApproval(withdrawalId) {
     }
     
     try {
-        // 1. উত্তোলন ডাটা চেক করুন
+        // উত্তোলন ডাটা নিন
         const { data: withdrawal, error: wError } = await client
             .from('withdrawals')
             .select('*')
@@ -7760,9 +7762,7 @@ async function processWithdrawalApproval(withdrawalId) {
             return false;
         }
         
-        console.log('📥 উত্তোলন ডাটা:', withdrawal);
-        
-        // 2. সদস্যের বর্তমান ব্যালেন্স চেক করুন
+        // সদস্যের বর্তমান ব্যালেন্স নিন
         const { data: member, error: mError } = await client
             .from('members')
             .select('balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
@@ -7774,46 +7774,45 @@ async function processWithdrawalApproval(withdrawalId) {
             return false;
         }
         
-        console.log('📊 বর্তমান ব্যালেন্স:', member);
-        
-        // 3. উত্তোলনের ধরন অনুযায়ী ব্যালেন্স কমান
         const amount = Number(withdrawal.amount) || 0;
         let updateData = {};
+        let fieldName = '';
         let type = withdrawal.type || '';
         
-        if (type.includes('রেফারেল বোনাস') || type.includes('referral_bonus')) {
-            const newBonus = Math.max(0, (Number(member.referral_bonus) || 0) - amount);
-            updateData.referral_bonus = newBonus;
-            console.log(`✅ রেফারেল বোনাস কমছে: ${member.referral_bonus} → ${newBonus}`);
+        // উত্তোলনের ধরন অনুযায়ী ব্যালেন্স কর্তন
+        if (type.includes('রেফারেল বোনাস') || type.toLowerCase().includes('referral_bonus')) {
+            const oldValue = Number(member.referral_bonus) || 0;
+            updateData.referral_bonus = Math.max(0, oldValue - amount);
+            fieldName = 'referral_bonus';
+            console.log(`💰 রেফারেল বোনাস কর্তন: ${oldValue} → ${updateData.referral_bonus}`);
         } 
-        else if (type.includes('সঞ্চয় লভ্যাংশ') || type.includes('savings_profit')) {
-            const newProfit = Math.max(0, (Number(member.profit_balance_savings) || 0) - amount);
-            updateData.profit_balance_savings = newProfit;
-            console.log(`✅ সঞ্চয় লভ্যাংশ কমছে: ${member.profit_balance_savings} → ${newProfit}`);
+        else if (type.includes('সঞ্চয় লভ্যাংশ') || type.toLowerCase().includes('savings_profit')) {
+            const oldValue = Number(member.profit_balance_savings) || 0;
+            updateData.profit_balance_savings = Math.max(0, oldValue - amount);
+            fieldName = 'profit_balance_savings';
+            console.log(`💰 সঞ্চয় লভ্যাংশ কর্তন: ${oldValue} → ${updateData.profit_balance_savings}`);
         }
-        else if (type.includes('বিনিয়োগ লভ্যাংশ') || type.includes('investment_profit')) {
-            const newProfit = Math.max(0, (Number(member.profit_balance_investment) || 0) - amount);
-            updateData.profit_balance_investment = newProfit;
-            console.log(`✅ বিনিয়োগ লভ্যাংশ কমছে: ${member.profit_balance_investment} → ${newProfit}`);
+        else if (type.includes('বিনিয়োগ লভ্যাংশ') || type.toLowerCase().includes('investment_profit')) {
+            const oldValue = Number(member.profit_balance_investment) || 0;
+            updateData.profit_balance_investment = Math.max(0, oldValue - amount);
+            fieldName = 'profit_balance_investment';
+            console.log(`💰 বিনিয়োগ লভ্যাংশ কর্তন: ${oldValue} → ${updateData.profit_balance_investment}`);
         }
-        else if (type.includes('রেফারেল লভ্যাংশ') || type.includes('referral_profit')) {
-            const newProfit = Math.max(0, (Number(member.profit_balance_referral) || 0) - amount);
-            updateData.profit_balance_referral = newProfit;
-            console.log(`✅ রেফারেল লভ্যাংশ কমছে: ${member.profit_balance_referral} → ${newProfit}`);
-        }
-        else if (type.includes('মূলধন') || type.includes('capital') || type.includes('সঞ্চয়')) {
-            const newBalance = Math.max(0, (Number(member.balance) || 0) - amount);
-            updateData.balance = newBalance;
-            console.log(`✅ মূলধন কমছে: ${member.balance} → ${newBalance}`);
+        else if (type.includes('রেফারেল লভ্যাংশ') || type.toLowerCase().includes('referral_profit')) {
+            const oldValue = Number(member.profit_balance_referral) || 0;
+            updateData.profit_balance_referral = Math.max(0, oldValue - amount);
+            fieldName = 'profit_balance_referral';
+            console.log(`💰 রেফারেল লভ্যাংশ কর্তন: ${oldValue} → ${updateData.profit_balance_referral}`);
         }
         else {
-            // ডিফল্ট: balance থেকে কমান
-            const newBalance = Math.max(0, (Number(member.balance) || 0) - amount);
-            updateData.balance = newBalance;
-            console.log(`✅ ডিফল্ট: balance কমছে: ${member.balance} → ${newBalance}`);
+            // মূলধন (সঞ্চয়) উত্তোলন
+            const oldValue = Number(member.balance) || 0;
+            updateData.balance = Math.max(0, oldValue - amount);
+            fieldName = 'balance';
+            console.log(`💰 মূলধন কর্তন: ${oldValue} → ${updateData.balance}`);
         }
         
-        // 4. ডাটাবেস আপডেট করুন
+        // ডাটাবেস আপডেট করুন
         const { error: updateError } = await client
             .from('members')
             .update(updateData)
@@ -7824,10 +7823,8 @@ async function processWithdrawalApproval(withdrawalId) {
             return false;
         }
         
-        console.log('✅ ব্যালেন্স আপডেট সম্পূর্ণ:', updateData);
-        
-        // 5. উত্তোলন ট্রানজেকশন রেকর্ড আপডেট করুন
-        const { error: txError } = await client
+        // উত্তোলন রেকর্ড আপডেট করুন
+        await client
             .from('withdrawals')
             .update({ 
                 balance_updated: true,
@@ -7835,26 +7832,263 @@ async function processWithdrawalApproval(withdrawalId) {
             })
             .eq('id', withdrawalId);
         
-        if (txError) {
-            console.error('❌ উত্তোলন আপডেট error:', txError);
-        }
+        console.log(`✅ উত্তোলন সম্পন্ন! ${fieldName} থেকে ${amount} টাকা কর্তন করা হয়েছে।`);
         
-        // 6. লোকাল ক্যাশ আপডেট করুন
+        // কারেন্ট ইউজার হলে UI আপডেট করুন
         if (currentUser && currentUser.id === withdrawal.member_id) {
             await refreshMemberDataFromSupabase();
             await loadUserFunds();
             updateFundsDisplay();
+            await loadWithdrawalHistory();
         }
         
-        showToast(`✅ ${amount} টাকা উত্তোলন সম্পন্ন! ব্যালেন্স আপডেট করা হয়েছে।`, 'success');
         return true;
         
     } catch(e) {
         console.error('❌ processWithdrawalApproval error:', e);
-        showToast('❌ ব্যালেন্স আপডেট করতে ব্যর্থ!', 'error');
         return false;
     }
 }
+
+// 2. সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ
+async function processAllPendingWithdrawals() {
+    console.log('🔄 সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ শুরু...');
+    showToast('⏳ উত্তোলন প্রক্রিয়াকরণ হচ্ছে...', 'info');
+    
+    const client = await initSupabase();
+    if (!client) {
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // সব approved কিন্তু balance_updated = false উত্তোলন খুঁজুন
+        const { data: withdrawals, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('status', 'approved')
+            .eq('balance_updated', false)
+            .order('approved_at', { ascending: true });
+        
+        if (error) {
+            console.error('❌ উত্তোলন লোড error:', error);
+            showToast('❌ ডাটা লোড করতে ব্যর্থ!', 'error');
+            return;
+        }
+        
+        if (!withdrawals || withdrawals.length === 0) {
+            console.log('✅ কোনো পেন্ডিং উত্তোলন নেই');
+            showToast('✅ কোনো পেন্ডিং উত্তোলন নেই!', 'success');
+            return;
+        }
+        
+        console.log(`📊 ${withdrawals.length} টি উত্তোলন পেন্ডিং`);
+        showToast(`⏳ ${withdrawals.length} টি উত্তোলন প্রক্রিয়াকরণ হচ্ছে...`, 'info');
+        
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const withdrawal of withdrawals) {
+            console.log(`📤 প্রক্রিয়াকরণ: ${withdrawal.id} - ${withdrawal.member_id} - ${withdrawal.amount}`);
+            const result = await processWithdrawalApproval(withdrawal.id);
+            if (result) {
+                successCount++;
+            } else {
+                failCount++;
+            }
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+        
+        console.log(`✅ সম্পন্ন: ${successCount} সফল, ${failCount} ব্যর্থ`);
+        showToast(`✅ ${successCount} টি উত্তোলন প্রক্রিয়াকরণ সম্পন্ন! ${failCount > 0 ? '❌ ' + failCount + ' টি ব্যর্থ' : ''}`, 'success');
+        
+        // UI রিফ্রেশ
+        if (currentUser) {
+            await refreshMemberDataFromSupabase();
+            await loadUserFunds();
+            updateFundsDisplay();
+            await loadWithdrawalHistory();
+        }
+        
+    } catch(e) {
+        console.error('❌ processAllPendingWithdrawals error:', e);
+        showToast('❌ প্রক্রিয়াকরণ ব্যর্থ!', 'error');
+    }
+}
+
+// 3. রিয়েল-টাইম ব্যালেন্স আপডেট লিসেনার
+let withdrawalSubscription = null;
+
+function startRealtimeWithdrawalListener() {
+    if (!currentUser) {
+        console.log('⏳ currentUser লোড হয়নি, 2 সেকেন্ড পরে চেষ্টা...');
+        setTimeout(() => startRealtimeWithdrawalListener(), 2000);
+        return;
+    }
+    
+    (async function() {
+        const client = await initSupabase();
+        if (!client) {
+            console.log('❌ Supabase client পাওয়া যায়নি!');
+            return;
+        }
+        
+        if (withdrawalSubscription) {
+            withdrawalSubscription.unsubscribe();
+        }
+        
+        withdrawalSubscription = client
+            .channel('withdrawals_changes')
+            .on(
+                'postgres_changes',
+                {
+                    event: 'UPDATE',
+                    schema: 'public',
+                    table: 'withdrawals',
+                    filter: `member_id=eq.${currentUser.id}`
+                },
+                (payload) => {
+                    console.log('🔄 উত্তোলন আপডেট:', payload);
+                    
+                    if (payload.new.status === 'approved' && payload.new.balance_updated === true) {
+                        console.log('✅ উত্তোলন অনুমোদিত এবং ব্যালেন্স আপডেট হয়েছে!');
+                        
+                        // টোস্ট নোটিফিকেশন
+                        showToast(`✅ ${payload.new.amount} টাকা উত্তোলন সম্পন্ন হয়েছে!`, 'success');
+                        
+                        // ব্যালেন্স রিফ্রেশ
+                        refreshBalanceWithAnimation();
+                    }
+                }
+            )
+            .subscribe();
+        
+        console.log('✅ রিয়েল-টাইম উত্তোলন লিসেনার সক্রিয়!');
+    })();
+}
+
+// 4. অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ
+async function refreshBalanceWithAnimation() {
+    console.log('🔄 অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ...');
+    
+    const oldBalances = {...userFunds};
+    
+    await refreshMemberDataFromSupabase();
+    await loadUserFunds();
+    
+    // অ্যানিমেশন দেখান
+    animateBalanceUpdate('monthlySavingsFund', oldBalances.monthlySavings, userFunds.monthlySavings);
+    animateBalanceUpdate('savingsProfitFund', oldBalances.savingsProfit, userFunds.savingsProfit);
+    animateBalanceUpdate('investmentProfitFund', oldBalances.investmentProfit, userFunds.investmentProfit);
+    animateBalanceUpdate('referralProfitFund', oldBalances.referralProfit, userFunds.referralProfit);
+    animateBalanceUpdate('referralBonusFund', oldBalances.referralBonus, userFunds.referralBonus);
+    
+    // টোটাল আপডেট
+    const total = userFunds.monthlySavings + userFunds.savingsProfit + userFunds.investmentProfit + 
+                  userFunds.referralProfit + userFunds.referralBonus;
+    document.getElementById('totalFunds').innerText = total.toLocaleString() + ' টাকা';
+    document.getElementById('totalBalanceDisplay').innerText = userFunds.monthlySavings.toLocaleString() + ' টাকা';
+    
+    await loadWithdrawalHistory();
+    updateLocalStorage();
+    
+    console.log('✅ ব্যালেন্স রিফ্রেশ সম্পূর্ণ:', userFunds);
+}
+
+// 5. অ্যানিমেশন ফাংশন
+function animateBalanceUpdate(elementId, oldValue, newValue) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    if (oldValue === newValue) return;
+    
+    element.style.transition = 'all 0.3s ease';
+    element.style.transform = 'scale(1.15)';
+    element.style.color = '#059669';
+    element.style.fontWeight = '900';
+    
+    const duration = 600;
+    const startTime = performance.now();
+    const diff = newValue - oldValue;
+    
+    function updateNumber(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const currentValue = oldValue + (diff * eased);
+        
+        if (Number.isInteger(newValue)) {
+            element.innerText = Math.round(currentValue).toLocaleString() + ' টাকা';
+        } else {
+            element.innerText = currentValue.toFixed(2) + ' টাকা';
+        }
+        
+        if (progress < 1) {
+            requestAnimationFrame(updateNumber);
+        } else {
+            setTimeout(() => {
+                element.style.transform = 'scale(1)';
+                element.style.color = '';
+                element.style.fontWeight = '';
+            }, 300);
+        }
+    }
+    
+    requestAnimationFrame(updateNumber);
+}
+
+// 6. লোকাল স্টোরেজ আপডেট
+function updateLocalStorage() {
+    try {
+        const storedUser = localStorage.getItem('tukn_logged_member') || 
+                          sessionStorage.getItem('tukn_logged_member');
+        if (storedUser) {
+            const user = JSON.parse(storedUser);
+            user.balance = userFunds.monthlySavings;
+            user.referral_bonus = userFunds.referralBonus;
+            user.profit_balance_savings = userFunds.savingsProfit;
+            user.profit_balance_investment = userFunds.investmentProfit;
+            user.profit_balance_referral = userFunds.referralProfit;
+            localStorage.setItem('tukn_logged_member', JSON.stringify(user));
+            sessionStorage.setItem('tukn_logged_member', JSON.stringify(user));
+        }
+    } catch(e) {
+        console.log('localStorage আপডেট ব্যর্থ:', e);
+    }
+}
+
+// 7. ম্যানুয়াল ফিক্স (কনসোল থেকে চালানোর জন্য)
+function fixBalanceManually() {
+    console.log('🔧 ম্যানুয়াল ব্যালেন্স ফিক্স শুরু...');
+    showToast('⏳ ব্যালেন্স ফিক্স করা হচ্ছে...', 'info');
+    
+    (async function() {
+        await processAllPendingWithdrawals();
+        await refreshMemberDataFromSupabase();
+        await loadUserFunds();
+        updateFundsDisplay();
+        showToast('✅ ব্যালেন্স ফিক্স সম্পূর্ণ!', 'success');
+    })();
+}
+
+// 8. কনসোলে এক্সপোজ
+window.processAllPendingWithdrawals = processAllPendingWithdrawals;
+window.processWithdrawalApproval = processWithdrawalApproval;
+window.fixBalanceManually = fixBalanceManually;
+window.refreshBalanceWithAnimation = refreshBalanceWithAnimation;
+window.startRealtimeWithdrawalListener = startRealtimeWithdrawalListener;
+
+// 9. DOM লোড হলে রিয়েল-টাইম লিসেনার শুরু
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(() => {
+        startRealtimeWithdrawalListener();
+    }, 3000);
+});
+
+console.log('✅ উত্তোলন ব্যালেন্স আপডেট সিস্টেম লোড হয়েছে!');
+console.log('💡 কনসোলে টাইপ করুন:');
+console.log('  fixBalanceManually() - সব পেন্ডিং উত্তোলন ফিক্স করবে');
+console.log('  processAllPendingWithdrawals() - সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ করবে');
+console.log('  refreshBalanceWithAnimation() - অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ');
 
 // ============================================================
 // ✅ সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ
@@ -8542,56 +8776,298 @@ async function checkAllPending() {
     return data;
 }
 
-    // ============================================================
-// সুপারবেস রিয়েল-টাইম সাবস্ক্রিপশন
+// ============================================================
+// সুপারবেস রিয়েল-টাইম সাবস্ক্রিপশন (সঠিক সিনট্যাক্স)
 // ============================================================
 
 let withdrawalSubscription = null;
 
+// ১. রিয়েল-টাইম লিসেনার শুরু করার ফাংশন
 function startRealtimeWithdrawalListener() {
-    if (!currentUser) return;
-    
-    const client = await initSupabase();
-    if (!client) return;
-    
-    // আগের সাবস্ক্রিপশন বন্ধ করুন
-    if (withdrawalSubscription) {
-        withdrawalSubscription.unsubscribe();
+    if (!currentUser) {
+        console.log('⏳ currentUser লোড হয়নি, 2 সেকেন্ড পরে চেষ্টা...');
+        setTimeout(() => startRealtimeWithdrawalListener(), 2000);
+        return;
     }
     
-    // withdrawals টেবিলের পরিবর্তন শুনুন
-    withdrawalSubscription = client
-        .channel('withdrawals_changes')
-        .on(
-            'postgres_changes',
-            {
-                event: 'UPDATE',
-                schema: 'public',
-                table: 'withdrawals',
-                filter: `member_id=eq.${currentUser.id}`
-            },
-            (payload) => {
-                console.log('🔄 উত্তোলন আপডেট:', payload);
-                
-                // যদি উত্তোলন approved হয় এবং balance_updated true হয়
-                if (payload.new.status === 'approved' && payload.new.balance_updated === true) {
-                    console.log('✅ উত্তোলন অনুমোদিত এবং ব্যালেন্স আপডেট হয়েছে!');
+    // async ফাংশনের ভিতরে initSupabase কল
+    (async function() {
+        const client = await initSupabase();
+        if (!client) {
+            console.log('❌ Supabase client পাওয়া যায়নি!');
+            return;
+        }
+        
+        // আগের সাবস্ক্রিপশন বন্ধ করুন
+        if (withdrawalSubscription) {
+            withdrawalSubscription.unsubscribe();
+        }
+        
+        // withdrawals টেবিলের পরিবর্তন শুনুন
+        withdrawalSubscription = client
+            .channel('withdrawals_changes')
+            .on(
+                'postgres_changes',
+                {
+                    event: 'UPDATE',
+                    schema: 'public',
+                    table: 'withdrawals',
+                    filter: `member_id=eq.${currentUser.id}`
+                },
+                (payload) => {
+                    console.log('🔄 উত্তোলন আপডেট:', payload);
                     
-                    // অ্যানিমেশন সহ ব্যালেন্স আপডেট
-                    refreshBalanceWithAnimation();
-                    
-                    // টোস্ট নোটিফিকেশন
-                    showToast(`✅ ${payload.new.amount} টাকা উত্তোলন সম্পন্ন হয়েছে!`, 'success');
-                    
-                    // অডিও নোটিফিকেশন (ঐচ্ছিক)
-                    playNotificationSound();
+                    // যদি উত্তোলন approved হয় এবং balance_updated true হয়
+                    if (payload.new.status === 'approved' && payload.new.balance_updated === true) {
+                        console.log('✅ উত্তোলন অনুমোদিত এবং ব্যালেন্স আপডেট হয়েছে!');
+                        
+                        // অ্যানিমেশন সহ ব্যালেন্স আপডেট
+                        refreshBalanceWithAnimation();
+                        
+                        // টোস্ট নোটিফিকেশন
+                        showToast(`✅ ${payload.new.amount} টাকা উত্তোলন সম্পন্ন হয়েছে!`, 'success');
+                        
+                        // অডিও নোটিফিকেশন (ঐচ্ছিক)
+                        playNotificationSound();
+                    }
                 }
-            }
-        )
-        .subscribe();
-    
-    console.log('✅ রিয়েল-টাইম উত্তোলন লিসেনার সক্রিয়!');
+            )
+            .subscribe();
+        
+        console.log('✅ রিয়েল-টাইম উত্তোলন লিসেনার সক্রিয়!');
+    })();
 }
+
+// ============================================================
+// অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ
+// ============================================================
+
+function refreshBalanceWithAnimation() {
+    console.log('🔄 অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ...');
+    
+    // async ফাংশনের ভিতরে কল
+    (async function() {
+        // পুরনো ব্যালেন্স সংরক্ষণ
+        const oldBalances = {...userFunds};
+        
+        // নতুন ব্যালেন্স লোড
+        await refreshMemberDataFromSupabase();
+        await loadUserFunds();
+        
+        // কাউন্ট-আপ অ্যানিমেশন দেখান
+        animateBalanceUpdate('monthlySavingsFund', oldBalances.monthlySavings, userFunds.monthlySavings);
+        animateBalanceUpdate('savingsProfitFund', oldBalances.savingsProfit, userFunds.savingsProfit);
+        animateBalanceUpdate('investmentProfitFund', oldBalances.investmentProfit, userFunds.investmentProfit);
+        animateBalanceUpdate('referralProfitFund', oldBalances.referralProfit, userFunds.referralProfit);
+        animateBalanceUpdate('referralBonusFund', oldBalances.referralBonus, userFunds.referralBonus);
+        
+        // টোটাল আপডেট
+        const total = userFunds.monthlySavings + userFunds.savingsProfit + userFunds.investmentProfit + 
+                      userFunds.referralProfit + userFunds.referralBonus;
+        const totalElement = document.getElementById('totalFunds');
+        if (totalElement) {
+            totalElement.innerText = total.toLocaleString() + ' টাকা';
+        }
+        
+        // ব্যালেন্স ডিসপ্লে আপডেট
+        const balanceElement = document.getElementById('totalBalanceDisplay');
+        if (balanceElement) {
+            balanceElement.innerText = userFunds.monthlySavings.toLocaleString() + ' টাকা';
+        }
+        
+        // হিস্ট্রি রিফ্রেশ
+        await loadWithdrawalHistory();
+        
+        // localStorage আপডেট
+        updateLocalStorage();
+        
+        console.log('✅ ব্যালেন্স রিফ্রেশ সম্পূর্ণ:', userFunds);
+    })();
+}
+
+// ============================================================
+// অ্যানিমেশন ফাংশন
+// ============================================================
+
+function animateBalanceUpdate(elementId, oldValue, newValue) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    
+    if (oldValue === newValue) return;
+    
+    // ফ্ল্যাশ ইফেক্ট
+    element.style.transition = 'all 0.3s ease';
+    element.style.transform = 'scale(1.15)';
+    element.style.color = '#059669';
+    element.style.fontWeight = '900';
+    
+    // কাউন্ট-আপ এফেক্ট (যদি সংখ্যা পরিবর্তন হয়)
+    const duration = 600;
+    const startTime = performance.now();
+    const diff = newValue - oldValue;
+    
+    function updateNumber(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const currentValue = oldValue + (diff * eased);
+        
+        if (Number.isInteger(newValue)) {
+            element.innerText = Math.round(currentValue).toLocaleString() + ' টাকা';
+        } else {
+            element.innerText = currentValue.toFixed(2) + ' টাকা';
+        }
+        
+        if (progress < 1) {
+            requestAnimationFrame(updateNumber);
+        } else {
+            // ফ্ল্যাশ ইফেক্ট রিমুভ
+            setTimeout(() => {
+                element.style.transform = 'scale(1)';
+                element.style.color = '';
+                element.style.fontWeight = '';
+            }, 300);
+        }
+    }
+    
+    requestAnimationFrame(updateNumber);
+}
+
+// ============================================================
+// লোকাল স্টোরেজ আপডেট
+// ============================================================
+
+function updateLocalStorage() {
+    try {
+        const storedUser = localStorage.getItem('tukn_logged_member') || 
+                          sessionStorage.getItem('tukn_logged_member');
+        if (storedUser) {
+            const user = JSON.parse(storedUser);
+            user.balance = userFunds.monthlySavings;
+            user.referral_bonus = userFunds.referralBonus;
+            user.profit_balance_savings = userFunds.savingsProfit;
+            user.profit_balance_investment = userFunds.investmentProfit;
+            user.profit_balance_referral = userFunds.referralProfit;
+            localStorage.setItem('tukn_logged_member', JSON.stringify(user));
+            sessionStorage.setItem('tukn_logged_member', JSON.stringify(user));
+        }
+    } catch(e) {
+        console.log('localStorage আপডেট ব্যর্থ:', e);
+    }
+}
+
+// ============================================================
+// অডিও নোটিফিকেশন (ঐচ্ছিক)
+// ============================================================
+
+function playNotificationSound() {
+    try {
+        const audio = new Audio('data:audio/wav;base64,UklGRlwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YVoAAACBhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqFhYqF');
+        audio.volume = 0.3;
+        audio.play().catch(() => {});
+    } catch(e) {}
+}
+
+// ============================================================
+// কনসোলে হেল্পার ফাংশন
+// ============================================================
+
+// উইন্ডোতে এক্সপোজ করুন
+window.startRealtimeWithdrawalListener = startRealtimeWithdrawalListener;
+window.refreshBalanceWithAnimation = refreshBalanceWithAnimation;
+
+// ============================================================
+// ব্যালেন্স ফিক্স ফাংশন (কনসোল থেকে চালানোর জন্য)
+// ============================================================
+
+function fixBalanceManually() {
+    console.log('🔧 ম্যানুয়াল ব্যালেন্স ফিক্স শুরু...');
+    showToast('⏳ ব্যালেন্স ফিক্স করা হচ্ছে...', 'info');
+    
+    (async function() {
+        // সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ
+        await processAllPendingWithdrawals();
+        
+        // ব্যালেন্স রিফ্রেশ
+        await refreshMemberDataFromSupabase();
+        await loadUserFunds();
+        updateFundsDisplay();
+        
+        console.log('✅ ব্যালেন্স ফিক্স সম্পূর্ণ!');
+        showToast('✅ ব্যালেন্স ফিক্স সম্পূর্ণ!', 'success');
+    })();
+}
+
+// ============================================================
+// সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ
+// ============================================================
+
+function processAllPendingWithdrawals() {
+    console.log('🔄 সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ শুরু...');
+    showToast('⏳ উত্তোলন প্রক্রিয়াকরণ হচ্ছে...', 'info');
+    
+    (async function() {
+        const client = await initSupabase();
+        if (!client) {
+            showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+            return;
+        }
+        
+        try {
+            // RPC ফাংশন কল করুন (যদি তৈরি করা থাকে)
+            const { data, error } = await client.rpc('process_all_pending_withdrawals');
+            
+            if (error) {
+                console.error('❌ RPC error:', error);
+                showToast('❌ প্রক্রিয়াকরণ ব্যর্থ: ' + error.message, 'error');
+                return;
+            }
+            
+            const processedCount = data?.[0]?.processed_count || 0;
+            const totalAmount = data?.[0]?.total_amount || 0;
+            
+            if (processedCount === 0) {
+                showToast('✅ কোনো পেন্ডিং উত্তোলন নেই!', 'success');
+            } else {
+                showToast(`✅ ${processedCount} টি উত্তোলন প্রক্রিয়াকরণ সম্পন্ন! (${totalAmount} টাকা)`, 'success');
+            }
+            
+            // UI রিফ্রেশ
+            await refreshMemberDataFromSupabase();
+            await loadUserFunds();
+            updateFundsDisplay();
+            await loadWithdrawalHistory();
+            
+        } catch(e) {
+            console.error('❌ processAllPendingWithdrawals error:', e);
+            showToast('❌ প্রক্রিয়াকরণ ব্যর্থ!', 'error');
+        }
+    })();
+}
+
+// ============================================================
+// DOM লোড হলে রিয়েল-টাইম সাবস্ক্রিপশন শুরু
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('📄 ড্যাশবোর্ড লোড সম্পূর্ণ!');
+    
+    // 3 সেকেন্ড পরে রিয়েল-টাইম লিসেনার শুরু
+    setTimeout(function() {
+        startRealtimeWithdrawalListener();
+    }, 3000);
+});
+
+// ============================================================
+// কনসোল হেল্পার মেসেজ
+// ============================================================
+
+console.log('✅ উত্তোলন ফিক্স সম্পূর্ণ লোড হয়েছে!');
+console.log('💡 কনসোলে টাইপ করুন:');
+console.log('  fixBalanceManually() - সব পেন্ডিং উত্তোলন ফিক্স করবে');
+console.log('  processAllPendingWithdrawals() - সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ করবে');
+console.log('  refreshBalanceWithAnimation() - অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ');
+console.log('  startRealtimeWithdrawalListener() - রিয়েল-টাইম লিসেনার শুরু');
 
 // ============================================================
 // অ্যানিমেশন সহ ব্যালেন্স রিফ্রেশ
