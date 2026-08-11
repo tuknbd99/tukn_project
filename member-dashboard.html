@@ -8847,6 +8847,167 @@ window.checkWithdrawalStatus = checkWithdrawalStatus;
 
 console.log('✅ জরুরি ফিক্স ফাংশন লোড হয়েছে!');
 console.log('💡 কনসোলে টাইপ করুন: emergencyFixAllWithdrawals()');
+
+// ============================================================
+// 🛡️ পার্মানেন্ট ফিক্স - ব্যালেন্স যেন আর ফিরে না আসে
+// ============================================================
+
+// 1. সুপার স্ট্রং অটো-ফিক্সার
+async function permanentAutoFix() {
+    try {
+        const client = await initSupabase();
+        if (!client) return;
+        
+        // শুধু আনপ্রসেসড উত্তোলন খুঁজুন
+        const { data: pending, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('status', 'approved')
+            .eq('is_processed', false)
+            .limit(50);
+        
+        if (error) {
+            console.error('❌ পার্মানেন্ট ফিক্স error:', error);
+            return;
+        }
+        
+        if (!pending || pending.length === 0) {
+            console.log('✅ কোনো পেন্ডিং উত্তোলন নেই - সব প্রক্রিয়াকরণ করা হয়েছে!');
+            return;
+        }
+        
+        console.log(`📊 ${pending.length} টি উত্তোলন ফিক্স করা হচ্ছে...`);
+        
+        for (const withdrawal of pending) {
+            await processWithdrawalApproval(withdrawal.id);
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
+            // ✅ নিশ্চিত করুন যে is_processed = true হয়েছে
+            await client
+                .from('withdrawals')
+                .update({ 
+                    is_processed: true,
+                    processed_by: 'PERMANENT_AUTO_FIX'
+                })
+                .eq('id', withdrawal.id);
+        }
+        
+        // UI রিফ্রেশ
+        if (currentUser) {
+            await refreshMemberDataFromSupabase();
+            await loadUserFunds();
+            updateFundsDisplay();
+        }
+        
+        console.log(`✅ ${pending.length} টি উত্তোলন পার্মানেন্টলি ফিক্স সম্পন্ন!`);
+        
+    } catch(e) {
+        console.error('❌ পার্মানেন্ট ফিক্স ব্যর্থ:', e);
+    }
+}
+
+// 2. 🛡️ প্রোটেক্টেড মোড - প্রতি ১০ সেকেন্ড পর পর চেক করবে (আরও ঘন)
+document.addEventListener('DOMContentLoaded', function() {
+    // প্রথমবার ৩ সেকেন্ড পর
+    setTimeout(permanentAutoFix, 3000);
+    
+    // প্রতি ১০ সেকেন্ড পর পর চেক করবে (আরও সক্রিয়)
+    setInterval(permanentAutoFix, 10000);
+    
+    // প্রতি ৬০ সেকেন্ড পর ভারী চেক
+    setInterval(async function() {
+        await permanentAutoFix();
+        await checkAndFixDuplicateWithdrawals();
+    }, 60000);
+    
+    console.log('🛡️ পার্মানেন্ট ফিক্স সক্রিয় (প্রতি ১০ সেকেন্ড)');
+});
+
+// 3. ডুপ্লিকেট প্রসেসিং চেক করুন
+async function checkAndFixDuplicateWithdrawals() {
+    const client = await initSupabase();
+    if (!client) return;
+    
+    try {
+        // চেক করুন কোনো উত্তোলন ডুপ্লিকেটভাবে প্রসেস হচ্ছে কিনা
+        const { data: duplicates, error } = await client
+            .from('withdrawals')
+            .select('member_id, amount, type, COUNT(*)')
+            .eq('status', 'approved')
+            .eq('is_processed', true)
+            .group_by('member_id, amount, type')
+            .having('COUNT(*) > 1');
+        
+        if (duplicates && duplicates.length > 0) {
+            console.warn('⚠️ ডুপ্লিকেট উত্তোলন পাওয়া গেছে:', duplicates);
+        }
+    } catch(e) {
+        console.log('ডুপ্লিকেট চেক ব্যর্থ:', e);
+    }
+}
+
+// 4. 🚨 জরুরি স্টপ - যদি কোনো কারণে ব্যালেন্স ফিরে আসে
+async function emergencyStopAndFix() {
+    if (!confirm('⚠️ জরুরি! সব উত্তোলন রি-প্রসেস করবেন? এটি ব্যালেন্স ঠিক করবে।')) return;
+    
+    const client = await initSupabase();
+    if (!client) return;
+    
+    try {
+        // সব উত্তোলন রি-প্রসেস করুন
+        const { data: allWithdrawals } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('status', 'approved')
+            .order('id', { ascending: true });
+        
+        if (!allWithdrawals || allWithdrawals.length === 0) {
+            showToast('❌ কোনো উত্তোলন পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        showToast(`⏳ ${allWithdrawals.length} টি উত্তোলন রি-প্রসেস হচ্ছে...`, 'info');
+        
+        // প্রথমে সব is_processed = false করে দিন
+        for (const w of allWithdrawals) {
+            await client
+                .from('withdrawals')
+                .update({ 
+                    is_processed: false,
+                    balance_updated: false 
+                })
+                .eq('id', w.id);
+        }
+        
+        // তারপর আবার প্রসেস করুন
+        for (const w of allWithdrawals) {
+            await processWithdrawalApproval(w.id);
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        
+        showToast(`✅ ${allWithdrawals.length} টি উত্তোলন রি-প্রসেস সম্পন্ন!`, 'success');
+        
+        // UI রিফ্রেশ
+        await refreshMemberDataFromSupabase();
+        await loadUserFunds();
+        updateFundsDisplay();
+        
+    } catch(e) {
+        console.error('❌ ইমার্জেন্সি স্টপ ব্যর্থ:', e);
+        showToast('❌ ইমার্জেন্সি স্টপ ব্যর্থ!', 'error');
+    }
+}
+
+// কনসোলে এক্সপোজ করুন
+window.permanentAutoFix = permanentAutoFix;
+window.emergencyStopAndFix = emergencyStopAndFix;
+window.checkAndFixDuplicateWithdrawals = checkAndFixDuplicateWithdrawals;
+
+console.log('🛡️ পার্মানেন্ট ফিক্স লোড হয়েছে!');
+console.log('💡 কমান্ড:');
+console.log('  permanentAutoFix() - সব উত্তোলন পার্মানেন্টলি ফিক্স');
+console.log('  emergencyStopAndFix() - জরুরি রি-প্রসেস');
+console.log('  checkAndFixDuplicateWithdrawals() - ডুপ্লিকেট চেক');
     
 </script>
 </body>
