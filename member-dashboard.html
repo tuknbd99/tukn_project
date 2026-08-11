@@ -5931,258 +5931,202 @@ async function insertReferralBonusLog(memberId, amount, level, note) {
     }
 }
 
+// ============================================================
+// 📁 রেফারেল সিস্টেম - সম্পূর্ণ JavaScript
+// ============================================================
+
+// ============================================================
+// ১. রেফারেল ডাটা লোড
+// ============================================================
 async function loadReferralData() {
-    if(!currentUser || isLoadingReferral) return;
-    let client = await initSupabase();
-    if(!client) {
-        console.log('Supabase client not ready, retrying...');
+    if (!currentUser || isLoadingReferral) return;
+    
+    const client = await initSupabase();
+    if (!client) {
         setTimeout(() => loadReferralData(), 1000);
         return;
     }
+    
     isLoadingReferral = true;
     
-    for(let i=1; i<=10; i++) {
+    for (let i = 1; i <= 10; i++) {
         const container = document.getElementById(`level${i}List`);
-        if(container) container.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-emerald-600"></i> লোড হচ্ছে...</div>';
+        if (container) {
+            container.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-emerald-600"></i> লোড হচ্ছে...</div>';
+        }
     }
     
     try {
-        const { data: allMembers, error } = await client.from('members')
-            .select('member_id, full_name, mobile, monthly_savings, referred_by, refer_code, status, created_at');
-        
-        if(error) {
-            console.error('Supabase error:', error);
-            throw error;
-        }
-        
-        if(!allMembers || allMembers.length === 0) {
-            console.log('কোনো সদস্য পাওয়া যায়নি');
-            for(let i=1; i<=10; i++) {
-                const countEl = document.getElementById(`level${i}Count`);
-                const commissionEl = document.getElementById(`level${i}Commission`);
-                if(countEl) countEl.innerText = '0';
-                if(commissionEl) commissionEl.innerText = '০ টাকা';
-                const container = document.getElementById(`level${i}List`);
-                if(container) container.innerHTML = '<p class="text-gray-500 text-center py-4">কোনো সদস্য পাওয়া যায়নি</p>';
-            }
-            document.getElementById('totalReferrals').innerText = '0';
-            document.getElementById('totalCommission').innerText = '0';
-            userFunds.referralBonus = 0;
-            updateFundsDisplay();
-            isLoadingReferral = false;
-            return;
-        }
-        
-        console.log('✅ মোট সদস্য:', allMembers.length);
-        
-        const commissionRates = {1:0.15,2:0.10,3:0.05,4:0.05,5:0.05,6:0.05,7:0.05,8:0.05,9:0.05,10:0.05};
-        
-        const normalizedMembers = allMembers.map(member => {
-            let refCode = member.refer_code;
-            let refBy = member.referred_by;
-            if(refCode && typeof refCode === 'string') {
-                const match = refCode.match(/\d+/);
-                if(match) refCode = match[0];
-            }
-            if(refBy && typeof refBy === 'string') {
-                const match = refBy.match(/\d+/);
-                if(match) refBy = match[0];
-            }
-            return { ...member, refer_code_normalized: refCode, referred_by_normalized: refBy };
-        });
-        
         let myReferCode = currentUser.referId || currentUser.refer_code;
-        if(myReferCode && typeof myReferCode === 'string') {
-            const match = myReferCode.match(/\d+/);
-            if(match) myReferCode = match[0];
-        }
         
-        console.log('🔑 আমার রেফারেল কোড:', myReferCode);
-        
-        if(!myReferCode) {
-            try {
-                const { data: memberData } = await client
-                    .from('members')
-                    .select('refer_code')
-                    .eq('member_id', currentUser.id)
-                    .single();
-                if(memberData && memberData.refer_code) {
-                    myReferCode = memberData.refer_code;
-                    currentUser.referId = myReferCode;
-                    currentUser.refer_code = myReferCode;
-                    console.log('✅ API থেকে রেফারেল কোড পাওয়া গেছে:', myReferCode);
-                }
-            } catch(e) {
-                console.error('❌ রেফারেল কোড fetch error:', e);
+        if (!myReferCode) {
+            const { data: fixData, error: fixError } = await client.rpc(
+                'fix_member_referral',
+                { p_member_id: currentUser.id }
+            );
+            
+            if (!fixError && fixData && fixData.length > 0) {
+                myReferCode = fixData[0].refer_code;
+                currentUser.referId = myReferCode;
+                currentUser.refer_code = myReferCode;
+            } else {
+                isLoadingReferral = false;
+                showToast('⚠️ রেফারেল কোড তৈরি করতে সমস্যা!', 'error');
+                return;
             }
         }
         
-        if(!myReferCode) {
-            for(let i=1; i<=10; i++) {
-                const countEl = document.getElementById(`level${i}Count`);
-                const commissionEl = document.getElementById(`level${i}Commission`);
-                if(countEl) countEl.innerText = '0';
-                if(commissionEl) commissionEl.innerText = '০ টাকা';
+        const { data: treeData, error: treeError } = await client.rpc(
+            'get_referral_tree',
+            { p_member_id: currentUser.id }
+        );
+        
+        if (treeError) throw treeError;
+        
+        if (treeData && treeData.length > 0) {
+            const levelData = {};
+            let totalReferrals = 0;
+            
+            for (const ref of treeData) {
+                const level = ref.level || 1;
+                if (!levelData[level]) levelData[level] = [];
+                levelData[level].push(ref);
+                totalReferrals++;
+            }
+            
+            const commissionRates = {1:0.15, 2:0.10, 3:0.05, 4:0.05, 5:0.05, 6:0.05, 7:0.05, 8:0.05, 9:0.05, 10:0.05};
+            let totalCommission = 0;
+            
+            for (let level = 1; level <= 10; level++) {
+                const members = levelData[level] || [];
+                const rate = commissionRates[level] || 0.05;
+                let levelCommission = 0;
+                
+                for (const member of members) {
+                    levelCommission += (member.monthly_savings || 500) * rate;
+                }
+                
+                totalCommission += levelCommission;
+                
+                const countEl = document.getElementById(`level${level}Count`);
+                const commissionEl = document.getElementById(`level${level}Commission`);
+                if (countEl) countEl.innerText = members.length;
+                if (commissionEl) commissionEl.innerText = Math.floor(levelCommission).toLocaleString() + ' টাকা';
+                
+                updateLevelList(level, members, rate * 100);
+            }
+            
+            document.getElementById('totalReferrals').innerText = totalReferrals;
+            document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
+            
+            const roundedBonus = Math.floor(totalCommission);
+            if (userFunds.referralBonus !== roundedBonus) {
+                userFunds.referralBonus = roundedBonus;
+                updateFundsDisplay();
+                await client
+                    .from('members')
+                    .update({ referral_bonus: roundedBonus })
+                    .eq('member_id', currentUser.id);
+            }
+            
+            const activeCount = (levelData[1] || []).filter(r => r.status === 'active' || r.status === 'approved').length;
+            document.getElementById('activeReferrals').innerText = activeCount;
+            
+        } else {
+            for (let i = 1; i <= 10; i++) {
                 const container = document.getElementById(`level${i}List`);
-                if(container) container.innerHTML = '<p class="text-gray-500 text-center py-4">আপনার কোনো রেফারেল কোড নেই</p>';
+                if (container) {
+                    container.innerHTML = '<div class="text-center text-gray-400 py-3 text-sm">📭 Level ' + i + ' - কোনো রেফারেল নেই</div>';
+                }
             }
             document.getElementById('totalReferrals').innerText = '0';
-            document.getElementById('totalCommission').innerText = '0';
-            userFunds.referralBonus = 0;
-            updateFundsDisplay();
-            isLoadingReferral = false;
-            return;
         }
         
-        const levelReferrals = {1:[],2:[],3:[],4:[],5:[],6:[],7:[],8:[],9:[],10:[]};
-        const visited = new Set();
+        showToast('✅ রেফারেল ডাটা আপডেট সম্পন্ন!', 'success');
         
-        levelReferrals[1] = normalizedMembers.filter(m => 
-            m.referred_by_normalized === myReferCode && 
-            m.member_id !== currentUser.id &&
-            (m.status === 'active' || m.status === 'approved')
-        );
-        visited.add(myReferCode);
-        levelReferrals[1].forEach(m => {
-            if(m.member_id) visited.add(m.member_id);
-        });
-        
-        console.log('📊 Level 1 referrals:', levelReferrals[1].length);
-        
-        let currentLevelMembers = [...levelReferrals[1]];
-        for(let level = 2; level <= 10; level++) {
-            const nextLevelMembers = [];
-            for(const member of currentLevelMembers) {
-                let memberReferCode = member.refer_code_normalized;
-                if(memberReferCode && !visited.has(memberReferCode) && memberReferCode !== myReferCode) {
-                    const childRefs = normalizedMembers.filter(m => 
-                        m.referred_by_normalized === memberReferCode && 
-                        !visited.has(m.member_id) && 
-                        (m.status === 'active' || m.status === 'approved') &&
-                        m.member_id !== currentUser.id
-                    );
-                    for(const child of childRefs) {
-                        if(!visited.has(child.member_id)) {
-                            visited.add(child.member_id);
-                            nextLevelMembers.push(child);
-                        }
-                    }
-                }
-            }
-            levelReferrals[level] = nextLevelMembers;
-            currentLevelMembers = nextLevelMembers;
-            console.log(`📊 Level ${level} referrals:`, nextLevelMembers.length);
-        }
-        
-        let totalCommission = 0;
-        let totalReferrals = 0;
-        const referralBonusMap = {};
-        const referralLevelMap = {};
-        
-        for(let level = 1; level <= 10; level++) {
-            const levelCount = levelReferrals[level].length;
-            totalReferrals += levelCount;
-            let levelCommission = 0;
-            const rate = commissionRates[level];
-            for(const ref of levelReferrals[level]) {
-                const monthlyAmount = ref.monthly_savings || 500;
-                const commission = monthlyAmount * rate;
-                levelCommission += commission;
-                if(!referralBonusMap[ref.member_id]) {
-                    referralBonusMap[ref.member_id] = 0;
-                    referralLevelMap[ref.member_id] = level;
-                }
-                referralBonusMap[ref.member_id] += commission;
-            }
-            totalCommission += levelCommission;
-            
-            const countEl = document.getElementById(`level${level}Count`);
-            const commissionEl = document.getElementById(`level${level}Commission`);
-            if(countEl) countEl.innerText = levelCount;
-            if(commissionEl) commissionEl.innerText = Math.floor(levelCommission).toLocaleString();
-            updateLevelList(level, levelReferrals[level], rate * 100);
-        }
-        
-        const now = getCurrentBangladeshTime();
-        const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        
-        for(const [memberId, bonus] of Object.entries(referralBonusMap)) {
-            const level = referralLevelMap[memberId] || 0;
-            const roundedBonus = Math.round(bonus);
-            if (roundedBonus > 0) {
-                await insertReferralBonusLog(
-                    memberId, 
-                    roundedBonus, 
-                    level, 
-                    `Level ${level} রেফারেল বোনাস (${currentMonthKey})`
-                );
-            }
-        }
-        
-        const myTotalBonus = totalCommission;
-        const roundedMyBonus = Math.round(myTotalBonus);
-        
-        const { data: currentMember } = await client
-            .from('members')
-            .select('referral_bonus')
-            .eq('member_id', currentUser.id)
-            .single();
-        
-        if (currentMember && Math.round(currentMember.referral_bonus || 0) !== roundedMyBonus) {
-            const { error: myUpdateError } = await client
-                .from('members')
-                .update({ referral_bonus: roundedMyBonus })
-                .eq('member_id', currentUser.id);
-            
-            if(myUpdateError) {
-                console.error('❌ আপনার referral_bonus আপডেট ব্যর্থ:', myUpdateError);
-            } else {
-                console.log(`✅ আপনার referral_bonus আপডেট: ${roundedMyBonus}`);
-                userFunds.referralBonus = roundedMyBonus;
-            }
-        } else {
-            console.log(`ℹ️ আপনার referral_bonus ইতিমধ্যে আপডেটেড: ${roundedMyBonus}`);
-            userFunds.referralBonus = roundedMyBonus;
-        }
-        
-        document.getElementById('totalReferrals').innerText = totalReferrals;
-        document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
-        document.getElementById('totalLevels').innerText = '১০';
-        
-        const referralBonusCard = document.getElementById('referralBonusFund');
-        if(referralBonusCard) {
-            referralBonusCard.innerText = userFunds.referralBonus.toLocaleString() + ' টাকা';
-        }
-        
-        const referralProfitCard = document.getElementById('referralProfitFund');
-        if(referralProfitCard) {
-            referralProfitCard.innerText = (userFunds.referralProfit || 0).toLocaleString() + ' টাকা';
-        }
-        
-        updateReferralLink();
-        updateFundsDisplay();
-        
-        console.log('🎯 রেফারেল ডাটা লোড সম্পন্ন:', { 
-            totalReferrals, 
-            totalCommission: Math.floor(totalCommission),
-            referralBonus: userFunds.referralBonus
-        });
-        
-        const activeReferrals = levelReferrals[1].filter(r => r.status === 'active' || r.status === 'approved').length;
-        document.getElementById('activeReferrals').innerText = activeReferrals;
-        
-        showToast('✅ রেফারেল বোনাস আপডেট সম্পন্ন!', 'success');
-        
-    } catch(error) { 
+    } catch (error) {
         console.error('❌ রেফারেল error:', error);
-        for(let i=1; i<=10; i++) {
-            const container = document.getElementById(`level${i}List`);
-            if(container) container.innerHTML = '<p class="text-red-500 text-center py-4">⚠️ তথ্য লোড করতে সমস্যা!</p>';
-        }
-    } finally { 
-        isLoadingReferral = false; 
+        showToast('❌ রেফারেল ডাটা লোড করতে সমস্যা!', 'error');
+    } finally {
+        isLoadingReferral = false;
     }
 }
+
+// ============================================================
+// ২. লেভেল লিস্ট আপডেট
+// ============================================================
+function updateLevelList(level, referrals, rate) {
+    const container = document.getElementById(`level${level}List`);
+    if (!container) return;
+    
+    if (!referrals || referrals.length === 0) {
+        container.innerHTML = `<div class="text-center text-gray-400 py-3 text-sm">📭 Level ${level} - কোনো রেফারেল নেই</div>`;
+        return;
+    }
+    
+    const colors = {1:'emerald', 2:'blue', 3:'amber', 4:'purple', 5:'pink', 6:'indigo', 7:'red', 8:'teal', 9:'orange', 10:'cyan'};
+    const color = colors[level] || 'gray';
+    
+    let html = '';
+    for (const ref of referrals) {
+        const joinDate = ref.join_date ? formatDateBD(ref.join_date) : '-';
+        const monthlyAmount = ref.monthly_savings || 500;
+        const commission = monthlyAmount * (rate / 100);
+        
+        html += `
+            <div class="bg-white p-3 rounded-lg border hover:shadow-md transition mb-2">
+                <div class="flex justify-between items-start flex-wrap gap-2">
+                    <div>
+                        <p class="font-semibold text-gray-800">${ref.full_name || 'নাম নেই'}</p>
+                        <p class="text-xs text-gray-500"><i class="fas fa-mobile-alt"></i> ${ref.mobile || 'মোবাইল নেই'}</p>
+                        <p class="text-xs text-${color}-600"><i class="fas fa-id-card"></i> ${ref.member_id}</p>
+                        <p class="text-xs text-gray-400"><i class="fas fa-calendar-alt"></i> সদস্য: ${joinDate}</p>
+                    </div>
+                    <div class="text-right bg-amber-50 px-3 py-2 rounded-lg">
+                        <p class="text-sm font-semibold text-amber-700">💰 মাসিক সঞ্চয়: ${monthlyAmount.toLocaleString()} টাকা</p>
+                        <p class="text-xs font-semibold text-emerald-600">🎁 কমিশন: ${Math.floor(commission)} টাকা (${rate}%)</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    container.innerHTML = html;
+}
+
+// ============================================================
+// ৩. সকল সদস্যের রেফারেল ফিক্স
+// ============================================================
+async function fixAllReferrals() {
+    showToast('⏳ সকল সদস্যের রেফারেল ফিক্স করা হচ্ছে...', 'info');
+    
+    const client = await initSupabase();
+    if (!client) {
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data, error } = await client.rpc('fix_all_member_referrals');
+        
+        if (error) throw error;
+        
+        if (data && data.length > 0) {
+            const result = data[0];
+            showToast(`✅ ${result.fixed_members} জন সদস্যের রেফারেল ফিক্স করা হয়েছে!`, 'success');
+            await loadReferralData();
+        }
+        
+    } catch(e) {
+        console.error('❌ fixAllReferrals error:', e);
+        showToast('❌ ফিক্স করতে ব্যর্থ!', 'error');
+    }
+}
+
+// ============================================================
+// ৪. কনসোলে এক্সপোজ
+// ============================================================
+window.loadReferralData = loadReferralData;
+window.fixAllReferrals = fixAllReferrals;
 
 function updateLevelList(level, referrals, rate) {
     const container = document.getElementById(`level${level}List`);
