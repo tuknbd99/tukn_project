@@ -10842,65 +10842,98 @@ async function completeBookOrder(orderId) {
 }
 
 // ================================================================
-// FIXED: BOOK CATALOG FUNCTIONS
+// DEBUG: BOOK CATALOG - FORCE LOAD FROM SUPABASE
 // ================================================================
 
 async function loadBookCatalog() {
+    console.log('🔍 loadBookCatalog() কল করা হয়েছে...');
+    
     const container = document.getElementById('bookCatalogContainer');
     if (!container) {
-        console.error('❌ bookCatalogContainer not found');
+        console.error('❌ container পাওয়া যায়নি!');
         return;
     }
     
     container.innerHTML = `
-        <div class="text-center py-8">
-            <div class="loading-spinner"></div>
-            <p class="text-gray-500 mt-2">📚 কিতাব লোড হচ্ছে...</p>
+        <div class="text-center py-12">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-3">⏳ কিতাব লোড হচ্ছে...</p>
         </div>
     `;
     
-    const client = initSupabaseClient();
+    // Supabase ক্লায়েন্ট পান
+    let client = null;
+    try {
+        client = initSupabaseClient();
+        console.log('📡 Supabase client:', client ? '✅ পাওয়া গেছে' : '❌ পাওয়া যায়নি');
+    } catch(e) {
+        console.error('❌ Client init error:', e);
+    }
+    
     if (!client) {
         container.innerHTML = `
-            <div class="text-center text-red-500 py-8">
-                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
-                <p>❌ সংযোগ সমস্যা! Supabase ক্লায়েন্ট পাওয়া যায়নি।</p>
+            <div class="text-center text-red-500 py-12 bg-white rounded-xl border border-red-200">
+                <i class="fas fa-times-circle text-4xl block mb-3 text-red-400"></i>
+                <p class="text-lg font-medium">❌ Supabase ক্লায়েন্ট পাওয়া যায়নি</p>
+                <button onclick="loadBookCatalog()" class="btn btn-info btn-sm mt-4">
+                    <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
+                </button>
             </div>
         `;
         return;
     }
     
     try {
-        console.log('🔄 বইয়ের তালিকা লোড করা হচ্ছে...');
+        console.log('🔄 book_catalog টেবিল থেকে ডাটা লোড হচ্ছে...');
         
-        const { data: books, error } = await client
+        // টেবিল থেকে ডাটা নিন
+        const { data, error, status, statusText } = await client
             .from('book_catalog')
             .select('*')
-            .order('category')
-            .order('name');
+            .order('category', { ascending: true })
+            .order('name', { ascending: true });
+        
+        console.log('📊 Response status:', status);
+        console.log('📊 Response statusText:', statusText);
         
         if (error) {
-            console.error('❌ বই লোড করতে সমস্যা:', error);
+            console.error('❌ Supabase error:', error);
+            console.error('❌ Error code:', error.code);
+            console.error('❌ Error message:', error.message);
+            console.error('❌ Error details:', error.details);
             throw error;
         }
         
-        console.log(`✅ ${books?.length || 0} টি বই পাওয়া গেছে`);
+        console.log(`✅ মোট ${data?.length || 0} টি বই পাওয়া গেছে`);
         
-        if (!books || books.length === 0) {
+        // ডাটা প্রিন্ট করুন (ডিবাগিং এর জন্য)
+        if (data && data.length > 0) {
+            console.log('📖 প্রথম ৩টি বই:', data.slice(0, 3));
+        } else {
+            console.warn('⚠️ কোনো বই পাওয়া যায়নি! টেবিলটি খালি।');
+        }
+        
+        // যদি কোনো বই না থাকে
+        if (!data || data.length === 0) {
             container.innerHTML = `
-                <div class="text-center text-gray-500 py-12">
-                    <i class="fas fa-book text-5xl block mb-4 text-gray-300"></i>
-                    <p class="text-lg font-medium text-gray-400">কোনো কিতাব নেই</p>
-                    <p class="text-sm text-gray-400 mt-2">নিচের "কিতাব যুক্ত" বাটনে ক্লিক করে নতুন কিতাব যোগ করুন</p>
+                <div class="text-center text-gray-500 py-12 bg-white rounded-xl border border-dashed border-gray-300">
+                    <i class="fas fa-book text-6xl block mb-4 text-gray-300"></i>
+                    <p class="text-lg font-medium text-gray-400">📭 কোনো কিতাব নেই</p>
+                    <p class="text-sm text-gray-400 mt-2">Supabase-এ book_catalog টেবিলটি খালি আছে</p>
+                    <p class="text-xs text-gray-400 mt-1">SQL দিয়ে ডেটা ঢোকান অথবা "কিতাব যুক্ত" বাটন ব্যবহার করুন</p>
                     <button onclick="openAddBookModal()" class="btn btn-success mt-4 px-6 py-2.5">
                         <i class="fas fa-plus mr-2"></i> প্রথম কিতাব যোগ করুন
+                    </button>
+                    <button onclick="loadBookCatalog()" class="btn btn-info mt-4 px-6 py-2.5 ml-2">
+                        <i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ
                     </button>
                 </div>
             `;
             return;
         }
         
-        // ক্যাটাগরি অনুযায়ী গ্রুপ
+        // === ডাটা প্রসেসিং ===
+        const books = data;
         const groups = {};
         books.forEach(book => {
             const cat = book.category || 'অন্যান্য';
@@ -10912,32 +10945,44 @@ async function loadBookCatalog() {
         const sortedCategories = Object.keys(groups).sort();
         
         sortedCategories.forEach(cat => {
+            const items = groups[cat];
             html += `
                 <div class="mb-6">
-                    <div class="flex items-center gap-2 mb-3">
+                    <div class="flex items-center gap-3 mb-3">
                         <div class="font-bold text-emerald-700 bg-emerald-50 px-4 py-1.5 rounded-lg inline-block">
                             <i class="fas fa-layer-group mr-2"></i> ${cat}
                         </div>
-                        <span class="text-xs text-gray-400">(${groups[cat].length} টি কিতাব)</span>
+                        <span class="text-xs text-gray-400">(${items.length} টি কিতাব)</span>
+                        <div class="flex-1 border-b border-gray-200"></div>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             `;
             
-            groups[cat].forEach(book => {
+            items.forEach(book => {
                 const profit = (book.selling_price || 0) - (book.purchase_price || 0);
                 html += `
-                    <div class="bg-white border rounded-lg p-3 hover:shadow-md transition-shadow hover:border-emerald-300">
+                    <div class="bg-white border border-gray-200 rounded-xl p-4 hover:shadow-lg transition-all duration-300 hover:border-emerald-300 hover:-translate-y-1">
                         <div class="flex justify-between items-start">
-                            <div class="flex-1">
-                                <p class="font-semibold text-gray-800 text-sm">${book.name}</p>
-                                <div class="flex flex-wrap gap-1 mt-1.5">
-                                    <span class="text-xs bg-gray-100 px-2 py-0.5 rounded">🛒 ${book.purchase_price || 0}</span>
-                                    <span class="text-xs bg-emerald-100 px-2 py-0.5 rounded text-emerald-700">💰 ${book.selling_price || 0}</span>
-                                    <span class="text-xs bg-blue-100 px-2 py-0.5 rounded text-blue-700">🏷️ ${book.discount || 0}%</span>
-                                    <span class="text-xs bg-purple-100 px-2 py-0.5 rounded text-purple-700">📈 ${profit > 0 ? profit : 0}</span>
+                            <div class="flex-1 min-w-0">
+                                <p class="font-semibold text-gray-800 text-sm truncate" title="${book.name}">${book.name}</p>
+                                <div class="flex flex-wrap gap-1.5 mt-2">
+                                    <span class="text-xs bg-gray-100 px-2.5 py-1 rounded-full">
+                                        <i class="fas fa-shopping-cart text-gray-400 mr-1"></i> ${book.purchase_price || 0}
+                                    </span>
+                                    <span class="text-xs bg-emerald-100 px-2.5 py-1 rounded-full text-emerald-700">
+                                        <i class="fas fa-taka-sign mr-1"></i> ${book.selling_price || 0}
+                                    </span>
+                                    <span class="text-xs bg-blue-100 px-2.5 py-1 rounded-full text-blue-700">
+                                        <i class="fas fa-percent mr-1"></i> ${book.discount || 0}%
+                                    </span>
+                                    <span class="text-xs bg-purple-100 px-2.5 py-1 rounded-full text-purple-700">
+                                        <i class="fas fa-chart-line mr-1"></i> ${profit > 0 ? profit : 0}
+                                    </span>
                                 </div>
                             </div>
-                            <button onclick="openEditBookModal('${book.id}')" class="text-blue-500 hover:text-blue-700 text-sm p-1.5 hover:bg-blue-50 rounded-lg transition" title="সম্পাদনা">
+                            <button onclick="openEditBookModal('${book.id}')" 
+                                    class="text-blue-500 hover:text-blue-700 p-2 hover:bg-blue-50 rounded-lg transition-all duration-200 ml-2 flex-shrink-0" 
+                                    title="সম্পাদনা">
                                 <i class="fas fa-edit"></i>
                             </button>
                         </div>
@@ -10954,16 +10999,27 @@ async function loadBookCatalog() {
         container.innerHTML = html;
         console.log('✅ কিতাব তালিকা রেন্ডার সম্পূর্ণ!');
         
+        // ক্যাটাগরি সিলেক্ট পপুলেট করুন
+        await populateCategorySelects();
+        
     } catch(e) {
         console.error('❌ কিতাব লোড error:', e);
+        console.error('❌ Error stack:', e.stack);
+        
         container.innerHTML = `
-            <div class="text-center text-red-500 py-8">
-                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
-                <p>❌ কিতাব লোড করতে সমস্যা!</p>
-                <p class="text-sm text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
-                <button onclick="loadBookCatalog()" class="btn btn-info btn-sm mt-3">
-                    <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
-                </button>
+            <div class="text-center text-red-500 py-12 bg-white rounded-xl border border-red-200">
+                <i class="fas fa-exclamation-triangle text-4xl block mb-3 text-red-400"></i>
+                <p class="text-lg font-medium">❌ কিতাব লোড করতে সমস্যা!</p>
+                <p class="text-sm text-gray-500 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <p class="text-xs text-gray-400 mt-1">ডিবাগ তথ্য: book_catalog টেবিল থেকে ডাটা লোড করা যাচ্ছে না</p>
+                <div class="flex gap-2 justify-center mt-4">
+                    <button onclick="loadBookCatalog()" class="btn btn-info btn-sm">
+                        <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
+                    </button>
+                    <button onclick="openAddBookModal()" class="btn btn-success btn-sm">
+                        <i class="fas fa-plus mr-1"></i> নতুন কিতাব যোগ করুন
+                    </button>
+                </div>
             </div>
         `;
     }
