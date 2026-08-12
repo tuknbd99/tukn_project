@@ -171,6 +171,19 @@
             font-size: 18px;
             margin-bottom: 16px;
         }
+        .class-select-btn {
+            padding: 8px 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: 0.2s;
+            background: white;
+            font-weight: 500;
+            font-size: 14px;
+            text-align: center;
+        }
+        .class-select-btn:hover { border-color: #059669; background: #ecfdf5; }
+        .class-select-btn.active { border-color: #059669; background: #ecfdf5; color: #059669; }
         .book-select-item {
             display: flex;
             align-items: center;
@@ -249,8 +262,16 @@
                     </div>
                 </div>
 
-                <!-- কিতাব নির্বাচন (ছাত্রদের জন্য চেকবক্স) -->
+                <!-- শ্রেণী নির্বাচন -->
                 <div class="mb-4">
+                    <label class="form-label"><i class="fas fa-layer-group mr-2"></i> আপনার শ্রেণী নির্বাচন করুন <span class="text-red-500">*</span></label>
+                    <div id="classSelectionContainer" class="flex flex-wrap gap-2 mt-2">
+                        <!-- ডায়নামিক লোড হবে -->
+                    </div>
+                </div>
+
+                <!-- কিতাব নির্বাচন (শ্রেণী অনুযায়ী) -->
+                <div id="bookSelectionContainer" class="mb-4" style="display:none;">
                     <label class="form-label"><i class="fas fa-book mr-2"></i> কিতাব নির্বাচন করুন</label>
                     <div id="studentBookSelection" class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
                         <!-- ডায়নামিক লোড হবে -->
@@ -578,9 +599,10 @@ const DEFAULT_BOOKS = [
 
 let books = [];
 let editingBookId = null;
-let isAdminView = false; // false = student view, true = admin view
+let isAdminView = false;
 let studentSelectedBooks = [];
 let studentInstallment = null;
+let selectedClass = null;
 let orders = [];
 
 // ======================================================================
@@ -600,10 +622,10 @@ function init() {
     
     renderCatalog();
     populateCategorySelects();
-    renderStudentBookSelection();
+    renderClassSelection();
     renderRecentApplications();
     updateStudentSummary();
-    setView(false); // Start with student view
+    setView(false);
 }
 
 // ======================================================================
@@ -632,7 +654,7 @@ function setView(adminView) {
         badge.className = 'admin-badge';
         studentSection.style.display = 'none';
         adminPanel.style.display = 'block';
-        renderCatalog(); // Full view with admin buttons
+        renderCatalog();
     } else {
         toggle.classList.remove('active');
         studentLabel.classList.add('active');
@@ -641,8 +663,11 @@ function setView(adminView) {
         badge.className = 'student-badge';
         studentSection.style.display = 'block';
         adminPanel.style.display = 'none';
-        renderCatalogStudentView(); // Simple view
-        renderStudentBookSelection();
+        renderCatalogStudentView();
+        renderClassSelection();
+        if (selectedClass) {
+            renderStudentBookSelection(selectedClass);
+        }
         updateStudentSummary();
     }
 }
@@ -668,9 +693,6 @@ function renderCatalog() {
         html += `<div class="book-grid mt-2">`;
         items.forEach(book => {
             const profit = book.sellingPrice - book.purchasePrice;
-            const total = book.sellingPrice;
-            const discount = book.discount || 0;
-            const finalPrice = total - (total * discount / 100);
             html += `
                 <div class="book-card" data-id="${book.id}">
                     <button class="admin-edit-btn" onclick="openEditBookModal(${book.id})" title="সম্পাদনা করুন">
@@ -696,7 +718,7 @@ function renderCatalog() {
 }
 
 // ======================================================================
-// RENDER CATALOG - STUDENT VIEW (শুধু নাম ও মূল্য)
+// RENDER CATALOG - STUDENT VIEW
 // ======================================================================
 
 function renderCatalogStudentView() {
@@ -734,14 +756,58 @@ function renderCatalogStudentView() {
 }
 
 // ======================================================================
-// STUDENT BOOK SELECTION (চেকবক্স)
+// CLASS SELECTION (ছাত্র)
 // ======================================================================
 
-function renderStudentBookSelection() {
+function renderClassSelection() {
+    const container = document.getElementById('classSelectionContainer');
+    if (!container) return;
+    
+    const classes = [...new Set(books.map(b => b.category).filter(Boolean))].sort();
+    
+    container.innerHTML = classes.map(cls => `
+        <div class="class-select-btn" onclick="selectClass('${cls}')" id="class_${cls.replace(/\s/g,'_')}">
+            ${cls}
+        </div>
+    `).join('');
+}
+
+function selectClass(cls) {
+    selectedClass = cls;
+    
+    // Highlight selected class
+    document.querySelectorAll('.class-select-btn').forEach(el => {
+        el.classList.remove('active');
+    });
+    const el = document.getElementById(`class_${cls.replace(/\s/g,'_')}`);
+    if (el) el.classList.add('active');
+    
+    // Show book selection
+    document.getElementById('bookSelectionContainer').style.display = 'block';
+    renderStudentBookSelection(cls);
+    
+    // Reset previously selected books
+    studentSelectedBooks = [];
+    renderSelectedBooksSummary();
+    updateStudentSummary();
+}
+
+// ======================================================================
+// STUDENT BOOK SELECTION
+// ======================================================================
+
+function renderStudentBookSelection(category) {
     const container = document.getElementById('studentBookSelection');
     if (!container) return;
-
-    container.innerHTML = books.map(book => `
+    
+    const classBooks = books.filter(b => b.category === category);
+    
+    if (classBooks.length === 0) {
+        container.innerHTML = `<p class="text-gray-400 text-sm col-span-2">এই শ্রেণীতে কোনো কিতাব নেই</p>`;
+        return;
+    }
+    
+    container.innerHTML = classBooks.map(book => `
         <div class="book-select-item" onclick="toggleStudentBook(${book.id})" id="sbook_${book.id}">
             <input type="checkbox" id="scheck_${book.id}" onchange="toggleStudentBook(${book.id})">
             <div class="flex-1">
@@ -853,6 +919,10 @@ function submitStudentOrder() {
         document.getElementById('studentMobile').focus();
         return;
     }
+    if (!selectedClass) {
+        showToast('দয়া করে আপনার শ্রেণী নির্বাচন করুন!', 'error');
+        return;
+    }
     if (studentSelectedBooks.length === 0) {
         showToast('কমপক্ষে একটি কিতাব নির্বাচন করুন!', 'error');
         return;
@@ -871,6 +941,7 @@ function submitStudentOrder() {
         id: Date.now(),
         studentName: name,
         mobile: mobile,
+        class: selectedClass,
         books: studentSelectedBooks.map(b => ({ id: b.id, name: b.name, price: b.sellingPrice })),
         totalPrice: total,
         downPayment: downPayment,
@@ -886,12 +957,15 @@ function submitStudentOrder() {
     
     showSuccess(order);
     
-    // Reset student selection
+    // Reset
     studentSelectedBooks = [];
     studentInstallment = null;
+    selectedClass = null;
     document.querySelectorAll('.book-select-item').forEach(el => el.classList.remove('selected'));
     document.querySelectorAll('.installment-option').forEach(el => el.classList.remove('selected'));
+    document.querySelectorAll('.class-select-btn').forEach(el => el.classList.remove('active'));
     document.getElementById('selectedInstallmentDisplay').classList.add('hidden');
+    document.getElementById('bookSelectionContainer').style.display = 'none';
     document.getElementById('studentName').value = '';
     document.getElementById('studentMobile').value = '';
     renderSelectedBooksSummary();
@@ -911,6 +985,7 @@ function showSuccess(order) {
     msg.textContent = `"${order.studentName}" এর অর্ডার গ্রহণ করা হয়েছে।`;
     
     details.innerHTML = `
+        <p><strong>শ্রেণী:</strong> ${order.class}</p>
         <p><strong>মোবাইল:</strong> ${order.mobile}</p>
         <p><strong>কিতাব:</strong> ${order.books.map(b => b.name).join(', ')}</p>
         <p><strong>মোট মূল্য:</strong> ${order.totalPrice} টাকা</p>
@@ -950,7 +1025,7 @@ function renderRecentApplications() {
         <div class="flex justify-between items-center py-2 border-b border-gray-100 last:border-0">
             <div>
                 <p class="font-medium text-gray-800 text-sm">${order.studentName}</p>
-                <p class="text-xs text-gray-500">${order.books.length} টি কিতাব | ${order.totalPrice} টাকা</p>
+                <p class="text-xs text-gray-500">${order.class} | ${order.books.length} টি কিতাব</p>
             </div>
             <div class="text-right">
                 <span class="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">⏳ বিচারাধীন</span>
@@ -982,6 +1057,7 @@ function showHistory() {
                     <div>
                         <p class="font-bold text-gray-800">${order.studentName}</p>
                         <p class="text-sm text-gray-500">📱 ${order.mobile}</p>
+                        <p class="text-xs text-gray-400">${order.class}</p>
                     </div>
                     <span class="px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-700">⏳ বিচারাধীন</span>
                 </div>
@@ -1077,7 +1153,7 @@ function addNewBook() {
     renderCatalog();
     renderCatalogStudentView();
     populateCategorySelects();
-    renderStudentBookSelection();
+    renderClassSelection();
     closeAddBookModal();
     showToast(`"${name}" কিতাব যুক্ত হয়েছে!`, 'success');
 }
@@ -1121,7 +1197,7 @@ function saveBookEdit() {
     renderCatalog();
     renderCatalogStudentView();
     populateCategorySelects();
-    renderStudentBookSelection();
+    renderClassSelection();
     closeEditBookModal();
     showToast('কিতাব আপডেট করা হয়েছে!', 'success');
 }
@@ -1134,7 +1210,7 @@ function deleteBook() {
     renderCatalog();
     renderCatalogStudentView();
     populateCategorySelects();
-    renderStudentBookSelection();
+    renderClassSelection();
     closeEditBookModal();
     showToast('কিতাব মুছে ফেলা হয়েছে।', 'info');
 }
