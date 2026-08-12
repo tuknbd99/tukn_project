@@ -6,7 +6,10 @@
     <title>📚 কিতাব আবেদন | TUKNBD</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <!-- ===== ✅ Supabase CDN - এখানে যোগ করতে হবে ===== -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js"></script>
+    
     <style>
         * { box-sizing: border-box; }
         body { background: #f0fdf4; min-height: 100vh; font-family: 'Noto Sans Bengali', sans-serif; }
@@ -26,6 +29,7 @@
         .btn-outline:hover { background: #f3f4f6; }
         .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; }
         .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(59,130,246,0.3); }
+        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
         .toast {
             position: fixed; bottom: 24px; right: 24px; padding: 14px 24px; border-radius: 12px;
             color: white; z-index: 99999; animation: slideIn 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
@@ -293,6 +297,10 @@ function loadData() {
     return null;
 }
 
+function saveData(data) {
+    localStorage.setItem('tukn_book_catalog', JSON.stringify(data));
+}
+
 function loadOrders() {
     try {
         const raw = localStorage.getItem('tukn_book_orders');
@@ -304,6 +312,10 @@ function loadOrders() {
 function saveOrders(orders) {
     localStorage.setItem('tukn_book_orders', JSON.stringify(orders));
 }
+
+// ================================================================
+// DEFAULT BOOKS
+// ================================================================
 
 const DEFAULT_BOOKS = [
     { id: 1, name: 'বুখারী শরীফ (১-২ খন্ড)', category: 'জামাতে তাকমীল', purchasePrice: 0, sellingPrice: 0, discount: 0, profit: 0 },
@@ -412,13 +424,28 @@ let verifiedMember = null;
 
 async function initSupabase() {
     try {
-        if (supabaseClient && supabaseClient.from) return supabaseClient;
+        // Check if supabase is already loaded
         if (typeof supabase !== 'undefined' && supabase.createClient) {
-            supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-            console.log('✅ Supabase initialized');
+            if (!supabaseClient) {
+                supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                console.log('✅ Supabase client created successfully');
+            }
             return supabaseClient;
         }
-        throw new Error('Supabase not loaded');
+        
+        // Wait for supabase to load (max 5 seconds)
+        let attempts = 0;
+        while (attempts < 10) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            if (typeof supabase !== 'undefined' && supabase.createClient) {
+                supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                console.log('✅ Supabase client created after waiting');
+                return supabaseClient;
+            }
+            attempts++;
+        }
+        
+        throw new Error('Supabase library not loaded after waiting');
     } catch(e) {
         console.error('❌ Supabase init error:', e);
         return null;
@@ -457,6 +484,16 @@ function init() {
     orders = loadOrders();
     renderClassSelection();
     updateStudentSummary();
+    
+    // Check if supabase is loaded
+    setTimeout(async () => {
+        const sb = await initSupabase();
+        if (sb) {
+            console.log('✅ Supabase ready');
+        } else {
+            console.warn('⚠️ Supabase not available - using local data only');
+        }
+    }, 1000);
 }
 
 // ================================================================
@@ -480,7 +517,7 @@ async function verifyMember() {
     if (!sb) {
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-search"></i> যাচাই করুন';
-        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+        showToast('সার্ভার সংযোগ সমস্যা! আবার চেষ্টা করুন।', 'error');
         return;
     }
     
@@ -576,6 +613,7 @@ async function verifyMember() {
     }
 }
 
+// Enter key support
 document.getElementById('verifyInput')?.addEventListener('keypress', function(e) {
     if (e.key === 'Enter') {
         verifyMember();
