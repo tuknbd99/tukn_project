@@ -10857,22 +10857,82 @@ async function approveBookOrder(orderId) {
         return;
     }
     
+    // বাটন ডিজেবল করুন
+    const btns = document.querySelectorAll(`[onclick*="approveBookOrder('${orderId}')"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
     try {
-        await client
+        // 🔥 প্রথমে অর্ডারটি আছে কিনা চেক করুন
+        const { data: existingOrder, error: checkError } = await client
             .from('book_orders')
-            .update({
-                status: 'approved',
-                approved_by: currentAdmin?.username || 'সুপার অ্যাডমিন',
-                approved_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-            })
-            .eq('id', orderId);
+            .select('id, status')
+            .eq('id', orderId)
+            .maybeSingle();
+        
+        if (checkError) {
+            console.error('Check error:', checkError);
+            throw new Error('অর্ডার চেক করতে সমস্যা: ' + checkError.message);
+        }
+        
+        if (!existingOrder) {
+            showToast('❌ এই অর্ডারটি পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        if (existingOrder.status === 'approved') {
+            showToast('ℹ️ এই অর্ডারটি ইতিমধ্যে অনুমোদিত!', 'info');
+            return;
+        }
+        
+        // 🔥 আপডেট ডেটা - শুধু প্রয়োজনীয় ফিল্ড
+        const updateData = {
+            status: 'approved',
+            approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+            approved_at: new Date().toISOString()
+        };
+        
+        console.log('🔄 আপডেট ডেটা:', updateData);
+        
+        // 🔥 আপডেট করুন
+        const { data, error } = await client
+            .from('book_orders')
+            .update(updateData)
+            .eq('id', orderId)
+            .select();
+        
+        if (error) {
+            console.error('❌ Update error:', error);
+            
+            // 🔥 বিস্তারিত error দেখান
+            if (error.code === '23502') {
+                showToast('❌ টেবিলে কিছু ফিল্ড নেই! ডেটাবেজ চেক করুন।', 'error');
+            } else if (error.code === '42703') {
+                showToast('❌ কলাম পাওয়া যায়নি! টেবিল আপডেট করুন।', 'error');
+            } else {
+                showToast(`❌ অনুমোদন ব্যর্থ: ${error.message}`, 'error');
+            }
+            return;
+        }
+        
+        console.log('✅ অর্ডার অনুমোদিত:', data);
         
         showToast('✅ অর্ডার অনুমোদিত হয়েছে!', 'success');
-        loadBookOrders();
+        
+        // রিলোড
+        await loadBookOrders();
+        await loadBookSalesReport();
+        
     } catch(e) {
-        console.error('Approve error:', e);
-        showToast('অনুমোদন ব্যর্থ!', 'error');
+        console.error('❌ Approve error:', e);
+        showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '✅ অনুমোদন';
+        });
     }
 }
 
@@ -10886,21 +10946,50 @@ async function rejectBookOrder(orderId) {
         return;
     }
     
+    const btns = document.querySelectorAll(`[onclick*="rejectBookOrder('${orderId}')"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
     try {
-        await client
+        // 🔥 অর্ডার চেক করুন
+        const { data: existingOrder, error: checkError } = await client
             .from('book_orders')
-            .update({
-                status: 'rejected',
-                reject_reason: reason,
-                updated_at: new Date().toISOString()
-            })
+            .select('id, status')
+            .eq('id', orderId)
+            .maybeSingle();
+        
+        if (checkError) throw checkError;
+        if (!existingOrder) {
+            showToast('❌ অর্ডার পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        // 🔥 আপডেট করুন
+        const updateData = {
+            status: 'rejected',
+            reject_reason: reason.trim()
+        };
+        
+        const { error } = await client
+            .from('book_orders')
+            .update(updateData)
             .eq('id', orderId);
         
+        if (error) throw error;
+        
         showToast('❌ অর্ডার বাতিল করা হয়েছে!', 'warning');
-        loadBookOrders();
+        await loadBookOrders();
+        
     } catch(e) {
         console.error('Reject error:', e);
-        showToast('বাতিল ব্যর্থ!', 'error');
+        showToast('❌ বাতিল ব্যর্থ!', 'error');
+    } finally {
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '❌ বাতিল';
+        });
     }
 }
 
