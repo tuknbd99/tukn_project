@@ -104,7 +104,7 @@
 
         /* ✅ প্রিন্টের জন্য পেজ ব্রেক */
 @media print {
-    .page-break {
+        .page-break {
         page-break-after: always !important;
         border: none !important;
         margin: 0 !important;
@@ -112,7 +112,44 @@
         height: 0 !important;
         visibility: hidden !important;
     }
+
+     /* ✅ প্রিন্ট পেজ */
+    .print-page {
+        page-break-inside: avoid !important;
+    }
+       /* ✅ পেজ হেডার */
+    .page-header-info {
+        page-break-inside: avoid !important;
+    }
+           
+    /* ✅ টেবিলের সকল ফন্ট সাইজ ১২ এবং বোল্ড */
+    .data-table {
+        font-size: 12px !important;
+        line-height: 1.5 !important;
+        width: 100% !important;
+    }
     
+    .data-table th {
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        padding: 6px 8px !important;
+        background: #f3f4f6 !important;
+        border-bottom: 2px solid #d1d5db !important;
+    }
+    
+    .data-table td {
+        font-size: 12px !important;
+        padding: 5px 8px !important;
+        line-height: 1.4 !important;
+        border-bottom: 1px solid #f1f5f9 !important;
+    }
+    
+    /* ✅ লেনদেনের ধরন বোল্ড */
+    .data-table td span {
+        font-weight: 700 !important;
+        font-size: 12px !important;
+    }
+}
     .page-footer {
         page-break-inside: avoid !important;
         margin-top: 8px !important;
@@ -7175,7 +7212,7 @@ async function loadReport() {
     }
 
 // ============================================================
-// ===== ALL TRANSACTIONS FUNCTIONS (UPDATED) =====
+// ===== ALL TRANSACTIONS FUNCTIONS (COMPLETE FIX) =====
 // ============================================================
 async function loadAllTransactions() {
     const fromDate = document.getElementById('txFromDate').value;
@@ -7230,17 +7267,8 @@ async function loadAllTransactions() {
         
         transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
         
-        const totalAmount = transactions.reduce((s, t) => s + (t.amount || 0), 0);
         const totalCredit = transactions.filter(t => t.isCredit).reduce((s, t) => s + (t.amount || 0), 0);
         const totalDebit = transactions.filter(t => !t.isCredit).reduce((s, t) => s + (t.amount || 0), 0);
-        
-        // ✅ সারাংশ এখন টেবিলের নিচে দেখানোর জন্য সংরক্ষণ করছি
-        const summaryData = {
-            count: transactions.length,
-            credit: totalCredit,
-            debit: totalDebit,
-            net: totalCredit - totalDebit
-        };
         
         if (transactions.length === 0) { 
             container.innerHTML = `
@@ -7249,80 +7277,154 @@ async function loadAllTransactions() {
                     <p>কোনো লেনদেন নেই</p>
                 </div>
             `;
-            // ✅ সারাংশ খালি করুন
             if (summaryContainer) summaryContainer.innerHTML = '';
             return; 
         }
         
-        const typeBadges = { 
-            'সঞ্চয়': 'savings', 
-            'লোন': 'loan', 
-            'উত্তোলন': 'withdrawal', 
-            'রেফারেল বোনাস': 'referral', 
-            'সঞ্চয় লভ্যাংশ': 'profit', 
-            'বিনিয়োগ লভ্যাংশ': 'profit', 
-            'রেফারেল লভ্যাংশ': 'profit' 
-        };
+        // ✅ পেজ ব্রেকের জন্য প্রতি ২৫টি লেনদেন
+        const PAGE_SIZE = 25;
+        let html = '';
+        let pageCount = 0;
+        let runningTotalCredit = 0;
+        let runningTotalDebit = 0;
+        const totalPages = Math.ceil(transactions.length / PAGE_SIZE);
+        const now = new Date();
+        const printDate = now.toLocaleString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const printerName = currentAdmin?.full_name || currentAdmin?.username || 'অ্যাডমিন';
         
-        let html = `
-            <div class="table-scroll">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>তারিখ</th>
-                            <th>ধরন</th>
-                            <th>সদস্য</th>
-                            <th>আইডি</th>
-                            <th class="text-left">পরিমাণ</th>
-                            <th>বিবরণ</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        `;
-        
-        transactions.forEach(t => {
-            const badgeClass = typeBadges[t.type] || 'savings';
-            html += `<tr>
-                <td>${new Date(t.date).toLocaleDateString('bn-BD')}</td>
-                <td><span class="tx-badge ${badgeClass}">${t.type}</span></td>
-                <td>${t.member || '-'}</td>
-                <td>${t.id || '-'}</td>
-                <td class="text-left font-bold ${t.isCredit ? 'text-emerald-600' : 'text-red-600'}">${t.isCredit ? '+' : '-'} ${formatAmountWithText(t.amount)}</td>
-                <td>${t.note || '-'}</td>
-            </tr>`;
-        });
-        
-        html += `
-                    </tbody>
-                </table>
-            </div>
+        for (let i = 0; i < transactions.length; i += PAGE_SIZE) {
+            pageCount++;
+            const pageTransactions = transactions.slice(i, i + PAGE_SIZE);
+            const pageCredit = pageTransactions.filter(t => t.isCredit).reduce((s, t) => s + (t.amount || 0), 0);
+            const pageDebit = pageTransactions.filter(t => !t.isCredit).reduce((s, t) => s + (t.amount || 0), 0);
             
-            <!-- ✅ সারাংশ এখন টেবিলের নিচে -->
-            <div class="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
-                        <p class="text-xs text-gray-500">📋 মোট লেনদেন</p>
-                        <p class="text-xl font-bold text-gray-700">${summaryData.count}</p>
+            // ✅ চলমান যোগফল আপডেট
+            runningTotalCredit += pageCredit;
+            runningTotalDebit += pageDebit;
+            
+            // ✅ পেজ হেডার
+            html += `
+                <div class="print-page">
+                    <!-- পেজ হেডার -->
+                    <div class="page-header-info">
+                        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #059669; padding-bottom:6px; margin-bottom:8px;">
+                            <div>
+                                <span style="font-weight:700; color:#059669; font-size:11px;">📄 TUKNBD</span>
+                                <span style="font-size:10px; color:#6b7280; margin-left:8px;">সকল লেনদেন</span>
+                            </div>
+                            <div style="font-size:9px; color:#6b7280; text-align:right;">
+                                <div>পৃষ্ঠা ${pageCount}/${totalPages}</div>
+                                <div>প্রিন্ট: ${printDate}</div>
+                            </div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; font-size:9px; color:#6b7280; padding-bottom:4px; border-bottom:1px dashed #e5e7eb; margin-bottom:6px;">
+                            <span>👤 প্রিন্ট করেছেন: ${printerName}</span>
+                            <span>📅 ${fromDate || 'সব'} থেকে ${toDate || 'সব'}</span>
+                        </div>
                     </div>
-                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
-                        <p class="text-xs text-gray-500">💰 মোট জমা</p>
-                        <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(summaryData.credit)}</p>
+                    
+                    <table class="data-table" style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead>
+                            <tr style="background:#f3f4f6;">
+                                <th style="padding:6px 8px; text-align:left; font-weight:700; border-bottom:2px solid #d1d5db; font-size:12px;">তারিখ</th>
+                                <th style="padding:6px 8px; text-align:left; font-weight:700; border-bottom:2px solid #d1d5db; font-size:12px;">ধরন</th>
+                                <th style="padding:6px 8px; text-align:left; font-weight:700; border-bottom:2px solid #d1d5db; font-size:12px;">সদস্য</th>
+                                <th style="padding:6px 8px; text-align:left; font-weight:700; border-bottom:2px solid #d1d5db; font-size:12px;">আইডি</th>
+                                <th style="padding:6px 8px; text-align:left; font-weight:700; border-bottom:2px solid #d1d5db; font-size:12px;">পরিমাণ</th>
+                                <th style="padding:6px 8px; text-align:left; font-weight:700; border-bottom:2px solid #d1d5db; font-size:12px;">বিবরণ</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            // ✅ টেবিল ডেটা
+            pageTransactions.forEach(t => {
+                const badgeClass = t.typeClass || 'savings';
+                const isCredit = t.isCredit;
+                const amountClass = isCredit ? 'text-emerald-600' : 'text-red-600';
+                const sign = isCredit ? '+' : '-';
+                
+                html += `<tr style="border-bottom:1px solid #f1f5f9;">
+                    <td style="padding:5px 8px; font-size:12px; line-height:1.4;">${new Date(t.date).toLocaleDateString('bn-BD')}</td>
+                    <td style="padding:5px 8px; font-size:12px; line-height:1.4;">
+                        <span style="font-weight:700; font-size:12px; padding:2px 8px; border-radius:10px; background:${t.typeClass === 'savings' ? '#d1fae5' : t.typeClass === 'loan' ? '#dbeafe' : t.typeClass === 'withdrawal' ? '#fee2e2' : '#fef3c7'}; color:${t.typeClass === 'savings' ? '#065f46' : t.typeClass === 'loan' ? '#1e40af' : t.typeClass === 'withdrawal' ? '#991b1b' : '#92400e'};">${t.type}</span>
+                    </td>
+                    <td style="padding:5px 8px; font-size:12px; line-height:1.4; font-weight:500;">${t.member || '-'}</td>
+                    <td style="padding:5px 8px; font-size:11px; line-height:1.4; color:#6b7280;">${t.id || '-'}</td>
+                    <td style="padding:5px 8px; font-size:12px; line-height:1.4; font-weight:700; ${isCredit ? 'color:#059669;' : 'color:#dc2626;'}">${sign} ${formatAmountWithText(t.amount)}</td>
+                    <td style="padding:5px 8px; font-size:11px; line-height:1.4; color:#6b7280;">${t.note || '-'}</td>
+                </tr>`;
+            });
+            
+            // ✅ পেজের শেষে যোগফল
+            html += `
+                        </tbody>
+                    </table>
+                    
+                    <!-- ✅ পেজের শেষে যোগফল -->
+                    <div style="margin-top:6px; padding-top:6px; border-top:2px solid #059669; display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; font-size:11px; page-break-inside:avoid;">
+                        <div style="background:#f0fdf4; padding:4px 8px; border-radius:4px; text-align:center;">
+                            <div style="font-size:9px; color:#6b7280;">📋 এই পেজের লেনদেন</div>
+                            <div style="font-weight:700; font-size:12px; color:#1f2937;">${pageTransactions.length}</div>
+                        </div>
+                        <div style="background:#ecfdf5; padding:4px 8px; border-radius:4px; text-align:center; border:1px solid #d1fae5;">
+                            <div style="font-size:9px; color:#6b7280;">💰 এই পেজের জমা</div>
+                            <div style="font-weight:700; font-size:12px; color:#059669;">${formatAmountWithText(pageCredit)}</div>
+                        </div>
+                        <div style="background:#fef2f2; padding:4px 8px; border-radius:4px; text-align:center; border:1px solid #fecaca;">
+                            <div style="font-size:9px; color:#6b7280;">💸 এই পেজের খরচ</div>
+                            <div style="font-weight:700; font-size:12px; color:#dc2626;">${formatAmountWithText(pageDebit)}</div>
+                        </div>
+                        <div style="background:#eff6ff; padding:4px 8px; border-radius:4px; text-align:center; border:1px solid #bfdbfe;">
+                            <div style="font-size:9px; color:#6b7280;">📊 চলমান ব্যালেন্স</div>
+                            <div style="font-weight:700; font-size:12px; ${(runningTotalCredit - runningTotalDebit) >= 0 ? 'color:#059669;' : 'color:#dc2626;'}">${formatAmountWithText(runningTotalCredit - runningTotalDebit)}</div>
+                        </div>
                     </div>
-                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
-                        <p class="text-xs text-gray-500">💸 মোট খরচ</p>
-                        <p class="text-xl font-bold text-red-600">${formatAmountWithText(summaryData.debit)}</p>
+                    
+                    <!-- ✅ চলমান যোগফল (পরের পেজের জন্য) -->
+                    ${pageCount < totalPages ? `
+                    <div style="margin-top:4px; padding:4px 8px; background:#f8fafc; border-radius:4px; border:1px dashed #059669; font-size:10px; text-align:center; page-break-inside:avoid;">
+                        <span style="font-weight:600;">⏩ পরবর্তী পেজের জন্য চলমান যোগফল:</span>
+                        <span style="font-weight:700; color:#059669;">জমা: ${formatAmountWithText(runningTotalCredit)}</span>
+                        <span style="font-weight:700; color:#dc2626; margin-left:8px;">খরচ: ${formatAmountWithText(runningTotalDebit)}</span>
+                        <span style="font-weight:700; ${(runningTotalCredit - runningTotalDebit) >= 0 ? 'color:#059669;' : 'color:#dc2626;'} margin-left:8px;">নেট: ${formatAmountWithText(runningTotalCredit - runningTotalDebit)}</span>
                     </div>
-                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
-                        <p class="text-xs text-gray-500">📊 নেট ব্যালেন্স</p>
-                        <p class="text-xl font-bold ${summaryData.net >= 0 ? 'text-emerald-600' : 'text-red-600'}">${formatAmountWithText(summaryData.net)}</p>
+                    ` : ''}
+                    
+                    <!-- ✅ পেজ ব্রেক (শেষ পেজ ছাড়া) -->
+                    ${pageCount < totalPages ? `<div class="page-break"></div>` : ''}
+                </div>
+            `;
+        }
+        
+        // ✅ মোট যোগফল (সব পেজের)
+        html += `
+            <div class="print-page-total" style="margin-top:10px; padding-top:10px; border-top:3px solid #059669; page-break-inside:avoid;">
+                <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;">
+                    <div style="background:#f0fdf4; padding:6px 10px; border-radius:6px; text-align:center; border:2px solid #059669;">
+                        <div style="font-size:10px; color:#6b7280; font-weight:600;">📋 মোট লেনদেন</div>
+                        <div style="font-weight:700; font-size:14px; color:#1f2937;">${transactions.length}</div>
                     </div>
+                    <div style="background:#ecfdf5; padding:6px 10px; border-radius:6px; text-align:center; border:2px solid #059669;">
+                        <div style="font-size:10px; color:#6b7280; font-weight:600;">💰 মোট জমা</div>
+                        <div style="font-weight:700; font-size:14px; color:#059669;">${formatAmountWithText(totalCredit)}</div>
+                    </div>
+                    <div style="background:#fef2f2; padding:6px 10px; border-radius:6px; text-align:center; border:2px solid #dc2626;">
+                        <div style="font-size:10px; color:#6b7280; font-weight:600;">💸 মোট খরচ</div>
+                        <div style="font-weight:700; font-size:14px; color:#dc2626;">${formatAmountWithText(totalDebit)}</div>
+                    </div>
+                    <div style="background:#eff6ff; padding:6px 10px; border-radius:6px; text-align:center; border:2px solid #3b82f6;">
+                        <div style="font-size:10px; color:#6b7280; font-weight:600;">📊 নেট ব্যালেন্স</div>
+                        <div style="font-weight:700; font-size:14px; ${(totalCredit - totalDebit) >= 0 ? 'color:#059669;' : 'color:#dc2626;'}">${formatAmountWithText(totalCredit - totalDebit)}</div>
+                    </div>
+                </div>
+                <div style="margin-top:6px; text-align:center; font-size:9px; color:#9ca3af; border-top:1px solid #e5e7eb; padding-top:6px;">
+                    TUKNBD - সুপার অ্যাডমিন প্যানেল | প্রিন্ট: ${printDate} | প্রিন্ট করেছেন: ${printerName}
                 </div>
             </div>
         `;
         
         container.innerHTML = html;
-        
-        // ✅ উপরের সারাংশ খালি করুন
         if (summaryContainer) summaryContainer.innerHTML = '';
         
     } catch(e) { 
@@ -11027,6 +11129,7 @@ function loadDashboardWithPermissions() {
     window.updateBranchAdminSession = updateBranchAdminSession;
     window.generateDynamicMenu = generateDynamicMenu;
     window.loadDashboardWithPermissions = loadDashboardWithPermissions;
+    window.loadAllTransactions = loadAllTransactions;
 
     console.log('✅ TUKNBD Admin Panel Loaded Successfully!');
     console.log('🔐 Permission System Active!');
