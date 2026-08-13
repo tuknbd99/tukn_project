@@ -12847,7 +12847,260 @@ window.showCustomModal = showCustomModal;
 window.closeCustomModal = closeCustomModal;
 
 console.log('✅ সমস্ত book-payment ফাংশন রেডি!');
+
+    // ================================================================
+// 📊 BOOK SALES REPORT FUNCTIONS
+// ================================================================
+
+// ১. বই বিক্রয় রিপোর্ট লোড করুন
+async function loadBookSalesReport() {
+    console.log('📊 loadBookSalesReport() called');
     
+    const container = document.getElementById('bookSalesReportContainer');
+    if (!container) {
+        console.error('❌ bookSalesReportContainer not found');
+        return;
+    }
+    
+    const fromDate = document.getElementById('salesFromDate')?.value || '';
+    const toDate = document.getElementById('salesToDate')?.value || '';
+    
+    // লোডিং দেখান
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner"></div>
+            <p class="text-gray-500 mt-2">📊 রিপোর্ট লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ সংযোগ সমস্যা!</p>
+                <button onclick="loadBookSalesReport()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+        return;
+    }
+    
+    try {
+        // 🔥 সব অর্ডার লোড করুন
+        let query = client
+            .from('book_orders')
+            .select('*')
+            .order('submitted_at', { ascending: false });
+        
+        if (fromDate) {
+            query = query.gte('submitted_at', fromDate);
+        }
+        if (toDate) {
+            query = query.lte('submitted_at', toDate + 'T23:59:59');
+        }
+        
+        const { data: orders, error } = await query;
+        
+        if (error) throw error;
+        
+        if (!orders || orders.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                    <p>কোনো অর্ডার নেই</p>
+                    <p class="text-sm text-gray-400 mt-2">${fromDate || toDate ? 'ফিল্টার মেলে কোনো ডেটা নেই' : 'এখনও কোনো অর্ডার করা হয়নি'}</p>
+                </div>
+            `;
+            updateSalesSummary({ total: 0, collected: 0, due: 0, lateFee: 0 });
+            return;
+        }
+        
+        // 🔥 পেমেন্ট লোড করুন
+        const orderIds = orders.map(o => o.order_id || o.id);
+        let paymentQuery = client
+            .from('book_payments')
+            .select('*')
+            .in('order_id', orderIds);
+        
+        if (fromDate) {
+            paymentQuery = paymentQuery.gte('payment_date', fromDate);
+        }
+        if (toDate) {
+            paymentQuery = paymentQuery.lte('payment_date', toDate + 'T23:59:59');
+        }
+        
+        const { data: payments, error: paymentError } = await paymentQuery;
+        
+        if (paymentError) throw paymentError;
+        
+        // 🔥 সারাংশ ক্যালকুলেশন
+        let totalAmount = 0;
+        let collectedAmount = 0;
+        let dueAmount = 0;
+        let lateFeeAmount = 0;
+        
+        orders.forEach(order => {
+            totalAmount += (order.total_price || 0);
+            collectedAmount += (order.total_paid || 0);
+            
+            // বাকি = মোট - পরিশোধিত
+            const due = (order.total_price || 0) - (order.total_paid || 0);
+            dueAmount += due > 0 ? due : 0;
+        });
+        
+        // লেট ফি ক্যালকুলেশন
+        if (payments) {
+            payments.forEach(p => {
+                if (p.is_late) {
+                    lateFeeAmount += (p.late_fee || 0);
+                }
+            });
+        }
+        
+        // সারাংশ আপডেট
+        updateSalesSummary({
+            total: totalAmount,
+            collected: collectedAmount,
+            due: dueAmount,
+            lateFee: lateFeeAmount
+        });
+        
+        // 🔥 টেবিল রেন্ডার
+        let html = `
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>তারিখ</th>
+                            <th>ছাত্র</th>
+                            <th>শ্রেণী</th>
+                            <th class="text-left">মোট</th>
+                            <th class="text-left">পরিশোধিত</th>
+                            <th class="text-left">বাকি</th>
+                            <th>স্ট্যাটাস</th>
+                            <th>অ্যাকশন</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        orders.forEach(order => {
+            const due = (order.total_price || 0) - (order.total_paid || 0);
+            const dueClass = due > 0 ? 'text-red-600 font-bold' : 'text-green-600';
+            const statusClass = order.status === 'approved' ? 'status-approved' :
+                               order.status === 'pending' ? 'status-pending' :
+                               order.status === 'rejected' ? 'status-rejected' : 'status-completed';
+            const statusText = order.status === 'approved' ? '✅ অনুমোদিত' :
+                              order.status === 'pending' ? '⏳ বিচারাধীন' :
+                              order.status === 'rejected' ? '❌ বাতিল' : '✅ সম্পন্ন';
+            
+            const dateStr = order.submitted_at ? new Date(order.submitted_at).toLocaleDateString('bn-BD', {
+                year: 'numeric', month: 'short', day: 'numeric'
+            }) : '-';
+            
+            html += `
+                <tr>
+                    <td class="text-xs whitespace-nowrap">${dateStr}</td>
+                    <td><span class="font-medium">${order.student_name || '-'}</span></td>
+                    <td class="text-xs">${order.class || '-'}</td>
+                    <td class="text-left font-bold text-blue-600">${(order.total_price || 0).toLocaleString()} টাকা</td>
+                    <td class="text-left text-emerald-600">${(order.total_paid || 0).toLocaleString()} টাকা</td>
+                    <td class="text-left ${dueClass}">${due > 0 ? due.toLocaleString() + ' টাকা' : '০ টাকা'}</td>
+                    <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                    <td>
+                        <button onclick="viewBookOrder('${order.id || order.order_id}')" class="btn btn-info btn-xs" title="বিস্তারিত">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        // ফুটার (মোট)
+        const totalDue = orders.reduce((sum, o) => sum + ((o.total_price || 0) - (o.total_paid || 0)), 0);
+        html += `
+            <tr style="font-weight:700; background:#f3f4f6; border-top:2px solid #059669;">
+                <td colspan="3" class="text-left">📊 মোট</td>
+                <td class="text-left text-blue-700">${totalAmount.toLocaleString()} টাকা</td>
+                <td class="text-left text-emerald-700">${collectedAmount.toLocaleString()} টাকা</td>
+                <td class="text-left text-red-700">${totalDue > 0 ? totalDue.toLocaleString() + ' টাকা' : '০ টাকা'}</td>
+                <td colspan="2"></td>
+            </tr>
+        `;
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-3 text-sm text-gray-500 text-right">
+                📊 মোট ${orders.length} টি অর্ডার
+            </div>
+        `;
+        
+        container.innerHTML = html;
+        console.log('✅ বই বিক্রয় রিপোর্ট রেন্ডার সম্পূর্ণ!');
+        
+    } catch(e) {
+        console.error('❌ Load sales report error:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ রিপোর্ট লোড করতে সমস্যা!</p>
+                <p class="text-sm text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="loadBookSalesReport()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+    }
+}
+
+// ২. সারাংশ আপডেট
+function updateSalesSummary(data) {
+    const setText = (id, text) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    };
+    
+    setText('salesTotalAmount', (data.total || 0).toLocaleString() + ' টাকা');
+    setText('salesCollectedAmount', (data.collected || 0).toLocaleString() + ' টাকা');
+    setText('salesDueAmount', (data.due || 0).toLocaleString() + ' টাকা');
+    setText('salesLateFeeAmount', (data.lateFee || 0).toLocaleString() + ' টাকা');
+}
+
+// ৩. ফিল্টার রিসেট
+function resetSalesFilters() {
+    document.getElementById('salesFromDate').value = '';
+    document.getElementById('salesToDate').value = '';
+    loadBookSalesReport();
+}
+
+// ৪. এক্সেল এক্সপোর্ট
+function exportSalesReport() {
+    const table = document.querySelector('#bookSalesReportContainer table');
+    if (!table) {
+        showToast('কোনো ডেটা নেই!', 'error');
+        return;
+    }
+    
+    let csv = "তারিখ,ছাত্র,শ্রেণী,মোট,পরিশোধিত,বাকি,স্ট্যাটাস\n";
+    const rows = table.querySelectorAll('tbody tr');
+    rows.forEach(row => {
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 7) {
+            csv += `"${cells[0]?.textContent.trim() || ''}","${cells[1]?.textContent.trim() || ''}","${cells[2]?.textContent.trim() || ''}","${cells[3]?.textContent.trim() || ''}","${cells[4]?.textContent.trim() || ''}","${cells[5]?.textContent.trim() || ''}","${cells[6]?.textContent.trim() || ''}"\n`;
+        }
+    });
+    
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `book_sales_report_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    showToast('✅ রিপোর্ট এক্সপোর্ট সম্পূর্ণ!');
+}
+window.loadBookSalesReport = loadBookSalesReport;
+window.resetSalesFilters = resetSalesFilters;
+window.exportSalesReport = exportSalesReport;
+window.updateSalesSummary = updateSalesSummary;
     </script>
 </body>
 </html>
