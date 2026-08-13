@@ -6714,44 +6714,146 @@ async function approvePayment(paymentId) {
         container.innerHTML = html;
     }
 
-    // ============================================================
-    // ===== REPORT FUNCTIONS =====
-    // ============================================================
-    async function loadReport() {
-        const fromDate = document.getElementById('reportFromDate').value;
-        const toDate = document.getElementById('reportToDate').value;
-        const container = document.getElementById('reportTableContainer');
-        const summaryContainer = document.getElementById('reportSummary');
-        if (!container) return;
-        container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">ডেটা লোড হচ্ছে...</p></div>';
-        const client = initSupabaseClient();
-        if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
-        try {
-            let query = client.from('members').select('*');
-            if (fromDate) query = query.gte('created_at', fromDate);
-            if (toDate) query = query.lte('created_at', toDate + 'T23:59:59');
-            const { data: members } = await query;
-            if (!members || members.length === 0) { container.innerHTML = '<div class="text-center text-gray-500 py-8"><i class="fas fa-inbox text-4xl block mb-3"></i><p>কোনো সদস্য নেই</p></div>'; summaryContainer.innerHTML = ''; return; }
-            let totalSavings = 0, totalLoans = 0, totalPaid = 0, totalDue = 0, totalBalance = 0, totalReferral = 0;
-            const memberIds = members.map(m => m.member_id);
-            const { data: payments } = await client.from('payments').select('member_id, amount').eq('status', 'approved').in('member_id', memberIds);
-            const { data: loans } = await client.from('loan_applications').select('member_id, amount').eq('status', 'approved').in('member_id', memberIds);
-            members.forEach(m => { totalBalance += (m.balance || 0); totalReferral += (m.referral_bonus || 0); });
-            if (payments) payments.forEach(p => totalSavings += (p.amount || 0));
-            if (loans) loans.forEach(l => totalLoans += (l.amount || 0));
-            totalDue = totalLoans - totalPaid;
-            summaryContainer.innerHTML = `<div class="summary-card"><div class="label">📊 মোট সদস্য</div><div class="amount">${members.length}</div></div><div class="summary-card"><div class="label">💰 মোট সঞ্চয়</div><div class="amount">${formatAmountWithText(totalSavings)}</div></div><div class="summary-card"><div class="label">🏦 মোট লোন</div><div class="amount">${formatAmountWithText(totalLoans)}</div></div><div class="summary-card danger"><div class="label">⏳ বকেয়া</div><div class="amount">${formatAmountWithText(totalDue)}</div></div><div class="summary-card info"><div class="label">💳 ব্যালেন্স</div><div class="amount">${formatAmountWithText(totalBalance)}</div></div>`;
-            let html = `<table class="data-table"><thead><tr><th>আইডি</th><th>নাম</th><th>মোবাইল</th><th>জেলা</th><th>স্ট্যাটাস</th><th class="text-left">সঞ্চয়</th><th class="text-left">লোন</th><th class="text-left">ব্যালেন্স</th><th class="text-left">রেফারেল</th><th class="text-left">মোট লভ্যাংশ</th></tr></thead><tbody>`;
-            members.forEach(m => {
-                const memberSavings = payments?.filter(p => p.member_id === m.member_id).reduce((s, p) => s + p.amount, 0) || 0;
-                const memberLoans = loans?.filter(l => l.member_id === m.member_id).reduce((s, l) => s + l.amount, 0) || 0;
-                const totalProfit = (m.profit_balance_savings || 0) + (m.profit_balance_investment || 0) + (m.profit_balance_referral || 0);
-                html += `<tr><td>${m.member_id}</td><td>${m.full_name}</td><td>${m.mobile}</td><td>${m.present_district || '-'}</td><td><span class="status-badge ${m.status==='active'?'status-active':m.status==='pending'?'status-pending':'status-inactive'}">${m.status==='active'?'সক্রিয়':m.status==='pending'?'পেন্ডিং':'নিষ্ক্রিয়'}</span></td><td class="text-left">${formatAmountWithText(memberSavings)}</td><td class="text-left">${formatAmountWithText(memberLoans)}</td><td class="text-left">${formatAmountWithText(m.balance || 0)}</td><td class="text-left">${formatAmountWithText(m.referral_bonus || 0)}</td><td class="text-left">${formatAmountWithText(totalProfit)}</td></tr>`;
-            });
-            html += '</tbody></table>';
-            container.innerHTML = html;
-        } catch(e) { console.error('Report error:', e); container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ রিপোর্ট লোড করতে সমস্যা!</div>'; }
+// ============================================================
+// ===== REPORT FUNCTIONS (UPDATED) =====
+// ============================================================
+async function loadReport() {
+    const fromDate = document.getElementById('reportFromDate').value;
+    const toDate = document.getElementById('reportToDate').value;
+    const container = document.getElementById('reportTableContainer');
+    const summaryContainer = document.getElementById('reportSummary');
+    if (!container) return;
+    
+    container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">ডেটা লোড হচ্ছে...</p></div>';
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; 
+        return; 
     }
+    
+    try {
+        let query = client.from('members').select('*');
+        if (fromDate) query = query.gte('created_at', fromDate);
+        if (toDate) query = query.lte('created_at', toDate + 'T23:59:59');
+        const { data: members } = await query;
+        
+        if (!members || members.length === 0) { 
+            container.innerHTML = '<div class="text-center text-gray-500 py-8"><i class="fas fa-inbox text-4xl block mb-3"></i><p>কোনো সদস্য নেই</p></div>';
+            // ✅ উপরের সারাংশ খালি করুন
+            if (summaryContainer) summaryContainer.innerHTML = '';
+            return; 
+        }
+        
+        let totalSavings = 0, totalLoans = 0, totalPaid = 0, totalDue = 0, totalBalance = 0, totalReferral = 0;
+        const memberIds = members.map(m => m.member_id);
+        
+        const { data: payments } = await client.from('payments').select('member_id, amount').eq('status', 'approved').in('member_id', memberIds);
+        const { data: loans } = await client.from('loan_applications').select('member_id, amount').eq('status', 'approved').in('member_id', memberIds);
+        
+        // ✅ প্রতিটি সদস্যের জন্য ডেটা কালেক্ট করুন
+        const memberData = members.map(m => {
+            const memberSavings = payments?.filter(p => p.member_id === m.member_id).reduce((s, p) => s + p.amount, 0) || 0;
+            const memberLoans = loans?.filter(l => l.member_id === m.member_id).reduce((s, l) => s + l.amount, 0) || 0;
+            const totalProfit = (m.profit_balance_savings || 0) + (m.profit_balance_investment || 0) + (m.profit_balance_referral || 0);
+            
+            totalSavings += memberSavings;
+            totalLoans += memberLoans;
+            totalBalance += (m.balance || 0);
+            totalReferral += (m.referral_bonus || 0);
+            
+            return {
+                ...m,
+                memberSavings,
+                memberLoans,
+                totalProfit
+            };
+        });
+        
+        totalDue = totalLoans - totalPaid;
+        
+        // ✅ উপরের সারাংশ খালি করুন
+        if (summaryContainer) summaryContainer.innerHTML = '';
+        
+        // ✅ টেবিল তৈরি করুন
+        let html = `
+            <div class="table-scroll">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>আইডি</th>
+                            <th>নাম</th>
+                            <th>মোবাইল</th>
+                            <th>জেলা</th>
+                            <th>স্ট্যাটাস</th>
+                            <th class="text-left">সঞ্চয়</th>
+                            <th class="text-left">লোন</th>
+                            <th class="text-left">ব্যালেন্স</th>
+                            <th class="text-left">রেফারেল</th>
+                            <th class="text-left">মোট লভ্যাংশ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        memberData.forEach(m => {
+            html += `<tr>
+                <td>${m.member_id}</td>
+                <td>${m.full_name}</td>
+                <td>${m.mobile}</td>
+                <td>${m.present_district || '-'}</td>
+                <td><span class="status-badge ${m.status==='active'?'status-active':m.status==='pending'?'status-pending':'status-inactive'}">${m.status==='active'?'সক্রিয়':m.status==='pending'?'পেন্ডিং':'নিষ্ক্রিয়'}</span></td>
+                <td class="text-left">${formatAmountWithText(m.memberSavings)}</td>
+                <td class="text-left">${formatAmountWithText(m.memberLoans)}</td>
+                <td class="text-left">${formatAmountWithText(m.balance || 0)}</td>
+                <td class="text-left">${formatAmountWithText(m.referral_bonus || 0)}</td>
+                <td class="text-left">${formatAmountWithText(m.totalProfit)}</td>
+            </tr>`;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- ✅ সারাংশ এখন টেবিলের নিচে -->
+            <div class="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                        <p class="text-xs text-gray-500">👥 মোট সদস্য</p>
+                        <p class="text-xl font-bold text-gray-700">${members.length}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                        <p class="text-xs text-gray-500">💰 মোট সঞ্চয়</p>
+                        <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(totalSavings)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                        <p class="text-xs text-gray-500">🏦 মোট লোন</p>
+                        <p class="text-xl font-bold text-blue-600">${formatAmountWithText(totalLoans)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                        <p class="text-xs text-gray-500">⏳ বকেয়া</p>
+                        <p class="text-xl font-bold text-red-600">${formatAmountWithText(totalDue)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                        <p class="text-xs text-gray-500">💳 ব্যালেন্স</p>
+                        <p class="text-xl font-bold text-purple-600">${formatAmountWithText(totalBalance)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                        <p class="text-xs text-gray-500">🎁 রেফারেল বোনাস</p>
+                        <p class="text-xl font-bold text-amber-600">${formatAmountWithText(totalReferral)}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        container.innerHTML = html;
+        
+    } catch(e) { 
+        console.error('Report error:', e); 
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ রিপোর্ট লোড করতে সমস্যা!</div>'; 
+    }
+}
 
     function resetReportFilters() { document.getElementById('reportFromDate').value = ''; document.getElementById('reportToDate').value = ''; loadReport(); }
     function exportReportExcel() {
@@ -6892,68 +6994,185 @@ async function approvePayment(paymentId) {
         showToast('✅ PDF ডাউনলোড শুরু হয়েছে!');
     }
 
-    // ============================================================
-    // ===== ALL TRANSACTIONS FUNCTIONS =====
-    // ============================================================
-    async function loadAllTransactions() {
-        const fromDate = document.getElementById('txFromDate').value;
-        const toDate = document.getElementById('txToDate').value;
-        const typeFilter = document.getElementById('txTypeFilter').value;
-        const container = document.getElementById('allTransactionsContainer');
-        const summaryContainer = document.getElementById('txSummary');
-        if (!container) return;
-        container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লেনদেন লোড হচ্ছে...</p></div>';
-        const client = initSupabaseClient();
-        if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
-        try {
-            let transactions = [];
-            let startDate = fromDate || '2000-01-01';
-            let endDate = toDate || new Date().toISOString().slice(0,10);
-            endDate += 'T23:59:59';
-            if (!typeFilter || typeFilter === 'payment') {
-                const { data: payments } = await client.from('payments').select('*').eq('status', 'approved').gte('submitted_at', startDate).lte('submitted_at', endDate);
-                (payments || []).forEach(p => transactions.push({ date: p.submitted_at, type: 'সঞ্চয়', typeClass: 'savings', member: p.member_name, id: p.member_id, amount: p.amount, note: `${p.month || ''} ${p.year || ''} - ${p.payment_method || 'cash'}`, isCredit: true }));
-            }
-            if (!typeFilter || typeFilter === 'loan') {
-                const { data: loans } = await client.from('loan_applications').select('*').eq('status', 'approved').gte('submitted_at', startDate).lte('submitted_at', endDate);
-                (loans || []).forEach(l => transactions.push({ date: l.submitted_at, type: 'লোন', typeClass: 'loan', member: l.member_name, id: l.member_id, amount: l.amount, note: l.loan_type || '', isCredit: true }));
-            }
-            if (!typeFilter || typeFilter === 'withdrawal') {
-                const { data: withdrawals } = await client.from('withdrawals').select('*').eq('status', 'approved').gte('requested_at', startDate).lte('requested_at', endDate);
-                (withdrawals || []).forEach(w => transactions.push({ date: w.requested_at, type: 'উত্তোলন', typeClass: 'withdrawal', member: w.member_name, id: w.member_id, amount: w.amount, note: w.type || '', isCredit: false }));
-            }
-            if (!typeFilter || typeFilter === 'referral_bonus') {
-                const { data: members } = await client.from('members').select('member_id, full_name, referral_bonus, created_at').gte('created_at', startDate).lte('created_at', endDate);
-                (members || []).forEach(m => { if (m.referral_bonus > 0) transactions.push({ date: m.created_at, type: 'রেফারেল বোনাস', typeClass: 'referral', member: m.full_name, id: m.member_id, amount: m.referral_bonus, note: 'রেফারেল বোনাস প্রাপ্ত', isCredit: true }); });
-            }
-            if (!typeFilter || typeFilter === 'profit_savings') {
-                const { data: members } = await client.from('members').select('member_id, full_name, profit_balance_savings, created_at').gte('created_at', startDate).lte('created_at', endDate);
-                (members || []).forEach(m => { if (m.profit_balance_savings > 0) transactions.push({ date: m.created_at, type: 'সঞ্চয় লভ্যাংশ', typeClass: 'profit', member: m.full_name, id: m.member_id, amount: m.profit_balance_savings, note: 'সঞ্চয় থেকে লভ্যাংশ', isCredit: true }); });
-            }
-            if (!typeFilter || typeFilter === 'profit_investment') {
-                const { data: members } = await client.from('members').select('member_id, full_name, profit_balance_investment, created_at').gte('created_at', startDate).lte('created_at', endDate);
-                (members || []).forEach(m => { if (m.profit_balance_investment > 0) transactions.push({ date: m.created_at, type: 'বিনিয়োগ লভ্যাংশ', typeClass: 'profit', member: m.full_name, id: m.member_id, amount: m.profit_balance_investment, note: 'বিনিয়োগ থেকে লভ্যাংশ', isCredit: true }); });
-            }
-            if (!typeFilter || typeFilter === 'profit_referral') {
-                const { data: members } = await client.from('members').select('member_id, full_name, profit_balance_referral, created_at').gte('created_at', startDate).lte('created_at', endDate);
-                (members || []).forEach(m => { if (m.profit_balance_referral > 0) transactions.push({ date: m.created_at, type: 'রেফারেল লভ্যাংশ', typeClass: 'profit', member: m.full_name, id: m.member_id, amount: m.profit_balance_referral, note: 'রেফারেল থেকে লভ্যাংশ', isCredit: true }); });
-            }
-            transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
-            const totalAmount = transactions.reduce((s, t) => s + (t.amount || 0), 0);
-            const totalCredit = transactions.filter(t => t.isCredit).reduce((s, t) => s + (t.amount || 0), 0);
-            const totalDebit = transactions.filter(t => !t.isCredit).reduce((s, t) => s + (t.amount || 0), 0);
-            summaryContainer.innerHTML = `<div class="summary-card"><div class="label">📋 মোট লেনদেন</div><div class="amount">${transactions.length}</div></div><div class="summary-card"><div class="label">💰 মোট জমা</div><div class="amount text-emerald-600">${formatAmountWithText(totalCredit)}</div></div><div class="summary-card danger"><div class="label">💸 মোট খরচ</div><div class="amount">${formatAmountWithText(totalDebit)}</div></div><div class="summary-card info"><div class="label">📊 নেট ব্যালেন্স</div><div class="amount">${formatAmountWithText(totalCredit - totalDebit)}</div></div>`;
-            if (transactions.length === 0) { container.innerHTML = '<div class="text-center text-gray-500 py-8"><i class="fas fa-inbox text-4xl block mb-3"></i><p>কোনো লেনদেন নেই</p></div>'; return; }
-            const typeBadges = { 'সঞ্চয়': 'savings', 'লোন': 'loan', 'উত্তোলন': 'withdrawal', 'রেফারেল বোনাস': 'referral', 'সঞ্চয় লভ্যাংশ': 'profit', 'বিনিয়োগ লভ্যাংশ': 'profit', 'রেফারেল লভ্যাংশ': 'profit' };
-            let html = `<table class="data-table"><thead><tr><th>তারিখ</th><th>ধরন</th><th>সদস্য</th><th>আইডি</th><th class="text-left">পরিমাণ</th><th>বিবরণ</th></tr></thead><tbody>`;
-            transactions.forEach(t => {
-                const badgeClass = typeBadges[t.type] || 'savings';
-                html += `<tr><td>${new Date(t.date).toLocaleDateString('bn-BD')}</td><td><span class="tx-badge ${badgeClass}">${t.type}</span></td><td>${t.member || '-'}</td><td>${t.id || '-'}</td><td class="text-left font-bold ${t.isCredit ? 'text-emerald-600' : 'text-red-600'}">${t.isCredit ? '+' : '-'} ${formatAmountWithText(t.amount)}</td><td>${t.note || '-'}</td></tr>`;
-            });
-            html += '</tbody></table>';
-            container.innerHTML = html;
-        } catch(e) { console.error('Transactions error:', e); container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ লেনদেন লোড করতে সমস্যা!</div>'; }
+// ============================================================
+// ===== ALL TRANSACTIONS FUNCTIONS (UPDATED) =====
+// ============================================================
+async function loadAllTransactions() {
+    const fromDate = document.getElementById('txFromDate').value;
+    const toDate = document.getElementById('txToDate').value;
+    const typeFilter = document.getElementById('txTypeFilter').value;
+    const container = document.getElementById('allTransactionsContainer');
+    const summaryContainer = document.getElementById('txSummary');
+    if (!container) return;
+    
+    container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লেনদেন লোড হচ্ছে...</p></div>';
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; 
+        return; 
     }
+    
+    try {
+        let transactions = [];
+        let startDate = fromDate || '2000-01-01';
+        let endDate = toDate || new Date().toISOString().slice(0,10);
+        endDate += 'T23:59:59';
+        
+        if (!typeFilter || typeFilter === 'payment') {
+            const { data: payments } = await client.from('payments').select('*').eq('status', 'approved').gte('submitted_at', startDate).lte('submitted_at', endDate);
+            (payments || []).forEach(p => transactions.push({ date: p.submitted_at, type: 'সঞ্চয়', typeClass: 'savings', member: p.member_name, id: p.member_id, amount: p.amount, note: `${p.month || ''} ${p.year || ''} - ${p.payment_method || 'cash'}`, isCredit: true }));
+        }
+        if (!typeFilter || typeFilter === 'loan') {
+            const { data: loans } = await client.from('loan_applications').select('*').eq('status', 'approved').gte('submitted_at', startDate).lte('submitted_at', endDate);
+            (loans || []).forEach(l => transactions.push({ date: l.submitted_at, type: 'লোন', typeClass: 'loan', member: l.member_name, id: l.member_id, amount: l.amount, note: l.loan_type || '', isCredit: true }));
+        }
+        if (!typeFilter || typeFilter === 'withdrawal') {
+            const { data: withdrawals } = await client.from('withdrawals').select('*').eq('status', 'approved').gte('requested_at', startDate).lte('requested_at', endDate);
+            (withdrawals || []).forEach(w => transactions.push({ date: w.requested_at, type: 'উত্তোলন', typeClass: 'withdrawal', member: w.member_name, id: w.member_id, amount: w.amount, note: w.type || '', isCredit: false }));
+        }
+        if (!typeFilter || typeFilter === 'referral_bonus') {
+            const { data: members } = await client.from('members').select('member_id, full_name, referral_bonus, created_at').gte('created_at', startDate).lte('created_at', endDate);
+            (members || []).forEach(m => { if (m.referral_bonus > 0) transactions.push({ date: m.created_at, type: 'রেফারেল বোনাস', typeClass: 'referral', member: m.full_name, id: m.member_id, amount: m.referral_bonus, note: 'রেফারেল বোনাস প্রাপ্ত', isCredit: true }); });
+        }
+        if (!typeFilter || typeFilter === 'profit_savings') {
+            const { data: members } = await client.from('members').select('member_id, full_name, profit_balance_savings, created_at').gte('created_at', startDate).lte('created_at', endDate);
+            (members || []).forEach(m => { if (m.profit_balance_savings > 0) transactions.push({ date: m.created_at, type: 'সঞ্চয় লভ্যাংশ', typeClass: 'profit', member: m.full_name, id: m.member_id, amount: m.profit_balance_savings, note: 'সঞ্চয় থেকে লভ্যাংশ', isCredit: true }); });
+        }
+        if (!typeFilter || typeFilter === 'profit_investment') {
+            const { data: members } = await client.from('members').select('member_id, full_name, profit_balance_investment, created_at').gte('created_at', startDate).lte('created_at', endDate);
+            (members || []).forEach(m => { if (m.profit_balance_investment > 0) transactions.push({ date: m.created_at, type: 'বিনিয়োগ লভ্যাংশ', typeClass: 'profit', member: m.full_name, id: m.member_id, amount: m.profit_balance_investment, note: 'বিনিয়োগ থেকে লভ্যাংশ', isCredit: true }); });
+        }
+        if (!typeFilter || typeFilter === 'profit_referral') {
+            const { data: members } = await client.from('members').select('member_id, full_name, profit_balance_referral, created_at').gte('created_at', startDate).lte('created_at', endDate);
+            (members || []).forEach(m => { if (m.profit_balance_referral > 0) transactions.push({ date: m.created_at, type: 'রেফারেল লভ্যাংশ', typeClass: 'profit', member: m.full_name, id: m.member_id, amount: m.profit_balance_referral, note: 'রেফারেল থেকে লভ্যাংশ', isCredit: true }); });
+        }
+        
+        transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        const totalAmount = transactions.reduce((s, t) => s + (t.amount || 0), 0);
+        const totalCredit = transactions.filter(t => t.isCredit).reduce((s, t) => s + (t.amount || 0), 0);
+        const totalDebit = transactions.filter(t => !t.isCredit).reduce((s, t) => s + (t.amount || 0), 0);
+        
+        // ✅ সারাংশ এখন টেবিলের নিচে দেখানোর জন্য সংরক্ষণ করছি
+        const summaryData = {
+            count: transactions.length,
+            credit: totalCredit,
+            debit: totalDebit,
+            net: totalCredit - totalDebit
+        };
+        
+        if (transactions.length === 0) { 
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                    <p>কোনো লেনদেন নেই</p>
+                </div>
+            `;
+            // ✅ সারাংশ খালি করুন
+            if (summaryContainer) summaryContainer.innerHTML = '';
+            return; 
+        }
+        
+        const typeBadges = { 
+            'সঞ্চয়': 'savings', 
+            'লোন': 'loan', 
+            'উত্তোলন': 'withdrawal', 
+            'রেফারেল বোনাস': 'referral', 
+            'সঞ্চয় লভ্যাংশ': 'profit', 
+            'বিনিয়োগ লভ্যাংশ': 'profit', 
+            'রেফারেল লভ্যাংশ': 'profit' 
+        };
+        
+        let html = `
+            <div class="table-scroll">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>তারিখ</th>
+                            <th>ধরন</th>
+                            <th>সদস্য</th>
+                            <th>আইডি</th>
+                            <th class="text-left">পরিমাণ</th>
+                            <th>বিবরণ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        transactions.forEach(t => {
+            const badgeClass = typeBadges[t.type] || 'savings';
+            html += `<tr>
+                <td>${new Date(t.date).toLocaleDateString('bn-BD')}</td>
+                <td><span class="tx-badge ${badgeClass}">${t.type}</span></td>
+                <td>${t.member || '-'}</td>
+                <td>${t.id || '-'}</td>
+                <td class="text-left font-bold ${t.isCredit ? 'text-emerald-600' : 'text-red-600'}">${t.isCredit ? '+' : '-'} ${formatAmountWithText(t.amount)}</td>
+                <td>${t.note || '-'}</td>
+            </tr>`;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- ✅ সারাংশ এখন টেবিলের নিচে -->
+            <div class="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                        <p class="text-xs text-gray-500">📋 মোট লেনদেন</p>
+                        <p class="text-xl font-bold text-gray-700">${summaryData.count}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                        <p class="text-xs text-gray-500">💰 মোট জমা</p>
+                        <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(summaryData.credit)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                        <p class="text-xs text-gray-500">💸 মোট খরচ</p>
+                        <p class="text-xl font-bold text-red-600">${formatAmountWithText(summaryData.debit)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                        <p class="text-xs text-gray-500">📊 নেট ব্যালেন্স</p>
+                        <p class="text-xl font-bold ${summaryData.net >= 0 ? 'text-emerald-600' : 'text-red-600'}">${formatAmountWithText(summaryData.net)}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        container.innerHTML = html;
+        
+        // ✅ উপরের সারাংশ খালি করুন
+        if (summaryContainer) summaryContainer.innerHTML = '';
+        
+    } catch(e) { 
+        console.error('Transactions error:', e); 
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ লেনদেন লোড করতে সমস্যা!</div>'; 
+    }
+}
+
+    html += `
+    <div class="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                <p class="text-xs text-gray-500">📋 মোট লেনদেন</p>
+                <p class="text-xl font-bold text-gray-700">${transactions.length}</p>
+            </div>
+            <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                <p class="text-xs text-gray-500">💰 মোট জমা</p>
+                <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(totalCredit)}</p>
+            </div>
+            <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                <p class="text-xs text-gray-500">💸 মোট খরচ</p>
+                <p class="text-xl font-bold text-red-600">${formatAmountWithText(totalDebit)}</p>
+            </div>
+            <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                <p class="text-xs text-gray-500">📊 নেট ব্যালেন্স</p>
+                <p class="text-xl font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-emerald-600' : 'text-red-600'}">${formatAmountWithText(totalCredit - totalDebit)}</p>
+            </div>
+        </div>
+    </div>
+`;
 
     function exportTransactionsExcel() {
         const table = document.querySelector('#allTransactionsContainer table');
