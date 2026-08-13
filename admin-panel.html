@@ -104,8 +104,6 @@
 
         /* ✅ প্রিন্টের জন্য পেজ ব্রেক */
 @media print {
-@media print {
-    /* ✅ পেজ ব্রেক */
     .page-break {
         page-break-after: always !important;
         border: none !important;
@@ -115,21 +113,21 @@
         visibility: hidden !important;
     }
     
-      .page-footer {
+    .page-footer {
         page-break-inside: avoid !important;
-        margin-top: 6px !important;
-        padding-top: 4px !important;
+        margin-top: 8px !important;
+        padding-top: 6px !important;
         border-top: 2px solid #059669 !important;
     }
-
+    
     .running-total-header {
         page-break-inside: avoid !important;
-        margin-bottom: 4px !important;
+        margin-bottom: 6px !important;
     }
     
-    /* ✅ যোগফল কার্ড - ফন্ট সাইজ 11px */
+    /* ✅ যোগফল কার্ড - ফন্ট সাইজ টেবিলের সমান */
     .report-summary-bottom .summary-card {
-        padding: 3px 6px !important;
+        padding: 4px 8px !important;
         border-radius: 4px !important;
         border: 1px solid #e5e7eb !important;
         background: #f8fafc !important;
@@ -138,7 +136,7 @@
     }
     
     .report-summary-bottom .summary-card .label {
-        font-size: 8px !important;
+        font-size: 9px !important;
         color: #6b7280 !important;
         margin: 0 !important;
         padding: 0 !important;
@@ -155,10 +153,49 @@
     
     .report-summary-bottom {
         display: grid !important;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
+        gap: 6px !important;
+        margin-top: 6px !important;
+        padding: 6px !important;
+        background: white !important;
+        border-top: 2px solid #059669 !important;
+        page-break-inside: avoid !important;
+    }
+}
+@media print {
+    /* ✅ যোগফল কার্ডের ফন্ট সাইজ ঠিক করুন */
+    .report-summary-bottom .summary-card {
+        padding: 4px 8px !important;
+        border-radius: 4px !important;
+        border: 1px solid #e5e7eb !important;
+        background: #f8fafc !important;
+        text-align: center !important;
+        page-break-inside: avoid !important;
+    }
+    
+    .report-summary-bottom .summary-card .label {
+        font-size: 9px !important;
+        color: #6b7280 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        line-height: 1.3 !important;
+    }
+    
+    .report-summary-bottom .summary-card .amount {
+        font-size: 12px !important;  /* ✅ টেবিলের ফন্ট সাইজের সমান */
+        font-weight: 700 !important;
+        margin: 2px 0 !important;
+        padding: 0 !important;
+        line-height: 1.3 !important;
+    }
+    
+    /* ✅ যোগফল গ্রিড */
+    .report-summary-bottom {
+        display: grid !important;
         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)) !important;
-        gap: 4px !important;
-        margin-top: 4px !important;
-        padding: 4px !important;
+        gap: 6px !important;
+        margin-top: 8px !important;
+        padding: 6px !important;
         background: white !important;
         border-top: 2px solid #059669 !important;
         page-break-inside: avoid !important;
@@ -6778,7 +6815,7 @@ async function approvePayment(paymentId) {
     }
 
 // ============================================================
-// ===== REPORT FUNCTIONS (FINAL FIXED) =====
+// ===== REPORT FUNCTIONS (COMPLETE UPDATE) =====
 // ============================================================
 async function loadReport() {
     const fromDate = document.getElementById('reportFromDate').value;
@@ -6813,7 +6850,14 @@ async function loadReport() {
         const { data: payments } = await client.from('payments').select('member_id, amount').eq('status', 'approved').in('member_id', memberIds);
         const { data: loans } = await client.from('loan_applications').select('member_id, amount').eq('status', 'approved').in('member_id', memberIds);
         
-        const memberData = members.map((m) => {
+        // ✅ প্রতি ২০ জন সদস্যের জন্য পেজ ব্রেক
+        const PAGE_SIZE = 20;
+        let runningTotalSavings = 0;
+        let runningTotalLoans = 0;
+        let runningTotalBalance = 0;
+        let runningTotalReferral = 0;
+        
+        const memberData = members.map((m, index) => {
             const memberSavings = payments?.filter(p => p.member_id === m.member_id).reduce((s, p) => s + p.amount, 0) || 0;
             const memberLoans = loans?.filter(l => l.member_id === m.member_id).reduce((s, l) => s + l.amount, 0) || 0;
             const totalProfit = (m.profit_balance_savings || 0) + (m.profit_balance_investment || 0) + (m.profit_balance_referral || 0);
@@ -6827,155 +6871,158 @@ async function loadReport() {
                 ...m,
                 memberSavings,
                 memberLoans,
-                totalProfit
+                totalProfit,
+                index
             };
         });
         
-        totalPaid = totalLoans;
+        totalPaid = totalLoans; // পেমেন্ট ডেটা থেকে ক্যালকুলেট করা যায়
         const totalDue = totalLoans - totalPaid;
         
         // ✅ উপরের সারাংশ খালি করুন
         if (summaryContainer) summaryContainer.innerHTML = '';
         
-        // ✅ প্রতি পেজে ১৫ জন সদস্য
-        const PAGE_SIZE = 15;
-        let html = '';
-        let runningTotalSavings = 0;
-        let runningTotalLoans = 0;
-        let runningTotalBalance = 0;
-        let runningTotalReferral = 0;
-        let totalMembersProcessed = 0;
+        // ✅ টেবিল তৈরি করুন
+        let html = `
+            <div class="table-scroll">
+                <table class="data-table" id="reportTable">
+                    <thead>
+                        <tr>
+                            <th>আইডি</th>
+                            <th>নাম</th>
+                            <th>মোবাইল</th>
+                            <th>জেলা</th>
+                            <th>স্ট্যাটাস</th>
+                            <th class="text-left">সঞ্চয়</th>
+                            <th class="text-left">লোন</th>
+                            <th class="text-left">ব্যালেন্স</th>
+                            <th class="text-left">রেফারেল</th>
+                            <th class="text-left">মোট লভ্যাংশ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
         
-        // ✅ পেজ অনুযায়ী ডেটা বিভক্ত করুন
-        for (let page = 0; page < Math.ceil(memberData.length / PAGE_SIZE); page++) {
-            const start = page * PAGE_SIZE;
-            const end = Math.min(start + PAGE_SIZE, memberData.length);
-            const pageData = memberData.slice(start, end);
+        // ✅ পেজ অনুযায়ী ডেটা রেন্ডার করুন
+        for (let i = 0; i < memberData.length; i++) {
+            const m = memberData[i];
             
-            // ✅ চলমান যোগফল আপডেট (পেজের আগে)
-            let pageRunningSavings = runningTotalSavings;
-            let pageRunningLoans = runningTotalLoans;
-            let pageRunningBalance = runningTotalBalance;
-            let pageRunningReferral = runningTotalReferral;
+            // চলমান যোগফল আপডেট
+            runningTotalSavings += m.memberSavings;
+            runningTotalLoans += m.memberLoans;
+            runningTotalBalance += (m.balance || 0);
+            runningTotalReferral += (m.referral_bonus || 0);
             
-            // ✅ পেজের শুরুতে পূর্ববর্তী যোগফল (শুধু ২য় পেজ থেকে)
-            if (page > 0) {
+            html += `<tr>
+                <td>${m.member_id}</td>
+                <td>${m.full_name}</td>
+                <td>${m.mobile}</td>
+                <td>${m.present_district || '-'}</td>
+                <td><span class="status-badge ${m.status==='active'?'status-active':m.status==='pending'?'status-pending':'status-inactive'}">${m.status==='active'?'সক্রিয়':m.status==='pending'?'পেন্ডিং':'নিষ্ক্রিয়'}</span></td>
+                <td class="text-left">${formatAmountWithText(m.memberSavings)}</td>
+                <td class="text-left">${formatAmountWithText(m.memberLoans)}</td>
+                <td class="text-left">${formatAmountWithText(m.balance || 0)}</td>
+                <td class="text-left">${formatAmountWithText(m.referral_bonus || 0)}</td>
+                <td class="text-left">${formatAmountWithText(m.totalProfit)}</td>
+            </tr>`;
+            
+            // ✅ প্রতি পেজের শেষে (পেজ সাইজ অনুযায়ী) যোগফল দেখান
+            if ((i + 1) % PAGE_SIZE === 0 && i < memberData.length - 1) {
                 html += `
-                    <div class="running-total-header" style="background:#f0fdf4; padding:6px 12px; border-radius:6px; border:1px solid #059669; margin-bottom:8px; font-size:12px;">
-                        <span style="font-weight:700; color:#059669;">📊 পূর্ববর্তী পেজের যোগফল:</span>
-                        <span style="font-weight:600;">সঞ্চয়: ${formatAmountWithText(runningTotalSavings)} | 
-                        লোন: ${formatAmountWithText(runningTotalLoans)} | 
-                        সদস্য: ${totalMembersProcessed} জন</span>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- ✅ পেজের শেষে যোগফল -->
+            <div class="report-summary-bottom page-footer">
+                <div class="summary-card">
+                    <div class="label">📊 এই পেজের যোগফল</div>
+                    <div class="amount" style="font-size:12px; font-weight:700; color:#059669;">
+                        সঞ্চয়: ${formatAmountWithText(runningTotalSavings)} | 
+                        লোন: ${formatAmountWithText(runningTotalLoans)}
                     </div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">👥 সদস্য</div>
+                    <div class="amount" style="font-size:12px; font-weight:700;">${i + 1}</div>
+                </div>
+            </div>
+            
+            <!-- ✅ পেজ ব্রেক + পরের পেজের শুরুতে চলমান যোগফল -->
+            <div class="page-break"></div>
+            <div class="running-total-header">
+                <div style="background:#f0fdf4; padding:6px 10px; border-radius:4px; border:1px solid #059669; margin-bottom:8px; font-size:12px;">
+                    <span style="font-weight:700; color:#059669;">📊 পূর্ববর্তী পেজের যোগফল:</span>
+                    <span style="font-weight:700;">সঞ্চয়: ${formatAmountWithText(runningTotalSavings)} | 
+                    লোন: ${formatAmountWithText(runningTotalLoans)} | 
+                    সদস্য: ${i + 1} জন</span>
+                </div>
+            </div>
+            
+            <div class="table-scroll">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>আইডি</th>
+                            <th>নাম</th>
+                            <th>মোবাইল</th>
+                            <th>জেলা</th>
+                            <th>স্ট্যাটাস</th>
+                            <th class="text-left">সঞ্চয়</th>
+                            <th class="text-left">লোন</th>
+                            <th class="text-left">ব্যালেন্স</th>
+                            <th class="text-left">রেফারেল</th>
+                            <th class="text-left">মোট লভ্যাংশ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
                 `;
-            }
-            
-            // ✅ টেবিল শুরু
-            html += `
-                <div class="table-scroll">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>আইডি</th>
-                                <th>নাম</th>
-                                <th>মোবাইল</th>
-                                <th>জেলা</th>
-                                <th>স্ট্যাটাস</th>
-                                <th class="text-left">সঞ্চয়</th>
-                                <th class="text-left">লোন</th>
-                                <th class="text-left">ব্যালেন্স</th>
-                                <th class="text-left">রেফারেল</th>
-                                <th class="text-left">মোট লভ্যাংশ</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-            `;
-            
-            // ✅ পেজের ডেটা রেন্ডার
-            pageData.forEach((m) => {
-                // চলমান যোগফল আপডেট
-                pageRunningSavings += m.memberSavings;
-                pageRunningLoans += m.memberLoans;
-                pageRunningBalance += (m.balance || 0);
-                pageRunningReferral += (m.referral_bonus || 0);
-                
-                html += `<tr>
-                    <td>${m.member_id}</td>
-                    <td>${m.full_name}</td>
-                    <td>${m.mobile}</td>
-                    <td>${m.present_district || '-'}</td>
-                    <td><span class="status-badge ${m.status==='active'?'status-active':m.status==='pending'?'status-pending':'status-inactive'}">${m.status==='active'?'সক্রিয়':m.status==='pending'?'পেন্ডিং':'নিষ্ক্রিয়'}</span></td>
-                    <td class="text-left">${formatAmountWithText(m.memberSavings)}</td>
-                    <td class="text-left">${formatAmountWithText(m.memberLoans)}</td>
-                    <td class="text-left">${formatAmountWithText(m.balance || 0)}</td>
-                    <td class="text-left">${formatAmountWithText(m.referral_bonus || 0)}</td>
-                    <td class="text-left">${formatAmountWithText(m.totalProfit)}</td>
-                </tr>`;
-            });
-            
-            // ✅ চলমান যোগফল সংরক্ষণ (পরবর্তী পেজের জন্য)
-            runningTotalSavings = pageRunningSavings;
-            runningTotalLoans = pageRunningLoans;
-            runningTotalBalance = pageRunningBalance;
-            runningTotalReferral = pageRunningReferral;
-            totalMembersProcessed += pageData.length;
-            
-            // ✅ টেবিল শেষ
-            html += `
-                        </tbody>
-                    </table>
-                </div>
-            `;
-            
-            // ✅ পেজের শেষে যোগফল
-            html += `
-                <div class="report-summary-bottom page-footer" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:8px; margin-top:6px; padding:6px; background:#f8fafc; border-top:2px solid #059669; border-radius:4px;">
-                    <div class="summary-card" style="background:white; padding:4px 8px; border-radius:4px; border:1px solid #e5e7eb; text-align:center;">
-                        <div class="label" style="font-size:9px; color:#6b7280;">📊 এই পেজের যোগফল</div>
-                        <div class="amount" style="font-size:11px; font-weight:700; color:#059669;">
-                            সঞ্চয়: ${formatAmountWithText(pageRunningSavings)} | 
-                            লোন: ${formatAmountWithText(pageRunningLoans)}
-                        </div>
-                    </div>
-                    <div class="summary-card" style="background:white; padding:4px 8px; border-radius:4px; border:1px solid #e5e7eb; text-align:center;">
-                        <div class="label" style="font-size:9px; color:#6b7280;">👥 সদস্য</div>
-                        <div class="amount" style="font-size:11px; font-weight:700;">${totalMembersProcessed}</div>
-                    </div>
-                </div>
-            `;
-            
-            // ✅ পেজ ব্রেক (শেষ পেজ ছাড়া)
-            if (page < Math.ceil(memberData.length / PAGE_SIZE) - 1) {
-                html += `<div class="page-break" style="page-break-after:always; border:none; margin:0; padding:0; height:0; visibility:hidden;"></div>`;
             }
         }
         
-        // ✅ মোট যোগফল (সব পেজের) - ফন্ট সাইজ 12 এবং বোল্ড
+        // ✅ শেষ পেজের যোগফল
         html += `
-            <div class="report-summary-bottom" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:8px; margin-top:10px; padding:8px; background:#ecfdf5; border:2px solid #059669; border-radius:6px;">
-                <div class="summary-card" style="background:white; padding:4px 10px; border-radius:4px; border:1px solid #d1fae5; text-align:center;">
-                    <div class="label" style="font-size:9px; font-weight:600; color:#059669;">📊 মোট সঞ্চয়</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#059669;">${formatAmountWithText(totalSavings)}</div>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- ✅ শেষ পেজের যোগফল -->
+            <div class="report-summary-bottom page-footer">
+                <div class="summary-card">
+                    <div class="label">📊 এই পেজের যোগফল</div>
+                    <div class="amount" style="font-size:12px; font-weight:700; color:#059669;">
+                        সঞ্চয়: ${formatAmountWithText(runningTotalSavings)} | 
+                        লোন: ${formatAmountWithText(runningTotalLoans)}
+                    </div>
                 </div>
-                <div class="summary-card" style="background:white; padding:4px 10px; border-radius:4px; border:1px solid #dbeafe; text-align:center;">
-                    <div class="label" style="font-size:9px; font-weight:600; color:#2563eb;">🏦 মোট লোন</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#2563eb;">${formatAmountWithText(totalLoans)}</div>
+                <div class="summary-card">
+                    <div class="label">👥 সদস্য</div>
+                    <div class="amount" style="font-size:12px; font-weight:700;">${memberData.length}</div>
                 </div>
-                <div class="summary-card" style="background:white; padding:4px 10px; border-radius:4px; border:1px solid #fef3c7; text-align:center;">
-                    <div class="label" style="font-size:9px; font-weight:600; color:#d97706;">💰 রেফারেল বোনাস</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#d97706;">${formatAmountWithText(totalReferral)}</div>
+            </div>
+            
+            <!-- ✅ মোট যোগফল (সব পেজের) -->
+            <div class="report-summary-bottom" style="border-top: 3px solid #059669; margin-top: 12px; padding-top: 10px;">
+                <div class="summary-card" style="background: #ecfdf5; border: 2px solid #059669;">
+                    <div class="label" style="font-weight:700; color:#059669;">📊 মোট যোগফল</div>
+                    <div class="amount" style="font-size:12px; font-weight:700; color:#059669;">
+                        সঞ্চয়: ${formatAmountWithText(totalSavings)} | 
+                        লোন: ${formatAmountWithText(totalLoans)} | 
+                        ব্যালেন্স: ${formatAmountWithText(totalBalance)}
+                    </div>
                 </div>
-                <div class="summary-card" style="background:white; padding:4px 10px; border-radius:4px; border:1px solid #fee2e2; text-align:center;">
-                    <div class="label" style="font-size:9px; font-weight:600; color:#dc2626;">⏳ বকেয়া</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#dc2626;">${formatAmountWithText(totalDue)}</div>
+                <div class="summary-card" style="background: #fef3c7; border: 2px solid #f59e0b;">
+                    <div class="label" style="font-weight:700; color:#d97706;">💰 রেফারেল & লভ্যাংশ</div>
+                    <div class="amount" style="font-size:12px; font-weight:700; color:#d97706;">
+                        রেফারেল: ${formatAmountWithText(totalReferral)} | 
+                        বকেয়া: ${formatAmountWithText(totalDue)}
+                    </div>
                 </div>
-                <div class="summary-card" style="background:white; padding:4px 10px; border-radius:4px; border:2px solid #059669; text-align:center;">
-                    <div class="label" style="font-size:9px; font-weight:700; color:#059669;">👥 মোট সদস্য</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#059669;">${members.length} জন</div>
-                </div>
-                <div class="summary-card" style="background:white; padding:4px 10px; border-radius:4px; border:2px solid #8b5cf6; text-align:center;">
-                    <div class="label" style="font-size:9px; font-weight:700; color:#7c3aed;">💳 নীট ব্যালেন্স</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#7c3aed;">${formatAmountWithText(totalBalance)}</div>
+                <div class="summary-card" style="background: #dbeafe; border: 2px solid #3b82f6;">
+                    <div class="label" style="font-weight:700; color:#2563eb;">👥 সদস্য পরিসংখ্যান</div>
+                    <div class="amount" style="font-size:12px; font-weight:700; color:#2563eb;">
+                        মোট: ${members.length} জন
+                    </div>
                 </div>
             </div>
         `;
@@ -7127,13 +7174,15 @@ async function loadReport() {
         showToast('✅ PDF ডাউনলোড শুরু হয়েছে!');
     }
 
+// ============================================================
+// ===== ALL TRANSACTIONS FUNCTIONS (UPDATED) =====
+// ============================================================
 async function loadAllTransactions() {
     const fromDate = document.getElementById('txFromDate').value;
     const toDate = document.getElementById('txToDate').value;
     const typeFilter = document.getElementById('txTypeFilter').value;
     const container = document.getElementById('allTransactionsContainer');
     const summaryContainer = document.getElementById('txSummary');
-    
     if (!container) return;
     
     container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লেনদেন লোড হচ্ছে...</p></div>';
@@ -7150,208 +7199,72 @@ async function loadAllTransactions() {
         let endDate = toDate || new Date().toISOString().slice(0,10);
         endDate += 'T23:59:59';
         
-        // সঞ্চয় পেমেন্ট লোড
         if (!typeFilter || typeFilter === 'payment') {
-            const { data: payments } = await client
-                .from('payments')
-                .select('*')
-                .eq('status', 'approved')
-                .gte('submitted_at', startDate)
-                .lte('submitted_at', endDate);
-            
-            (payments || []).forEach(p => {
-                transactions.push({
-                    date: p.submitted_at,
-                    type: 'সঞ্চয়',
-                    typeClass: 'savings',
-                    member: p.member_name,
-                    id: p.member_id,
-                    amount: p.amount,
-                    note: `${p.month || ''} ${p.year || ''} - ${p.payment_method || 'cash'}`,
-                    isCredit: true
-                });
-            });
+            const { data: payments } = await client.from('payments').select('*').eq('status', 'approved').gte('submitted_at', startDate).lte('submitted_at', endDate);
+            (payments || []).forEach(p => transactions.push({ date: p.submitted_at, type: 'সঞ্চয়', typeClass: 'savings', member: p.member_name, id: p.member_id, amount: p.amount, note: `${p.month || ''} ${p.year || ''} - ${p.payment_method || 'cash'}`, isCredit: true }));
         }
-        
-        // লোন লোড
         if (!typeFilter || typeFilter === 'loan') {
-            const { data: loans } = await client
-                .from('loan_applications')
-                .select('*')
-                .eq('status', 'approved')
-                .gte('submitted_at', startDate)
-                .lte('submitted_at', endDate);
-            
-            (loans || []).forEach(l => {
-                transactions.push({
-                    date: l.submitted_at,
-                    type: 'লোন',
-                    typeClass: 'loan',
-                    member: l.member_name,
-                    id: l.member_id,
-                    amount: l.amount,
-                    note: l.loan_type || '',
-                    isCredit: true
-                });
-            });
+            const { data: loans } = await client.from('loan_applications').select('*').eq('status', 'approved').gte('submitted_at', startDate).lte('submitted_at', endDate);
+            (loans || []).forEach(l => transactions.push({ date: l.submitted_at, type: 'লোন', typeClass: 'loan', member: l.member_name, id: l.member_id, amount: l.amount, note: l.loan_type || '', isCredit: true }));
         }
-        
-        // উত্তোলন লোড
         if (!typeFilter || typeFilter === 'withdrawal') {
-            const { data: withdrawals } = await client
-                .from('withdrawals')
-                .select('*')
-                .eq('status', 'approved')
-                .gte('requested_at', startDate)
-                .lte('requested_at', endDate);
-            
-            (withdrawals || []).forEach(w => {
-                transactions.push({
-                    date: w.requested_at,
-                    type: 'উত্তোলন',
-                    typeClass: 'withdrawal',
-                    member: w.member_name,
-                    id: w.member_id,
-                    amount: w.amount,
-                    note: w.type || '',
-                    isCredit: false
-                });
-            });
+            const { data: withdrawals } = await client.from('withdrawals').select('*').eq('status', 'approved').gte('requested_at', startDate).lte('requested_at', endDate);
+            (withdrawals || []).forEach(w => transactions.push({ date: w.requested_at, type: 'উত্তোলন', typeClass: 'withdrawal', member: w.member_name, id: w.member_id, amount: w.amount, note: w.type || '', isCredit: false }));
         }
-        
-        // রেফারেল বোনাস লোড
         if (!typeFilter || typeFilter === 'referral_bonus') {
-            const { data: members } = await client
-                .from('members')
-                .select('member_id, full_name, referral_bonus, created_at')
-                .gte('created_at', startDate)
-                .lte('created_at', endDate);
-            
-            (members || []).forEach(m => {
-                if (m.referral_bonus > 0) {
-                    transactions.push({
-                        date: m.created_at,
-                        type: 'রেফারেল বোনাস',
-                        typeClass: 'referral',
-                        member: m.full_name,
-                        id: m.member_id,
-                        amount: m.referral_bonus,
-                        note: 'রেফারেল বোনাস প্রাপ্ত',
-                        isCredit: true
-                    });
-                }
-            });
+            const { data: members } = await client.from('members').select('member_id, full_name, referral_bonus, created_at').gte('created_at', startDate).lte('created_at', endDate);
+            (members || []).forEach(m => { if (m.referral_bonus > 0) transactions.push({ date: m.created_at, type: 'রেফারেল বোনাস', typeClass: 'referral', member: m.full_name, id: m.member_id, amount: m.referral_bonus, note: 'রেফারেল বোনাস প্রাপ্ত', isCredit: true }); });
         }
-        
-        // সঞ্চয় লভ্যাংশ লোড
         if (!typeFilter || typeFilter === 'profit_savings') {
-            const { data: members } = await client
-                .from('members')
-                .select('member_id, full_name, profit_balance_savings, created_at')
-                .gte('created_at', startDate)
-                .lte('created_at', endDate);
-            
-            (members || []).forEach(m => {
-                if (m.profit_balance_savings > 0) {
-                    transactions.push({
-                        date: m.created_at,
-                        type: 'সঞ্চয় লভ্যাংশ',
-                        typeClass: 'profit',
-                        member: m.full_name,
-                        id: m.member_id,
-                        amount: m.profit_balance_savings,
-                        note: 'সঞ্চয় থেকে লভ্যাংশ',
-                        isCredit: true
-                    });
-                }
-            });
+            const { data: members } = await client.from('members').select('member_id, full_name, profit_balance_savings, created_at').gte('created_at', startDate).lte('created_at', endDate);
+            (members || []).forEach(m => { if (m.profit_balance_savings > 0) transactions.push({ date: m.created_at, type: 'সঞ্চয় লভ্যাংশ', typeClass: 'profit', member: m.full_name, id: m.member_id, amount: m.profit_balance_savings, note: 'সঞ্চয় থেকে লভ্যাংশ', isCredit: true }); });
         }
-        
-        // বিনিয়োগ লভ্যাংশ লোড
         if (!typeFilter || typeFilter === 'profit_investment') {
-            const { data: members } = await client
-                .from('members')
-                .select('member_id, full_name, profit_balance_investment, created_at')
-                .gte('created_at', startDate)
-                .lte('created_at', endDate);
-            
-            (members || []).forEach(m => {
-                if (m.profit_balance_investment > 0) {
-                    transactions.push({
-                        date: m.created_at,
-                        type: 'বিনিয়োগ লভ্যাংশ',
-                        typeClass: 'profit',
-                        member: m.full_name,
-                        id: m.member_id,
-                        amount: m.profit_balance_investment,
-                        note: 'বিনিয়োগ থেকে লভ্যাংশ',
-                        isCredit: true
-                    });
-                }
-            });
+            const { data: members } = await client.from('members').select('member_id, full_name, profit_balance_investment, created_at').gte('created_at', startDate).lte('created_at', endDate);
+            (members || []).forEach(m => { if (m.profit_balance_investment > 0) transactions.push({ date: m.created_at, type: 'বিনিয়োগ লভ্যাংশ', typeClass: 'profit', member: m.full_name, id: m.member_id, amount: m.profit_balance_investment, note: 'বিনিয়োগ থেকে লভ্যাংশ', isCredit: true }); });
         }
-        
-        // রেফারেল লভ্যাংশ লোড
         if (!typeFilter || typeFilter === 'profit_referral') {
-            const { data: members } = await client
-                .from('members')
-                .select('member_id, full_name, profit_balance_referral, created_at')
-                .gte('created_at', startDate)
-                .lte('created_at', endDate);
-            
-            (members || []).forEach(m => {
-                if (m.profit_balance_referral > 0) {
-                    transactions.push({
-                        date: m.created_at,
-                        type: 'রেফারেল লভ্যাংশ',
-                        typeClass: 'profit',
-                        member: m.full_name,
-                        id: m.member_id,
-                        amount: m.profit_balance_referral,
-                        note: 'রেফারেল থেকে লভ্যাংশ',
-                        isCredit: true
-                    });
-                }
-            });
+            const { data: members } = await client.from('members').select('member_id, full_name, profit_balance_referral, created_at').gte('created_at', startDate).lte('created_at', endDate);
+            (members || []).forEach(m => { if (m.profit_balance_referral > 0) transactions.push({ date: m.created_at, type: 'রেফারেল লভ্যাংশ', typeClass: 'profit', member: m.full_name, id: m.member_id, amount: m.profit_balance_referral, note: 'রেফারেল থেকে লভ্যাংশ', isCredit: true }); });
         }
         
-        // তারিখ অনুযায়ী সাজান (সর্বশেষ প্রথমে)
         transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
         
-        // টোটাল ক্যালকুলেশন
         const totalAmount = transactions.reduce((s, t) => s + (t.amount || 0), 0);
         const totalCredit = transactions.filter(t => t.isCredit).reduce((s, t) => s + (t.amount || 0), 0);
         const totalDebit = transactions.filter(t => !t.isCredit).reduce((s, t) => s + (t.amount || 0), 0);
-        const netBalance = totalCredit - totalDebit;
         
-        // ✅ html ভেরিয়েবল ডিফাইন করুন
-        let html = '';
+        // ✅ সারাংশ এখন টেবিলের নিচে দেখানোর জন্য সংরক্ষণ করছি
+        const summaryData = {
+            count: transactions.length,
+            credit: totalCredit,
+            debit: totalDebit,
+            net: totalCredit - totalDebit
+        };
         
-        if (transactions.length === 0) {
+        if (transactions.length === 0) { 
             container.innerHTML = `
                 <div class="text-center text-gray-500 py-8">
                     <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
                     <p>কোনো লেনদেন নেই</p>
-                    <p class="text-sm text-gray-400 mt-2">${fromDate || toDate ? 'ফিল্টার মেলে কোনো ডেটা নেই' : 'এখনও কোনো লেনদেন করা হয়নি'}</p>
                 </div>
             `;
+            // ✅ সারাংশ খালি করুন
             if (summaryContainer) summaryContainer.innerHTML = '';
-            return;
+            return; 
         }
         
-        // টাইপ ব্যাজ ম্যাপিং
-        const typeBadges = {
-            'সঞ্চয়': 'savings',
-            'লোন': 'loan',
-            'উত্তোলন': 'withdrawal',
-            'রেফারেল বোনাস': 'referral',
-            'সঞ্চয় লভ্যাংশ': 'profit',
-            'বিনিয়োগ লভ্যাংশ': 'profit',
-            'রেফারেল লভ্যাংশ': 'profit'
+        const typeBadges = { 
+            'সঞ্চয়': 'savings', 
+            'লোন': 'loan', 
+            'উত্তোলন': 'withdrawal', 
+            'রেফারেল বোনাস': 'referral', 
+            'সঞ্চয় লভ্যাংশ': 'profit', 
+            'বিনিয়োগ লভ্যাংশ': 'profit', 
+            'রেফারেল লভ্যাংশ': 'profit' 
         };
         
-        // টেবিল HTML তৈরি
-        html += `
+        let html = `
             <div class="table-scroll">
                 <table class="data-table">
                     <thead>
@@ -7369,21 +7282,13 @@ async function loadAllTransactions() {
         
         transactions.forEach(t => {
             const badgeClass = typeBadges[t.type] || 'savings';
-            const dateStr = t.date ? new Date(t.date).toLocaleDateString('bn-BD', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric'
-            }) : '-';
-            
             html += `<tr>
-                <td class="text-xs whitespace-nowrap">${dateStr}</td>
+                <td>${new Date(t.date).toLocaleDateString('bn-BD')}</td>
                 <td><span class="tx-badge ${badgeClass}">${t.type}</span></td>
-                <td><span class="font-medium">${t.member || '-'}</span></td>
-                <td class="text-xs text-gray-500">${t.id || '-'}</td>
-                <td class="text-left font-bold ${t.isCredit ? 'text-emerald-600' : 'text-red-600'}">
-                    ${t.isCredit ? '+' : '-'} ${formatAmountWithText(t.amount)}
-                </td>
-                <td class="text-xs text-gray-500">${t.note || '-'}</td>
+                <td>${t.member || '-'}</td>
+                <td>${t.id || '-'}</td>
+                <td class="text-left font-bold ${t.isCredit ? 'text-emerald-600' : 'text-red-600'}">${t.isCredit ? '+' : '-'} ${formatAmountWithText(t.amount)}</td>
+                <td>${t.note || '-'}</td>
             </tr>`;
         });
         
@@ -7391,64 +7296,63 @@ async function loadAllTransactions() {
                     </tbody>
                 </table>
             </div>
-        `;
-        
-        // ✅ সারাংশ কার্ড (টেবিলের নিচে)
-        html += `
+            
+            <!-- ✅ সারাংশ এখন টেবিলের নিচে -->
             <div class="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div class="bg-white p-3 rounded-lg shadow-sm text-center">
                         <p class="text-xs text-gray-500">📋 মোট লেনদেন</p>
-                        <p class="text-xl font-bold text-gray-700">${transactions.length}</p>
+                        <p class="text-xl font-bold text-gray-700">${summaryData.count}</p>
                     </div>
                     <div class="bg-white p-3 rounded-lg shadow-sm text-center">
                         <p class="text-xs text-gray-500">💰 মোট জমা</p>
-                        <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(totalCredit)}</p>
+                        <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(summaryData.credit)}</p>
                     </div>
                     <div class="bg-white p-3 rounded-lg shadow-sm text-center">
                         <p class="text-xs text-gray-500">💸 মোট খরচ</p>
-                        <p class="text-xl font-bold text-red-600">${formatAmountWithText(totalDebit)}</p>
+                        <p class="text-xl font-bold text-red-600">${formatAmountWithText(summaryData.debit)}</p>
                     </div>
                     <div class="bg-white p-3 rounded-lg shadow-sm text-center">
                         <p class="text-xs text-gray-500">📊 নেট ব্যালেন্স</p>
-                        <p class="text-xl font-bold ${netBalance >= 0 ? 'text-emerald-600' : 'text-red-600'}">
-                            ${formatAmountWithText(netBalance)}
-                        </p>
+                        <p class="text-xl font-bold ${summaryData.net >= 0 ? 'text-emerald-600' : 'text-red-600'}">${formatAmountWithText(summaryData.net)}</p>
                     </div>
                 </div>
             </div>
         `;
         
-        // ফুটার তথ্য
-        html += `
-            <div class="mt-3 text-sm text-gray-500 text-right">
-                📊 মোট ${transactions.length} টি লেনদেন 
-                ${fromDate ? `| 📅 ${fromDate}` : ''} 
-                ${toDate ? `থেকে ${toDate}` : ''}
-                ${!fromDate && !toDate ? '| সব সময়' : ''}
-            </div>
-        `;
-        
         container.innerHTML = html;
         
-        // উপরের সারাংশ খালি করুন
+        // ✅ উপরের সারাংশ খালি করুন
         if (summaryContainer) summaryContainer.innerHTML = '';
         
-        console.log(`✅ ${transactions.length} টি লেনদেন রেন্ডার সম্পূর্ণ!`);
-        
-    } catch(e) {
-        console.error('Transactions error:', e);
-        container.innerHTML = `
-            <div class="text-red-500 p-4 text-center">
-                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
-                <p>❌ লেনদেন লোড করতে সমস্যা!</p>
-                <p class="text-sm text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
-                <button onclick="loadAllTransactions()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
-            </div>
-        `;
+    } catch(e) { 
+        console.error('Transactions error:', e); 
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ লেনদেন লোড করতে সমস্যা!</div>'; 
     }
 }
 
+    html += `
+    <div class="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                <p class="text-xs text-gray-500">📋 মোট লেনদেন</p>
+                <p class="text-xl font-bold text-gray-700">${transactions.length}</p>
+            </div>
+            <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                <p class="text-xs text-gray-500">💰 মোট জমা</p>
+                <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(totalCredit)}</p>
+            </div>
+            <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                <p class="text-xs text-gray-500">💸 মোট খরচ</p>
+                <p class="text-xl font-bold text-red-600">${formatAmountWithText(totalDebit)}</p>
+            </div>
+            <div class="bg-white p-3 rounded-lg shadow-sm text-center">
+                <p class="text-xs text-gray-500">📊 নেট ব্যালেন্স</p>
+                <p class="text-xl font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-emerald-600' : 'text-red-600'}">${formatAmountWithText(totalCredit - totalDebit)}</p>
+            </div>
+        </div>
+    </div>
+`;
 
     function exportTransactionsExcel() {
         const table = document.querySelector('#allTransactionsContainer table');
