@@ -12169,6 +12169,596 @@ async function rejectBookPayment(paymentId) {
         showToast('❌ বাতিল করতে সমস্যা!', 'error');
     }
 }
+
+    // ============================================================
+// 📚 BOOK PAYMENTS - সম্পূর্ণ ফাংশন সেট
+// ============================================================
+
+// ১. সব পেমেন্ট লোড করুন (সব স্ট্যাটাস)
+async function loadAllBookPayments() {
+    console.log('📚 loadAllBookPayments() called');
+    
+    const container = document.getElementById('pendingBookPaymentsList');
+    if (!container) {
+        console.error('❌ pendingBookPaymentsList container not found');
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner"></div>
+            <p class="text-gray-500 mt-2">📚 সব পেমেন্ট লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ সংযোগ সমস্যা!</p>
+                <button onclick="loadAllBookPayments()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('book_payments')
+            .select(`
+                *,
+                book_orders!order_id (
+                    student_name,
+                    class,
+                    total_price,
+                    down_payment
+                )
+            `)
+            .order('payment_date', { ascending: false });
+        
+        if (error) throw error;
+        
+        if (!data || data.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                    <p>📭 কোনো পেমেন্ট নেই</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // ডেটা রেন্ডার করুন
+        let html = `
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>তারিখ</th>
+                            <th>ছাত্র/অর্ডার</th>
+                            <th>ধরন</th>
+                            <th class="text-left">পরিমাণ</th>
+                            <th>পদ্ধতি</th>
+                            <th>স্ট্যাটাস</th>
+                            <th>অ্যাকশন</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        data.forEach(p => {
+            const order = p.book_orders || {};
+            const isDown = p.payment_type === 'down_payment';
+            const typeLabel = isDown ? '💵 ডাউন' : `📅 কিস্তি #${p.installment_no}`;
+            const statusClass = p.status === 'approved' ? 'status-approved' :
+                               p.status === 'pending' ? 'status-pending' : 'status-rejected';
+            const statusText = p.status === 'approved' ? '✅ অনুমোদিত' :
+                              p.status === 'pending' ? '⏳ বিচারাধীন' : '❌ বাতিল';
+            
+            const dateStr = p.payment_date ? new Date(p.payment_date).toLocaleDateString('bn-BD', {
+                year: 'numeric', month: 'short', day: 'numeric'
+            }) : '-';
+            
+            html += `
+                <tr>
+                    <td class="text-xs whitespace-nowrap">${dateStr}</td>
+                    <td><span class="font-medium">${order.student_name || p.member_id || '-'}</span></td>
+                    <td><span class="text-xs px-2 py-0.5 rounded-full ${isDown ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">${typeLabel}</span></td>
+                    <td class="text-left font-bold text-emerald-600">${(p.amount || 0).toLocaleString()} টাকা</td>
+                    <td><span class="text-xs">${p.payment_method || 'cash'}</span></td>
+                    <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                    <td>
+                        <button onclick="viewBookPaymentDetails('${p.id}')" class="btn btn-info btn-xs" title="বিস্তারিত">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        ${p.status === 'pending' ? `
+                            <button onclick="approveBookPayment('${p.id}')" class="btn btn-success btn-xs" title="অনুমোদন">
+                                <i class="fas fa-check"></i>
+                            </button>
+                            <button onclick="rejectBookPayment('${p.id}')" class="btn btn-danger btn-xs" title="বাতিল">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        ` : ''}
+                    </td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-3 text-sm text-gray-500 text-right">
+                📊 মোট ${data.length} টি পেমেন্ট
+                ${data.filter(p => p.status === 'pending').length > 0 ? 
+                    ` | ⏳ পেন্ডিং: ${data.filter(p => p.status === 'pending').length} টি` : ''}
+            </div>
+        `;
+        
+        container.innerHTML = html;
+        console.log('✅ সব পেমেন্ট রেন্ডার সম্পূর্ণ!');
+        
+        // ব্যাজ আপডেট
+        const pendingCount = data.filter(p => p.status === 'pending').length;
+        updateBookPaymentBadge(pendingCount);
+        
+    } catch(e) {
+        console.error('Load all payments error:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ পেমেন্ট লোড করতে সমস্যা!</p>
+                <p class="text-sm text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="loadAllBookPayments()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+    }
+}
+
+// ২. পেন্ডিং পেমেন্ট লোড করুন
+async function loadPendingBookPayments() {
+    console.log('⏳ loadPendingBookPayments() called');
+    
+    const container = document.getElementById('pendingBookPaymentsList');
+    if (!container) {
+        console.error('❌ pendingBookPaymentsList container not found');
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner"></div>
+            <p class="text-gray-500 mt-2">⏳ পেন্ডিং পেমেন্ট লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ সংযোগ সমস্যা!</p>
+                <button onclick="loadPendingBookPayments()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('book_payments')
+            .select(`
+                *,
+                book_orders!order_id (
+                    student_name,
+                    class,
+                    total_price,
+                    down_payment
+                )
+            `)
+            .eq('status', 'pending')
+            .order('payment_date', { ascending: false });
+        
+        if (error) throw error;
+        
+        if (!data || data.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-check-circle text-4xl block mb-3 text-green-500"></i>
+                    <p>✅ কোনো পেন্ডিং পেমেন্ট নেই</p>
+                    <button onclick="loadAllBookPayments()" class="btn btn-info btn-sm mt-3">
+                        <i class="fas fa-list mr-1"></i> সব পেমেন্ট দেখুন
+                    </button>
+                </div>
+            `;
+            updateBookPaymentBadge(0);
+            return;
+        }
+        
+        updateBookPaymentBadge(data.length);
+        
+        // পেন্ডিং পেমেন্ট কার্ড ভিউ
+        let html = `
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        `;
+        
+        data.forEach(p => {
+            const order = p.book_orders || {};
+            const isDown = p.payment_type === 'down_payment';
+            const typeLabel = isDown ? '💵 ডাউন পেমেন্ট' : `📅 কিস্তি #${p.installment_no}`;
+            const amount = p.amount || 0;
+            const methodColors = {
+                'bKash': 'bg-green-100 text-green-700',
+                'Nagad': 'bg-orange-100 text-orange-700',
+                'Rocket': 'bg-purple-100 text-purple-700',
+                'bank': 'bg-indigo-100 text-indigo-700',
+                'cash': 'bg-yellow-100 text-yellow-700'
+            };
+            const methodColor = methodColors[p.payment_method] || 'bg-gray-100 text-gray-700';
+            
+            html += `
+                <div class="border rounded-lg p-4 hover:shadow-md transition bg-white ${isDown ? 'border-blue-300' : 'border-purple-300'}">
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="font-bold text-gray-800">${order.student_name || p.member_id || 'অজানা'}</span>
+                                <span class="text-xs px-2 py-0.5 rounded-full ${isDown ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">${typeLabel}</span>
+                                <span class="status-badge status-pending">⏳ বিচারাধীন</span>
+                            </div>
+                            <div class="grid grid-cols-2 gap-1 mt-2 text-sm">
+                                <div><span class="text-gray-500">অর্ডার:</span> <span class="font-mono text-xs">${p.order_id}</span></div>
+                                <div><span class="text-gray-500">পরিমাণ:</span> <span class="font-bold text-emerald-600">${amount.toLocaleString()} টাকা</span></div>
+                                <div><span class="text-gray-500">পদ্ধতি:</span> <span class="px-2 py-0.5 rounded-full text-xs ${methodColor}">${p.payment_method || 'cash'}</span></div>
+                                ${p.is_late ? `<div><span class="text-gray-500 text-red-600">⏰ বিলম্ব ফি:</span> <span class="text-red-600 font-bold">${p.late_fee || 0} টাকা</span></div>` : ''}
+                            </div>
+                            ${p.transaction_id ? `<div class="mt-1 text-xs text-blue-600">📝 লেনদেন ID: ${p.transaction_id}</div>` : ''}
+                            ${p.note ? `<div class="mt-1 text-xs text-gray-500">📝 ${p.note}</div>` : ''}
+                            <div class="mt-1 text-xs text-gray-400">📅 ${p.payment_date ? new Date(p.payment_date).toLocaleString('bn-BD') : '-'}</div>
+                        </div>
+                    </div>
+                    <div class="mt-3 flex gap-2 flex-wrap">
+                        <button onclick="approveBookPayment('${p.id}')" class="btn btn-success btn-sm flex-1">
+                            <i class="fas fa-check mr-1"></i> অনুমোদন
+                        </button>
+                        <button onclick="rejectBookPayment('${p.id}')" class="btn btn-danger btn-sm flex-1">
+                            <i class="fas fa-times mr-1"></i> বাতিল
+                        </button>
+                        <button onclick="viewBookPaymentDetails('${p.id}')" class="btn btn-info btn-sm">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+        
+        html += `
+            </div>
+            <div class="mt-4 text-center">
+                <button onclick="loadAllBookPayments()" class="btn btn-info btn-sm">
+                    <i class="fas fa-list mr-1"></i> সব পেমেন্ট দেখুন (${data.length} টি পেন্ডিং)
+                </button>
+            </div>
+        `;
+        
+        container.innerHTML = html;
+        console.log(`✅ ${data.length} টি পেন্ডিং পেমেন্ট রেন্ডার সম্পূর্ণ!`);
+        
+    } catch(e) {
+        console.error('Load pending payments error:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ পেমেন্ট লোড করতে সমস্যা!</p>
+                <button onclick="loadPendingBookPayments()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+    }
+}
+
+// ৩. ব্যাজ আপডেট
+function updateBookPaymentBadge(count) {
+    const badge = document.getElementById('pendingBookPaymentBadge');
+    if (badge) {
+        badge.innerText = count;
+        badge.style.display = count > 0 ? 'flex' : 'none';
+    }
+}
+
+// ৪. পেমেন্ট অনুমোদন
+async function approveBookPayment(paymentId) {
+    if (!confirm('✅ এই পেমেন্ট অনুমোদন দেবেন?')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const btn = document.querySelector(`[onclick*="approveBookPayment('${paymentId}')"]`);
+    const originalText = btn?.innerHTML || 'অনুমোদন';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    }
+    
+    try {
+        // পেমেন্ট ডেটা নিন
+        const { data: payment, error: getError } = await client
+            .from('book_payments')
+            .select('*')
+            .eq('id', paymentId)
+            .single();
+        
+        if (getError) throw getError;
+        if (!payment) {
+            showToast('❌ পেমেন্ট পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        // পেমেন্ট আপডেট
+        await client
+            .from('book_payments')
+            .update({
+                status: 'approved',
+                approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+                approved_at: new Date().toISOString()
+            })
+            .eq('id', paymentId);
+        
+        // অর্ডারের total_paid আপডেট
+        const { data: order, error: orderError } = await client
+            .from('book_orders')
+            .select('total_paid, total_price')
+            .eq('order_id', payment.order_id)
+            .single();
+        
+        if (!orderError && order) {
+            const newTotalPaid = (order.total_paid || 0) + (payment.amount || 0);
+            await client
+                .from('book_orders')
+                .update({
+                    total_paid: newTotalPaid,
+                    remaining: (order.total_price || 0) - newTotalPaid,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('order_id', payment.order_id);
+        }
+        
+        // ডাউন পেমেন্ট চেক
+        if (payment.payment_type === 'down_payment') {
+            await client
+                .from('book_orders')
+                .update({
+                    down_payment_paid: true,
+                    down_payment_paid_at: new Date().toISOString()
+                })
+                .eq('order_id', payment.order_id);
+        }
+        
+        // কিস্তি আপডেট
+        if (payment.payment_type === 'installment' && payment.installment_no) {
+            await client
+                .from('book_installments')
+                .update({
+                    paid: true,
+                    paid_at: new Date().toISOString(),
+                    payment_id: payment.id
+                })
+                .eq('order_id', payment.order_id)
+                .eq('installment_no', payment.installment_no);
+        }
+        
+        showToast(`✅ ${(payment.amount || 0).toLocaleString()} টাকা পেমেন্ট অনুমোদিত হয়েছে!`, 'success');
+        
+        // রিলোড
+        await loadPendingBookPayments();
+        await loadAllBookPayments();
+        await loadBookSalesReport();
+        
+    } catch(e) {
+        console.error('Approve error:', e);
+        showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    }
+}
+
+// ৫. পেমেন্ট বাতিল
+async function rejectBookPayment(paymentId) {
+    const reason = prompt('❌ বাতিলের কারণ লিখুন:');
+    if (!reason) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const btn = document.querySelector(`[onclick*="rejectBookPayment('${paymentId}')"]`);
+    const originalText = btn?.innerHTML || 'বাতিল';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    }
+    
+    try {
+        await client
+            .from('book_payments')
+            .update({
+                status: 'rejected',
+                reject_reason: reason.trim(),
+                rejected_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+                rejected_at: new Date().toISOString()
+            })
+            .eq('id', paymentId);
+        
+        showToast('❌ পেমেন্ট বাতিল করা হয়েছে!', 'warning');
+        
+        // রিলোড
+        await loadPendingBookPayments();
+        await loadAllBookPayments();
+        
+    } catch(e) {
+        console.error('Reject error:', e);
+        showToast(`❌ বাতিল করতে সমস্যা: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    }
+}
+
+// ৬. পেমেন্ট বিস্তারিত দেখুন
+function viewBookPaymentDetails(paymentId) {
+    showToast('🔍 পেমেন্ট বিস্তারিত শীঘ্রই আসছে', 'info');
+    
+    // বিস্তারিত মডাল খোলার জন্য ফাংশন
+    // আপনি চাইলে এখানে মডাল তৈরি করতে পারেন
+    console.log(`📋 Payment details requested for: ${paymentId}`);
+}
+
+// ৭. পেমেন্টের বিস্তারিত মডাল
+async function showBookPaymentDetailsModal(paymentId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: payment, error } = await client
+            .from('book_payments')
+            .select(`
+                *,
+                book_orders!order_id (
+                    *,
+                    books
+                )
+            `)
+            .eq('id', paymentId)
+            .single();
+        
+        if (error) throw error;
+        if (!payment) {
+            showToast('❌ পেমেন্ট পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        const order = payment.book_orders || {};
+        const isDown = payment.payment_type === 'down_payment';
+        const typeLabel = isDown ? '💵 ডাউন পেমেন্ট' : `📅 কিস্তি #${payment.installment_no}`;
+        const statusClass = payment.status === 'approved' ? 'status-approved' :
+                           payment.status === 'pending' ? 'status-pending' : 'status-rejected';
+        const statusText = payment.status === 'approved' ? '✅ অনুমোদিত' :
+                          payment.status === 'pending' ? '⏳ বিচারাধীন' : '❌ বাতিল';
+        
+        const html = `
+            <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500">পেমেন্ট আইডি</span><p class="font-semibold">#${payment.id}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500">স্ট্যাটাস</span><p><span class="status-badge ${statusClass}">${statusText}</span></p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500">ছাত্রের নাম</span><p class="font-semibold">${order.student_name || '-'}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500">ধরন</span><p class="font-semibold">${typeLabel}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500">পরিমাণ</span><p class="font-bold text-emerald-600">${(payment.amount || 0).toLocaleString()} টাকা</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500">পেমেন্ট পদ্ধতি</span><p class="font-semibold">${payment.payment_method || 'cash'}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500">তারিখ</span><p class="font-semibold">${payment.payment_date ? new Date(payment.payment_date).toLocaleString('bn-BD') : '-'}</p></div>
+                    ${payment.transaction_id ? `<div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500">লেনদেন আইডি</span><p class="font-semibold font-mono text-xs">${payment.transaction_id}</p></div>` : ''}
+                    ${payment.is_late ? `<div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500">⏰ বিলম্ব ফি</span><p class="font-bold text-red-600">${(payment.late_fee || 0).toLocaleString()} টাকা</p></div>` : ''}
+                    ${payment.note ? `<div class="bg-gray-50 p-3 rounded-lg col-span-2"><span class="text-gray-500">📝 নোট</span><p class="font-semibold">${payment.note}</p></div>` : ''}
+                    ${payment.reject_reason ? `<div class="bg-gray-50 p-3 rounded-lg col-span-2"><span class="text-gray-500">❌ বাতিলের কারণ</span><p class="font-semibold text-red-600">${payment.reject_reason}</p></div>` : ''}
+                    ${payment.approved_at ? `<div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500">✅ অনুমোদনের তারিখ</span><p class="font-semibold">${new Date(payment.approved_at).toLocaleString('bn-BD')}</p></div>` : ''}
+                </div>
+                
+                ${order.books ? `
+                    <div class="border-t pt-3">
+                        <p class="font-semibold text-gray-700 mb-2">📚 কিতাবসমূহ:</p>
+                        <div class="bg-gray-50 rounded-lg p-3 max-h-40 overflow-y-auto">
+                            ${order.books.map((b, i) => `
+                                <div class="flex justify-between items-center py-1 border-b border-gray-100 last:border-0">
+                                    <span class="text-sm">${i+1}. ${b.name}</span>
+                                    <span class="text-sm font-bold text-emerald-600">${(b.price || 0).toLocaleString()} টাকা</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+                
+                <div class="grid grid-cols-4 gap-2 pt-2 border-t">
+                    <div class="bg-emerald-50 p-2 rounded-lg text-center">
+                        <p class="text-xs text-gray-500">মোট</p>
+                        <p class="font-bold text-emerald-700">${(order.total_price || 0).toLocaleString()} টাকা</p>
+                    </div>
+                    <div class="bg-blue-50 p-2 rounded-lg text-center">
+                        <p class="text-xs text-gray-500">ডাউন</p>
+                        <p class="font-bold text-blue-700">${(order.down_payment || 0).toLocaleString()} টাকা</p>
+                    </div>
+                    <div class="bg-purple-50 p-2 rounded-lg text-center">
+                        <p class="text-xs text-gray-500">কিস্তি</p>
+                        <p class="font-bold text-purple-700">${order.installment_months || 0} মাস</p>
+                    </div>
+                    <div class="bg-amber-50 p-2 rounded-lg text-center">
+                        <p class="text-xs text-gray-500">পরিশোধিত</p>
+                        <p class="font-bold text-amber-700">${(order.total_paid || 0).toLocaleString()} টাকা</p>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        showCustomModal('📋 পেমেন্ট বিস্তারিত', html);
+        
+    } catch(e) {
+        console.error('Show payment details error:', e);
+        showToast('❌ পেমেন্ট বিস্তারিত লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ৮. কাস্টম মডাল (যদি না থাকে)
+function showCustomModal(title, content) {
+    let modal = document.getElementById('customModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'customModal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal-container max-w-2xl">
+                <div class="flex justify-between items-center border-b pb-2 mb-4">
+                    <h3 class="text-xl font-bold" id="customModalTitle"></h3>
+                    <button onclick="closeCustomModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
+                </div>
+                <div id="customModalContent"></div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+    
+    document.getElementById('customModalTitle').textContent = title;
+    document.getElementById('customModalContent').innerHTML = content;
+    modal.classList.add('active');
+}
+
+function closeCustomModal() {
+    const modal = document.getElementById('customModal');
+    if (modal) modal.classList.remove('active');
+}
+
+// ৯. গ্লোবাল স্কোপে ফাংশনগুলো এক্সপোজ করুন
+window.loadAllBookPayments = loadAllBookPayments;
+window.loadPendingBookPayments = loadPendingBookPayments;
+window.approveBookPayment = approveBookPayment;
+window.rejectBookPayment = rejectBookPayment;
+window.viewBookPaymentDetails = viewBookPaymentDetails;
+window.showBookPaymentDetailsModal = showBookPaymentDetailsModal;
+window.updateBookPaymentBadge = updateBookPaymentBadge;
+window.showCustomModal = showCustomModal;
+window.closeCustomModal = closeCustomModal;
+
+console.log('✅ সমস্ত book-payment ফাংশন রেডি!');
+    
     </script>
 </body>
 </html>
