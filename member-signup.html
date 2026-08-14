@@ -262,6 +262,22 @@
             font-size: 12px;
             font-weight: 600;
         }
+        .id-preview-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        .id-preview-badge.regular {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+        .id-preview-badge.current {
+            background: #fce7f3;
+            color: #9d174d;
+        }
     </style>
 </head>
 <body class="watermark-container">
@@ -502,7 +518,9 @@
                     </div>
 
                     <div class="id-preview mt-4 text-base">
-                        <i class="fas fa-id-card mr-2"></i> আপনার আইডি হবে: <strong id="memberIdPreview">লোড হচ্ছে...</strong>
+                        <i class="fas fa-id-card mr-2"></i> আপনার আইডি হবে: 
+                        <strong id="memberIdPreview">লোড হচ্ছে...</strong>
+                        <span id="memberTypeBadge" class="id-preview-badge regular">মেয়াদী</span>
                     </div>
                 </div>
 
@@ -629,12 +647,13 @@ function toggleDynamicFields() {
 }
 
 // ============================================================
-// সদস্য ধরন নির্বাচন
+// সদস্য ধরন নির্বাচন - আইডি প্রিভিউ আপডেট সহ
 // ============================================================
-function selectMemberType(type) {
+async function selectMemberType(type) {
     const regularFields = document.getElementById('regularMemberFields');
     const currentFields = document.getElementById('currentMemberFields');
     const regularTermField = document.getElementById('regularMemberTermField');
+    const badge = document.getElementById('memberTypeBadge');
 
     document.querySelectorAll('.member-type-card').forEach(card => {
         card.classList.remove('selected');
@@ -643,15 +662,33 @@ function selectMemberType(type) {
     if (type === 'current') {
         regularFields.classList.add('hidden');
         currentFields.classList.remove('hidden');
-        regularTermField.classList.add('hidden'); // কারেন্ট সদস্যের জন্য মেয়াদ ফিল্ড লুকান
+        regularTermField.classList.add('hidden');
         document.querySelector('input[name="memberType"][value="current"]').checked = true;
         document.querySelector('.member-type-card:has(input[value="current"])')?.classList.add('selected');
+        
+        // ব্যাজ আপডেট
+        badge.textContent = 'কারেন্ট';
+        badge.className = 'id-preview-badge current';
+        
+        // কারেন্ট আইডি জেনারেট
+        const newId = await generateMemberId(0, 'current');
+        document.getElementById('memberIdPreview').textContent = newId;
+        
     } else {
         regularFields.classList.remove('hidden');
         currentFields.classList.add('hidden');
         regularTermField.classList.remove('hidden');
         document.querySelector('input[name="memberType"][value="regular"]').checked = true;
         document.querySelector('.member-type-card:has(input[value="regular"])')?.classList.add('selected');
+        
+        // ব্যাজ আপডেট
+        badge.textContent = 'মেয়াদী';
+        badge.className = 'id-preview-badge regular';
+        
+        // মেয়াদী আইডি জেনারেট (বর্তমান সিলেক্টেড টার্ম অনুযায়ী)
+        const term = parseInt(document.getElementById('memberTerm').value) || 12;
+        const newId = await generateMemberId(term, 'regular');
+        document.getElementById('memberIdPreview').textContent = newId;
     }
 }
 
@@ -749,11 +786,11 @@ function generatePassword() {
 }
 
 // ============================================================
-// মেম্বার আইডি জেনারেট (কারেন্ট সদস্যের জন্য মেয়াদ G হিসেবে)
+// মেম্বার আইডি জেনারেট
 // ============================================================
 async function generateMemberId(memberTerm = 12, memberType = 'regular') {
     const client = initSupabaseClient();
-    if (!client) return 'TUKN-000001';
+    if (!client) return memberType === 'current' ? 'TUKN-C-000001' : 'TUKN-T12-000001';
 
     try {
         const { data, error } = await client
@@ -788,7 +825,7 @@ async function generateMemberId(memberTerm = 12, memberType = 'regular') {
 
         let termCode = '';
         if (memberType === 'current') {
-            termCode = 'C'; // কারেন্ট সদস্য
+            termCode = 'C';
         } else if (memberTerm === 0) {
             termCode = 'G';
         } else {
@@ -800,7 +837,7 @@ async function generateMemberId(memberTerm = 12, memberType = 'regular') {
     } catch(e) {
         console.error('Generate member ID error:', e);
         const timestamp = Date.now().toString().slice(-6);
-        return `TUKN-${memberType === 'current' ? 'C' : 'T' + memberTerm}-${timestamp}`;
+        return memberType === 'current' ? `TUKN-C-${timestamp}` : `TUKN-T${memberTerm}-${timestamp}`;
     }
 }
 
@@ -995,7 +1032,6 @@ document.getElementById('signupForm').addEventListener('submit', async function(
         const memberTerm = memberType === 'regular' ? parseInt(document.getElementById('memberTerm').value) || 0 : 0;
         const referCodeInput = document.getElementById('referCode').value.trim();
 
-        // ✅ অটো জেনারেট: আইডি, রেফারেল কোড, পাসওয়ার্ড
         const memberId = await generateMemberId(memberTerm, memberType);
         const referCode = referCodeInput || generateReferralCode(mobile);
         const password = generatePassword();
@@ -1043,7 +1079,6 @@ document.getElementById('signupForm').addEventListener('submit', async function(
             created_at: new Date().toISOString()
         };
 
-        // যদি রেফারেল কোড দেওয়া থাকে, refer_by সেট করি
         if (referCodeInput) {
             const { data: referrerData, error: referrerError } = await client
                 .from('members')
@@ -1073,7 +1108,6 @@ document.getElementById('signupForm').addEventListener('submit', async function(
             throw memberError;
         }
 
-        // branch_members এ যোগ করুন
         await client
             .from('branch_members')
             .insert([{
@@ -1083,7 +1117,6 @@ document.getElementById('signupForm').addEventListener('submit', async function(
                 status: 'active'
             }]);
 
-        // কারেন্ট সদস্যের জন্য পেমেন্ট
         if (memberType === 'current') {
             const currentMonth = new Date().toLocaleString('bn-BD', { month: 'long' });
             const currentYear = new Date().getFullYear();
@@ -1105,7 +1138,6 @@ document.getElementById('signupForm').addEventListener('submit', async function(
                 }]);
         }
 
-        // ব্রাঞ্চ নাম নিন
         const branchName = document.getElementById('signupBranch').selectedOptions[0]?.text || '-';
 
         showSuccessNotification(memberId, referCode, password, mobile, branchName, memberType);
@@ -1170,6 +1202,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('permanentDistrict').value = document.getElementById('presentDistrict').value;
             }, 100);
         }
+    });
+
+    // মেয়াদ পরিবর্তন করলে আইডি আপডেট
+    document.getElementById('memberTerm').addEventListener('change', async function() {
+        const term = parseInt(this.value) || 12;
+        const newId = await generateMemberId(term, 'regular');
+        document.getElementById('memberIdPreview').textContent = newId;
     });
 
     setTimeout(async () => {
