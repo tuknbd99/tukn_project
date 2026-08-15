@@ -37,6 +37,11 @@
         .footer-text a { color: #059669; text-decoration: none; }
         .loading-spinner { display: inline-block; width: 18px; height: 18px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 8px; }
         @keyframes spin { to { rotate(360deg); } }
+        .toast { position: fixed; bottom: 24px; right: 24px; padding: 14px 24px; border-radius: 10px; color: white; z-index: 99999; animation: slideIn 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.2); font-weight: 600; max-width: 400px; }
+        .toast-success { background: #059669; }
+        .toast-error { background: #dc2626; }
+        .toast-info { background: #3b82f6; }
+        @keyframes slideIn { from { opacity:0; transform: translateX(40px); } to { opacity:1; transform: translateX(0); } }
     </style>
 </head>
 <body>
@@ -63,7 +68,6 @@
             </div>
         </div>
 
-        <!-- ===== শুধু ফর্ম - কোনো পাসওয়ার্ড হিন্টস বা ডটস নেই ===== -->
         <form id="loginForm" onsubmit="handleLogin(event)">
             <div class="form-group">
                 <label><i class="fas fa-user mr-2"></i>ইউজারনেম</label>
@@ -82,10 +86,35 @@
     </div>
 
     <script>
+        // ============================================================
+        // 🔥 SUPABASE কনফিগারেশন
+        // ============================================================
         const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
         const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
         let selectedRole = 'super_admin';
+        let supabaseClient = null;
 
+        // ============================================================
+        // 🔥 SUPABASE ক্লায়েন্ট ইনিশিয়ালাইজ
+        // ============================================================
+        function initSupabase() {
+            if (supabaseClient) return supabaseClient;
+            try {
+                if (typeof supabase !== 'undefined' && supabase.createClient) {
+                    supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                    console.log('✅ Supabase client initialized');
+                    return supabaseClient;
+                }
+                return null;
+            } catch(e) {
+                console.error('❌ Supabase init error:', e);
+                return null;
+            }
+        }
+
+        // ============================================================
+        // 🔥 রোল সিলেক্ট
+        // ============================================================
         function selectRole(role) {
             selectedRole = role;
             document.querySelectorAll('.role-option').forEach(el => el.classList.remove('active'));
@@ -93,8 +122,32 @@
             document.getElementById('errorMsg').style.display = 'none';
         }
 
+        // ============================================================
+        // 🔥 টোস্ট নোটিফিকেশন
+        // ============================================================
+        function showToast(message, type = 'success') {
+            const oldToasts = document.querySelectorAll('.toast');
+            oldToasts.forEach(t => t.remove());
+            const toast = document.createElement('div');
+            const bgClass = type === 'success' ? 'toast-success' : type === 'error' ? 'toast-error' : 'toast-info';
+            const icon = type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle';
+            toast.className = `toast ${bgClass}`;
+            toast.innerHTML = `<i class="fas ${icon} mr-2"></i> ${message}`;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(20px)';
+                toast.style.transition = 'all 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        // ============================================================
+        // 🔥 লগইন হ্যান্ডলার - সম্পূর্ণ Supabase কেন্দ্রিক
+        // ============================================================
         async function handleLogin(e) {
             e.preventDefault();
+            
             const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value.trim();
             const errorMsg = document.getElementById('errorMsg');
@@ -113,8 +166,16 @@
             loginBtn.innerHTML = '<span class="loading-spinner"></span> লগইন হচ্ছে...';
 
             try {
-                const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-                
+                const client = initSupabase();
+                if (!client) {
+                    errorText.textContent = '❌ Supabase সংযোগ সমস্যা!';
+                    errorMsg.style.display = 'block';
+                    loginBtn.disabled = false;
+                    loginBtn.innerHTML = '<i class="fas fa-sign-in-alt mr-2"></i>লগইন করুন';
+                    return;
+                }
+
+                // 🔥 Supabase থেকে অ্যাডমিন চেক
                 const { data, error } = await client
                     .from('admins')
                     .select('*')
@@ -122,6 +183,7 @@
                     .eq('password', password);
 
                 if (error) {
+                    console.error('❌ Database error:', error);
                     errorText.textContent = '❌ ডেটাবেস ত্রুটি: ' + error.message;
                     errorMsg.style.display = 'block';
                     loginBtn.disabled = false;
@@ -139,6 +201,7 @@
 
                 const admin = data[0];
 
+                // 🔥 রোল চেক
                 if (selectedRole === 'super_admin' && admin.role !== 'super_admin') {
                     errorText.textContent = '❌ এই অ্যাকাউন্ট সুপার অ্যাডমিন নয়!';
                     errorMsg.style.display = 'block';
@@ -147,7 +210,7 @@
                     return;
                 }
 
-                if (selectedRole === 'admin' && admin.role !== 'admin') {
+                if (selectedRole === 'admin' && admin.role !== 'admin' && admin.role !== 'super_admin') {
                     errorText.textContent = '❌ এই অ্যাকাউন্ট অ্যাডমিন নয়!';
                     errorMsg.style.display = 'block';
                     loginBtn.disabled = false;
@@ -155,22 +218,46 @@
                     return;
                 }
 
-                // ✅ লগইন সফল
+                // ✅ লগইন সফল - লোকাল স্টোরেজে সংরক্ষণ
                 const adminData = {
                     id: admin.id,
                     username: admin.username,
                     name: admin.full_name || admin.username,
                     full_name: admin.full_name || admin.username,
                     role: admin.role,
-                    permissions: admin.permissions || {}
+                    permissions: admin.permissions || {},
+                    login_time: new Date().toISOString()
                 };
 
+                // 🔥 লোকাল স্টোরেজ এবং সেশন স্টোরেজে সংরক্ষণ
                 localStorage.setItem('currentAdmin', JSON.stringify(adminData));
                 sessionStorage.setItem('currentAdmin', JSON.stringify(adminData));
 
+                // 🔥 Supabase Auth সেশনও তৈরি করুন (যদি ইমেইল থাকে)
+                if (admin.email) {
+                    try {
+                        const { error: signInError } = await client.auth.signInWithPassword({
+                            email: admin.email,
+                            password: password
+                        });
+                        if (signInError) {
+                            console.warn('⚠️ Auth sign-in skipped:', signInError.message);
+                        } else {
+                            console.log('✅ Supabase Auth session created');
+                        }
+                    } catch(e) {
+                        console.warn('⚠️ Auth sign-in not available:', e.message);
+                    }
+                }
+
+                // 🔥 সফল লগইন টোস্ট
+                const roleLabel = admin.role === 'super_admin' ? 'সুপার অ্যাডমিন' : 'অ্যাডমিন';
+                showToast(`✅ স্বাগতম ${adminData.full_name}! (${roleLabel})`, 'success');
+
+                // 🔥 ড্যাশবোর্ডে রিডাইরেক্ট
                 setTimeout(() => {
                     window.location.href = 'admin-panel.html';
-                }, 800);
+                }, 1000);
 
             } catch (err) {
                 console.error('❌ Login error:', err);
@@ -181,19 +268,55 @@
             }
         }
 
-        // Enter key support
+        // ============================================================
+        // 🔥 পেজ লোড
+        // ============================================================
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('📄 অ্যাডমিন লগইন পেজ লোড হচ্ছে...');
+            initSupabase();
+            
+            // আগের সেশন চেক
+            const existingAdmin = localStorage.getItem('currentAdmin') || sessionStorage.getItem('currentAdmin');
+            if (existingAdmin) {
+                try {
+                    const admin = JSON.parse(existingAdmin);
+                    if (admin.username) {
+                        console.log('ℹ️ ইতিমধ্যে লগইন করা আছে:', admin.username);
+                        // showToast('ℹ️ ইতিমধ্যে লগইন করা আছে!', 'info');
+                        // setTimeout(() => window.location.href = 'admin-panel.html', 1500);
+                    }
+                } catch(e) {}
+            }
+
+            document.getElementById('username').value = 'admin';
+            document.getElementById('password').value = '';
+            document.getElementById('password').placeholder = 'পাসওয়ার্ড দিন';
+        });
+
+        // ============================================================
+        // 🔥 কীবোর্ড সাপোর্ট (Enter Key)
+        // ============================================================
         document.getElementById('password').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 document.getElementById('loginForm').dispatchEvent(new Event('submit'));
             }
         });
 
-        // Page load
-        document.addEventListener('DOMContentLoaded', function() {
-            document.getElementById('username').value = 'admin';
-            document.getElementById('password').value = '';
-            document.getElementById('password').placeholder = 'পাসওয়ার্ড দিন';
+        document.getElementById('username').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                document.getElementById('password').focus();
+            }
         });
+
+        // ============================================================
+        // 🔥 গ্লোবাল এক্সপোজ
+        // ============================================================
+        window.selectRole = selectRole;
+        window.handleLogin = handleLogin;
+        window.initSupabase = initSupabase;
+        window.showToast = showToast;
+
+        console.log('✅ অ্যাডমিন লগইন পেজ রেডি!');
     </script>
 </body>
 </html>
