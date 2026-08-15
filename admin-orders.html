@@ -47,6 +47,23 @@
         .empty-state { text-align: center; padding: 40px 20px; }
         .empty-state i { font-size: 48px; color: #d1d5db; margin-bottom: 16px; }
         .pagination-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        /* লগআউট বাটন স্টাইল */
+        .logout-btn {
+            background: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.3s;
+            font-size: 13px;
+        }
+        .logout-btn:hover {
+            background: #ef4444;
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -66,6 +83,9 @@
                 </a>
                 <button onclick="loadOrders()" class="btn bg-white/20 text-white hover:bg-white/30">
                     <i class="fas fa-sync-alt mr-2"></i> রিফ্রেশ
+                </button>
+                <button onclick="adminLogout()" class="logout-btn">
+                    <i class="fas fa-sign-out-alt mr-2"></i> লগআউট
                 </button>
             </div>
         </div>
@@ -191,7 +211,7 @@
 
 <script>
 // ============================================================
-// CONFIGURATION
+// 🔥 SUPABASE কনফিগারেশন - সম্পূর্ণ Supabase কেন্দ্রিক
 // ============================================================
 const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
@@ -200,9 +220,10 @@ let currentOrders = [];
 let currentPage = 1;
 let totalPages = 1;
 let currentOrderId = null;
+let currentAdmin = null;
 
 // ============================================================
-// SUPABASE INIT
+// 🔥 SUPABASE ক্লায়েন্ট ইনিশিয়ালাইজ
 // ============================================================
 async function initSupabase() {
     try {
@@ -227,6 +248,70 @@ async function initSupabase() {
     } catch(e) {
         console.error('❌ Supabase init error:', e);
         return null;
+    }
+}
+
+// ============================================================
+// 🔥 অ্যাডমিন চেক - সম্পূর্ণ Supabase থেকে
+// ============================================================
+async function checkAdminSession() {
+    const sb = await initSupabase();
+    if (!sb) return false;
+    
+    try {
+        // Supabase session থেকে অ্যাডমিন চেক
+        const { data: { session } } = await sb.auth.getSession();
+        
+        if (!session) {
+            showToast('অ্যাডমিন লগইন প্রয়োজন!', 'error');
+            setTimeout(() => window.location.href = 'admin-login.html', 1500);
+            return false;
+        }
+        
+        // অ্যাডমিন টেবিল থেকে ভেরিফাই
+        const { data: admin, error } = await sb
+            .from('admins')
+            .select('*')
+            .eq('email', session.user.email)
+            .single();
+        
+        if (error || !admin) {
+            showToast('অ্যাডমিন অ্যাক্সেস নেই!', 'error');
+            await sb.auth.signOut();
+            setTimeout(() => window.location.href = 'admin-login.html', 1500);
+            return false;
+        }
+        
+        currentAdmin = admin;
+        console.log('✅ অ্যাডমিন ভেরিফাইড:', admin.full_name || admin.username);
+        return true;
+        
+    } catch(e) {
+        console.error('❌ Admin check error:', e);
+        showToast('অ্যাডমিন চেক করতে সমস্যা!', 'error');
+        return false;
+    }
+}
+
+// ============================================================
+// 🔥 লগআউট - সম্পূর্ণ Supabase থেকে
+// ============================================================
+async function adminLogout() {
+    if (!confirm('লগআউট করতে চান?')) return;
+    
+    const sb = await initSupabase();
+    if (!sb) {
+        window.location.href = 'admin-login.html';
+        return;
+    }
+    
+    try {
+        await sb.auth.signOut();
+        showToast('✅ লগআউট সফল!', 'success');
+        setTimeout(() => window.location.href = 'admin-login.html', 500);
+    } catch(e) {
+        console.error('Logout error:', e);
+        window.location.href = 'admin-login.html';
     }
 }
 
@@ -261,30 +346,6 @@ function showToast(message, type = 'success') {
 }
 
 // ============================================================
-// CHECK ADMIN SESSION
-// ============================================================
-function checkAdminSession() {
-    const admin = localStorage.getItem('tukn_admin');
-    if (!admin) {
-        showToast('অ্যাডমিন লগইন প্রয়োজন!', 'error');
-        setTimeout(() => window.location.href = 'admin-login.html', 1500);
-        return false;
-    }
-    try {
-        const adminData = JSON.parse(admin);
-        if (!adminData.username) {
-            throw new Error('Invalid admin data');
-        }
-        return true;
-    } catch(e) {
-        localStorage.removeItem('tukn_admin');
-        showToast('অ্যাডমিন সেশন মেয়াদোত্তীর্ণ!', 'error');
-        setTimeout(() => window.location.href = 'admin-login.html', 1500);
-        return false;
-    }
-}
-
-// ============================================================
 // LOAD STATS
 // ============================================================
 async function loadStats() {
@@ -313,7 +374,7 @@ async function loadStats() {
 // LOAD ORDERS
 // ============================================================
 async function loadOrders() {
-    if (!checkAdminSession()) return;
+    if (!(await checkAdminSession())) return;
     
     const container = document.getElementById('ordersContainer');
     container.innerHTML = `
@@ -477,6 +538,8 @@ function viewOrderDetail(orderId) {
 // OPEN ORDER DETAIL
 // ============================================================
 async function openOrderDetail(orderId) {
+    if (!(await checkAdminSession())) return;
+    
     currentOrderId = orderId;
     const modal = document.getElementById('orderDetailModal');
     const content = document.getElementById('orderDetailContent');
@@ -618,6 +681,8 @@ async function updateOrderStatus(status) {
 }
 
 async function updateOrderStatusFromCard(orderId, status) {
+    if (!(await checkAdminSession())) return;
+    
     const sb = await initSupabase();
     if (!sb) {
         showToast('সার্ভার সংযোগ সমস্যা!', 'error');
@@ -712,16 +777,27 @@ function exportOrders() {
 // AUTO REFRESH (প্রতি ৩০ সেকেন্ড)
 // ============================================================
 let refreshInterval = setInterval(() => {
-    loadOrders();
-    loadStats();
+    if (document.visibilityState === 'visible') {
+        loadOrders();
+        loadStats();
+    }
 }, 30000);
 
 // ============================================================
 // INIT
 // ============================================================
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
     console.log('🚀 অর্ডার ম্যানেজমেন্ট পেজ লোড হচ্ছে...');
-    if (checkAdminSession()) {
+    
+    const sb = await initSupabase();
+    if (!sb) {
+        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    // অ্যাডমিন চেক
+    const isAdmin = await checkAdminSession();
+    if (isAdmin) {
         loadOrders();
         loadStats();
         console.log('✅ অর্ডার ম্যানেজমেন্ট পেজ লোড সম্পূর্ণ!');
