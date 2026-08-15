@@ -97,7 +97,6 @@
         .class-group { margin-bottom: 12px; }
         .class-header { font-weight: 700; color: #064e3b; background: #ecfdf5; padding: 6px 14px; border-radius: 8px; display: inline-block; font-size: 16px; }
         
-        /* সুপার অ্যাডমিন কনফিগ */
         .admin-config-box {
             background: #f8fdfa;
             border: 2px solid #059669;
@@ -141,8 +140,8 @@
 
 <div class="container mx-auto px-4 py-6 max-w-5xl">
     
-    <a href="index.html" class="back-link mb-4 inline-block">
-        <i class="fas fa-arrow-left"></i> হোমপেজে ফিরে যান
+    <a href="admin-panel.html" class="back-link mb-4 inline-block">
+        <i class="fas fa-arrow-left"></i> অ্যাডমিন প্যানেলে ফিরে যান
     </a>
 
     <div class="card">
@@ -159,7 +158,7 @@
         <div class="card-body">
 
             <!-- ================================================== -->
-            <!-- 🔧 সুপার অ্যাডমিন কনফিগ -->
+            <!-- 🔧 সুপার অ্যাডমিন কনফিগ - ডেলিভারি চার্জ সহ -->
             <!-- ================================================== -->
             <div class="admin-config-box" id="adminConfigSection">
                 <label><i class="fas fa-percent text-emerald-600"></i> লাভাংশ (%)</label>
@@ -167,6 +166,12 @@
                 
                 <label><i class="fas fa-hand-holding-usd text-emerald-600"></i> সার্ভিস চার্জ (%)</label>
                 <input type="number" id="serviceChargePercent" value="5" min="0" step="0.5">
+                
+                <label><i class="fas fa-truck text-emerald-600"></i> ডেলিভারি চার্জ (ন্যূনতম)</label>
+                <input type="number" id="deliveryChargeMin" value="100" min="0" step="5" style="width:80px;">
+                
+                <label><i class="fas fa-truck text-emerald-600"></i> ডেলিভারি চার্জ (সর্বোচ্চ)</label>
+                <input type="number" id="deliveryChargeMax" value="150" min="0" step="5" style="width:80px;">
                 
                 <button onclick="updateConfig()" class="btn btn-success btn-sm">
                     <i class="fas fa-save"></i> সংরক্ষণ
@@ -321,7 +326,7 @@
 const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
 let supabaseClient = null;
-let config = { profit_percent: 10, service_charge_percent: 5 };
+let config = { profit_percent: 10, service_charge_percent: 5, delivery_charge_min: 100, delivery_charge_max: 150 };
 
 // ================================================================
 // STATE
@@ -377,13 +382,13 @@ function showToast(message, type = 'success') {
 }
 
 // ================================================================
-// 📊 CONFIG FUNCTIONS
+// 📊 CONFIG FUNCTIONS (আপডেটেড - ডেলিভারি চার্চ সহ)
 // ================================================================
 
 async function loadConfig() {
     const sb = await initSupabase();
     if (!sb) {
-        config = { profit_percent: 10, service_charge_percent: 5 };
+        config = { profit_percent: 10, service_charge_percent: 5, delivery_charge_min: 100, delivery_charge_max: 150 };
         return config;
     }
     
@@ -397,16 +402,18 @@ async function loadConfig() {
         if (!error && data && data.length > 0) {
             config = {
                 profit_percent: parseFloat(data[0].profit_percent) || 10,
-                service_charge_percent: parseFloat(data[0].service_charge_percent) || 5
+                service_charge_percent: parseFloat(data[0].service_charge_percent) || 5,
+                delivery_charge_min: parseFloat(data[0].delivery_charge_min) || 100,
+                delivery_charge_max: parseFloat(data[0].delivery_charge_max) || 150
             };
             console.log('✅ কনফিগ লোড হয়েছে:', config);
         } else {
             console.log('ℹ️ কনফিগ পাওয়া যায়নি, ডিফল্ট ব্যবহার করা হচ্ছে');
-            config = { profit_percent: 10, service_charge_percent: 5 };
+            config = { profit_percent: 10, service_charge_percent: 5, delivery_charge_min: 100, delivery_charge_max: 150 };
         }
     } catch(e) {
         console.error('❌ Config load error:', e);
-        config = { profit_percent: 10, service_charge_percent: 5 };
+        config = { profit_percent: 10, service_charge_percent: 5, delivery_charge_min: 100, delivery_charge_max: 150 };
     }
     
     return config;
@@ -415,9 +422,16 @@ async function loadConfig() {
 async function updateConfig() {
     const profit = parseFloat(document.getElementById('profitPercent').value);
     const service = parseFloat(document.getElementById('serviceChargePercent').value);
+    const deliveryMin = parseFloat(document.getElementById('deliveryChargeMin').value);
+    const deliveryMax = parseFloat(document.getElementById('deliveryChargeMax').value);
     
     if (isNaN(profit) || isNaN(service) || profit < 0 || service < 0) {
         showToast('দয়া করে সঠিক সংখ্যা দিন (০ বা তার বেশি)', 'error');
+        return;
+    }
+    
+    if (deliveryMin > deliveryMax) {
+        showToast('ন্যূনতম চার্জ সর্বোচ্চ চার্জের চেয়ে বেশি হতে পারে না!', 'error');
         return;
     }
     
@@ -433,6 +447,8 @@ async function updateConfig() {
             .insert([{
                 profit_percent: profit,
                 service_charge_percent: service,
+                delivery_charge_min: deliveryMin || 100,
+                delivery_charge_max: deliveryMax || 150,
                 updated_at: new Date().toISOString(),
                 updated_by: 'super_admin'
             }]);
@@ -441,8 +457,10 @@ async function updateConfig() {
         
         config.profit_percent = profit;
         config.service_charge_percent = service;
+        config.delivery_charge_min = deliveryMin || 100;
+        config.delivery_charge_max = deliveryMax || 150;
         
-        showToast(`✅ লাভাংশ ${profit}% ও সার্ভিস চার্জ ${service}% সংরক্ষিত!`, 'success');
+        showToast(`✅ লাভাংশ ${profit}%, সার্ভিস চার্জ ${service}% ও ডেলিভারি চার্জ ${deliveryMin}-${deliveryMax} টাকা সংরক্ষিত!`, 'success');
     } catch(e) {
         console.error('❌ Config update error:', e);
         showToast('কনফিগ সংরক্ষণে সমস্যা!', 'error');
@@ -971,6 +989,8 @@ async function init() {
     // কনফিগ ডিসপ্লে
     document.getElementById('profitPercent').value = config.profit_percent;
     document.getElementById('serviceChargePercent').value = config.service_charge_percent;
+    document.getElementById('deliveryChargeMin').value = config.delivery_charge_min || 100;
+    document.getElementById('deliveryChargeMax').value = config.delivery_charge_max || 150;
     
     renderCatalog();
     populateCategorySelects();
@@ -978,6 +998,7 @@ async function init() {
     
     console.log('✅ পেজ লোড সম্পূর্ণ!');
     console.log(`📚 মোট কিতাব: ${books.length}`);
+    console.log(`📦 ডেলিভারি চার্জ: ${config.delivery_charge_min} - ${config.delivery_charge_max} টাকা`);
 }
 
 document.addEventListener('DOMContentLoaded', init);
