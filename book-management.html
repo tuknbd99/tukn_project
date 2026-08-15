@@ -167,6 +167,7 @@
                 <label><i class="fas fa-hand-holding-usd text-emerald-600"></i> সার্ভিস চার্জ (%)</label>
                 <input type="number" id="serviceChargePercent" value="5" min="0" step="0.5">
                 
+                <!-- 🔥 ডেলিভারি চার্জ ফিল্ড (নতুন) -->
                 <label><i class="fas fa-truck text-emerald-600"></i> ডেলিভারি চার্জ (ন্যূনতম)</label>
                 <input type="number" id="deliveryChargeMin" value="100" min="0" step="5" style="width:80px;">
                 
@@ -382,7 +383,7 @@ function showToast(message, type = 'success') {
 }
 
 // ================================================================
-// 📊 CONFIG FUNCTIONS (আপডেটেড - ডেলিভারি চার্চ সহ)
+// 📊 CONFIG FUNCTIONS (আপডেটেড - ডেলিভারি চার্জ সহ)
 // ================================================================
 
 async function loadConfig() {
@@ -431,7 +432,7 @@ async function updateConfig() {
     }
     
     if (deliveryMin > deliveryMax) {
-        showToast('ন্যূনতম চার্জ সর্বোচ্চ চার্জের চেয়ে বেশি হতে পারে না!', 'error');
+        showToast('⚠️ ন্যূনতম চার্জ সর্বোচ্চ চার্জের চেয়ে বেশি হতে পারে না!', 'error');
         return;
     }
     
@@ -442,18 +443,48 @@ async function updateConfig() {
     }
     
     try {
-        const { error } = await sb
+        // চেক করুন কনফিগ আছে কিনা
+        const { data: existing, error: findError } = await sb
             .from('book_config')
-            .insert([{
-                profit_percent: profit,
-                service_charge_percent: service,
-                delivery_charge_min: deliveryMin || 100,
-                delivery_charge_max: deliveryMax || 150,
-                updated_at: new Date().toISOString(),
-                updated_by: 'super_admin'
-            }]);
+            .select('id')
+            .order('id', { ascending: false })
+            .limit(1);
         
-        if (error) throw error;
+        if (findError && findError.code !== 'PGRST116') {
+            console.error('Find error:', findError);
+        }
+        
+        if (existing && existing.length > 0) {
+            // আপডেট
+            const { error: updateError } = await sb
+                .from('book_config')
+                .update({
+                    profit_percent: profit,
+                    service_charge_percent: service,
+                    delivery_charge_min: deliveryMin || 100,
+                    delivery_charge_max: deliveryMax || 150,
+                    updated_at: new Date().toISOString(),
+                    updated_by: 'super_admin'
+                })
+                .eq('id', existing[0].id);
+            
+            if (updateError) throw updateError;
+        } else {
+            // নতুন ইনসার্ট
+            const { error: insertError } = await sb
+                .from('book_config')
+                .insert([{
+                    profit_percent: profit,
+                    service_charge_percent: service,
+                    delivery_charge_min: deliveryMin || 100,
+                    delivery_charge_max: deliveryMax || 150,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                    updated_by: 'super_admin'
+                }]);
+            
+            if (insertError) throw insertError;
+        }
         
         config.profit_percent = profit;
         config.service_charge_percent = service;
@@ -977,7 +1008,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ================================================================
-// INIT
+// INIT (আপডেটেড - ডেলিভারি চার্জ ডিসপ্লে সহ)
 // ================================================================
 
 async function init() {
@@ -989,6 +1020,8 @@ async function init() {
     // কনফিগ ডিসপ্লে
     document.getElementById('profitPercent').value = config.profit_percent;
     document.getElementById('serviceChargePercent').value = config.service_charge_percent;
+    
+    // 🔥 ডেলিভারি চার্জ ডিসপ্লে (নতুন)
     document.getElementById('deliveryChargeMin').value = config.delivery_charge_min || 100;
     document.getElementById('deliveryChargeMax').value = config.delivery_charge_max || 150;
     
