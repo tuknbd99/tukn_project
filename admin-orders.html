@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📚 অর্ডার ম্যানেজমেন্ট | TUKNBD অ্যাডমিন</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js">
+    </script>
+    <style>
+        * { box-sizing: border-box; }
+        body { background: #f0fdf4; font-family: 'Noto Sans Bengali', sans-serif; }
+        .admin-header { background: linear-gradient(135deg, #064e3b, #059669); padding: 20px 30px; color: white; border-radius: 16px; }
+        .status-badge { padding: 4px 14px; border-radius: 50px; font-size: 12px; font-weight: 600; }
+        .status-pending { background: #fef3c7; color: #92400e; }
+        .status-approved { background: #d1fae5; color: #065f46; }
+        .status-rejected { background: #fecaca; color: #991b1b; }
+        .status-completed { background: #dbeafe; color: #1e40af; }
+        .btn { padding: 8px 16px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.3s; }
+        .btn-sm { padding: 4px 12px; font-size: 12px; }
+        .btn-success { background: #059669; color: white; }
+        .btn-success:hover { background: #047857; }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-warning { background: #f59e0b; color: white; }
+        .btn-warning:hover { background: #d97706; }
+        .btn-info { background: #3b82f6; color: white; }
+        .btn-info:hover { background: #2563eb; }
+        .btn-outline { background: transparent; border: 2px solid #e5e7eb; }
+        .btn-outline:hover { background: #f3f4f6; }
+        .filter-section { background: white; padding: 16px 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); margin-bottom: 20px; }
+        .order-card { background: white; border-radius: 12px; padding: 16px 20px; margin-bottom: 12px; border: 1px solid #e5e7eb; transition: 0.3s; cursor: pointer; }
+        .order-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.08); transform: translateY(-2px); }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; z-index: 9999; padding: 20px; }
+        .modal-overlay.active { display: flex; }
+        .modal-box { background: white; border-radius: 16px; max-width: 750px; width: 100%; padding: 28px; max-height: 90vh; overflow-y: auto; }
+        .delivery-info { background: #f0fdf4; padding: 12px; border-radius: 8px; border: 1px solid #d1fae5; margin: 8px 0; }
+        .toast { position: fixed; bottom: 24px; right: 24px; padding: 14px 24px; border-radius: 10px; color: white; z-index: 99999; animation: slideIn 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.2); }
+        .loading-spinner { display: inline-block; width: 32px; height: 32px; border: 3px solid #e5e7eb; border-top-color: #059669; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { rotate: 360deg; } }
+        @keyframes slideIn { from { opacity:0; transform: translateX(40px); } to { opacity:1; transform: translateX(0); } }
+        .form-control { padding: 8px 14px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; transition: 0.2s; }
+        .form-control:focus { outline: none; border-color: #059669; box-shadow: 0 0 0 3px rgba(5,150,105,0.1); }
+        .stat-card { transition: 0.3s; }
+        .stat-card:hover { transform: translateY(-4px); box-shadow: 0 8px 25px rgba(0,0,0,0.08); }
+        .empty-state { text-align: center; padding: 40px 20px; }
+        .empty-state i { font-size: 48px; color: #d1d5db; margin-bottom: 16px; }
+        .pagination-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+<div class="container mx-auto px-4 py-4 max-w-7xl">
+    
+    <!-- হেডার -->
+    <div class="admin-header mb-6">
+        <div class="flex justify-between items-center flex-wrap gap-4">
+            <div>
+                <h1 class="text-2xl font-bold"><i class="fas fa-book mr-2"></i> কিতাব অর্ডার ম্যানেজমেন্ট</h1>
+                <p class="text-sm opacity-80">সকল কিতাব অর্ডার দেখুন, ফিল্টার করুন ও ম্যানেজ করুন</p>
+            </div>
+            <div class="flex gap-2 flex-wrap">
+                <a href="admin-panel.html" class="btn bg-white/20 text-white hover:bg-white/30">
+                    <i class="fas fa-arrow-left mr-2"></i> প্যানেলে ফিরুন
+                </a>
+                <button onclick="loadOrders()" class="btn bg-white/20 text-white hover:bg-white/30">
+                    <i class="fas fa-sync-alt mr-2"></i> রিফ্রেশ
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- স্ট্যাটিসটিকস -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div class="stat-card bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center">
+                    <i class="fas fa-book text-emerald-600"></i>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-500">মোট অর্ডার</p>
+                    <p class="text-xl font-bold text-emerald-700" id="statTotal">০</p>
+                </div>
+            </div>
+        </div>
+        <div class="stat-card bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center">
+                    <i class="fas fa-clock text-yellow-600"></i>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-500">বিচারাধীন</p>
+                    <p class="text-xl font-bold text-yellow-600" id="statPending">০</p>
+                </div>
+            </div>
+        </div>
+        <div class="stat-card bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                    <i class="fas fa-check-circle text-blue-600"></i>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-500">অনুমোদিত</p>
+                    <p class="text-xl font-bold text-blue-600" id="statApproved">০</p>
+                </div>
+            </div>
+        </div>
+        <div class="stat-card bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center">
+                    <i class="fas fa-truck text-purple-600"></i>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-500">ডেলিভারি</p>
+                    <p class="text-xl font-bold text-purple-600" id="statDelivery">০</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ফিল্টার -->
+    <div class="filter-section">
+        <div class="flex flex-wrap gap-3 items-center">
+            <div>
+                <label class="text-sm font-medium text-gray-600">স্ট্যাটাস:</label>
+                <select id="filterStatus" class="form-control" onchange="loadOrders()">
+                    <option value="">সব</option>
+                    <option value="pending">⏳ বিচারাধীন</option>
+                    <option value="approved">✅ অনুমোদিত</option>
+                    <option value="rejected">❌ বাতিল</option>
+                    <option value="completed">✅ সম্পন্ন</option>
+                </select>
+            </div>
+            <div>
+                <label class="text-sm font-medium text-gray-600">ডেলিভারি:</label>
+                <select id="filterDelivery" class="form-control" onchange="loadOrders()">
+                    <option value="">সব</option>
+                    <option value="direct">🏪 সরাসরি</option>
+                    <option value="post">📮 ডাক</option>
+                    <option value="courier">📦 কুরিয়ার</option>
+                </select>
+            </div>
+            <div class="flex-1 min-w-[200px]">
+                <input type="text" id="searchInput" placeholder="🔍 অর্ডার আইডি বা নাম দিয়ে সার্চ করুন..." class="w-full form-control" oninput="loadOrders()">
+            </div>
+            <button class="btn btn-info" onclick="exportOrders()">
+                <i class="fas fa-file-excel mr-2"></i> এক্সপোর্ট
+            </button>
+        </div>
+    </div>
+
+    <!-- অর্ডার লিস্ট -->
+    <div id="ordersContainer">
+        <div class="text-center py-8">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-2">অর্ডার লোড হচ্ছে...</p>
+        </div>
+    </div>
+
+    <!-- পেজিনেশন -->
+    <div class="flex justify-between items-center mt-4 flex-wrap gap-2 bg-white rounded-xl p-4 border border-gray-200">
+        <span class="text-sm text-gray-500" id="paginationInfo">০ টি অর্ডার</span>
+        <div class="flex gap-2 items-center">
+            <button class="btn btn-outline btn-sm pagination-btn" id="prevPage" onclick="changePage(-1)">← আগে</button>
+            <span class="text-sm text-gray-600" id="pageInfo">পৃষ্ঠা ১</span>
+            <button class="btn btn-outline btn-sm pagination-btn" id="nextPage" onclick="changePage(1)">পরের →</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== অর্ডার ডিটেইল মোডাল ===== -->
+<div id="orderDetailModal" class="modal-overlay" onclick="if(event.target===this) closeOrderDetail()">
+    <div class="modal-box">
+        <div class="flex justify-between items-center border-b pb-3 mb-4">
+            <h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-file-invoice mr-2"></i> অর্ডার ডিটেইলস</h3>
+            <button onclick="closeOrderDetail()" class="text-gray-400 hover:text-red-500 text-2xl">&times;</button>
+        </div>
+        <div id="orderDetailContent">
+            <div class="text-center py-4"><div class="loading-spinner mx-auto"></div></div>
+        </div>
+        <div class="flex flex-wrap gap-3 mt-4 pt-4 border-t">
+            <button onclick="updateOrderStatus('approved')" class="btn btn-success"><i class="fas fa-check mr-2"></i> অনুমোদন দিন</button>
+            <button onclick="updateOrderStatus('rejected')" class="btn btn-danger"><i class="fas fa-times mr-2"></i> বাতিল করুন</button>
+            <button onclick="updateOrderStatus('completed')" class="btn btn-info"><i class="fas fa-check-double mr-2"></i> সম্পন্ন করুন</button>
+            <button onclick="window.open(`invoice.html?order=${currentOrderId}`, '_blank')" class="btn btn-warning"><i class="fas fa-print mr-2"></i> ইনভয়েস</button>
+            <button onclick="closeOrderDetail()" class="btn btn-outline"><i class="fas fa-times mr-2"></i> বন্ধ</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ============================================================
+// CONFIGURATION
+// ============================================================
+const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
+let supabaseClient = null;
+let currentOrders = [];
+let currentPage = 1;
+let totalPages = 1;
+let currentOrderId = null;
+
+// ============================================================
+// SUPABASE INIT
+// ============================================================
+async function initSupabase() {
+    try {
+        if (typeof supabase !== 'undefined' && supabase.createClient) {
+            if (!supabaseClient) {
+                supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                console.log('✅ Supabase initialized');
+            }
+            return supabaseClient;
+        }
+        let attempts = 0;
+        while (attempts < 10) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            if (typeof supabase !== 'undefined' && supabase.createClient) {
+                supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                console.log('✅ Supabase initialized after wait');
+                return supabaseClient;
+            }
+            attempts++;
+        }
+        throw new Error('Supabase library not loaded');
+    } catch(e) {
+        console.error('❌ Supabase init error:', e);
+        return null;
+    }
+}
+
+// ============================================================
+// TOAST
+// ============================================================
+function showToast(message, type = 'success') {
+    const oldToasts = document.querySelectorAll('.toast');
+    oldToasts.forEach(t => t.remove());
+    const toast = document.createElement('div');
+    const bgColor = type === 'success' ? '#059669' : type === 'error' ? '#dc2626' : '#d97706';
+    const icon = type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle';
+    toast.className = 'toast';
+    toast.style.cssText = `
+        position: fixed; bottom: 24px; right: 24px; 
+        padding: 14px 24px; border-radius: 10px; 
+        color: white; z-index: 99999; 
+        animation: slideIn 0.3s ease; 
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        background: ${bgColor};
+        font-weight: 600;
+        max-width: 400px;
+    `;
+    toast.innerHTML = `<i class="fas ${icon} mr-2"></i> ${message}`;
+    document.body.appendChild(toast);
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(20px)';
+        toast.style.transition = 'all 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 4000);
+}
+
+// ============================================================
+// CHECK ADMIN SESSION
+// ============================================================
+function checkAdminSession() {
+    const admin = localStorage.getItem('tukn_admin');
+    if (!admin) {
+        showToast('অ্যাডমিন লগইন প্রয়োজন!', 'error');
+        setTimeout(() => window.location.href = 'admin-login.html', 1500);
+        return false;
+    }
+    try {
+        const adminData = JSON.parse(admin);
+        if (!adminData.username) {
+            throw new Error('Invalid admin data');
+        }
+        return true;
+    } catch(e) {
+        localStorage.removeItem('tukn_admin');
+        showToast('অ্যাডমিন সেশন মেয়াদোত্তীর্ণ!', 'error');
+        setTimeout(() => window.location.href = 'admin-login.html', 1500);
+        return false;
+    }
+}
+
+// ============================================================
+// LOAD STATS
+// ============================================================
+async function loadStats() {
+    const sb = await initSupabase();
+    if (!sb) return;
+    
+    try {
+        const [totalResult, pendingResult, approvedResult, deliveryResult] = await Promise.all([
+            sb.from('book_orders').select('*', { count: 'exact', head: true }),
+            sb.from('book_orders').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+            sb.from('book_orders').select('*', { count: 'exact', head: true }).eq('status', 'approved'),
+            sb.from('book_orders').select('*', { count: 'exact', head: true }).in('delivery_method', ['post', 'courier'])
+        ]);
+        
+        document.getElementById('statTotal').textContent = totalResult.count || 0;
+        document.getElementById('statPending').textContent = pendingResult.count || 0;
+        document.getElementById('statApproved').textContent = approvedResult.count || 0;
+        document.getElementById('statDelivery').textContent = deliveryResult.count || 0;
+        
+    } catch(e) {
+        console.error('Stats load error:', e);
+    }
+}
+
+// ============================================================
+// LOAD ORDERS
+// ============================================================
+async function loadOrders() {
+    if (!checkAdminSession()) return;
+    
+    const container = document.getElementById('ordersContainer');
+    container.innerHTML = `
+        <div class="text-center py-8 bg-white rounded-xl border border-gray-200">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-2">অর্ডার লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const sb = await initSupabase();
+    if (!sb) {
+        container.innerHTML = `<div class="text-center text-red-500 py-8 bg-white rounded-xl border border-red-200">❌ সার্ভার সংযোগ সমস্যা!</div>`;
+        return;
+    }
+    
+    try {
+        const status = document.getElementById('filterStatus').value;
+        const delivery = document.getElementById('filterDelivery').value;
+        const search = document.getElementById('searchInput').value.trim();
+        
+        let query = sb.from('book_orders').select('*', { count: 'exact' });
+        
+        if (status) query = query.eq('status', status);
+        if (delivery) query = query.eq('delivery_method', delivery);
+        if (search) {
+            query = query.or(`order_id.ilike.%${search}%,student_name.ilike.%${search}%,member_id.ilike.%${search}%,mobile.ilike.%${search}%`);
+        }
+        
+        const start = (currentPage - 1) * 20;
+        const { data, error, count } = await query
+            .order('submitted_at', { ascending: false })
+            .range(start, start + 19);
+        
+        if (error) throw error;
+        
+        currentOrders = data || [];
+        totalPages = Math.ceil((count || 0) / 20) || 1;
+        
+        renderOrders(currentOrders);
+        updatePagination(count || 0);
+        
+    } catch(e) {
+        console.error('Load orders error:', e);
+        container.innerHTML = `<div class="text-center text-red-500 py-8 bg-white rounded-xl border border-red-200">❌ অর্ডার লোড করতে সমস্যা!</div>`;
+    }
+}
+
+// ============================================================
+// RENDER ORDERS
+// ============================================================
+function renderOrders(orders) {
+    const container = document.getElementById('ordersContainer');
+    
+    if (!orders || orders.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state bg-white rounded-xl border border-gray-200">
+                <i class="fas fa-inbox"></i>
+                <p class="text-gray-500 text-lg">কোনো অর্ডার পাওয়া যায়নি</p>
+                <p class="text-sm text-gray-400">ফিল্টার পরিবর্তন করে দেখুন</p>
+            </div>
+        `;
+        return;
+    }
+    
+    const statusMap = {
+        'pending': { class: 'status-pending', label: '⏳ বিচারাধীন' },
+        'approved': { class: 'status-approved', label: '✅ অনুমোদিত' },
+        'rejected': { class: 'status-rejected', label: '❌ বাতিল' },
+        'completed': { class: 'status-completed', label: '✅ সম্পন্ন' }
+    };
+    
+    const deliveryMap = {
+        'direct': '🏪 সরাসরি',
+        'post': '📮 ডাক',
+        'courier': '📦 কুরিয়ার'
+    };
+    
+    container.innerHTML = orders.map(order => {
+        const status = statusMap[order.status] || statusMap['pending'];
+        const deliveryLabel = deliveryMap[order.delivery_method] || '🏪 সরাসরি';
+        const bookCount = order.books?.length || 0;
+        const paid = order.total_paid || 0;
+        const total = order.total_price || 0;
+        const remaining = total - paid;
+        const isPaid = order.down_payment_paid || false;
+        
+        return `
+            <div class="order-card" onclick="openOrderDetail('${order.order_id}')">
+                <div class="flex flex-wrap justify-between items-start gap-3">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <span class="font-bold text-emerald-700">#${order.order_id}</span>
+                            <span class="status-badge ${status.class}">${status.label}</span>
+                            <span class="text-sm text-gray-500">${deliveryLabel}</span>
+                            ${!isPaid ? `<span class="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">⏳ ডাউন পেমেন্ট বাকি</span>` : ''}
+                        </div>
+                        <p class="font-semibold text-gray-800 mt-1">${order.student_name || 'N/A'}</p>
+                        <p class="text-sm text-gray-500">📱 ${order.mobile || 'N/A'} | 📚 ${order.class || 'N/A'}</p>
+                        <p class="text-sm text-gray-400">📖 ${bookCount} টি কিতাব | 🏫 ${order.madrasa_name || 'N/A'}</p>
+                        <p class="text-xs text-gray-400">${new Date(order.submitted_at).toLocaleString('bn-BD')}</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-lg font-bold text-emerald-700">৳${total.toFixed(2)}</p>
+                        <p class="text-sm text-gray-500">পরিশোধিত: ৳${paid.toFixed(2)}</p>
+                        <p class="text-sm ${remaining > 0 ? 'text-red-500' : 'text-green-500'}">বাকি: ৳${remaining.toFixed(2)}</p>
+                        <p class="text-xs text-gray-400">কিস্তি: ${order.installment_months || 0} মাস</p>
+                    </div>
+                </div>
+                <div class="mt-3 flex gap-2 flex-wrap border-t pt-3 border-gray-100">
+                    <button onclick="event.stopPropagation(); window.open('invoice.html?order=${order.order_id}', '_blank')" class="btn btn-info btn-sm">
+                        <i class="fas fa-file-invoice"></i> ইনভয়েস
+                    </button>
+                    ${order.status === 'pending' ? `
+                        <button onclick="event.stopPropagation(); updateOrderStatusFromCard('${order.order_id}', 'approved')" class="btn btn-success btn-sm">
+                            <i class="fas fa-check"></i> অনুমোদন
+                        </button>
+                        <button onclick="event.stopPropagation(); updateOrderStatusFromCard('${order.order_id}', 'rejected')" class="btn btn-danger btn-sm">
+                            <i class="fas fa-times"></i> বাতিল
+                        </button>
+                    ` : ''}
+                    ${order.status === 'approved' ? `
+                        <button onclick="event.stopPropagation(); updateOrderStatusFromCard('${order.order_id}', 'completed')" class="btn btn-info btn-sm">
+                            <i class="fas fa-check-double"></i> সম্পন্ন
+                        </button>
+                    ` : ''}
+                    <button onclick="event.stopPropagation(); viewOrderDetail('${order.order_id}')" class="btn btn-outline btn-sm">
+                        <i class="fas fa-eye"></i> বিস্তারিত
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// ============================================================
+// PAGINATION
+// ============================================================
+function updatePagination(total) {
+    document.getElementById('paginationInfo').textContent = `মোট ${total} টি অর্ডার`;
+    document.getElementById('pageInfo').textContent = `পৃষ্ঠা ${currentPage} / ${totalPages || 1}`;
+    document.getElementById('prevPage').disabled = currentPage <= 1;
+    document.getElementById('nextPage').disabled = currentPage >= totalPages;
+}
+
+function changePage(delta) {
+    const newPage = currentPage + delta;
+    if (newPage < 1 || (totalPages > 0 && newPage > totalPages)) return;
+    currentPage = newPage;
+    loadOrders();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ============================================================
+// VIEW ORDER DETAIL
+// ============================================================
+function viewOrderDetail(orderId) {
+    openOrderDetail(orderId);
+}
+
+// ============================================================
+// OPEN ORDER DETAIL
+// ============================================================
+async function openOrderDetail(orderId) {
+    currentOrderId = orderId;
+    const modal = document.getElementById('orderDetailModal');
+    const content = document.getElementById('orderDetailContent');
+    modal.classList.add('active');
+    content.innerHTML = `<div class="text-center py-4"><div class="loading-spinner mx-auto"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>`;
+    
+    const sb = await initSupabase();
+    if (!sb) {
+        content.innerHTML = `<div class="text-center text-red-500 py-4">❌ সংযোগ সমস্যা!</div>`;
+        return;
+    }
+    
+    try {
+        const { data: order, error } = await sb
+            .from('book_orders')
+            .select('*')
+            .eq('order_id', orderId)
+            .single();
+        
+        if (error) throw error;
+        if (!order) {
+            content.innerHTML = `<div class="text-center text-red-500 py-4">❌ অর্ডার পাওয়া যায়নি!</div>`;
+            return;
+        }
+        
+        const deliveryMap = {
+            'direct': '🏪 সরাসরি সংগ্রহ',
+            'post': '📮 ডাক',
+            'courier': '📦 কুরিয়ার'
+        };
+        
+        let deliveryHtml = '';
+        if (order.delivery_method === 'post') {
+            const info = order.delivery_info || {};
+            deliveryHtml = `
+                <div class="delivery-info">
+                    <p class="font-semibold text-emerald-700"><i class="fas fa-mail-bulk mr-2"></i>📮 ডাকের ঠিকানা</p>
+                    <div class="grid grid-cols-2 gap-2 text-sm mt-2">
+                        <div><span class="text-gray-500">গ্রাম/মহল্লা:</span> <strong>${info.village || '-'}</strong></div>
+                        <div><span class="text-gray-500">ডাকঘর:</span> <strong>${info.office || '-'}</strong></div>
+                        <div><span class="text-gray-500">থানা:</span> <strong>${info.thana || '-'}</strong></div>
+                        <div><span class="text-gray-500">জেলা:</span> <strong>${info.district || '-'}</strong></div>
+                    </div>
+                </div>
+            `;
+        } else if (order.delivery_method === 'courier') {
+            const info = order.delivery_info || {};
+            deliveryHtml = `
+                <div class="delivery-info">
+                    <p class="font-semibold text-purple-700"><i class="fas fa-truck mr-2"></i>📦 কুরিয়ার তথ্য</p>
+                    <div class="grid grid-cols-2 gap-2 text-sm mt-2">
+                        <div><span class="text-gray-500">কুরিয়ার:</span> <strong>${info.courier_name || '-'}</strong></div>
+                        <div><span class="text-gray-500">ঠিকানা:</span> <strong>${info.address || '-'}</strong></div>
+                        <div><span class="text-gray-500">মোবাইল:</span> <strong>${info.mobile || '-'}</strong></div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        const statusMap = {
+            'pending': '⏳ বিচারাধীন',
+            'approved': '✅ অনুমোদিত',
+            'rejected': '❌ বাতিল',
+            'completed': '✅ সম্পন্ন'
+        };
+        
+        const books = order.books || [];
+        const remaining = (order.total_price || 0) - (order.total_paid || 0);
+        const isDownPaymentPaid = order.down_payment_paid || false;
+        
+        content.innerHTML = `
+            <div class="grid grid-cols-2 gap-3 text-sm">
+                <div><span class="text-gray-500">অর্ডার আইডি:</span> <strong class="text-emerald-700">${order.order_id}</strong></div>
+                <div><span class="text-gray-500">তারিখ:</span> <strong>${new Date(order.submitted_at).toLocaleString('bn-BD')}</strong></div>
+                <div><span class="text-gray-500">নাম:</span> <strong>${order.student_name || 'N/A'}</strong></div>
+                <div><span class="text-gray-500">সদস্য আইডি:</span> <strong>${order.member_id || 'N/A'}</strong></div>
+                <div><span class="text-gray-500">মোবাইল:</span> <strong>${order.mobile || 'N/A'}</strong></div>
+                <div><span class="text-gray-500">জেলা:</span> <strong>${order.district || 'N/A'}</strong></div>
+                <div><span class="text-gray-500">মাদ্রাসা:</span> <strong>${order.madrasa_name || 'N/A'}</strong></div>
+                <div><span class="text-gray-500">শ্রেণী:</span> <strong>${order.class || 'N/A'}</strong></div>
+                <div><span class="text-gray-500">উস্তাদ:</span> <strong>${order.teacher_name || 'N/A'}</strong></div>
+                <div><span class="text-gray-500">অভিভাবক:</span> <strong>${order.guardian_name || 'N/A'}</strong></div>
+                <div><span class="text-gray-500">ডেলিভারি মাধ্যম:</span> <strong>${deliveryMap[order.delivery_method] || '🏪 সরাসরি'}</strong></div>
+                <div><span class="text-gray-500">স্ট্যাটাস:</span> <span class="status-badge ${statusMap[order.status] ? 'status-' + order.status : 'status-pending'}">${statusMap[order.status] || '⏳ বিচারাধীন'}</span></div>
+                <div><span class="text-gray-500">ডাউন পেমেন্ট:</span> <strong class="${isDownPaymentPaid ? 'text-green-600' : 'text-amber-600'}">${isDownPaymentPaid ? '✅ সম্পন্ন' : '⏳ বাকি'}</strong></div>
+                <div><span class="text-gray-500">ডেলিভারি চার্জ:</span> <strong>৳${(order.delivery_charge || 0).toFixed(2)}</strong></div>
+            </div>
+            
+            ${deliveryHtml}
+            
+            <div class="mt-3">
+                <p class="font-semibold text-gray-700"><i class="fas fa-book mr-2"></i>কিতাবসমূহ (${books.length} টি)</p>
+                <div class="bg-gray-50 rounded-lg p-2 mt-1">
+                    ${books.map((b, i) => `
+                        <div class="flex justify-between items-center py-1 border-b border-gray-200 last:border-0 text-sm">
+                            <span>${i+1}. ${b.name}</span>
+                            <span class="font-medium text-emerald-600">৳${(b.price || 0).toFixed(2)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+            
+            <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm bg-gray-50 p-3 rounded-lg">
+                <div><span class="text-gray-500">মোট:</span> <strong class="text-emerald-700">৳${(order.total_price || 0).toFixed(2)}</strong></div>
+                <div><span class="text-gray-500">ডাউন পেমেন্ট:</span> <strong class="text-blue-600">৳${(order.down_payment || 0).toFixed(2)}</strong></div>
+                <div><span class="text-gray-500">পরিশোধিত:</span> <strong class="text-green-600">৳${(order.total_paid || 0).toFixed(2)}</strong></div>
+                <div><span class="text-gray-500">বাকি:</span> <strong class="text-red-600">৳${remaining.toFixed(2)}</strong></div>
+                <div><span class="text-gray-500">কিস্তি:</span> <strong>${order.installment_months || 0} মাস</strong></div>
+                <div><span class="text-gray-500">মাসিক:</span> <strong>৳${(order.monthly_payment || 0).toFixed(2)}</strong></div>
+                <div><span class="text-gray-500">লাভাংশ:</span> <strong>৳${(order.profit_amount || 0).toFixed(2)}</strong></div>
+                <div><span class="text-gray-500">সার্ভিস চার্জ:</span> <strong>৳${(order.service_charge || 0).toFixed(2)}</strong></div>
+            </div>
+            
+            ${order.teacher_mobile ? `<div class="mt-2 text-sm"><span class="text-gray-500">👨‍🏫 উস্তাদের মোবাইল:</span> <strong>${order.teacher_mobile}</strong></div>` : ''}
+            ${order.guardian_mobile ? `<div class="text-sm"><span class="text-gray-500">👨‍👩‍👧 অভিভাবকের মোবাইল:</span> <strong>${order.guardian_mobile}</strong></div>` : ''}
+            ${order.guardian_relation ? `<div class="text-sm"><span class="text-gray-500">সম্পর্ক:</span> <strong>${order.guardian_relation}</strong></div>` : ''}
+            ${order.guardian_address ? `<div class="text-sm"><span class="text-gray-500">অভিভাবকের ঠিকানা:</span> <strong>${order.guardian_address}</strong></div>` : ''}
+        `;
+        
+    } catch(e) {
+        console.error('Order detail error:', e);
+        content.innerHTML = `<div class="text-center text-red-500 py-4">❌ অর্ডার ডিটেইল লোড করতে সমস্যা!</div>`;
+    }
+}
+
+function closeOrderDetail() {
+    document.getElementById('orderDetailModal').classList.remove('active');
+}
+
+// ============================================================
+// UPDATE ORDER STATUS
+// ============================================================
+async function updateOrderStatus(status) {
+    if (!currentOrderId) {
+        showToast('অর্ডার আইডি পাওয়া যায়নি!', 'error');
+        return;
+    }
+    await updateOrderStatusFromCard(currentOrderId, status);
+}
+
+async function updateOrderStatusFromCard(orderId, status) {
+    const sb = await initSupabase();
+    if (!sb) {
+        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const statusLabels = {
+        'approved': 'অনুমোদিত',
+        'rejected': 'বাতিল',
+        'completed': 'সম্পন্ন'
+    };
+    
+    if (!confirm(`এই অর্ডারটি "${statusLabels[status]}" করতে চান?`)) return;
+    
+    try {
+        const { error } = await sb
+            .from('book_orders')
+            .update({ 
+                status: status,
+                updated_at: new Date().toISOString()
+            })
+            .eq('order_id', orderId);
+        
+        if (error) throw error;
+        
+        showToast(`✅ অর্ডার ${statusLabels[status]} করা হয়েছে!`, 'success');
+        closeOrderDetail();
+        loadOrders();
+        loadStats();
+        
+    } catch(e) {
+        console.error('Status update error:', e);
+        showToast('❌ স্ট্যাটাস আপডেট করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// EXPORT ORDERS (CSV)
+// ============================================================
+function exportOrders() {
+    if (!currentOrders || currentOrders.length === 0) {
+        showToast('এক্সপোর্ট করার মতো অর্ডার নেই!', 'warning');
+        return;
+    }
+    
+    const headers = [
+        'অর্ডার আইডি', 'নাম', 'সদস্য আইডি', 'মোবাইল', 'জেলা', 'মাদ্রাসা', 'শ্রেণী', 
+        'মোট', 'ডাউন পেমেন্ট', 'পরিশোধিত', 'বাকি', 'কিস্তি', 'মাসিক', 
+        'ডেলিভারি মাধ্যম', 'ডেলিভারি চার্জ', 'স্ট্যাটাস', 'ডাউন পেমেন্ট স্ট্যাটাস', 'তারিখ'
+    ];
+    
+    const statusMap = { 'pending': 'বিচারাধীন', 'approved': 'অনুমোদিত', 'rejected': 'বাতিল', 'completed': 'সম্পন্ন' };
+    const deliveryMap = { 'direct': 'সরাসরি', 'post': 'ডাক', 'courier': 'কুরিয়ার' };
+    
+    const rows = currentOrders.map(order => {
+        const remaining = (order.total_price || 0) - (order.total_paid || 0);
+        return [
+            order.order_id || '',
+            order.student_name || '',
+            order.member_id || '',
+            order.mobile || '',
+            order.district || '',
+            order.madrasa_name || '',
+            order.class || '',
+            (order.total_price || 0).toFixed(2),
+            (order.down_payment || 0).toFixed(2),
+            (order.total_paid || 0).toFixed(2),
+            remaining.toFixed(2),
+            order.installment_months || 0,
+            (order.monthly_payment || 0).toFixed(2),
+            deliveryMap[order.delivery_method] || 'সরাসরি',
+            (order.delivery_charge || 0).toFixed(2),
+            statusMap[order.status] || 'বিচারাধীন',
+            order.down_payment_paid ? 'সম্পন্ন' : 'বাকি',
+            new Date(order.submitted_at).toLocaleDateString('bn-BD')
+        ];
+    });
+    
+    const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `book_orders_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+    showToast('✅ CSV এক্সপোর্ট করা হয়েছে!', 'success');
+}
+
+// ============================================================
+// AUTO REFRESH (প্রতি ৩০ সেকেন্ড)
+// ============================================================
+let refreshInterval = setInterval(() => {
+    loadOrders();
+    loadStats();
+}, 30000);
+
+// ============================================================
+// INIT
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('🚀 অর্ডার ম্যানেজমেন্ট পেজ লোড হচ্ছে...');
+    if (checkAdminSession()) {
+        loadOrders();
+        loadStats();
+        console.log('✅ অর্ডার ম্যানেজমেন্ট পেজ লোড সম্পূর্ণ!');
+    }
+});
+
+// ব্রাউজার বন্ধ হলে interval ক্লিয়ার করুন
+window.addEventListener('beforeunload', function() {
+    if (refreshInterval) clearInterval(refreshInterval);
+});
+</script>
+</body>
+</html>
