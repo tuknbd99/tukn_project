@@ -1075,7 +1075,11 @@ async function loadOrderData() {
             .eq('order_id', orderId)
             .single();
         
-        if (error) throw error;
+        if (error) {
+            console.error('Supabase error:', error);
+            showToast('অর্ডার লোড করতে সমস্যা!', 'error');
+            return;
+        }
         if (!data) {
             showToast('অর্ডার পাওয়া যায়নি!', 'error');
             return;
@@ -1092,10 +1096,11 @@ async function loadOrderData() {
 }
 
 // ================================================================
-// RENDER INVOICE
+// RENDER INVOICE (আপডেটেড - JSON পার্স সহ)
 // ================================================================
 
 function renderInvoice(order) {
+    // মৌলিক তথ্য
     document.getElementById('displayOrderId').textContent = order.order_id || '---';
     document.getElementById('displayDate').textContent = order.submitted_at ? new Date(order.submitted_at).toLocaleString('bn-BD', {
         year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
@@ -1109,6 +1114,7 @@ function renderInvoice(order) {
     document.getElementById('displayTeacher').textContent = order.teacher_name ? `${order.teacher_name} (${order.teacher_mobile || ''})` : '---';
     document.getElementById('displayGuardian').textContent = order.guardian_name ? `${order.guardian_name} (${order.guardian_relation || ''}) - ${order.guardian_mobile || ''}` : '---';
     
+    // ডেলিভারি মাধ্যম
     const deliveryLabels = {
         'direct': '🏪 সরাসরি সংগ্রহ',
         'post': '📮 ডাক',
@@ -1116,6 +1122,7 @@ function renderInvoice(order) {
     };
     document.getElementById('displayDeliveryMethod').textContent = deliveryLabels[order.delivery_method] || '🏪 সরাসরি সংগ্রহ';
     
+    // স্ট্যাটাস
     const statusMap = {
         'pending': '⏳ বিচারাধীন',
         'approved': '✅ অনুমোদিত',
@@ -1126,33 +1133,54 @@ function renderInvoice(order) {
     statusEl.textContent = statusMap[order.status] || '⏳ বিচারাধীন';
     statusEl.className = `badge badge-${order.status === 'pending' ? 'pending' : order.status === 'approved' ? 'approved' : order.status === 'rejected' ? 'rejected' : 'completed'}`;
     
-    // ডেলিভারি ঠিকানা
+    // ===== ডেলিভারি ঠিকানা =====
     const deliveryBox = document.getElementById('deliveryAddressBox');
     const deliveryContent = document.getElementById('deliveryAddressContent');
     
+    let deliveryInfo = order.delivery_info || {};
+    if (typeof deliveryInfo === 'string') {
+        try { deliveryInfo = JSON.parse(deliveryInfo); } catch(e) { deliveryInfo = {}; }
+    }
+    
     if (order.delivery_method === 'post') {
-        const info = order.delivery_info || {};
         deliveryBox.classList.add('show');
         deliveryContent.innerHTML = `
-            <strong>গ্রাম/মহল্লা:</strong> ${info.village || '-'} &nbsp;|&nbsp;
-            <strong>ডাকঘর:</strong> ${info.office || '-'} &nbsp;|&nbsp;
-            <strong>থানা:</strong> ${info.thana || '-'} &nbsp;|&nbsp;
-            <strong>জেলা:</strong> ${info.district || '-'}
+            <strong>গ্রাম/মহল্লা:</strong> ${deliveryInfo.village || '-'} &nbsp;|&nbsp;
+            <strong>ডাকঘর:</strong> ${deliveryInfo.office || '-'} &nbsp;|&nbsp;
+            <strong>থানা:</strong> ${deliveryInfo.thana || '-'} &nbsp;|&nbsp;
+            <strong>জেলা:</strong> ${deliveryInfo.district || '-'}
         `;
     } else if (order.delivery_method === 'courier') {
-        const info = order.delivery_info || {};
         deliveryBox.classList.add('show');
         deliveryContent.innerHTML = `
-            <strong>কুরিয়ার:</strong> ${info.courier_name || '-'} &nbsp;|&nbsp;
-            <strong>ঠিকানা:</strong> ${info.address || '-'} &nbsp;|&nbsp;
-            <strong>মোবাইল:</strong> ${info.mobile || '-'}
+            <strong>কুরিয়ার:</strong> ${deliveryInfo.courier_name || '-'} &nbsp;|&nbsp;
+            <strong>ঠিকানা:</strong> ${deliveryInfo.address || '-'} &nbsp;|&nbsp;
+            <strong>মোবাইল:</strong> ${deliveryInfo.mobile || '-'}
         `;
     } else {
         deliveryBox.classList.remove('show');
     }
     
-    // কিতাবের তালিকা
-    const books = order.books || [];
+    // ================================================================
+    // 🔥 কিতাবের তালিকা (JSON স্ট্রিং পার্স করা)
+    // ================================================================
+    let books = order.books || [];
+    
+    // JSON স্ট্রিং হলে পার্স করুন
+    if (typeof books === 'string') {
+        try {
+            books = JSON.parse(books);
+        } catch(e) {
+            console.warn('Books parse error:', e);
+            books = [];
+        }
+    }
+    
+    // যদি books অ্যারে না হয়, তাহলে খালি অ্যারে সেট করুন
+    if (!Array.isArray(books)) {
+        books = [];
+    }
+    
     const tbody = document.getElementById('booksTableBody');
     
     if (books.length === 0) {
@@ -1166,26 +1194,55 @@ function renderInvoice(order) {
                     <td>${i + 1}</td>
                     <td>${book.name || 'N/A'}</td>
                     <td class="text-center">${discount > 0 ? `${discount}%` : '-'}</td>
-                    <td class="text-right">৳${price.toFixed(2)}</td>
+                    <td class="text-right">৳${parseFloat(price).toFixed(2)}</td>
                 </tr>
             `;
         }).join('');
     }
     
-    const totalPurchase = order.total_purchase || 0;
-    const totalSelling = order.total_selling || 0;
-    const totalDiscount = order.total_discount || 0;
-    const afterDiscount = order.after_discount || 0;
-    const profitAmount = order.profit_amount || 0;
-    const serviceCharge = order.service_charge || 0;
-    const deliveryCharge = order.delivery_charge || 0;
-    const totalPrice = order.total_price || 0;
-    const downPayment = order.down_payment || 0;
-    const remaining = order.remaining || 0;
-    const monthlyPayment = order.monthly_payment || 0;
-    const installmentMonths = order.installment_months || 0;
+    // ================================================================
+    // 🔥 সারাংশ ক্যালকুলেশন
+    // ================================================================
     
-    document.getElementById('summaryPurchase').textContent = `৳${totalPurchase.toFixed(2)}`;
+    // মোট মূল্য
+    const totalPrice = parseFloat(order.total_price) || 0;
+    const downPayment = parseFloat(order.down_payment) || 0;
+    const remaining = parseFloat(order.remaining) || 0;
+    const monthlyPayment = parseFloat(order.monthly_payment) || 0;
+    const installmentMonths = parseInt(order.installment_months) || 0;
+    
+    // ক্রয়মূল্য, লাভ, সার্ভিস চার্জ
+    const purchasePrice = parseFloat(order.purchase_price) || 0;
+    const profitAmount = parseFloat(order.profit_amount) || 0;
+    const serviceCharge = parseFloat(order.service_charge_amount) || parseFloat(order.service_charge) || 0;
+    const deliveryCharge = parseFloat(order.delivery_charge) || 0;
+    
+    // total_selling এবং after_discount ক্যালকুলেট করুন
+    let totalSelling = 0;
+    let totalDiscount = 0;
+    let afterDiscount = 0;
+    
+    if (books.length > 0) {
+        books.forEach(book => {
+            const price = parseFloat(book.price) || 0;
+            const originalPrice = parseFloat(book.original_price) || price;
+            const discount = parseFloat(book.discount_percent) || 0;
+            
+            totalSelling += originalPrice;
+            if (discount > 0) {
+                const discountAmount = (originalPrice * discount) / 100;
+                totalDiscount += discountAmount;
+            }
+        });
+        afterDiscount = totalSelling - totalDiscount;
+    } else {
+        // যদি books না থাকে, তাহলে order থেকে নিন
+        totalSelling = parseFloat(order.total_selling) || 0;
+        totalDiscount = parseFloat(order.total_discount) || 0;
+        afterDiscount = parseFloat(order.after_discount) || 0;
+    }
+    
+    document.getElementById('summaryPurchase').textContent = `৳${purchasePrice.toFixed(2)}`;
     document.getElementById('summarySelling').textContent = `৳${totalSelling.toFixed(2)}`;
     document.getElementById('summaryDiscount').textContent = `৳${totalDiscount.toFixed(2)}`;
     document.getElementById('summaryAfterDiscount').textContent = `৳${afterDiscount.toFixed(2)}`;
@@ -1200,7 +1257,7 @@ function renderInvoice(order) {
 }
 
 // ================================================================
-// RENDER STICKER
+// RENDER STICKER (আপডেটেড)
 // ================================================================
 
 function renderSticker(order) {
@@ -1208,12 +1265,15 @@ function renderSticker(order) {
     document.getElementById('stickerReceiverMobile').textContent = order.mobile || '---';
     
     let address = '';
+    let deliveryInfo = order.delivery_info || {};
+    if (typeof deliveryInfo === 'string') {
+        try { deliveryInfo = JSON.parse(deliveryInfo); } catch(e) { deliveryInfo = {}; }
+    }
+    
     if (order.delivery_method === 'post') {
-        const info = order.delivery_info || {};
-        address = `${info.village || ''}, ${info.office || ''}, ${info.thana || ''}, ${info.district || ''}`;
+        address = `${deliveryInfo.village || ''}, ${deliveryInfo.office || ''}, ${deliveryInfo.thana || ''}, ${deliveryInfo.district || ''}`;
     } else if (order.delivery_method === 'courier') {
-        const info = order.delivery_info || {};
-        address = `${info.address || ''} (${info.courier_name || ''})`;
+        address = `${deliveryInfo.address || ''} (${deliveryInfo.courier_name || ''})`;
     } else {
         address = `${order.district || ''} (সরাসরি সংগ্রহ)`;
     }
@@ -1221,7 +1281,12 @@ function renderSticker(order) {
     
     document.getElementById('stickerOrderId').textContent = order.order_id || '---';
     
-    const books = order.books || [];
+    let books = order.books || [];
+    if (typeof books === 'string') {
+        try { books = JSON.parse(books); } catch(e) { books = []; }
+    }
+    if (!Array.isArray(books)) books = [];
+    
     const bookNames = books.map(b => b.name).join(', ');
     document.getElementById('stickerPackageDesc').textContent = bookNames || 'কিতাব প্যাকেজ';
     
