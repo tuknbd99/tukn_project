@@ -266,6 +266,17 @@
                     <div><span class="text-gray-500">ডাউন পেমেন্ট:</span> <span id="displayDownStatus" class="font-bold text-amber-600">❌ হয়নি</span></div>
                 </div>
             </div>
+            <!-- ✅ ডেলিভারি চার্জ দেখানো (নতুন) -->
+            <div class="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div><span class="text-gray-500">📦 ডেলিভারি মাধ্যম:</span> <span id="displayDeliveryMethod" class="font-semibold">-</span></div>
+                    <div><span class="text-gray-500">📦 ডেলিভারি চার্জ:</span> <span id="displayDeliveryCharge" class="font-semibold text-amber-600">-</span></div>
+                </div>
+                <div id="deliveryAddressBox" class="mt-2 text-xs text-gray-500 hidden">
+                    <p class="font-semibold text-gray-700">📍 প্রাপ্তির ঠিকানা:</p>
+                    <p id="deliveryAddressContent">-</p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -600,6 +611,39 @@ async function searchOrder() {
         document.getElementById('displayRemaining').innerHTML = formatCurrency((order.total_price || 0) - (order.total_paid || 0));
         document.getElementById('displayDownStatus').innerHTML = order.down_payment_paid ? '✅ হয়েছে' : '❌ হয়নি';
         document.getElementById('displayDownStatus').className = `font-bold ${order.down_payment_paid ? 'text-emerald-600' : 'text-red-600'}`;
+        
+        // ✅ ডেলিভারি তথ্য দেখান (নতুন)
+        const deliveryLabels = {
+            'direct': '🏪 সরাসরি সংগ্রহ',
+            'post': '📮 ডাক',
+            'courier': '📦 কুরিয়ার'
+        };
+        document.getElementById('displayDeliveryMethod').innerHTML = deliveryLabels[order.delivery_method] || '🏪 সরাসরি সংগ্রহ';
+        document.getElementById('displayDeliveryCharge').innerHTML = formatCurrency(order.delivery_charge || 0);
+        
+        // ডেলিভারি ঠিকানা
+        const addressBox = document.getElementById('deliveryAddressBox');
+        const addressContent = document.getElementById('deliveryAddressContent');
+        if (order.delivery_method === 'post') {
+            const info = order.delivery_info || {};
+            addressBox.classList.remove('hidden');
+            addressContent.innerHTML = `
+                গ্রাম/মহল্লা: ${info.village || '-'}<br>
+                ডাকঘর: ${info.office || '-'}<br>
+                থানা: ${info.thana || '-'}<br>
+                জেলা: ${info.district || '-'}
+            `;
+        } else if (order.delivery_method === 'courier') {
+            const info = order.delivery_info || {};
+            addressBox.classList.remove('hidden');
+            addressContent.innerHTML = `
+                কুরিয়ার: ${info.courier_name || '-'}<br>
+                ঠিকানা: ${info.address || '-'}<br>
+                মোবাইল: ${info.mobile || '-'}
+            `;
+        } else {
+            addressBox.classList.add('hidden');
+        }
         
         const statusClass = order.status === 'pending' ? 'status-pending' : 
                            order.status === 'approved' ? 'status-approved' : 'status-pending';
@@ -949,6 +993,42 @@ async function generateSlip() {
         // Save to Supabase
         await savePaymentToSupabase(amount, method, paymentDetails, slipNumber, paymentTypeLabel, installmentNo, isLate, lateFee);
         
+        // ✅ ডাউন পেমেন্ট হলে অর্ডার আপডেট (নতুন)
+        if (paymentType === 'down') {
+            const sb = await initSupabase();
+            if (sb) {
+                await sb.from('book_orders')
+                    .update({ 
+                        down_payment_paid: true,
+                        down_payment_paid_at: new Date().toISOString()
+                    })
+                    .eq('order_id', currentOrder.order_id);
+                
+                // লোকাল আপডেট
+                currentOrder.down_payment_paid = true;
+                document.getElementById('displayDownStatus').innerHTML = '✅ হয়েছে';
+                document.getElementById('displayDownStatus').className = 'font-bold text-emerald-600';
+            }
+        }
+        
+        // ✅ কিস্তি পেমেন্ট হলে ইনস্টলমেন্ট আপডেট (নতুন)
+        if (paymentType === 'installment' && installmentNo) {
+            const sb = await initSupabase();
+            if (sb) {
+                const inst = allInstallments.find(i => i.installment_no === installmentNo);
+                if (inst) {
+                    await sb.from('book_installments')
+                        .update({ 
+                            paid: true,
+                            paid_at: new Date().toISOString(),
+                            late_fee_applied: isLate,
+                            late_fee_amount: lateFee
+                        })
+                        .eq('id', inst.id);
+                }
+            }
+        }
+        
         // Show slip
         document.getElementById('slipNumber').innerHTML = slipNumber;
         document.getElementById('slipStatus').innerHTML = '⏳ বিচারাধীন';
@@ -1006,6 +1086,30 @@ function buildSlipHTML(slipNumber, amount, method, details, paymentTypeLabel, in
     const dateStr = now.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric' });
     const timeStr = now.toLocaleTimeString('bn-BD');
     
+    // ✅ ডেলিভারি তথ্য স্লিপে যোগ করুন (নতুন)
+    const deliveryLabels = {
+        'direct': '🏪 সরাসরি সংগ্রহ',
+        'post': '📮 ডাক',
+        'courier': '📦 কুরিয়ার'
+    };
+    const deliveryMethod = currentOrder?.delivery_method || 'direct';
+    const deliveryCharge = currentOrder?.delivery_charge || 0;
+    
+    let deliveryInfoHtml = '';
+    if (deliveryMethod === 'post') {
+        const info = currentOrder?.delivery_info || {};
+        deliveryInfoHtml = `
+            <div class="info-row"><span class="info-label">📮 ডাকের ঠিকানা:</span><span class="info-value">${info.village || '-'}, ${info.office || '-'}, ${info.thana || '-'}, ${info.district || '-'}</span></div>
+        `;
+    } else if (deliveryMethod === 'courier') {
+        const info = currentOrder?.delivery_info || {};
+        deliveryInfoHtml = `
+            <div class="info-row"><span class="info-label">📦 কুরিয়ার:</span><span class="info-value">${info.courier_name || '-'}</span></div>
+            <div class="info-row"><span class="info-label">📍 ঠিকানা:</span><span class="info-value">${info.address || '-'}</span></div>
+            <div class="info-row"><span class="info-label">📱 মোবাইল:</span><span class="info-value">${info.mobile || '-'}</span></div>
+        `;
+    }
+    
     let paymentDetailsHtml = '';
     if (method === 'bKash' || method === 'Nagad' || method === 'Rocket') {
         paymentDetailsHtml = `
@@ -1047,6 +1151,14 @@ function buildSlipHTML(slipNumber, amount, method, details, paymentTypeLabel, in
                     <div class="info-row"><span class="info-label">শ্রেণী:</span><span class="info-value">${currentOrder.class}</span></div>
                     <div class="info-row"><span class="info-label">মাদ্রাসা:</span><span class="info-value">${currentOrder.madrasa_name}</span></div>
                     <div class="info-row"><span class="info-label">📖 কিতাব:</span><span class="info-value" style="text-align:right;">${currentOrder.books?.map(b => b.name).join(', ') || '-'}</span></div>
+                </div>
+                
+                <!-- ✅ ডেলিভারি তথ্য (নতুন) -->
+                <div class="info-section" style="background:#fffbeb; border-color:#fcd34d;">
+                    <div class="info-title" style="color:#92400e; border-bottom-color:#f59e0b;">📦 ডেলিভারি তথ্য</div>
+                    <div class="info-row"><span class="info-label">ডেলিভারি মাধ্যম:</span><span class="info-value">${deliveryLabels[deliveryMethod] || '🏪 সরাসরি'}</span></div>
+                    ${deliveryInfoHtml}
+                    <div class="info-row"><span class="info-label">ডেলিভারি চার্জ:</span><span class="info-value"><strong class="text-amber-600">${formatCurrency(deliveryCharge)}</strong></span></div>
                 </div>
                 
                 <!-- Payment Info -->
