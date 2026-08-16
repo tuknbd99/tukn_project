@@ -5579,7 +5579,7 @@ function renderPendingPaymentsList() {
 }
 
 // ============================================================
-// ✅ FIXED: approvePayment() - সম্পূর্ণ ব্যালেন্স আপডেট সহ
+// ✅ FIXED: approvePayment() - Supabase থেকে সরাসরি ডেটা লোড
 // ============================================================
 async function approvePayment(paymentId) {
     const id = parseInt(paymentId);
@@ -5618,10 +5618,7 @@ async function approvePayment(paymentId) {
             .eq('member_id', payment.member_id)
             .single();
         
-        if (memberError) {
-            console.error('❌ সদস্য লোড error:', memberError);
-            throw memberError;
-        }
+        if (memberError) throw memberError;
         
         if (member.status !== 'active' && member.status !== 'approved') {
             showToast(`⚠️ এই সদস্য (${member.full_name || payment.member_id}) সক্রিয় নয়!`, 'error');
@@ -5633,7 +5630,7 @@ async function approvePayment(paymentId) {
         
         console.log(`📊 ব্যালেন্স আপডেট: ${currentBalance} → ${newBalance} (${payment.amount} যোগ)`);
         
-        // ✅ ২. সদস্যের ব্যালেন্স আপডেট করুন
+        // ✅ ২. ব্যালেন্স আপডেট
         const { error: updateError } = await client
             .from('members')
             .update({ 
@@ -5642,12 +5639,9 @@ async function approvePayment(paymentId) {
             })
             .eq('member_id', payment.member_id);
         
-        if (updateError) {
-            console.error('❌ ব্যালেন্স আপডেট error:', updateError);
-            throw updateError;
-        }
+        if (updateError) throw updateError;
         
-        // ✅ ৩. পেমেন্ট স্ট্যাটাস আপডেট করুন
+        // ✅ ৩. পেমেন্ট স্ট্যাটাস আপডেট
         await client
             .from('payments')
             .update({
@@ -5657,7 +5651,7 @@ async function approvePayment(paymentId) {
             })
             .eq('id', id);
         
-        // ✅ ৪. পেন্ডিং লিস্ট থেকে রিমুভ করুন
+        // ✅ ৪. পেন্ডিং লিস্ট থেকে রিমুভ
         pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
         
         // ✅ ৫. membersData রিফ্রেশ করুন (সব সদস্য রিলোড)
@@ -5680,29 +5674,10 @@ async function approvePayment(paymentId) {
         // ✅ ৮. ব্যাজ আপডেট
         await updateAllBadges();
         
-        // ✅ ৯. মেম্বার লিস্ট রিলোড (যদি খোলা থাকে)
+        // ✅ ৯. মেম্বার লিস্ট রিলোড
         renderMembersList();
         renderPendingMembersList();
         
-        // ✅ ১০. ইউজার ফান্ড আপডেট (যদি লগইন করা সদস্য হয়)
-        // চেক করুন যে সদস্য ড্যাশবোর্ডে লগইন করেছেন কিনা
-        const loggedMember = localStorage.getItem('tukn_logged_member') || sessionStorage.getItem('tukn_logged_member');
-        if (loggedMember) {
-            try {
-                const user = JSON.parse(loggedMember);
-                if (user.id === payment.member_id || user.member_id === payment.member_id) {
-                    // সদস্যের লোকাল স্টোরেজ আপডেট করুন
-                    user.balance = newBalance;
-                    localStorage.setItem('tukn_logged_member', JSON.stringify(user));
-                    sessionStorage.setItem('tukn_logged_member', JSON.stringify(user));
-                    console.log('✅ সদস্যের localStorage আপডেট করা হয়েছে');
-                }
-            } catch(e) {
-                console.log('localStorage আপডেট ব্যর্থ:', e);
-            }
-        }
-        
-        // ✅ ১১. সাফল্যের মেসেজ
         showToast(`✅ ${member.full_name || payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদিত হয়েছে!\nনতুন ব্যালেন্স: ${formatAmount(newBalance)} টাকা`, 'success');
         
         console.log('✅ পেমেন্ট অনুমোদন সম্পূর্ণ! নতুন ব্যালেন্স:', newBalance);
