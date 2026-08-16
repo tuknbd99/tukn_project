@@ -5019,34 +5019,45 @@ document.addEventListener('DOMContentLoaded', function() {
         </tr>`).join('');
     }
 
-    function renderPendingMembersList() {
-        const tbody = document.getElementById('pendingMembersList');
-        if (!tbody) return;
-        
-        const pending = membersData.filter(m => m.status === 'pending');
-        const badge = document.getElementById('pendingMemberBadge');
-        
-        if (pending.length === 0) { 
-            tbody.innerHTML = `<tr><td colspan="8" class="text-center p-4"><i class="fas fa-check-circle text-green-500 text-2xl"></i><br><span class="text-gray-500">কোনো পেন্ডিং সদস্য নেই</span></td></tr>`;
-            if (badge) { badge.style.display = 'none'; badge.innerText = '0'; }
-            return; 
-        }
-        
-        tbody.innerHTML = pending.map(m => `
-            <tr>
-                <td>${m.created_at ? new Date(m.created_at).toLocaleDateString('bn-BD') : '-'}</td>
-                <td><span class="font-medium">${m.full_name || '-'}</span></td>
-                <td>${m.mobile || '-'}</td>
-                <td>${m.present_district || '-'}</td>
-                <td class="text-right font-bold text-emerald-600">${(m.monthly_savings||500).toLocaleString()} টাকা</td>
-                <td><button onclick="showPendingMemberDetails('${m.member_id}')" class="btn btn-info btn-sm" title="বিস্তারিত"><i class="fas fa-eye"></i></button></td>
-                <td><button onclick="approveMember('${m.member_id}')" class="btn btn-success btn-sm"><i class="fas fa-check mr-1"></i> অনুমোদন</button></td>
-                <td><button onclick="deleteMember('${m.member_id}')" class="btn btn-danger btn-sm"><i class="fas fa-trash mr-1"></i> বাতিল</button></td>
-            </tr>
-        `).join('');
-        
-        if (badge) { badge.innerText = pending.length; badge.style.display = 'flex'; }
+   // ============================================================
+// ✅ FIXED: renderPendingMembersList()
+// ============================================================
+function renderPendingMembersList() {
+    const tbody = document.getElementById('pendingMembersList');
+    if (!tbody) return;
+    
+    // ✅ পেন্ডিং সদস্য ফিল্টার করুন
+    const pending = membersData.filter(m => m.status === 'pending');
+    
+    // ✅ ব্যাজ আপডেট করুন
+    const badge = document.getElementById('pendingMemberBadge');
+    if (badge) {
+        badge.innerText = pending.length;
+        badge.style.display = pending.length > 0 ? 'flex' : 'none';
+        console.log('📊 পেন্ডিং ব্যাজ আপডেট:', pending.length);
     }
+    
+    if (pending.length === 0) { 
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center p-4">
+            <i class="fas fa-check-circle text-green-500 text-2xl"></i>
+            <br><span class="text-gray-500">✅ কোনো পেন্ডিং সদস্য নেই</span>
+        </td></tr>`;
+        return; 
+    }
+    
+    tbody.innerHTML = pending.map(m => `
+        <tr>
+            <td>${m.created_at ? new Date(m.created_at).toLocaleDateString('bn-BD') : '-'}</td>
+            <td><span class="font-medium">${m.full_name || '-'}</span></td>
+            <td>${m.mobile || '-'}</td>
+            <td>${m.present_district || '-'}</td>
+            <td class="text-right font-bold text-emerald-600">${(m.monthly_savings||500).toLocaleString()} টাকা</td>
+            <td><button onclick="showPendingMemberDetails('${m.member_id}')" class="btn btn-info btn-sm" title="বিস্তারিত"><i class="fas fa-eye"></i></button></td>
+            <td><button onclick="approveMember('${m.member_id}')" class="btn btn-success btn-sm"><i class="fas fa-check mr-1"></i> অনুমোদন</button></td>
+            <td><button onclick="deleteMember('${m.member_id}')" class="btn btn-danger btn-sm"><i class="fas fa-trash mr-1"></i> বাতিল</button></td>
+        </tr>
+    `).join('');
+}
 
     function renderDeletedMembersList() {
         const tbody = document.getElementById('deletedMembersList');
@@ -5062,97 +5073,141 @@ document.addEventListener('DOMContentLoaded', function() {
         </tr>`).join('');
     }
 
-    // ============================================================
-    // ===== APPROVE MEMBER =====
-    // ============================================================
-    async function approveMember(id) {
-        if (!confirm('সদস্যকে অনুমোদন দেবেন?')) return;
+  // ============================================================
+// ✅ FIXED: approveMember() - সদস্য অনুমোদন
+// ============================================================
+async function approveMember(id) {
+    if (!confirm('সদস্যকে অনুমোদন দেবেন?')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const btns = document.querySelectorAll(`[onclick*="approveMember('${id}')"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
+    try {
+        console.log('🔄 সদস্য অনুমোদন শুরু:', id);
         
-        const client = initSupabaseClient();
-        if (!client) {
-            showToast('সংযোগ সমস্যা!', 'error');
+        // ✅ ১. সদস্যের বর্তমান স্ট্যাটাস চেক করুন
+        const { data: memberCheck, error: checkError } = await client
+            .from('members')
+            .select('status, member_id')
+            .eq('member_id', id)
+            .single();
+        
+        if (checkError) {
+            console.error('❌ সদস্য চেক error:', checkError);
+            showToast('❌ সদস্য খুঁজে পাওয়া যায়নি!', 'error');
             return;
         }
         
-        const btns = document.querySelectorAll(`[onclick*="approveMember('${id}')"]`);
-        btns.forEach(btn => {
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-        });
+        if (memberCheck.status === 'active') {
+            showToast('ℹ️ সদস্যটি ইতিমধ্যে অনুমোদিত!', 'info');
+            return;
+        }
         
-        try {
-            console.log('🔄 সদস্য অনুমোদন শুরু:', id);
-            
-            await client
-                .from('members')
-                .update({ 
-                    status: 'active', 
-                    approved_at: new Date().toISOString(),
-                    approved_by: currentAdmin?.username || 'system'
-                })
-                .eq('member_id', id);
-            
-            const { data: existingBranch } = await client
-                .from('branch_members')
+        console.log('📊 বর্তমান স্ট্যাটাস:', memberCheck.status);
+        
+        // ✅ ২. সদস্য অনুমোদন আপডেট করুন
+        const { error: updateError } = await client
+            .from('members')
+            .update({ 
+                status: 'active', 
+                approved_at: new Date().toISOString(),
+                approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন'
+            })
+            .eq('member_id', id);
+        
+        if (updateError) {
+            console.error('❌ অনুমোদন আপডেট error:', updateError);
+            showToast(`❌ অনুমোদন ব্যর্থ: ${updateError.message}`, 'error');
+            return;
+        }
+        
+        console.log('✅ সদস্য অনুমোদন আপডেট সম্পন্ন!');
+        
+        // ✅ ৩. ব্রাঞ্চে যোগ করুন (যদি না থাকে)
+        const { data: existingBranch } = await client
+            .from('branch_members')
+            .select('id')
+            .eq('member_id', id)
+            .maybeSingle();
+        
+        if (!existingBranch) {
+            const { data: defaultBranch } = await client
+                .from('branches')
                 .select('id')
-                .eq('member_id', id)
+                .eq('status', 'active')
+                .limit(1)
                 .maybeSingle();
             
-            if (!existingBranch) {
-                const { data: defaultBranch } = await client
-                    .from('branches')
-                    .select('id')
-                    .eq('status', 'active')
-                    .limit(1)
-                    .maybeSingle();
-                
-                if (defaultBranch) {
-                    await client
-                        .from('branch_members')
-                        .insert([{
-                            branch_id: defaultBranch.id,
-                            member_id: id,
-                            joined_at: new Date().toISOString(),
-                            status: 'active'
-                        }]);
-                }
+            if (defaultBranch) {
+                await client
+                    .from('branch_members')
+                    .insert([{
+                        branch_id: defaultBranch.id,
+                        member_id: id,
+                        joined_at: new Date().toISOString(),
+                        status: 'active'
+                    }]);
+                console.log('✅ ব্রাঞ্চে যোগ করা হয়েছে:', defaultBranch.id);
             }
-            
-            const { data: freshData, error: loadError } = await client
-                .from('members')
-                .select('*')
-                .order('created_at', { ascending: false });
-            
-            if (loadError) throw loadError;
-            
-            membersData = freshData || [];
-            renderMembersList();
-            renderPendingMembersList();
-            renderDeletedMembersList();
-            await updateAllBadges();
-            await loadRealDashboard();
-            await loadBranches();
-            
-            const pendingCount = membersData.filter(m => m.status === 'pending').length;
-            const badge = document.getElementById('pendingMemberBadge');
-            if (badge) {
-                badge.innerText = pendingCount;
-                badge.style.display = pendingCount > 0 ? 'flex' : 'none';
-            }
-            
-            showToast('✅ সদস্য সফলভাবে অনুমোদিত হয়েছে!', 'success');
-            console.log('✅ অনুমোদন সম্পূর্ণ!');
-            
-        } catch(e) {
-            console.error('❌ Approval error:', e);
-            showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
-        } finally {
-            btns.forEach(btn => {
-                btn.disabled = false;
-                btn.innerHTML = '✅ অনুমোদন';
-            });
         }
+        
+        // ✅ ৪. ক্যাশ ক্লিয়ার করুন এবং তাজা ডেটা লোড করুন
+        // Force refresh from database
+        const { data: freshData, error: loadError } = await client
+            .from('members')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (loadError) {
+            console.error('❌ ডেটা রিলোড error:', loadError);
+        } else {
+            membersData = freshData || [];
+            console.log('✅ তাজা ডেটা লোড সম্পন্ন:', membersData.length);
+        }
+        
+        // ✅ ৫. UI আপডেট করুন
+        renderMembersList();
+        renderPendingMembersList();
+        renderDeletedMembersList();
+        
+        // ✅ ৬. ব্যাজ আপডেট করুন
+        const pendingCount = membersData.filter(m => m.status === 'pending').length;
+        const badge = document.getElementById('pendingMemberBadge');
+        if (badge) {
+            badge.innerText = pendingCount;
+            badge.style.display = pendingCount > 0 ? 'flex' : 'none';
+            console.log('📊 ব্যাজ আপডেট:', pendingCount);
+        }
+        
+        // ✅ ৭. ড্যাশবোর্ড এবং ব্রাঞ্চ রিফ্রেশ
+        await loadRealDashboard();
+        await loadBranches();
+        await updateAllBadges();
+        
+        // ✅ ৮. সাফল্যের মেসেজ
+        const memberName = membersData.find(m => m.member_id === id)?.full_name || 'সদস্য';
+        showToast(`✅ ${memberName} সফলভাবে অনুমোদিত হয়েছে!`, 'success');
+        console.log('✅ অনুমোদন সম্পূর্ণ!');
+        
+    } catch(e) {
+        console.error('❌ Approval error:', e);
+        showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '✅ অনুমোদন';
+        });
     }
+}
 
     // ============================================================
     // ===== SHOW PENDING MEMBER DETAILS =====
@@ -5363,37 +5418,94 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // ============================================================
-    // ===== UPDATE ALL BADGES =====
-    // ============================================================
-    async function updateAllBadges() {
-        const client = initSupabaseClient();
-        if (!client) return;
-        try {
-            const { count: pendingMembers } = await client.from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-            const badge1 = document.getElementById('pendingMemberBadge');
-            if (badge1) { badge1.innerText = pendingMembers || 0; badge1.style.display = (pendingMembers || 0) > 0 ? 'flex' : 'none'; }
-            
-            const { count: pendingPayments } = await client.from('payments').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-            const badge2 = document.getElementById('pendingPaymentBadge');
-            if (badge2) { badge2.innerText = pendingPayments || 0; badge2.style.display = (pendingPayments || 0) > 0 ? 'flex' : 'none'; }
-            
-            const { count: pendingWithdrawals } = await client.from('withdrawals').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-            const badge3 = document.getElementById('pendingWithdrawalBadge');
-            if (badge3) { badge3.innerText = pendingWithdrawals || 0; badge3.style.display = (pendingWithdrawals || 0) > 0 ? 'flex' : 'none'; }
-            
-            const { count: pendingLoans } = await client.from('loan_applications').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-            const badge4 = document.getElementById('pendingLoanBadge');
-            if (badge4) { badge4.innerText = pendingLoans || 0; badge4.style.display = (pendingLoans || 0) > 0 ? 'flex' : 'none'; }
-            
-            const { count: pendingLoanPayments } = await client.from('loan_payments').select('*', { count: 'exact', head: true }).eq('status', 'pending_verification');
-            const badge5 = document.getElementById('pendingLoanPaymentBadge');
-            if (badge5) { badge5.innerText = pendingLoanPayments || 0; badge5.style.display = (pendingLoanPayments || 0) > 0 ? 'flex' : 'none'; }
-            
-            const { count: pendingApps } = await client.from('representative_applications').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-            const badge6 = document.getElementById('pendingApplicationBadge');
-            if (badge6) { badge6.innerText = pendingApps || 0; badge6.style.display = (pendingApps || 0) > 0 ? 'flex' : 'none'; }
-        } catch(e) { console.error('Badge update error:', e); }
+  // ============================================================
+// ✅ FIXED: updateAllBadges()
+// ============================================================
+async function updateAllBadges() {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        // ✅ পেন্ডিং সদস্য
+        const { data: pendingMembers, error: mError } = await client
+            .from('members')
+            .select('member_id', { count: 'exact' })
+            .eq('status', 'pending');
+        
+        if (!mError) {
+            const count = pendingMembers?.length || 0;
+            const badge = document.getElementById('pendingMemberBadge');
+            if (badge) {
+                badge.innerText = count;
+                badge.style.display = count > 0 ? 'flex' : 'none';
+                console.log('📊 পেন্ডিং সদস্য ব্যাজ:', count);
+            }
+        }
+        
+        // ✅ পেন্ডিং পেমেন্ট
+        const { data: pendingPayments, error: pError } = await client
+            .from('payments')
+            .select('id', { count: 'exact' })
+            .eq('status', 'pending');
+        
+        if (!pError) {
+            const count = pendingPayments?.length || 0;
+            const badge = document.getElementById('pendingPaymentBadge');
+            if (badge) {
+                badge.innerText = count;
+                badge.style.display = count > 0 ? 'flex' : 'none';
+            }
+        }
+        
+        // ✅ পেন্ডিং উইথড্রয়াল
+        const { data: pendingWithdrawals, error: wError } = await client
+            .from('withdrawals')
+            .select('id', { count: 'exact' })
+            .eq('status', 'pending');
+        
+        if (!wError) {
+            const count = pendingWithdrawals?.length || 0;
+            const badge = document.getElementById('pendingWithdrawalBadge');
+            if (badge) {
+                badge.innerText = count;
+                badge.style.display = count > 0 ? 'flex' : 'none';
+            }
+        }
+        
+        // ✅ পেন্ডিং লোন
+        const { data: pendingLoans, error: lError } = await client
+            .from('loan_applications')
+            .select('id', { count: 'exact' })
+            .eq('status', 'pending');
+        
+        if (!lError) {
+            const count = pendingLoans?.length || 0;
+            const badge = document.getElementById('pendingLoanBadge');
+            if (badge) {
+                badge.innerText = count;
+                badge.style.display = count > 0 ? 'flex' : 'none';
+            }
+        }
+        
+        // ✅ পেন্ডিং লোন পেমেন্ট
+        const { data: pendingLoanPayments, error: lpError } = await client
+            .from('loan_payments')
+            .select('id', { count: 'exact' })
+            .eq('status', 'pending_verification');
+        
+        if (!lpError) {
+            const count = pendingLoanPayments?.length || 0;
+            const badge = document.getElementById('pendingLoanPaymentBadge');
+            if (badge) {
+                badge.innerText = count;
+                badge.style.display = count > 0 ? 'flex' : 'none';
+            }
+        }
+        
+    } catch(e) {
+        console.error('❌ Badge update error:', e);
     }
+}
 
 // ============================================================
 // ✅ FIXED: loadPendingPayments() - সব পেমেন্ট লোড করুন
