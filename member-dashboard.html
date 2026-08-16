@@ -2118,57 +2118,6 @@ function setupTimeIntervals() {
     }, 5 * 60 * 1000);
 }
 
-async function refreshMemberDataFromSupabase() {
-    if(!currentUser || !currentUser.id) return;
-    let client = await initSupabase();
-    if(!client) return;
-    try {
-        const { data, error } = await client
-            .from('members')
-            .select('present_address, permanent_address, profile_image, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, balance, member_term, approved_at, created_at, refer_code, status')
-            .eq('member_id', currentUser.id)
-            .single();
-            
-        if(error) throw error;
-        
-        if(data) {
-            // অ্যাড্রেস আপডেট
-            if(data.present_address) currentUser.presentAddress = data.present_address;
-            if(data.permanent_address) currentUser.permanentAddress = data.permanent_address;
-            if(data.profile_image) currentUser.profileImage = data.profile_image;
-            if(data.member_term !== undefined) currentUser.memberTerm = data.member_term;
-            if(data.status) currentUser.status = data.status;
-            
-            // ✅ approved_at আপডেট
-            if(data.approved_at) {
-                currentUser.approved_at = data.approved_at;
-            } else if(data.created_at) {
-                currentUser.approved_at = data.created_at;
-            }
-            
-            if(data.refer_code) {
-                currentUser.referId = data.refer_code;
-                currentUser.refer_code = data.refer_code;
-            }
-            
-            // ✅ গুরুত্বপূর্ণ: userFunds আপডেট করুন
-            userFunds.monthlySavings = data.balance || 0;
-            userFunds.savingsProfit = data.profit_balance_savings || 0;
-            userFunds.investmentProfit = data.profit_balance_investment || 0;
-            userFunds.referralProfit = data.profit_balance_referral || 0;
-            userFunds.referralBonus = data.referral_bonus || 0;
-            
-            // ✅ কার্ড UI আপডেট করুন
-            updateFundsDisplay();
-            
-            console.log('✅ রিফ্রেশ করা userFunds:', userFunds);
-            console.log('✅ রিফ্রেশ করা approved_at:', currentUser.approved_at);
-            console.log('✅ রিফ্রেশ করা status:', currentUser.status);
-        }
-    } catch(e) { 
-        console.error('❌ refreshMemberDataFromSupabase error:', e); 
-    }
-}
 
 // ============================================================
 // Address Functions
@@ -2391,10 +2340,6 @@ function updateFundsDisplay() {
     console.log('✅ কার্ড ব্যালেন্স আপডেট সম্পূর্ণ!');
 }
 
-// ============================================================
-// ✅ সম্পূর্ণ ঠিক করা refreshMemberDataFromSupabase()
-// ============================================================
-
 async function refreshMemberDataFromSupabase() {
     if(!currentUser || !currentUser.id) {
         console.log('❌ currentUser নেই!');
@@ -2423,33 +2368,46 @@ async function refreshMemberDataFromSupabase() {
         if(data) {
             console.log('📥 ডাটাবেস থেকে পাওয়া ডাটা:', data);
             
-            // ✅ userFunds আপডেট করুন
+            const oldBalance = userFunds.monthlySavings;
             userFunds.monthlySavings = Number(data.balance) || 0;
             userFunds.savingsProfit = Number(data.profit_balance_savings) || 0;
             userFunds.investmentProfit = Number(data.profit_balance_investment) || 0;
             userFunds.referralProfit = Number(data.profit_balance_referral) || 0;
             userFunds.referralBonus = Number(data.referral_bonus) || 0;
             
-            // ✅ currentUser আপডেট করুন
             if(data.member_term !== undefined) currentUser.memberTerm = data.member_term;
             if(data.status) currentUser.status = data.status;
             if(data.approved_at) currentUser.approved_at = data.approved_at;
             
-            // ✅ কার্ড UI আপডেট করুন
+            if (oldBalance !== userFunds.monthlySavings) {
+                console.log(`📊 ব্যালেন্স পরিবর্তন: ${oldBalance} → ${userFunds.monthlySavings}`);
+                showToast(`💰 আপনার ব্যালেন্স আপডেট হয়েছে: ${userFunds.monthlySavings.toLocaleString()} টাকা`, 'success');
+            }
+            
             updateFundsDisplay();
             
+            try {
+                const storedUser = localStorage.getItem('tukn_logged_member') || sessionStorage.getItem('tukn_logged_member');
+                if (storedUser) {
+                    const user = JSON.parse(storedUser);
+                    user.balance = userFunds.monthlySavings;
+                    user.referral_bonus = userFunds.referralBonus;
+                    user.profit_balance_savings = userFunds.savingsProfit;
+                    user.profit_balance_investment = userFunds.investmentProfit;
+                    user.profit_balance_referral = userFunds.referralProfit;
+                    localStorage.setItem('tukn_logged_member', JSON.stringify(user));
+                    sessionStorage.setItem('tukn_logged_member', JSON.stringify(user));
+                }
+            } catch(e) {
+                console.log('localStorage আপডেট ব্যর্থ:', e);
+            }
+            
             console.log('✅ রিফ্রেশ সম্পূর্ণ! নতুন userFunds:', userFunds);
-        } else {
-            console.log('❌ ডাটা পাওয়া যায়নি!');
         }
     } catch(e) { 
         console.error('❌ refreshMemberDataFromSupabase error:', e); 
     }
 }
-
-// ============================================================
-// ✅ সম্পূর্ণ ঠিক করা loadUserFunds()
-// ============================================================
 
 async function loadUserFunds() {
     if(!currentUser) {
@@ -2479,14 +2437,18 @@ async function loadUserFunds() {
         if(member) {
             console.log('📥 ফান্ড ডাটা:', member);
             
-            // ✅ ফান্ড আপডেট করুন
+            const oldBalance = userFunds.monthlySavings;
             userFunds.monthlySavings = Number(member.balance) || 0;
             userFunds.savingsProfit = Number(member.profit_balance_savings) || 0;
             userFunds.investmentProfit = Number(member.profit_balance_investment) || 0;
             userFunds.referralProfit = Number(member.profit_balance_referral) || 0;
             userFunds.referralBonus = Number(member.referral_bonus) || 0;
             
-            // ✅ কার্ড UI আপডেট করুন
+            if (oldBalance !== userFunds.monthlySavings) {
+                console.log(`📊 ব্যালেন্স পরিবর্তন: ${oldBalance} → ${userFunds.monthlySavings}`);
+                showToast(`💰 আপনার ব্যালেন্স আপডেট হয়েছে: ${userFunds.monthlySavings.toLocaleString()} টাকা`, 'success');
+            }
+            
             updateFundsDisplay();
             
             console.log('✅ ফান্ড লোড সম্পূর্ণ:', userFunds);
@@ -2734,39 +2696,6 @@ function updateFundsDisplayWithAnimation() {
     });
 }
 
-async function loadUserFunds() {
-    if(!currentUser) return;
-    let client = await initSupabase();
-    if(!client) return;
-    try {
-        // ✅ সরাসরি ডাটাবেস থেকে তাজা ডেটা নিন
-        const { data: member, error } = await client
-            .from('members')
-            .select('balance, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus')
-            .eq('member_id', currentUser.id)
-            .single();
-        
-        if(error) {
-            console.error('❌ member data error:', error);
-            return;
-        }
-        
-        // ✅ ফান্ড আপডেট করুন
-        userFunds.monthlySavings = member?.balance || 0;
-        userFunds.savingsProfit = member?.profit_balance_savings || 0;
-        userFunds.investmentProfit = member?.profit_balance_investment || 0;
-        userFunds.referralProfit = member?.profit_balance_referral || 0;
-        userFunds.referralBonus = member?.referral_bonus || 0;
-        
-        // ✅ কার্ড UI আপডেট করুন
-        updateFundsDisplay();
-        
-        console.log('✅ ফান্ড লোড সম্পূর্ণ:', userFunds);
-        
-    } catch(error) { 
-        console.error('❌ ফান্ড লোড সমস্যা:', error); 
-    }
-}
 
 async function loadSavingsData() {
     if(!currentUser) return;
@@ -4153,42 +4082,36 @@ async function searchReceiver() {
     }
 }
 
-    // ============================================================
-// REAL-TIME BALANCE CHECK (ALL MEMBERS)
-// ============================================================
 function startRealTimeBalanceCheck() {
-    // আগের interval ক্লিয়ার করুন
     if (balanceCheckInterval) {
         clearInterval(balanceCheckInterval);
     }
     
-    // প্রতি 30 সেকেন্ড পর পর ব্যালেন্স চেক করুন
     balanceCheckInterval = setInterval(async function() {
         if (currentUser && currentUser.id) {
             console.log('⏳ রিয়েল-টাইম ব্যালেন্স চেক...');
-            await loadUserFunds();
-            await refreshMemberDataFromSupabase();
             
-            // ✅ কার্ডে নতুন ব্যালেন্স দেখান
-            const balanceEl = document.querySelector('.balance-amount, .user-balance, #userBalance, .card-balance');
-            if (balanceEl) {
-                const total = (userFunds.monthlySavings || 0) + (userFunds.referralBonus || 0) + 
-                             (userFunds.savingsProfit || 0) + (userFunds.investmentProfit || 0) + 
-                             (userFunds.referralProfit || 0);
-                balanceEl.textContent = total.toFixed(2) + ' টাকা';
+            try {
+                await refreshMemberDataFromSupabase();
+                await loadUserFunds();
+                updateFundsDisplay();
+                console.log('✅ ব্যালেন্স চেক সম্পূর্ণ:', userFunds);
+            } catch(e) {
+                console.error('❌ ব্যালেন্স চেক error:', e);
             }
         }
-    }, 30000); // 30 সেকেন্ড
+    }, 15000);
     
-    console.log('✅ রিয়েল-টাইম ব্যালেন্স চেক সক্রিয় (প্রতি 30 সেকেন্ড)');
+    console.log('✅ রিয়েল-টাইম ব্যালেন্স চেক সক্রিয় (প্রতি ১৫ সেকেন্ড)');
 }
 
-// পেজ ভিজিবল হলে ব্যালেন্স চেক করুন
+// ============================================================
+// ✅ ট্যাব ভিজিবল হলে ব্যালেন্স চেক
+// ============================================================
 document.addEventListener('visibilitychange', function() {
     if (!document.hidden && currentUser) {
         console.log('👁️ ট্যাব পুনরায় খোলা হয়েছে, ব্যালেন্স চেক করা হচ্ছে');
         loadUserFunds();
-        refreshMemberDataFromSupabase();
     }
 });
     
@@ -7144,9 +7067,6 @@ function shareStatement() {
     }
 }
 
-// ============================================================
-// DOM Ready
-// ============================================================
 document.addEventListener('DOMContentLoaded', async function() { 
     await initSupabase(); 
     await updateUI();
@@ -7155,7 +7075,30 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     document.getElementById('paymentMethod')?.addEventListener('change', togglePaymentFields);
     togglePaymentFields();
+    
+    startRealTimeBalanceCheck();
+    
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden && currentUser) {
+            console.log('👁️ ট্যাব পুনরায় খোলা হয়েছে, ব্যালেন্স চেক করা হচ্ছে');
+            refreshMemberDataFromSupabase();
+            loadUserFunds();
+            updateFundsDisplay();
+        }
+    });
+    
+    console.log('💡 কনসোলে টাইপ করুন:');
+    console.log('  refreshMemberDataFromSupabase() - ব্যালেন্স রিফ্রেশ');
+    console.log('  forceBalanceUpdate() - ফোর্স আপডেট');
 });
+
+window.forceBalanceUpdate = async function() {
+    console.log('🔍 ফোর্স ব্যালেন্স আপডেট শুরু...');
+    await refreshMemberDataFromSupabase();
+    await loadUserFunds();
+    updateFundsDisplay();
+    showToast('✅ ব্যালেন্স রিফ্রেশ করা হয়েছে!', 'success');
+};
 
     // ============================================================
 // ===== WITHDRAWAL SLIP FUNCTIONS (NEW) =====
@@ -7546,22 +7489,7 @@ function shareWithdrawalSlipWhatsApp() {
     const text = `📄 TUKNBD উত্তোলন স্লিপ\n━━━━━━━━━━━━━━━━━━━\n🆔 স্লিপ নং: ${data.slipNumber}\n👤 সদস্য: ${data.memberName} (${data.memberId})\n💰 পরিমাণ: ${Number(data.amount || 0).toLocaleString()} টাকা\n📋 ধরন: ${data.type}\n📅 তারিখ: ${new Date().toLocaleDateString('bn-BD')}\n━━━━━━━━━━━━━━━━━━━\n🔗 TUKNBD - ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
 }
-    // প্রতি 30 সেকেন্ড পর পর ব্যালেন্স চেক করুন
-let balanceCheckInterval = null;
-
-function startRealTimeBalanceCheck() {
-    if (balanceCheckInterval) {
-        clearInterval(balanceCheckInterval);
-    }
-    
-    balanceCheckInterval = setInterval(async function() {
-        if (currentUser && currentUser.id) {
-            console.log('⏳ রিয়েল-টাইম ব্যালেন্স চেক...');
-            await refreshMemberDataFromSupabase();
-        }
-    }, 30000); // 30 সেকেন্ড
-}
-
+  
 // পেজ লোড হলে চালু করুন
 document.addEventListener('DOMContentLoaded', function() {
     startRealTimeBalanceCheck();
