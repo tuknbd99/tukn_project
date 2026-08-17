@@ -5579,7 +5579,7 @@ function renderPendingPaymentsList() {
 }
 
 // ============================================================
-// ✅ FIXED: approvePayment() - Supabase থেকে সরাসরি ডেটা লোড
+// ✅ FIXED: approvePayment() - ব্যালেন্স আপডেট + রিফ্রেশ
 // ============================================================
 async function approvePayment(paymentId) {
     const id = parseInt(paymentId);
@@ -5618,7 +5618,10 @@ async function approvePayment(paymentId) {
             .eq('member_id', payment.member_id)
             .single();
         
-        if (memberError) throw memberError;
+        if (memberError) {
+            console.error('❌ সদস্য লোড error:', memberError);
+            throw memberError;
+        }
         
         if (member.status !== 'active' && member.status !== 'approved') {
             showToast(`⚠️ এই সদস্য (${member.full_name || payment.member_id}) সক্রিয় নয়!`, 'error');
@@ -5630,7 +5633,7 @@ async function approvePayment(paymentId) {
         
         console.log(`📊 ব্যালেন্স আপডেট: ${currentBalance} → ${newBalance} (${payment.amount} যোগ)`);
         
-        // ✅ ২. ব্যালেন্স আপডেট
+        // ✅ ২. ব্যালেন্স আপডেট (এটাই মূল ফিক্স!)
         const { error: updateError } = await client
             .from('members')
             .update({ 
@@ -5639,7 +5642,10 @@ async function approvePayment(paymentId) {
             })
             .eq('member_id', payment.member_id);
         
-        if (updateError) throw updateError;
+        if (updateError) {
+            console.error('❌ ব্যালেন্স আপডেট error:', updateError);
+            throw updateError;
+        }
         
         // ✅ ৩. পেমেন্ট স্ট্যাটাস আপডেট
         await client
@@ -5654,7 +5660,7 @@ async function approvePayment(paymentId) {
         // ✅ ৪. পেন্ডিং লিস্ট থেকে রিমুভ
         pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
         
-        // ✅ ৫. membersData রিফ্রেশ করুন (সব সদস্য রিলোড)
+        // ✅ ৫. membersData রিফ্রেশ করুন
         const { data: freshMembers, error: loadError } = await client
             .from('members')
             .select('*')
@@ -5678,6 +5684,7 @@ async function approvePayment(paymentId) {
         renderMembersList();
         renderPendingMembersList();
         
+        // ✅ ১০. সাফল্যের মেসেজ
         showToast(`✅ ${member.full_name || payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদিত হয়েছে!\nনতুন ব্যালেন্স: ${formatAmount(newBalance)} টাকা`, 'success');
         
         console.log('✅ পেমেন্ট অনুমোদন সম্পূর্ণ! নতুন ব্যালেন্স:', newBalance);
