@@ -7741,6 +7741,339 @@
     }
 
     // ============================================================
+// ✅ FIXED: loadPendingWithdrawals ফাংশন (যোগ করুন)
+// ============================================================
+async function loadPendingWithdrawals() {
+    console.log('🔄 loadPendingWithdrawals called');
+    
+    const container = document.getElementById('pendingWithdrawalsList');
+    if (!container) {
+        console.error('❌ pendingWithdrawalsList container not found');
+        return;
+    }
+    
+    container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>';
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('withdrawals')
+            .select('*')
+            .eq('status', 'pending')
+            .order('requested_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        pendingWithdrawalsData = data || [];
+        console.log(`✅ পেন্ডিং উত্তোলন লোড সম্পূর্ণ: ${pendingWithdrawalsData.length}`);
+        
+        if (pendingWithdrawalsData.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-check-circle text-4xl block mb-3 text-green-500"></i>
+                    <p>✅ কোনো পেন্ডিং উত্তোলন নেই</p>
+                </div>
+            `;
+            const badge = document.getElementById('pendingWithdrawalBadge');
+            if (badge) {
+                badge.innerText = '0';
+                badge.style.display = 'none';
+            }
+            return;
+        }
+        
+        const badge = document.getElementById('pendingWithdrawalBadge');
+        if (badge) {
+            badge.innerText = pendingWithdrawalsData.length;
+            badge.style.display = 'flex';
+        }
+        
+        container.innerHTML = pendingWithdrawalsData.map(w => {
+            const methodIcon = w.payment_method === 'bKash' ? '💚' :
+                               w.payment_method === 'Nagad' ? '🧡' :
+                               w.payment_method === 'Rocket' ? '💜' :
+                               w.payment_method === 'bank' ? '🏦' : '💵';
+            
+            let contactInfo = '';
+            if (w.sender_mobile) {
+                contactInfo = `<span class="text-xs text-gray-500">📱 সেন্ডার: ${w.sender_mobile}</span>`;
+            } else if (w.receiver_mobile) {
+                contactInfo = `<span class="text-xs text-gray-500">📱 গ্রহীতা: ${w.receiver_mobile}</span>`;
+            } else if (w.receiver_name) {
+                contactInfo = `<span class="text-xs text-gray-500">👤 গ্রহীতা: ${w.receiver_name}</span>`;
+            } else if (w.bank_name) {
+                contactInfo = `<span class="text-xs text-gray-500">🏦 ${w.bank_name}</span>`;
+            }
+            
+            let cleanType = w.type || 'অন্যান্য';
+            cleanType = cleanType.replace(/ উত্তোলন/g, '');
+            
+            return `
+            <div class="border rounded-lg p-4 mb-3 bg-white shadow-sm hover:shadow-md transition">
+                <div class="flex flex-wrap justify-between items-center">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <p class="font-bold">${w.member_name || '-'}</p>
+                            <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">⏳ পেন্ডিং</span>
+                        </div>
+                        <p class="text-xs text-gray-500">🆔 ${w.member_id}</p>
+                        <div class="flex items-center gap-2 mt-1 flex-wrap">
+                            <p class="text-sm font-medium text-emerald-600">${cleanType}</p>
+                            <span class="text-xs px-2 py-0.5 rounded-full ${w.payment_method === 'bKash' ? 'bg-green-100 text-green-700' : w.payment_method === 'Nagad' ? 'bg-orange-100 text-orange-700' : w.payment_method === 'Rocket' ? 'bg-purple-100 text-purple-700' : w.payment_method === 'bank' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-700'}">
+                                ${methodIcon} ${w.payment_method || 'cash'}
+                            </span>
+                            ${contactInfo}
+                        </div>
+                        ${w.account_number ? `<div class="mt-1 text-xs text-gray-500">🔢 একাউন্ট: ${w.account_number}</div>` : ''}
+                        ${w.transaction_id ? `<div class="mt-1 text-xs text-blue-600">📝 লেনদেন ID: ${w.transaction_id}</div>` : ''}
+                        ${w.note ? `<div class="mt-1 text-xs text-amber-600 bg-amber-50 p-1 rounded">📝 নোট: ${w.note}</div>` : ''}
+                        <p class="text-xs text-gray-400 mt-1">${w.requested_at ? new Date(w.requested_at).toLocaleString('bn-BD') : '-'}</p>
+                    </div>
+                    <div class="text-right mt-2 sm:mt-0">
+                        <p class="text-xl font-bold text-amber-600">${formatAmountWithText(w.amount)}</p>
+                        <div class="flex gap-2 mt-2 flex-wrap justify-end">
+                            <button onclick="viewWithdrawalDetails('${w.id}')" class="btn btn-info btn-sm" title="বিস্তারিত"><i class="fas fa-eye"></i></button>
+                            <button onclick="approveWithdrawal('${w.id}')" class="btn btn-success btn-sm">অনুমোদন</button>
+                            <button onclick="rejectWithdrawal('${w.id}')" class="btn btn-danger btn-sm">বাতিল</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `}).join('');
+        
+        console.log('✅ পেন্ডিং উত্তোলন রেন্ডার সম্পূর্ণ!');
+        
+    } catch(e) {
+        console.error('❌ Load pending withdrawals error:', e);
+        container.innerHTML = `
+            <div class="text-red-500 p-4 text-center">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ উত্তোলন লোড করতে সমস্যা!</p>
+                <button onclick="loadPendingWithdrawals()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+    }
+}
+
+// ============================================================
+// ✅ approveWithdrawal ফাংশন (যোগ করুন)
+// ============================================================
+async function approveWithdrawal(id) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const withdrawal = pendingWithdrawalsData.find(w => w.id == id);
+    if (!withdrawal) {
+        showToast('উত্তোলন পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    if (!confirm(`${formatAmount(withdrawal.amount)} টাকা উত্তোলন অনুমোদন দেবেন?`)) return;
+    
+    const btns = document.querySelectorAll(`[onclick*="approveWithdrawal('${id}')"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
+    try {
+        const { data: member, error: memberError } = await client
+            .from('members')
+            .select('balance')
+            .eq('member_id', withdrawal.member_id)
+            .single();
+        
+        if (memberError) throw memberError;
+        
+        if ((member.balance || 0) < withdrawal.amount) {
+            showToast(`❌ পর্যাপ্ত ব্যালেন্স নেই!`, 'error');
+            return;
+        }
+        
+        await client
+            .from('members')
+            .update({ balance: (member.balance || 0) - withdrawal.amount })
+            .eq('member_id', withdrawal.member_id);
+        
+        await client
+            .from('withdrawals')
+            .update({
+                status: 'approved',
+                approved_by: currentAdmin?.username || 'সুপার অ্যাডমিন',
+                approved_at: new Date().toISOString()
+            })
+            .eq('id', id);
+        
+        pendingWithdrawalsData = pendingWithdrawalsData.filter(w => w.id != id);
+        loadPendingWithdrawals();
+        loadAllWithdrawals();
+        await updateAllBadges();
+        await loadRealDashboard();
+        
+        showToast(`✅ ${formatAmount(withdrawal.amount)} টাকা উত্তোলন অনুমোদিত হয়েছে!`, 'success');
+        
+    } catch(e) {
+        console.error('Approve withdrawal error:', e);
+        showToast('❌ অনুমোদন ব্যর্থ!', 'error');
+    } finally {
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = 'অনুমোদন';
+        });
+    }
+}
+
+// ============================================================
+// ✅ viewWithdrawalDetails ফাংশন (যোগ করুন)
+// ============================================================
+function viewWithdrawalDetails(id) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    let withdrawal = pendingWithdrawalsData.find(w => w.id == id);
+    
+    if (!withdrawal) {
+        client.from('withdrawals')
+            .select('*')
+            .eq('id', id)
+            .single()
+            .then(({ data, error }) => {
+                if (error || !data) {
+                    showToast('উত্তোলন তথ্য পাওয়া যায়নি!', 'error');
+                    return;
+                }
+                showWithdrawalDetailModal(data);
+            })
+            .catch(e => {
+                console.error('View withdrawal error:', e);
+                showToast('❌ উত্তোলন তথ্য লোড করতে সমস্যা!', 'error');
+            });
+        return;
+    }
+    
+    showWithdrawalDetailModal(withdrawal);
+}
+
+// ============================================================
+// ✅ showWithdrawalDetailModal ফাংশন (যোগ করুন)
+// ============================================================
+function showWithdrawalDetailModal(withdrawal) {
+    const modal = document.getElementById('withdrawalDetailsModal');
+    if (!modal) {
+        showToast('মডাল পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    const content = document.getElementById('withdrawalDetailsContent');
+    if (!content) {
+        showToast('কন্টেন্ট এলিমেন্ট পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    let cleanType = (withdrawal.type || 'মূলধন').replace(/ উত্তোলন/g, '');
+    const statusClass = withdrawal.status === 'approved' ? 'status-approved' :
+                       withdrawal.status === 'pending' ? 'status-pending' : 'status-rejected';
+    const statusText = withdrawal.status === 'approved' ? '✅ অনুমোদিত' :
+                      withdrawal.status === 'pending' ? '⏳ পেন্ডিং' : '❌ বাতিল';
+    
+    const paymentMethod = withdrawal.payment_method || withdrawal.method || 'cash';
+    const methodColor = paymentMethod.toLowerCase() === 'bkash' ? 'bg-green-100 text-green-700' :
+                       paymentMethod.toLowerCase() === 'nagad' ? 'bg-orange-100 text-orange-700' :
+                       paymentMethod.toLowerCase() === 'rocket' ? 'bg-purple-100 text-purple-700' :
+                       paymentMethod.toLowerCase() === 'bank' ? 'bg-indigo-100 text-indigo-700' :
+                       'bg-blue-100 text-blue-700';
+    const methodIcon = paymentMethod.toLowerCase() === 'bkash' ? '💚' :
+                      paymentMethod.toLowerCase() === 'nagad' ? '🧡' :
+                      paymentMethod.toLowerCase() === 'rocket' ? '💜' :
+                      paymentMethod.toLowerCase() === 'bank' ? '🏦' : '💵';
+    
+    let contactInfo = '';
+    if (withdrawal.sender_mobile) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📱 সেন্ডার মোবাইল</span><p class="font-semibold text-gray-800">${withdrawal.sender_mobile}</p></div>`;
+    }
+    if (withdrawal.bank_name) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">🏦 ব্যাংকের নাম</span><p class="font-semibold text-gray-800">${withdrawal.bank_name}</p></div>`;
+    }
+    if (withdrawal.account_number) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">🔢 একাউন্ট নম্বর</span><p class="font-semibold text-gray-800 font-mono">${withdrawal.account_number}</p></div>`;
+    }
+    if (withdrawal.account_holder_name) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">👤 একাউন্ট হোল্ডারের নাম</span><p class="font-semibold text-gray-800">${withdrawal.account_holder_name}</p></div>`;
+    }
+    if (withdrawal.receiver_name) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">👤 গ্রহীতার নাম</span><p class="font-semibold text-gray-800">${withdrawal.receiver_name}</p></div>`;
+    }
+    if (withdrawal.receiver_mobile) {
+        contactInfo += `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📱 গ্রহীতার মোবাইল</span><p class="font-semibold text-gray-800">${withdrawal.receiver_mobile}</p></div>`;
+    }
+    
+    const requestedDate = withdrawal.requested_at ? new Date(withdrawal.requested_at).toLocaleString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
+    
+    content.innerHTML = `
+        <div class="bg-gradient-to-r from-amber-50 to-red-50 p-4 rounded-lg border mb-4">
+            <h4 class="font-bold text-amber-700 text-lg mb-3"><i class="fas fa-money-bill-transfer mr-2"></i>উত্তোলন বিস্তারিত</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">উত্তোলন আইডি</span><p class="font-semibold text-gray-800">#${withdrawal.id}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য</span><p class="font-semibold text-gray-800">${withdrawal.member_name || '-'}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য আইডি</span><p class="font-semibold text-gray-800">${withdrawal.member_id || '-'}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">উত্তোলনের ধরন</span><p class="font-semibold text-emerald-600">${cleanType}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm col-span-1 md:col-span-2"><span class="text-gray-500">💰 পরিমাণ</span><p class="font-bold text-red-600 text-2xl">${formatAmountWithText(withdrawal.amount)}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📅 আবেদনের তারিখ</span><p class="font-semibold text-gray-800">${requestedDate}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">⏳ স্ট্যাটাস</span><p><span class="status-badge ${statusClass}">${statusText}</span></p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">💳 পেমেন্ট মাধ্যম</span><p><span class="px-2 py-1 rounded-full text-xs ${methodColor}">${methodIcon} ${paymentMethod}</span></p></div>
+                ${withdrawal.transaction_id ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📝 লেনদেন আইডি</span><p class="font-semibold font-mono text-xs break-all">${withdrawal.transaction_id}</p></div>` : ''}
+                ${contactInfo}
+                ${withdrawal.note ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-1 md:col-span-2"><span class="text-gray-500">📝 নোট</span><p class="font-semibold text-gray-800">${withdrawal.note}</p></div>` : ''}
+                ${withdrawal.rejection_reason ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-1 md:col-span-2"><span class="text-gray-500">❌ বাতিলের কারণ</span><p class="font-semibold text-red-600">${withdrawal.rejection_reason}</p></div>` : ''} 
+                ${withdrawal.approved_by ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">✅ অনুমোদনকারী</span><p class="font-semibold text-gray-800">${withdrawal.approved_by}</p></div>` : ''}
+                ${withdrawal.approved_at ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📅 অনুমোদনের তারিখ</span><p class="font-semibold text-gray-800">${new Date(withdrawal.approved_at).toLocaleString('bn-BD')}</p></div>` : ''}
+                ${withdrawal.rejected_by ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">❌ বাতিলকারী</span><p class="font-semibold text-gray-800">${withdrawal.rejected_by}</p></div>` : ''}
+                ${withdrawal.rejected_at ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">📅 বাতিলের তারিখ</span><p class="font-semibold text-gray-800">${new Date(withdrawal.rejected_at).toLocaleString('bn-BD')}</p></div>` : ''}
+            </div>
+        </div>
+        <div class="flex gap-2 justify-center flex-wrap no-print">
+            ${withdrawal.status === 'pending' ? `
+                <button onclick="approveWithdrawal('${withdrawal.id}')" class="btn btn-success flex-1 py-2 min-w-[120px]">
+                    ✅ অনুমোদন দিন
+                </button>
+                <button onclick="rejectWithdrawal('${withdrawal.id}')" class="btn btn-danger flex-1 py-2 min-w-[120px]">
+                    ❌ বাতিল করুন
+                </button>
+            ` : ''}
+            <button onclick="closeWithdrawalDetailsModal()" class="btn btn-warning flex-1 py-2 min-w-[120px]">
+                <i class="fas fa-times mr-1"></i> বন্ধ করুন
+            </button>
+        </div>
+    `;
+    
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+// ============================================================
+// ✅ closeWithdrawalDetailsModal ফাংশন (যোগ করুন)
+// ============================================================
+function closeWithdrawalDetailsModal() {
+    const modal = document.getElementById('withdrawalDetailsModal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+    
+    // ============================================================
     // ✅ DOM লোড হলে ইনিশিয়ালাইজেশন
     // ============================================================
     document.addEventListener('DOMContentLoaded', function() {
@@ -7877,11 +8210,16 @@
     window.loadAllBookPayments = loadAllBookPayments;
     window.viewBookPaymentDetails = viewBookPaymentDetails;
     window.updateBookPaymentBadge = updateBookPaymentBadge;
+    window.loadPendingWithdrawals = loadPendingWithdrawals;
+    window.approveWithdrawal = approveWithdrawal;
+    window.viewWithdrawalDetails = viewWithdrawalDetails;
+    window.closeWithdrawalDetailsModal = closeWithdrawalDetailsModal;
 
     console.log('✅ TUKNBD Admin Panel Loaded Successfully!');
     console.log('🔐 Permission System Active!');
     console.log('📋 Total Permissions:', Object.keys(ALL_PERMISSIONS).length);
     console.log('👤 Available Roles:', Object.keys(ROLE_PERMISSIONS).length);
+    
 
     // ============================================================
     // ✅ লোড অল ডেটা ফাংশন
