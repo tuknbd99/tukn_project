@@ -71,7 +71,7 @@
         <form id="loginForm" onsubmit="handleLogin(event)">
             <div class="form-group">
                 <label><i class="fas fa-user mr-2"></i>ইউজারনেম</label>
-                <input type="text" id="username" placeholder="ইউজারনেম দিন" required autocomplete="username" value="admin">
+                <input type="text" id="username" placeholder="ইউজারনেম দিন" required autocomplete="username">
             </div>
             <div class="form-group">
                 <label><i class="fas fa-lock mr-2"></i>পাসওয়ার্ড</label>
@@ -93,6 +93,49 @@
         const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
         let selectedRole = 'super_admin';
         let supabaseClient = null;
+
+        // ============================================================
+        // 🔥 সমস্ত ফিচারের পারমিশন লিস্ট (সুপার অ্যাডমিনের জন্য)
+        // ============================================================
+        const ALL_PERMISSIONS = {
+            view_dashboard: true,
+            view_users: true,
+            create_users: true,
+            edit_users: true,
+            delete_users: true,
+            view_admins: true,
+            create_admins: true,
+            edit_admins: true,
+            delete_admins: true,
+            manage_admin_permissions: true,
+            view_content: true,
+            create_content: true,
+            edit_content: true,
+            delete_content: true,
+            publish_content: true,
+            view_settings: true,
+            edit_settings: true,
+            view_reports: true,
+            view_analytics: true,
+            export_data: true,
+            view_system: true,
+            system_backup: true,
+            system_restore: true,
+            send_notifications: true,
+            manage_notifications: true,
+            view_database: true,
+            manage_database: true,
+            view_books: true,
+            create_books: true,
+            edit_books: true,
+            delete_books: true,
+            view_orders: true,
+            approve_orders: true,
+            reject_orders: true,
+            complete_orders: true,
+            full_access: true,
+            all_permissions: true
+        };
 
         // ============================================================
         // 🔥 SUPABASE ক্লায়েন্ট ইনিশিয়ালাইজ
@@ -143,7 +186,7 @@
         }
 
         // ============================================================
-        // 🔥 লগইন হ্যান্ডলার - সম্পূর্ণ Supabase কেন্দ্রিক
+        // 🔥 লগইন হ্যান্ডলার
         // ============================================================
         async function handleLogin(e) {
             e.preventDefault();
@@ -202,7 +245,9 @@
                 const admin = data[0];
 
                 // 🔥 রোল চেক
-                if (selectedRole === 'super_admin' && admin.role !== 'super_admin') {
+                const isSuper = admin.role === 'super_admin';
+
+                if (selectedRole === 'super_admin' && !isSuper) {
                     errorText.textContent = '❌ এই অ্যাকাউন্ট সুপার অ্যাডমিন নয়!';
                     errorMsg.style.display = 'block';
                     loginBtn.disabled = false;
@@ -210,12 +255,22 @@
                     return;
                 }
 
-                if (selectedRole === 'admin' && admin.role !== 'admin' && admin.role !== 'super_admin') {
+                if (selectedRole === 'admin' && admin.role !== 'admin' && !isSuper) {
                     errorText.textContent = '❌ এই অ্যাকাউন্ট অ্যাডমিন নয়!';
                     errorMsg.style.display = 'block';
                     loginBtn.disabled = false;
                     loginBtn.innerHTML = '<i class="fas fa-sign-in-alt mr-2"></i>লগইন করুন';
                     return;
+                }
+
+                // ============================================================
+                // 🔥 সুপার অ্যাডমিনের জন্য সকল পারমিশন সেট করুন
+                // ============================================================
+                let permissions = admin.permissions || {};
+                
+                if (isSuper) {
+                    permissions = { ...ALL_PERMISSIONS };
+                    console.log('👑 সুপার অ্যাডমিন: সমস্ত পারমিশন সক্রিয় করা হয়েছে');
                 }
 
                 // ✅ লগইন সফল - লোকাল স্টোরেজে সংরক্ষণ
@@ -225,7 +280,7 @@
                     name: admin.full_name || admin.username,
                     full_name: admin.full_name || admin.username,
                     role: admin.role,
-                    permissions: admin.permissions || {},
+                    permissions: permissions,
                     login_time: new Date().toISOString()
                 };
 
@@ -233,29 +288,18 @@
                 localStorage.setItem('currentAdmin', JSON.stringify(adminData));
                 sessionStorage.setItem('currentAdmin', JSON.stringify(adminData));
 
-                // 🔥 Supabase Auth সেশনও তৈরি করুন (যদি ইমেইল থাকে)
-                if (admin.email) {
-                    try {
-                        const { error: signInError } = await client.auth.signInWithPassword({
-                            email: admin.email,
-                            password: password
-                        });
-                        if (signInError) {
-                            console.warn('⚠️ Auth sign-in skipped:', signInError.message);
-                        } else {
-                            console.log('✅ Supabase Auth session created');
-                        }
-                    } catch(e) {
-                        console.warn('⚠️ Auth sign-in not available:', e.message);
-                    }
-                }
-
+                // ============================================================
                 // 🔥 সফল লগইন টোস্ট
-                const roleLabel = admin.role === 'super_admin' ? 'সুপার অ্যাডমিন' : 'অ্যাডমিন';
-                showToast(`✅ স্বাগতম ${adminData.full_name}! (${roleLabel})`, 'success');
+                // ============================================================
+                const roleLabel = isSuper ? 'সুপার অ্যাডমিন' : 'অ্যাডমিন';
+                const permCount = Object.keys(permissions).filter(k => permissions[k] === true).length;
+                showToast(`✅ স্বাগতম ${adminData.full_name}! (${roleLabel} - ${permCount}টি পারমিশন)`, 'success');
 
-                // 🔥 ড্যাশবোর্ডে রিডাইরেক্ট
+                // ============================================================
+                // 🔥 রিডাইরেক্ট - সবাই admin-panel.html এ যাবে (২ নং ফাইল নেই বলে)
+                // ============================================================
                 setTimeout(() => {
+                    // সুপার অ্যাডমিন এবং অ্যাডমিন উভয়েই admin-panel.html এ যাবে
                     window.location.href = 'admin-panel.html';
                 }, 1000);
 
@@ -269,32 +313,49 @@
         }
 
         // ============================================================
+        // 🔥 পারমিশন চেক ফাংশন
+        // ============================================================
+        function hasPermission(permissionName) {
+            try {
+                const adminData = JSON.parse(localStorage.getItem('currentAdmin') || sessionStorage.getItem('currentAdmin'));
+                if (!adminData) return false;
+                if (adminData.role === 'super_admin') return true;
+                return adminData.permissions && adminData.permissions[permissionName] === true;
+            } catch(e) {
+                return false;
+            }
+        }
+
+        // ============================================================
         // 🔥 পেজ লোড
         // ============================================================
         document.addEventListener('DOMContentLoaded', function() {
             console.log('📄 অ্যাডমিন লগইন পেজ লোড হচ্ছে...');
+            console.log('👑 সুপার অ্যাডমিন ও অ্যাডমিন উভয়েই admin-panel.html এ যাবে');
+            
             initSupabase();
             
-            // আগের সেশন চেক
             const existingAdmin = localStorage.getItem('currentAdmin') || sessionStorage.getItem('currentAdmin');
             if (existingAdmin) {
                 try {
                     const admin = JSON.parse(existingAdmin);
                     if (admin.username) {
                         console.log('ℹ️ ইতিমধ্যে লগইন করা আছে:', admin.username);
-                        // showToast('ℹ️ ইতিমধ্যে লগইন করা আছে!', 'info');
-                        // setTimeout(() => window.location.href = 'admin-panel.html', 1500);
+                        // admin-panel.html এ রিডাইরেক্ট করুন
+                        setTimeout(() => {
+                            window.location.href = 'admin-panel.html';
+                        }, 500);
                     }
                 } catch(e) {}
             }
 
-            document.getElementById('username').value = 'admin';
+            document.getElementById('username').value = '';
             document.getElementById('password').value = '';
             document.getElementById('password').placeholder = 'পাসওয়ার্ড দিন';
         });
 
         // ============================================================
-        // 🔥 কীবোর্ড সাপোর্ট (Enter Key)
+        // 🔥 কীবোর্ড সাপোর্ট
         // ============================================================
         document.getElementById('password').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
@@ -315,8 +376,11 @@
         window.handleLogin = handleLogin;
         window.initSupabase = initSupabase;
         window.showToast = showToast;
+        window.hasPermission = hasPermission;
 
         console.log('✅ অ্যাডমিন লগইন পেজ রেডি!');
+        console.log('📌 সুপার অ্যাডমিন → admin-panel.html (সব পারমিশন সহ)');
+        console.log('📌 অ্যাডমিন → admin-panel.html (নিজস্ব পারমিশন সহ)');
     </script>
 </body>
 </html>
