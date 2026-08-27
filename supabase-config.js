@@ -1,27 +1,12 @@
 // supabase-config.js
-// TUKNBD - Supabase কনফিগারেশন (v3 - নিরাপদ + সম্পূর্ণ)
+// TUKNBD - Supabase কনফিগারেশন (v5 - সম্পূর্ণ + import.meta মুক্ত)
 
 // ============================================================
-// ১. কনফিগারেশন — এনভায়রনমেন্ট থেকে পড়ুন
+// ১. কনফিগারেশন — সরাসরি ভেরিয়েবল
 // ============================================================
 
-// Vite/Webpack এর জন্য import.meta.env
-// অথবা window.ENV থেকে পড়ুন
-const SUPABASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || 
-                     window.ENV?.SUPABASE_URL || 
-                     'https://bffomfsffrtfgxyetzvm.supabase.co';
-
-// ⚠️ গুরুত্বপূর্ণ: প্রোডাকশনে কখনো হার্ডকোড করবেন না!
-const SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || 
-                          window.ENV?.SUPABASE_ANON_KEY || 
-                          'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
-
-// প্রোডাকশনে সতর্কতা
-if (typeof import.meta !== 'undefined' && import.meta.env?.PROD) {
-    if (SUPABASE_ANON_KEY === 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D') {
-        console.warn('⚠️ প্রোডাকশনে Default Anon Key ব্যবহার করছেন! .env ফাইল ব্যবহার করুন।');
-    }
-}
+const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
 
 // ============================================================
 // ২. ডুপ্লিকেট ইনিশিয়ালাইজেশন প্রতিরোধ
@@ -42,36 +27,29 @@ const MAX_RETRIES = 5;
 const RETRY_DELAY = 1000;
 
 async function initSupabaseConfig() {
-    // ইতিমধ্যে ইনিশিয়ালাইজড?
     if (window._supabaseClient) {
         console.log('✅ Supabase already initialized');
         return true;
     }
 
-    // Supabase লাইব্রেরি লোড
     const lib = await loadSupabaseLibrary();
     if (!lib) {
         console.error('❌ Supabase library not loaded');
         return false;
     }
 
-    // রেট্রি সহ ক্লায়েন্ট তৈরি
     try {
         const client = lib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
             auth: {
                 persistSession: true,
                 autoRefreshToken: true,
                 storageKey: 'tuknbd-auth-token'
-            },
-            // রেট লিমিটিং (ঐচ্ছিক)
-            fetch: createRateLimitedFetch()
+            }
         });
 
-        // গ্লোবালে সংরক্ষণ
         window._supabaseClient = client;
         window._supabase = client;
         
-        // কম্প্যাটিবিলিটি
         if (typeof window.supabase === 'undefined') {
             window.supabase = client;
         }
@@ -93,7 +71,6 @@ async function initSupabaseConfig() {
 // ============================================================
 
 async function loadSupabaseLibrary() {
-    // ইতিমধ্যে লোড?
     if (window.supabase && typeof window.supabase.createClient === 'function') {
         return window.supabase;
     }
@@ -101,7 +78,6 @@ async function loadSupabaseLibrary() {
         return supabase;
     }
 
-    // CDN থেকে লোড (রেট্রি সহ)
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
             const script = document.createElement('script');
@@ -114,7 +90,6 @@ async function loadSupabaseLibrary() {
                 document.head.appendChild(script);
             });
 
-            // লাইব্রেরি চেক
             if (window.supabase && typeof window.supabase.createClient === 'function') {
                 return window.supabase;
             }
@@ -186,47 +161,32 @@ function getSupabaseClient() {
 // ============================================================
 
 const TABLES = {
-    // ===== সদস্য =====
     MEMBERS: 'members',
     PENDING_MEMBERS: 'pending_members',
     DELETED_MEMBERS: 'deleted_members',
-    
-    // ===== মাদ্রাসা =====
     MADRASAS: 'madrasas',
-    
-    // ===== আর্থিক লেনদেন =====
     PAYMENTS: 'payments',
     WITHDRAWALS: 'withdrawals',
     REFERRALS: 'referrals',
     COMMISSION_LOGS: 'commission_logs',
     LEDGER_TRANSACTIONS: 'transactions',
     WELFARE_FUND: 'welfare_fund',
-    
-    // ===== লোন =====
     LOANS: 'loan_applications',
     LOAN_PAYMENTS: 'loan_payments',
-    
-    // ===== প্রশাসন =====
     ADMINS: 'admins',
     BRANCHES: 'branches',
     BRANCH_ADMINS: 'branch_admins',
     BRANCH_MEMBERS: 'branch_members',
     BRANCH_BALANCES: 'branch_balances',
     MEMBER_TRANSFERS: 'member_transfers',
-    
-    // ===== জেলা ও প্রতিনিধি =====
     DISTRICTS: 'districts',
     REPS: 'representatives',
     REP_APPLICATIONS: 'representative_applications',
-    
-    // ===== কিতাব ব্যবস্থাপনা =====
     BOOK_ORDERS: 'book_orders',
     BOOK_CATALOG: 'book_catalog',
     BOOK_PAYMENTS: 'book_payments',
     BOOK_INSTALLMENTS: 'book_installments',
     BOOK_CONFIG: 'book_config',
-    
-    // ===== কন্টেন্ট =====
     PRODUCTS: 'products',
     CATEGORIES: 'categories',
     NOTICES: 'notices',
@@ -235,12 +195,8 @@ const TABLES = {
     ABOUT: 'about',
     CAREER: 'career',
     COMPLAINTS: 'complaints',
-    
-    // ===== লাভ ও বণ্টন =====
     PROFIT_DISTRIBUTION_HISTORY: 'profit_distribution_history',
     DISTRIBUTION_HISTORY: 'distribution_history',
-    
-    // ===== সিস্টেম =====
     AUDIT_LOGS: 'audit_logs',
     VISITOR_STATS: 'visitor_stats',
     PROJECTS: 'projects',
@@ -337,7 +293,6 @@ function generateReferralCode(name = '') {
     return `${prefix}${nameCode}${random}`;
 }
 
-// রেফারেল কনফিগ (কাস্টমাইজযোগ্য)
 const REFERRAL_CONFIG = {
     LEVEL_1: { min: 1, max: 4, bonus: 50, label: 'বেসিক' },
     LEVEL_2: { min: 5, max: 14, bonus: 75, label: 'মিডিয়াম' },
@@ -479,7 +434,6 @@ async function loadLedgerData() {
         const payments = paymentsResult.status === 'fulfilled' ? paymentsResult.value.data || [] : [];
         const loans = loansResult.status === 'fulfilled' ? loansResult.value.data || [] : [];
 
-        // প্রতিটি সদস্যের জন্য সঞ্চয় ও লোনের যোগফল
         const paymentMap = {};
         payments.forEach(p => {
             if (!paymentMap[p.member_id]) paymentMap[p.member_id] = 0;
@@ -509,7 +463,7 @@ async function loadLedgerData() {
                 totalMembers: members.length,
                 totalPayments: payments.reduce((s, p) => s + (p.amount || 0), 0),
                 totalLoans: loans.reduce((s, l) => s + (l.amount || 0), 0),
-                totalWelfare: 0 // এখানে কল্যাণ তহবিল যোগ করা যেতে পারে
+                totalWelfare: 0
             }
         };
 
@@ -520,7 +474,7 @@ async function loadLedgerData() {
 }
 
 // ============================================================
-// ১২. ব্যাচ অপারেশন — সম্পূর্ণ
+// ১২. ব্যাচ অপারেশন
 // ============================================================
 
 async function batchOperation(operations, options = {}) {
@@ -554,10 +508,9 @@ async function batchOperation(operations, options = {}) {
 }
 
 // ============================================================
-// ১৩. অতিরিক্ত ফাংশন — সম্পূর্ণ
+// ১৩. অতিরিক্ত ফাংশন
 // ============================================================
 
-// সদস্য আইডি জেনারেট
 function generateMemberId() {
     const prefix = 'TUKN';
     const timestamp = Date.now().toString(36).toUpperCase();
@@ -565,7 +518,6 @@ function generateMemberId() {
     return `${prefix}-${timestamp}-${random}`;
 }
 
-// তারিখ ফরম্যাট (বাংলা)
 function formatDateBangla(date) {
     if (!date) return '-';
     const d = new Date(date);
@@ -573,13 +525,11 @@ function formatDateBangla(date) {
     return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
-// টাকা ফরম্যাট (বাংলা)
 function formatTaka(amount) {
     if (typeof amount !== 'number' || isNaN(amount)) return '০ টাকা';
     return amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' টাকা';
 }
 
-// ট্রানজেকশন আইডি জেনারেট
 function generateTransactionId() {
     const prefix = 'TXN';
     const timestamp = Date.now().toString(36).toUpperCase();
@@ -588,42 +538,29 @@ function generateTransactionId() {
 }
 
 // ============================================================
-// ১৪. গ্লোবাল এক্সপোর্ট — সমস্ত ফাংশন
+// ১৪. গ্লোবাল এক্সপোর্ট — সব ফাংশন
 // ============================================================
 
-// Supabase ক্লায়েন্ট ফাংশন
 window.initSupabaseConfig = initSupabaseConfig;
 window.getSupabaseClient = getSupabaseClient;
 window.testSupabaseConfig = testSupabaseConfig;
 window.loadSupabaseLibrary = loadSupabaseLibrary;
-
-// স্টোরেজ ফাংশন
 window.uploadProfileImage = uploadProfileImage;
-
-// রেফারেল ফাংশন
 window.generateReferralCode = generateReferralCode;
 window.processReferral = processReferral;
 window.calculateAndAddBonus = calculateAndAddBonus;
 window.calculateReferralBonus = calculateReferralBonus;
 window.REFERRAL_CONFIG = REFERRAL_CONFIG;
-
-// লেজার ফাংশন
 window.loadLedgerData = loadLedgerData;
-
-// ব্যাচ অপারেশন
 window.batchOperation = batchOperation;
-
-// হেল্পার ফাংশন
 window.generateMemberId = generateMemberId;
 window.formatDateBangla = formatDateBangla;
 window.formatTaka = formatTaka;
 window.generateTransactionId = generateTransactionId;
-
-// টেবিল কনস্ট্যান্ট
 window.TABLES = TABLES;
 
 // ============================================================
-// ১৫. ক্লায়েন্ট সাইড ক্যাশিং
+// ১৫. ক্যাশিং
 // ============================================================
 
 const CACHE = {
@@ -631,7 +568,7 @@ const CACHE = {
     payments: null,
     loans: null,
     timestamp: null,
-    TTL: 30000 // 30 সেকেন্ড
+    TTL: 30000
 };
 
 async function getCachedData(table, forceRefresh = false) {
@@ -663,7 +600,6 @@ function clearCache() {
     console.log('✅ Cache cleared');
 }
 
-// গ্লোবালে এক্সপোর্ট
 window.getCachedData = getCachedData;
 window.clearCache = clearCache;
 
@@ -690,26 +626,11 @@ if (document.readyState === 'loading') {
 }
 
 // ============================================================
-// ১৭. প্রোডাকশন লগ অফ
-// ============================================================
-
-if (typeof import.meta !== 'undefined' && import.meta.env?.PROD) {
-    console.log = () => {};
-    console.warn = () => {};
-    console.debug = () => {};
-} else {
-    console.log('✅ supabase-config.js v3 loaded — All functions included');
-}
-
-// ============================================================
-// ১৮. Window Error Handler (অতিরিক্ত নিরাপত্তা)
+// ১৭. Error Handlers
 // ============================================================
 
 window.addEventListener('unhandledrejection', function(event) {
     console.error('Unhandled Promise Rejection:', event.reason);
-    if (event.reason?.message?.includes('Supabase')) {
-        showToast?.('সার্ভার সংযোগে সমস্যা! পেজ রিলোড করুন।', 'error');
-    }
 });
 
 window.addEventListener('error', function(event) {
@@ -718,6 +639,6 @@ window.addEventListener('error', function(event) {
     }
 });
 
-console.log('✅ All functions exported successfully!');
+console.log('✅ supabase-config.js v5 loaded — All functions included!');
 console.log('📋 Total functions: 20+');
 console.log('📋 Tables: ' + Object.keys(TABLES).length);
