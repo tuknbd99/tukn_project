@@ -1,12 +1,32 @@
 // supabase-config.js
-// TUKNBD - Supabase কনফিগারেশন (কনফ্লিক্ট মুক্ত)
+// TUKNBD - Supabase কনফিগারেশন (v3 - নিরাপদ)
 
-// ==================== Supabase কনফিগারেশন ====================
+// ============================================================
+// ১. কনফিগারেশন — এনভায়রনমেন্ট থেকে পড়ুন
+// ============================================================
 
-const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
+// Vite/Webpack এর জন্য import.meta.env
+// অথবা window.ENV থেকে পড়ুন
+const SUPABASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || 
+                     window.ENV?.SUPABASE_URL || 
+                     'https://bffomfsffrtfgxyetzvm.supabase.co';
 
-// ভেরিয়েবল চেক করে ডিক্লেয়ার করুন (ডুপ্লিকেট এড়াতে)
+// ⚠️ গুরুত্বপূর্ণ: প্রোডাকশনে কখনো হার্ডকোড করবেন না!
+const SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || 
+                          window.ENV?.SUPABASE_ANON_KEY || 
+                          'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
+
+// প্রোডাকশনে সতর্কতা
+if (typeof import.meta !== 'undefined' && import.meta.env?.PROD) {
+    if (SUPABASE_ANON_KEY === 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D') {
+        console.warn('⚠️ প্রোডাকশনে Default Anon Key ব্যবহার করছেন! .env ফাইল ব্যবহার করুন।');
+    }
+}
+
+// ============================================================
+// ২. ডুপ্লিকেট ইনিশিয়ালাইজেশন প্রতিরোধ
+// ============================================================
+
 if (typeof window._supabaseClient === 'undefined') {
     window._supabaseClient = null;
 }
@@ -14,56 +34,156 @@ if (typeof window._supabase === 'undefined') {
     window._supabase = null;
 }
 
-// ==================== Supabase ক্লায়েন্ট ইনিশিয়ালাইজেশন ====================
+// ============================================================
+// ৩. Supabase ক্লায়েন্ট ইনিশিয়ালাইজেশন
+// ============================================================
+
+const MAX_RETRIES = 5;
+const RETRY_DELAY = 1000;
 
 async function initSupabaseConfig() {
+    // ইতিমধ্যে ইনিশিয়ালাইজড?
+    if (window._supabaseClient) {
+        console.log('✅ Supabase already initialized');
+        return true;
+    }
+
+    // Supabase লাইব্রেরি লোড
+    const lib = await loadSupabaseLibrary();
+    if (!lib) {
+        console.error('❌ Supabase library not loaded');
+        return false;
+    }
+
+    // রেট্রি সহ ক্লায়েন্ট তৈরি
     try {
-        // Supabase CDN লোড হয়েছে কিনা চেক করুন
-        let supabaseLib = null;
-        let attempts = 0;
-        
-        while (!supabaseLib && attempts < 30) {
-            if (window.supabase && typeof window.supabase.createClient === 'function') {
-                supabaseLib = window.supabase;
-            } else if (typeof supabase !== 'undefined' && supabase && typeof supabase.createClient === 'function') {
-                supabaseLib = supabase;
-            }
-            if (!supabaseLib) {
-                await new Promise(r => setTimeout(r, 300));
-                attempts++;
-            }
-        }
-        
-        if (!supabaseLib) {
-            console.error('❌ Supabase library not loaded');
-            return false;
-        }
-        
-        // ক্লায়েন্ট তৈরি করুন
-        const client = supabaseLib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        
-        // গ্লোবাল ভেরিয়েবল সেট করুন (রিডিক্লেয়ার না করে)
-        window._supabase = client;
+        const client = lib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+            auth: {
+                persistSession: true,
+                autoRefreshToken: true,
+                storageKey: 'tuknbd-auth-token'
+            },
+            // রেট লিমিটিং (ঐচ্ছিক)
+            fetch: createRateLimitedFetch()
+        });
+
+        // গ্লোবালে সংরক্ষণ
         window._supabaseClient = client;
+        window._supabase = client;
         
-        // কম্প্যাটিবিলিটির জন্য (যদি আগে থেকে না থাকে)
+        // কম্প্যাটিবিলিটি
         if (typeof window.supabase === 'undefined') {
             window.supabase = client;
         }
         if (typeof window.supabaseClient === 'undefined') {
             window.supabaseClient = client;
         }
-        
-        console.log('✅ Supabase Config: Client initialized');
+
+        console.log('✅ Supabase client initialized');
         return true;
-        
-    } catch (err) {
-        console.error('❌ Supabase Config Error:', err);
+
+    } catch (error) {
+        console.error('❌ Supabase init error:', error);
         return false;
     }
 }
 
-// ==================== টেবিলের নাম কনস্ট্যান্ট ====================
+// ============================================================
+// ৪. Supabase লাইব্রেরি লোডার (রেট্রি সহ)
+// ============================================================
+
+async function loadSupabaseLibrary() {
+    // ইতিমধ্যে লোড?
+    if (window.supabase && typeof window.supabase.createClient === 'function') {
+        return window.supabase;
+    }
+    if (typeof supabase !== 'undefined' && supabase.createClient) {
+        return supabase;
+    }
+
+    // CDN থেকে লোড (রেট্রি সহ)
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+            script.async = true;
+            
+            await new Promise((resolve, reject) => {
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+
+            // লাইব্রেরি চেক
+            if (window.supabase && typeof window.supabase.createClient === 'function') {
+                return window.supabase;
+            }
+            
+            if (typeof supabase !== 'undefined' && supabase.createClient) {
+                return supabase;
+            }
+
+        } catch (error) {
+            console.warn(`Attempt ${attempt} failed:`, error);
+            if (attempt < MAX_RETRIES) {
+                await sleep(RETRY_DELAY * attempt);
+            }
+        }
+    }
+
+    console.error('❌ Failed to load Supabase library');
+    return null;
+}
+
+// ============================================================
+// ৫. হেল্পার ফাংশন
+// ============================================================
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function createRateLimitedFetch() {
+    const queue = [];
+    let isProcessing = false;
+    const RATE_LIMIT_MS = 100;
+    const MAX_CONCURRENT = 3;
+
+    async function processQueue() {
+        if (isProcessing || queue.length === 0) return;
+        isProcessing = true;
+
+        const batch = queue.splice(0, MAX_CONCURRENT);
+        await Promise.all(batch.map(({ resolve, reject, url, options }) => {
+            return fetch(url, options)
+                .then(resolve)
+                .catch(reject);
+        }));
+
+        await sleep(RATE_LIMIT_MS);
+        isProcessing = false;
+        processQueue();
+    }
+
+    return function(url, options) {
+        return new Promise((resolve, reject) => {
+            queue.push({ resolve, reject, url, options });
+            processQueue();
+        });
+    };
+}
+
+// ============================================================
+// ৬. ক্লায়েন্ট গেটার
+// ============================================================
+
+function getSupabaseClient() {
+    return window._supabaseClient || window.supabaseClient || null;
+}
+
+// ============================================================
+// ৭. টেবিল কনস্ট্যান্ট
+// ============================================================
 
 const TABLES = {
     MEMBERS: 'members',
@@ -86,50 +206,65 @@ const TABLES = {
     DISTRICTS: 'districts',
     PROJECTS: 'projects',
     DISTRIBUTION_HISTORY: 'distribution_history',
-    PENDING_MEMBERS: 'pending_members'
+    PENDING_MEMBERS: 'pending_members',
+    // নতুন
+    BOOK_ORDERS: 'book_orders',
+    BOOK_CATALOG: 'book_catalog',
+    BOOK_PAYMENTS: 'book_payments',
+    BOOK_INSTALLMENTS: 'book_installments',
+    BOOK_CONFIG: 'book_config',
+    WITHDRAWALS: 'withdrawals',
+    BRANCH_ADMINS: 'branch_admins',
+    BRANCH_MEMBERS: 'branch_members',
+    EVENTS: 'events',
+    WELFARE_FUND: 'welfare_fund',
+    AUDIT_LOGS: 'audit_logs'
 };
 
 if (typeof window.TABLES === 'undefined') {
     window.TABLES = TABLES;
 }
 
-// ==================== কানেকশন টেস্ট ====================
+// ============================================================
+// ৮. কানেকশন টেস্ট
+// ============================================================
 
 async function testSupabaseConfig() {
+    const client = getSupabaseClient();
+    if (!client) {
+        await initSupabaseConfig();
+    }
+    
+    const finalClient = getSupabaseClient();
+    if (!finalClient) {
+        console.error('❌ No Supabase client available');
+        return false;
+    }
+
     try {
-        const client = window._supabaseClient || window.supabaseClient;
-        if (!client) {
-            await initSupabaseConfig();
-        }
-        
-        const finalClient = window._supabaseClient || window.supabaseClient;
-        if (!finalClient) {
-            console.error('❌ No Supabase client available');
-            return false;
-        }
-        
         const { error } = await finalClient
             .from(TABLES.MEMBERS)
             .select('count', { count: 'exact', head: true });
-        
+
         if (error) throw error;
-        
         console.log('✅ Supabase Config: Connection successful');
         return true;
-        
+
     } catch (error) {
         console.error('❌ Supabase Config: Connection failed', error);
         return false;
     }
 }
 
-// ==================== প্রোফাইল ইমেজ আপলোড ====================
+// ============================================================
+// ৯. প্রোফাইল ইমেজ আপলোড
+// ============================================================
 
 async function uploadProfileImage(file, memberId) {
     try {
         if (!file || !memberId) return null;
         
-        const client = window._supabaseClient || window.supabaseClient;
+        const client = getSupabaseClient();
         if (!client) return null;
         
         const fileExt = file.name.split('.').pop();
@@ -138,7 +273,10 @@ async function uploadProfileImage(file, memberId) {
         
         const { error: uploadError } = await client.storage
             .from('member-profiles')
-            .upload(filePath, file);
+            .upload(filePath, file, {
+                cacheControl: '3600',
+                upsert: true
+            });
         
         if (uploadError) throw uploadError;
         
@@ -162,7 +300,9 @@ async function uploadProfileImage(file, memberId) {
     }
 }
 
-// ==================== রেফারেল ফাংশন ====================
+// ============================================================
+// ১০. রেফারেল ফাংশন
+// ============================================================
 
 function generateReferralCode(name = '') {
     const prefix = 'TUKN';
@@ -171,27 +311,52 @@ function generateReferralCode(name = '') {
     return `${prefix}${nameCode}${random}`;
 }
 
+// রেফারেল কনফিগ (কাস্টমাইজযোগ্য)
+const REFERRAL_CONFIG = {
+    LEVEL_1: { min: 1, max: 4, bonus: 50, label: 'বেসিক' },
+    LEVEL_2: { min: 5, max: 14, bonus: 75, label: 'মিডিয়াম' },
+    LEVEL_3: { min: 15, max: Infinity, bonus: 100, label: 'প্রিমিয়াম' }
+};
+
+function calculateReferralBonus(referralCount) {
+    for (const [level, config] of Object.entries(REFERRAL_CONFIG)) {
+        if (referralCount >= config.min && referralCount <= config.max) {
+            return {
+                level: level.replace('LEVEL_', ''),
+                bonus: referralCount * config.bonus,
+                perReferralBonus: config.bonus,
+                label: config.label
+            };
+        }
+    }
+    return null;
+}
+
 async function processReferral(referralCode, newMemberId, newMemberName) {
-    if (!referralCode) return { success: false, message: 'কোন রেফারেল কোড নেই' };
-    
-    const client = window._supabaseClient || window.supabaseClient;
-    if (!client) return { success: false, message: 'সংযোগ সমস্যা' };
-    
+    if (!referralCode) {
+        return { success: false, message: 'কোন রেফারেল কোড নেই' };
+    }
+
+    const client = getSupabaseClient();
+    if (!client) {
+        return { success: false, message: 'সংযোগ সমস্যা' };
+    }
+
     try {
-        const { data: referrer } = await client
+        const { data: referrer, error: referrerError } = await client
             .from(TABLES.MEMBERS)
             .select('member_id, full_name, referral_code, referral_count, referral_bonus')
             .eq('referral_code', referralCode)
             .single();
-        
-        if (!referrer) {
+
+        if (referrerError || !referrer) {
             return { success: false, message: 'রেফারেল কোডটি বৈধ নয়!' };
         }
-        
+
         if (referrer.member_id === newMemberId) {
             return { success: false, message: 'আপনি নিজেকে রেফার করতে পারবেন না!' };
         }
-        
+
         const referralRecord = {
             referrer_id: referrer.member_id,
             referred_id: newMemberId,
@@ -200,15 +365,19 @@ async function processReferral(referralCode, newMemberId, newMemberName) {
             status: 'pending',
             created_at: new Date().toISOString()
         };
-        
-        await client.from(TABLES.REFERRALS).insert(referralRecord);
-        
-        return { 
-            success: true, 
+
+        const { error: insertError } = await client
+            .from(TABLES.REFERRALS)
+            .insert(referralRecord);
+
+        if (insertError) throw insertError;
+
+        return {
+            success: true,
             message: `${referrer.full_name} এর মাধ্যমে রেফার করা হয়েছে!`,
             referrer: referrer
         };
-        
+
     } catch (error) {
         console.error('Referral error:', error);
         return { success: false, message: 'রেফারেল প্রসেসিং এ সমস্যা হয়েছে!' };
@@ -216,109 +385,164 @@ async function processReferral(referralCode, newMemberId, newMemberName) {
 }
 
 async function calculateAndAddBonus(memberId) {
-    const client = window._supabaseClient || window.supabaseClient;
+    const client = getSupabaseClient();
     if (!client) return null;
-    
+
     try {
-        const { data: referrals } = await client
+        const { data: referrals, error: refError } = await client
             .from(TABLES.REFERRALS)
             .select('*')
             .eq('referrer_id', memberId)
             .eq('status', 'completed');
-        
+
+        if (refError) throw refError;
+
         const referralCount = referrals?.length || 0;
-        let bonusAmount = 0;
-        let level = 0;
-        let perReferralBonus = 0;
+        const bonusData = calculateReferralBonus(referralCount);
         
-        if (referralCount >= 1 && referralCount <= 4) {
-            perReferralBonus = 50;
-            bonusAmount = referralCount * perReferralBonus;
-            level = 1;
-        } else if (referralCount >= 5 && referralCount <= 14) {
-            perReferralBonus = 75;
-            bonusAmount = referralCount * perReferralBonus;
-            level = 2;
-        } else if (referralCount >= 15) {
-            perReferralBonus = 100;
-            bonusAmount = referralCount * perReferralBonus;
-            level = 3;
+        if (!bonusData) {
+            await client
+                .from(TABLES.MEMBERS)
+                .update({
+                    referral_count: 0,
+                    referral_bonus: 0,
+                    referral_level: 0,
+                    per_referral_bonus: 0
+                })
+                .eq('member_id', memberId);
+            
+            return { referralCount: 0, bonusAmount: 0, level: 0 };
         }
-        
+
         await client
             .from(TABLES.MEMBERS)
             .update({
-                referral_bonus: bonusAmount,
-                referral_level: level,
+                referral_bonus: bonusData.bonus,
+                referral_level: parseInt(bonusData.level),
                 referral_count: referralCount,
-                per_referral_bonus: perReferralBonus
+                per_referral_bonus: bonusData.perReferralBonus
             })
             .eq('member_id', memberId);
-        
-        return { bonusAmount, level, referralCount, perReferralBonus };
-        
+
+        return bonusData;
+
     } catch (error) {
         console.error('Calculate bonus error:', error);
         return null;
     }
 }
 
-// ==================== লেজার ডাটা ====================
+// ============================================================
+// ১১. লেজার ডেটা
+// ============================================================
 
 async function loadLedgerData() {
-    const client = window._supabaseClient || window.supabaseClient;
-    if (!client) return { success: false, members: [], payments: [], loans: [] };
-    
+    const client = getSupabaseClient();
+    if (!client) {
+        return { success: false, members: [], payments: [], loans: [] };
+    }
+
     try {
-        const { data: members } = await client
-            .from(TABLES.MEMBERS)
-            .select('member_id, full_name, mobile, status')
-            .eq('status', 'active');
-        
-        const { data: payments } = await client
-            .from(TABLES.PAYMENTS)
-            .select('*')
-            .eq('status', 'approved');
-        
-        const { data: loans } = await client
-            .from(TABLES.LOANS)
-            .select('*');
-        
+        const [membersResult, paymentsResult, loansResult] = await Promise.allSettled([
+            client.from(TABLES.MEMBERS).select('member_id, full_name, mobile, status').eq('status', 'active'),
+            client.from(TABLES.PAYMENTS).select('*').eq('status', 'approved'),
+            client.from(TABLES.LOANS).select('*')
+        ]);
+
+        const members = membersResult.status === 'fulfilled' ? membersResult.value.data || [] : [];
+        const payments = paymentsResult.status === 'fulfilled' ? paymentsResult.value.data || [] : [];
+        const loans = loansResult.status === 'fulfilled' ? loansResult.value.data || [] : [];
+
         return {
             success: true,
-            members: members || [],
-            payments: payments || [],
-            loans: loans || []
+            members,
+            payments,
+            loans,
+            summary: {
+                totalMembers: members.length,
+                totalPayments: payments.reduce((s, p) => s + (p.amount || 0), 0),
+                totalLoans: loans.reduce((s, l) => s + (l.amount || 0), 0)
+            }
         };
-        
+
     } catch (error) {
         console.error('Ledger error:', error);
         return { success: false, members: [], payments: [], loans: [] };
     }
 }
 
-// ==================== গ্লোবাল এক্সপোর্ট ====================
+// ============================================================
+// ১২. ব্যাচ অপারেশন
+// ============================================================
+
+async function batchOperation(operations, options = {}) {
+    const { maxConcurrent = 5, stopOnError = false } = options;
+    const results = [];
+    const errors = [];
+
+    const chunks = [];
+    for (let i = 0; i < operations.length; i += maxConcurrent) {
+        chunks.push(operations.slice(i, i + maxConcurrent));
+    }
+
+    for (const chunk of chunks) {
+        const chunkResults = await Promise.allSettled(
+            chunk.map(op => op())
+        );
+
+        for (const result of chunkResults) {
+            if (result.status === 'fulfilled') {
+                results.push(result.value);
+            } else {
+                errors.push(result.reason);
+                if (stopOnError) {
+                    throw result.reason;
+                }
+            }
+        }
+    }
+
+    return { results, errors };
+}
+
+// ============================================================
+// ১৩. গ্লোবাল এক্সপোর্ট
+// ============================================================
 
 window.initSupabaseConfig = initSupabaseConfig;
+window.getSupabaseClient = getSupabaseClient;
 window.testSupabaseConfig = testSupabaseConfig;
 window.uploadProfileImage = uploadProfileImage;
 window.generateReferralCode = generateReferralCode;
 window.processReferral = processReferral;
 window.calculateAndAddBonus = calculateAndAddBonus;
 window.loadLedgerData = loadLedgerData;
+window.batchOperation = batchOperation;
+window.calculateReferralBonus = calculateReferralBonus;
+window.REFERRAL_CONFIG = REFERRAL_CONFIG;
+window.TABLES = TABLES;
 
-// ==================== অটো ইনিশিয়ালাইজেশন ====================
+// ============================================================
+// ১৪. অটো ইনিশিয়ালাইজেশন
+// ============================================================
 
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', async () => {
-        await initSupabaseConfig();
+async function initialize() {
+    const success = await initSupabaseConfig();
+    if (success) {
         await testSupabaseConfig();
-    });
-} else {
-    (async () => {
-        await initSupabaseConfig();
-        await testSupabaseConfig();
-    })();
+    }
 }
 
-console.log('✅ supabase-config.js loaded (final version)');
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initialize);
+} else {
+    initialize();
+}
+
+// প্রোডাকশনে লগ অফ
+if (typeof import.meta !== 'undefined' && import.meta.env?.PROD) {
+    console.log = () => {};
+    console.warn = () => {};
+} else {
+    console.log('✅ supabase-config.js v3 loaded');
+}
