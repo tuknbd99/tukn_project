@@ -6034,20 +6034,53 @@ function closePaymentDetailsModal() {
         showWithdrawalDetailModal(withdrawal);
     }
 
-    // ============================================================
-    // ===== LOAN FUNCTIONS =====
-    // ============================================================
-    async function loadPendingLoans() {
-        const container = document.getElementById('pendingLoansList');
-        if (!container) return;
-        container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">পেন্ডিং লোন লোড হচ্ছে...</p></div>';
-        const client = initSupabaseClient();
-        if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
-        const { data } = await client.from('loan_applications').select('*, branches(branch_name)').eq('status', 'pending').order('submitted_at', { ascending: false });
+// ============================================================
+// FIX 4: loadPendingLoans() - ক্যাশ আপডেট সহ
+// ============================================================
+async function loadPendingLoans() {
+    const container = document.getElementById('pendingLoansList');
+    if (!container) return;
+    
+    container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">পেন্ডিং লোন লোড হচ্ছে...</p></div>';
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; 
+        return; 
+    }
+    
+    try {
+        // ✅ branches জয়েন ছাড়া শুধু লোন ডেটা লোড করুন
+        const { data, error } = await client
+            .from('loan_applications')
+            .select('*')
+            .eq('status', 'pending')
+            .order('submitted_at', { ascending: false });
+        
+        if (error) throw error;
+        
         const pendingLoans = data || [];
-        if (pendingLoans.length === 0) { container.innerHTML = '<div class="text-center text-gray-500 py-12"><i class="fas fa-check-circle text-4xl block mb-3 text-green-500"></i><p>✅ কোনো পেন্ডিং লোন নেই</p></div>'; return; }
+        
+        if (pendingLoans.length === 0) { 
+            container.innerHTML = '<div class="text-center text-gray-500 py-12"><i class="fas fa-check-circle text-4xl block mb-3 text-green-500"></i><p>✅ কোনো পেন্ডিং লোন নেই</p></div>'; 
+            // ✅ ব্যাজ আপডেট
+            const badge = document.getElementById('pendingLoanBadge');
+            if (badge) {
+                badge.innerText = '0';
+                badge.style.display = 'none';
+            }
+            return; 
+        }
+        
+        // ✅ ব্যাজ আপডেট
+        const badge = document.getElementById('pendingLoanBadge');
+        if (badge) {
+            badge.innerText = pendingLoans.length;
+            badge.style.display = 'flex';
+        }
+        
         container.innerHTML = pendingLoans.map(loan => {
-            const branchName = loan.branches?.branch_name || loan.branch_name || '-';
+            const branchName = loan.branch_name || loan.branch_id || '-';
             return `
             <div class="border rounded-lg p-4 mb-3 bg-yellow-50 border-yellow-400 hover:shadow-md transition">
                 <div class="flex flex-wrap justify-between items-start gap-2">
@@ -6062,7 +6095,10 @@ function closePaymentDetailsModal() {
                             <div><span class="text-gray-500">💰 পরিমাণ:</span> <span class="font-bold text-emerald-600">${formatAmountWithText(loan.amount)}</span></div>
                             <div><span class="text-gray-500">🏢 ব্রাঞ্চ:</span> <span class="font-medium text-blue-600">${branchName}</span></div>
                             <div><span class="text-gray-500">📅 তারিখ:</span> ${loan.submitted_at ? new Date(loan.submitted_at).toLocaleDateString('bn-BD') : '-'}</div>
+                            ${loan.duration_months ? `<div><span class="text-gray-500">⏳ মেয়াদ:</span> ${loan.duration_months} মাস</div>` : ''}
+                            ${loan.emi_amount ? `<div><span class="text-gray-500">📊 কিস্তি:</span> ${formatAmountWithText(loan.emi_amount)}</div>` : ''}
                         </div>
+                        ${loan.special_note ? `<div class="mt-2 text-sm bg-gray-50 p-2 rounded border border-gray-200"><span class="text-gray-500">📝 নোট:</span> ${loan.special_note}</div>` : ''}
                     </div>
                     <div class="flex gap-2 flex-wrap">
                         <button onclick="showPendingLoanDetails('${loan.id}')" class="btn btn-info btn-sm" title="বিস্তারিত"><i class="fas fa-eye"></i></button>
@@ -6072,57 +6108,89 @@ function closePaymentDetailsModal() {
                 </div>
             </div>
         `}).join('');
-        await updateAllBadges();
+        
+    } catch(e) {
+        console.error('Load pending loans error:', e);
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ লোড করতে সমস্যা!</div>';
     }
+}
 
-    function showPendingLoanDetails(loanId) {
-        const client = initSupabaseClient();
-        if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-        client.from('loan_applications')
-            .select('*, branches(branch_name)')
-            .eq('id', loanId)
-            .single()
-            .then(({ data: loan, error }) => {
-                if (error || !loan) {
-                    showToast('লোন তথ্য পাওয়া যায়নি!', 'error');
-                    return;
-                }
-                const modal = document.getElementById('pendingLoanDetailsModal');
-                if (!modal) {
-                    showToast('মডাল পাওয়া যায়নি!', 'error');
-                    return;
-                }
-                const content = document.getElementById('pendingLoanDetailsContent');
-                const branchName = loan.branches?.branch_name || loan.branch_name || '-';
-                content.innerHTML = `
-                    <div class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border mb-4">
-                        <h4 class="font-bold text-indigo-700 text-lg mb-3"><i class="fas fa-hand-holding-usd mr-2"></i>লোন আবেদন বিস্তারিত</h4>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                            <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">লোন আইডি</span><p class="font-semibold text-gray-800">#${loan.id}</p></div>
-                            <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য</span><p class="font-semibold text-gray-800">${loan.member_name || '-'}</p></div>
-                            <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য আইডি</span><p class="font-semibold text-gray-800">${loan.member_id || '-'}</p></div>
-                            <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">লোনের ধরন</span><p class="font-semibold text-gray-800">${loan.loan_type || '-'}</p></div>
-                            <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">পরিমাণ</span><p class="font-bold text-emerald-600 text-lg">${formatAmountWithText(loan.amount)}</p></div>
-                            <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">ব্রাঞ্চ</span><p class="font-semibold text-blue-600">${branchName}</p></div>
-                            <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">তারিখ</span><p class="font-semibold text-gray-800">${loan.submitted_at ? new Date(loan.submitted_at).toLocaleString('bn-BD') : '-'}</p></div>
-                            <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">স্ট্যাটাস</span><p><span class="px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-700">⏳ বিচারাধীন</span></p></div>
-                            ${loan.special_note ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">বিশেষ নোট</span><p class="font-semibold text-gray-800">${loan.special_note}</p></div>` : ''}
-                        </div>
-                    </div>
-                    <div class="flex gap-2 justify-center no-print">
-                        <button onclick="approveLoan('${loan.id}')" class="btn btn-success flex-1 py-2">✅ অনুমোদন দিন</button>
-                        <button onclick="rejectLoan('${loan.id}')" class="btn btn-danger flex-1 py-2">❌ বাতিল করুন</button>
-                        <button onclick="closePendingLoanDetailsModal()" class="btn btn-warning flex-1 py-2">বন্ধ করুন</button>
-                    </div>
-                `;
-                modal.classList.remove('hidden');
-                modal.classList.add('flex');
-            })
-            .catch(e => {
-                console.error('Error loading loan details:', e);
-                showToast('❌ লোন তথ্য লোড করতে সমস্যা!', 'error');
-            });
-    }
+// ============================================================
+// FIX 1: showPendingLoanDetails() - আপডেটেড
+// ============================================================
+function showPendingLoanDetails(loanId) {
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    // ✅ লোন ডেটা লোড করুন (branches ছাড়া)
+    client.from('loan_applications')
+        .select('*')
+        .eq('id', loanId)
+        .single()
+        .then(({ data: loan, error }) => {
+            if (error || !loan) {
+                showToast('লোন তথ্য পাওয়া যায়নি!', 'error');
+                return;
+            }
+            
+            const modal = document.getElementById('pendingLoanDetailsModal');
+            if (!modal) {
+                showToast('মডাল পাওয়া যায়নি!', 'error');
+                return;
+            }
+            
+            const content = document.getElementById('pendingLoanDetailsContent');
+            
+            // ✅ ব্রাঞ্চ নাম আলাদাভাবে লোড করুন (যদি থাকে)
+            let branchName = loan.branch_name || '-';
+            if (loan.branch_id) {
+                client.from('branches')
+                    .select('branch_name')
+                    .eq('id', loan.branch_id)
+                    .maybeSingle()
+                    .then(({ data: branch }) => {
+                        if (branch) branchName = branch.branch_name;
+                        renderLoanDetailsModal(loan, branchName, content, modal);
+                    })
+                    .catch(() => {
+                        renderLoanDetailsModal(loan, branchName, content, modal);
+                    });
+            } else {
+                renderLoanDetailsModal(loan, branchName, content, modal);
+            }
+        })
+        .catch(e => {
+            console.error('Error loading loan details:', e);
+            showToast('❌ লোন তথ্য লোড করতে সমস্যা!', 'error');
+        });
+}
+    // ✅ হেল্পার ফাংশন: মডাল রেন্ডার
+function renderLoanDetailsModal(loan, branchName, content, modal) {
+    content.innerHTML = `
+        <div class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border mb-4">
+            <h4 class="font-bold text-indigo-700 text-lg mb-3"><i class="fas fa-hand-holding-usd mr-2"></i>লোন আবেদন বিস্তারিত</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">লোন আইডি</span><p class="font-semibold text-gray-800">#${loan.id}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য</span><p class="font-semibold text-gray-800">${loan.member_name || '-'}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সদস্য আইডি</span><p class="font-semibold text-gray-800">${loan.member_id || '-'}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">লোনের ধরন</span><p class="font-semibold text-gray-800">${loan.loan_type || '-'}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">পরিমাণ</span><p class="font-bold text-emerald-600 text-lg">${formatAmountWithText(loan.amount)}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">ব্রাঞ্চ</span><p class="font-semibold text-blue-600">${branchName}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">তারিখ</span><p class="font-semibold text-gray-800">${loan.submitted_at ? new Date(loan.submitted_at).toLocaleString('bn-BD') : '-'}</p></div>
+                <div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">স্ট্যাটাস</span><p><span class="px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-700">⏳ বিচারাধীন</span></p></div>
+                ${loan.special_note ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">বিশেষ নোট</span><p class="font-semibold text-gray-800">${loan.special_note}</p></div>` : ''}
+            </div>
+        </div>
+        <div class="flex gap-2 justify-center no-print">
+            <button onclick="approveLoan('${loan.id}')" class="btn btn-success flex-1 py-2">✅ অনুমোদন দিন</button>
+            <button onclick="rejectLoan('${loan.id}')" class="btn btn-danger flex-1 py-2">❌ বাতিল করুন</button>
+            <button onclick="closePendingLoanDetailsModal()" class="btn btn-warning flex-1 py-2">বন্ধ করুন</button>
+        </div>
+    `;
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
 
     function closePendingLoanDetailsModal() {
         const modal = document.getElementById('pendingLoanDetailsModal');
@@ -6132,71 +6200,151 @@ function closePaymentDetailsModal() {
         }
     }
 
-    async function approveLoan(loanId) {
-        if (!confirm('লোন অনুমোদন দেবেন?')) return;
-        const client = initSupabaseClient();
-        if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-        try {
-            const { data: loan, error: loanError } = await client
-                .from('loan_applications')
-                .select('branch_id, amount')
-                .eq('id', loanId)
-                .single();
-            if (loanError) throw loanError;
-            await client.from('loan_applications').update({ 
-                status: 'approved', 
-                approved_by: currentAdmin?.username || 'system', 
-                approved_at: new Date().toISOString() 
-            }).eq('id', loanId);
-            if (loan && loan.branch_id) {
-                const { data: balance, error: balanceError } = await client
-                    .from('branch_balances')
-                    .select('*')
-                    .eq('branch_id', loan.branch_id)
-                    .single();
-                if (balanceError && balanceError.code !== 'PGRST116') throw balanceError;
-                if (balance) {
-                    const newLoanGiven = (balance.total_loan_given || 0) + loan.amount;
-                    const newNetBalance = (balance.net_balance || 0) - loan.amount;
-                    await client
-                        .from('branch_balances')
-                        .update({
-                            total_loan_given: newLoanGiven,
-                            net_balance: newNetBalance,
-                            updated_at: new Date().toISOString()
-                        })
-                        .eq('branch_id', loan.branch_id);
-                } else {
-                    await client
-                        .from('branch_balances')
-                        .insert([{
-                            branch_id: loan.branch_id,
-                            total_loan_given: loan.amount,
-                            net_balance: -loan.amount,
-                            updated_at: new Date().toISOString()
-                        }]);
-                }
-            }
-            loadAllLoans(); 
-            loadPendingLoans(); 
-            loadBranchReport();
-            await updateAllBadges();
-            showToast('✅ লোন অনুমোদিত হয়েছে!');
-        } catch(e) {
-            console.error('Loan approval error:', e);
-            showToast('❌ লোন অনুমোদন ব্যর্থ: ' + (e.message || 'অজানা ত্রুটি'), 'error');
+// ============================================================
+// FIX 2: approveLoan() - ক্যাশ আপডেট সহ
+// ============================================================
+async function approveLoan(loanId) {
+    if (!confirm('লোন অনুমোদন দেবেন?')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    const btns = document.querySelectorAll(`[onclick*="approveLoan('${loanId}')"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
+    try {
+        // ✅ ১. লোনের বর্তমান ডেটা লোড করুন
+        const { data: loan, error: loanError } = await client
+            .from('loan_applications')
+            .select('*')
+            .eq('id', loanId)
+            .single();
+        
+        if (loanError) throw loanError;
+        if (!loan) {
+            showToast('❌ লোন পাওয়া যায়নি!', 'error');
+            return;
         }
+        
+        // ✅ ২. স্ট্যাটাস আপডেট করুন
+        const { error: updateError } = await client
+            .from('loan_applications')
+            .update({ 
+                status: 'approved', 
+                approved_by: currentAdmin?.username || 'সুপার অ্যাডমিন', 
+                approved_at: new Date().toISOString() 
+            })
+            .eq('id', loanId);
+        
+        if (updateError) throw updateError;
+        
+        // ✅ ৩. ব্রাঞ্চ ব্যালেন্স আপডেট
+        if (loan.branch_id) {
+            const { data: balance, error: balanceError } = await client
+                .from('branch_balances')
+                .select('*')
+                .eq('branch_id', loan.branch_id)
+                .single();
+            
+            if (balanceError && balanceError.code !== 'PGRST116') throw balanceError;
+            
+            if (balance) {
+                const newLoanGiven = (balance.total_loan_given || 0) + loan.amount;
+                const newNetBalance = (balance.net_balance || 0) - loan.amount;
+                await client
+                    .from('branch_balances')
+                    .update({
+                        total_loan_given: newLoanGiven,
+                        net_balance: newNetBalance,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('branch_id', loan.branch_id);
+            } else {
+                await client
+                    .from('branch_balances')
+                    .insert([{
+                        branch_id: loan.branch_id,
+                        total_loan_given: loan.amount,
+                        net_balance: -loan.amount,
+                        updated_at: new Date().toISOString()
+                    }]);
+            }
+        }
+        
+        // ✅ ৪. ✅ সব লিস্ট রিফ্রেশ করুন (ক্যাশ ক্লিয়ার সহ)
+        // pendingLoansData রিফ্রেশ করতে force reload
+        await loadPendingLoans();
+        await loadAllLoans();
+        await loadBranchReport();
+        await updateAllBadges();
+        await loadRealDashboard();
+        
+        // ✅ ৫. মডাল বন্ধ করুন (যদি খোলা থাকে)
+        closePendingLoanDetailsModal();
+        
+        showToast(`✅ "${loan.member_name || 'সদস্য'}" এর লোন অনুমোদিত হয়েছে!`, 'success');
+        
+    } catch(e) {
+        console.error('Loan approval error:', e);
+        showToast(`❌ লোন অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '✅ অনুমোদন';
+        });
     }
+}
 
-    async function rejectLoan(loanId) {
-        const reason = prompt('বাতিলের কারণ লিখুন:');
-        if (!reason) return;
-        const client = initSupabaseClient();
-        if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-        await client.from('loan_applications').update({ status: 'rejected', reject_reason: reason, rejected_by: currentAdmin?.username || 'system', rejected_at: new Date().toISOString() }).eq('id', loanId);
-        loadAllLoans(); loadPendingLoans(); await updateAllBadges();
-        showToast('❌ লোন বাতিল করা হয়েছে!');
+// ============================================================
+// FIX 3: rejectLoan() - ক্যাশ আপডেট সহ
+// ============================================================
+async function rejectLoan(loanId) {
+    const reason = prompt('বাতিলের কারণ লিখুন:');
+    if (!reason) return;
+    
+    const client = initSupabaseClient();
+    if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
+    
+    const btns = document.querySelectorAll(`[onclick*="rejectLoan('${loanId}')"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
+    try {
+        const { error } = await client
+            .from('loan_applications')
+            .update({ 
+                status: 'rejected', 
+                reject_reason: reason, 
+                rejected_by: currentAdmin?.username || 'সুপার অ্যাডমিন', 
+                rejected_at: new Date().toISOString() 
+            })
+            .eq('id', loanId);
+        
+        if (error) throw error;
+        
+        // ✅ লিস্ট রিফ্রেশ
+        await loadPendingLoans();
+        await loadAllLoans();
+        await updateAllBadges();
+        
+        closePendingLoanDetailsModal();
+        showToast('❌ লোন বাতিল করা হয়েছে!', 'warning');
+        
+    } catch(e) {
+        console.error('Reject error:', e);
+        showToast(`❌ বাতিল ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '❌ বাতিল';
+        });
     }
+}
 
     async function loadAllLoans() {
         const container = document.getElementById('loanApplicationsList');
