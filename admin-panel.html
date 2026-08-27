@@ -6035,7 +6035,7 @@ function closePaymentDetailsModal() {
     }
 
 // ============================================================
-// loadPendingLoans() - পেন্ডিং লোন লিস্ট রিফ্রেশ
+// loadPendingLoans() - সম্পূর্ণ রিফ্রেশ সহ (ক্যাশ ক্লিয়ার)
 // ============================================================
 async function loadPendingLoans() {
     const container = document.getElementById('pendingLoansList');
@@ -6055,21 +6055,28 @@ async function loadPendingLoans() {
     }
     
     try {
-        // ✅ সব লোন লোড করুন
-        const { data, error } = await client
+        // ✅ ১. ব্রাঞ্চের তথ্য সহ লোন লোড করুন
+        const { data: loans, error } = await client
             .from('loan_applications')
-            .select('*')
+            .select(`
+                *,
+                branches:branch_id (
+                    branch_name,
+                    branch_code
+                )
+            `)
             .order('submitted_at', { ascending: false });
         
         if (error) throw error;
         
-        const allLoans = data || [];
+        // ✅ ২. pending ফিল্টার
+        const allLoans = loans || [];
         const pendingLoans = allLoans.filter(loan => loan.status === 'pending');
         
-        // ✅ গ্লোবাল ভেরিয়েবল আপডেট
+        // ✅ ৩. ক্যাশ ক্লিয়ার
         allLoansData = allLoans;
         
-        // ✅ ব্যাজ আপডেট
+        // ✅ ৪. ব্যাজ আপডেট
         const badge = document.getElementById('pendingLoanBadge');
         if (badge) {
             badge.innerText = pendingLoans.length;
@@ -6086,9 +6093,13 @@ async function loadPendingLoans() {
             return; 
         }
         
-        // ✅ লিস্ট রেন্ডার
+        // ✅ ৫. লিস্ট রেন্ডার (ব্রাঞ্চের নাম সহ)
         container.innerHTML = pendingLoans.map(loan => {
-            const branchName = loan.branch_name || loan.branch_id || '-';
+            // 🔥 ব্রাঞ্চের নাম বের করুন
+            const branchName = loan.branches?.branch_name || loan.branch_name || 'ব্রাঞ্চ নির্ধারিত হয়নি';
+            const branchCode = loan.branches?.branch_code || '';
+            const branchDisplay = branchCode ? `${branchName} (${branchCode})` : branchName;
+            
             return `
             <div class="border rounded-lg p-4 mb-3 bg-yellow-50 border-yellow-400 hover:shadow-md transition" id="loan-item-${loan.id}">
                 <div class="flex flex-wrap justify-between items-start gap-2">
@@ -6096,12 +6107,13 @@ async function loadPendingLoans() {
                         <div class="flex items-center gap-2 flex-wrap">
                             <span class="font-bold text-gray-800 text-lg">${loan.member_name || '-'}</span>
                             <span class="status-badge status-pending">⏳ বিচারাধীন</span>
+                            <span class="text-xs text-gray-400">#${loan.id}</span>
                         </div>
                         <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2 text-sm">
                             <div><span class="text-gray-500">🆔 আইডি:</span> ${loan.member_id || '-'}</div>
                             <div><span class="text-gray-500">📋 ধরন:</span> ${loan.loan_type || '-'}</div>
                             <div><span class="text-gray-500">💰 পরিমাণ:</span> <span class="font-bold text-emerald-600">${formatAmountWithText(loan.amount)}</span></div>
-                            <div><span class="text-gray-500">🏢 ব্রাঞ্চ:</span> <span class="font-medium text-blue-600">${branchName}</span></div>
+                            <div><span class="text-gray-500">🏢 ব্রাঞ্চ:</span> <span class="font-medium text-blue-600">${branchDisplay}</span></div>
                             <div><span class="text-gray-500">📅 তারিখ:</span> ${loan.submitted_at ? new Date(loan.submitted_at).toLocaleDateString('bn-BD') : '-'}</div>
                             ${loan.duration_months ? `<div><span class="text-gray-500">⏳ মেয়াদ:</span> ${loan.duration_months} মাস</div>` : ''}
                             ${loan.emi_amount ? `<div><span class="text-gray-500">📊 কিস্তি:</span> ${formatAmountWithText(loan.emi_amount)}</div>` : ''}
@@ -6138,34 +6150,28 @@ async function loadPendingLoans() {
 }
 
 // ============================================================
-// showPendingLoanDetails() - পেন্ডিং লোন বিস্তারিত দেখান
+// showPendingLoanDetails() - ব্রাঞ্চের নাম সহ
 // ============================================================
 function showPendingLoanDetails(loanId) {
-    // ✅ লোন আইডি ভ্যালিডেশন
+    console.log('🔍 showPendingLoanDetails called for loan:', loanId);
+    
     if (!loanId) {
-        console.error('❌ লোন আইডি খালি!');
         showToast('❌ লোন আইডি পাওয়া যায়নি!', 'error');
         return;
     }
     
-    // ✅ লোন আইডি নাম্বার কনভার্ট
     const id = parseInt(loanId);
     if (isNaN(id) || id <= 0) {
-        console.error('❌ ইনভ্যালিড লোন আইডি:', loanId);
         showToast('❌ সঠিক লোন আইডি দিন!', 'error');
         return;
     }
     
-    console.log('🔍 showPendingLoanDetails called for loan:', id);
-    
     const client = initSupabaseClient();
-    if (!client) { 
-        console.error('❌ Supabase client not found');
-        showToast('সংযোগ সমস্যা!', 'error'); 
-        return; 
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
     }
     
-    // ✅ লোডিং দেখান
     const content = document.getElementById('pendingLoanDetailsContent');
     const modal = document.getElementById('pendingLoanDetailsModal');
     
@@ -6178,45 +6184,32 @@ function showPendingLoanDetails(loanId) {
         `;
     }
     
-    // ✅ মডাল দেখান
     if (modal) {
         modal.classList.remove('hidden');
         modal.classList.add('flex');
         modal.style.display = 'flex';
-        console.log('✅ Modal opened');
     }
     
-    // ✅ ডেটা লোড
+    // ✅ ব্রাঞ্চের তথ্য সহ লোন লোড করুন
     client.from('loan_applications')
-        .select('*')
+        .select(`
+            *,
+            branches:branch_id (
+                branch_name,
+                branch_code,
+                district
+            )
+        `)
         .eq('id', id)
-        .single()
+        .maybeSingle()
         .then(({ data: loan, error }) => {
-            if (error) {
-                console.error('❌ Load error:', error);
-                if (error.code === 'PGRST116') {
-                    showToast('❌ এই আইডিতে কোনো লোন নেই!', 'error');
-                } else {
-                    showToast('❌ লোন তথ্য লোড করতে সমস্যা!', 'error');
-                }
+            if (error || !loan) {
+                console.error('❌ Loan load error:', error);
+                showToast('লোন তথ্য পাওয়া যায়নি!', 'error');
                 if (content) {
                     content.innerHTML = `
                         <div class="text-center text-red-500 py-8">
                             <i class="fas fa-exclamation-circle text-4xl block mb-3"></i>
-                            <p>লোন তথ্য পাওয়া যায়নি!</p>
-                            <p class="text-sm text-gray-400 mt-2">আইডি: #${id}</p>
-                        </div>
-                    `;
-                }
-                return;
-            }
-            
-            if (!loan) {
-                showToast('❌ লোন পাওয়া যায়নি!', 'error');
-                if (content) {
-                    content.innerHTML = `
-                        <div class="text-center text-yellow-500 py-8">
-                            <i class="fas fa-exclamation-triangle text-4xl block mb-3"></i>
                             <p>লোন পাওয়া যায়নি!</p>
                         </div>
                     `;
@@ -6226,65 +6219,47 @@ function showPendingLoanDetails(loanId) {
             
             console.log('✅ Loan loaded:', loan);
             
-            // ✅ ব্রাঞ্চ নাম লোড
-            let branchName = loan.branch_name || '-';
-            if (loan.branch_id) {
-                client.from('branches')
-                    .select('branch_name')
-                    .eq('id', loan.branch_id)
-                    .maybeSingle()
-                    .then(({ data: branch }) => {
-                        if (branch) branchName = branch.branch_name;
-                        renderLoanDetailsModal(loan, branchName);
-                    })
-                    .catch(() => {
-                        renderLoanDetailsModal(loan, branchName);
-                    });
-            } else {
-                renderLoanDetailsModal(loan, branchName);
-            }
+            // ✅ ব্রাঞ্চের নাম বের করুন
+            const branch = loan.branches || {};
+            const branchName = branch.branch_name || loan.branch_name || 'ব্রাঞ্চ নির্ধারিত হয়নি';
+            const branchCode = branch.branch_code || '';
+            const branchDistrict = branch.district || '';
+            const branchDisplay = branchCode ? `${branchName} (${branchCode})` : branchName;
+            const branchFullDisplay = branchDistrict ? `${branchDisplay} - ${branchDistrict}` : branchDisplay;
+            
+            renderLoanDetailsModal(loan, branchFullDisplay);
         })
         .catch(e => {
             console.error('❌ Fatal error:', e);
             showToast('❌ লোন তথ্য লোড করতে সমস্যা!', 'error');
-            if (content) {
-                content.innerHTML = `
-                    <div class="text-center text-red-500 py-8">
-                        <i class="fas fa-exclamation-circle text-4xl block mb-3"></i>
-                        <p>লোন তথ্য লোড করতে সমস্যা!</p>
-                        <p class="text-sm text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
-                    </div>
-                `;
-            }
         });
 }
 
 // ============================================================
-// renderLoanDetailsModal() - মডাল কন্টেন্ট রেন্ডার
+// renderLoanDetailsModal() - ব্রাঞ্চের নাম সহ
 // ============================================================
-function renderLoanDetailsModal(loan, branchName) {
+function renderLoanDetailsModal(loan, branchDisplay) {
     console.log('📋 Rendering modal for loan:', loan.id);
     
     const content = document.getElementById('pendingLoanDetailsContent');
     if (!content) {
-        console.error('❌ Content element not found!');
+        console.error('❌ Content not found!');
         return;
     }
     
-    // ✅ গ্যারান্টার তথ্য ফরম্যাট
+    // ✅ গ্যারান্টার তথ্য
     const guarantor1 = loan.guarantor1_name ? 
-        `<div class="bg-white p-3 rounded-lg shadow-sm">
-            <span class="text-gray-500">👤 গ্যারান্টার-১</span>
-            <p class="font-semibold text-gray-800">${loan.guarantor1_name} (${loan.guarantor1_mobile || 'N/A'})</p>
+        `<div class="bg-white p-3 rounded-lg border">
+            <span class="text-xs text-gray-500">👤 গ্যারান্টার-১</span>
+            <p class="font-semibold text-gray-800">${loan.guarantor1_name} ${loan.guarantor1_mobile ? '('+loan.guarantor1_mobile+')' : ''}</p>
         </div>` : '';
     
     const guarantor2 = loan.guarantor2_name ? 
-        `<div class="bg-white p-3 rounded-lg shadow-sm">
-            <span class="text-gray-500">👤 গ্যারান্টার-২</span>
-            <p class="font-semibold text-gray-800">${loan.guarantor2_name} (${loan.guarantor2_mobile || 'N/A'})</p>
+        `<div class="bg-white p-3 rounded-lg border">
+            <span class="text-xs text-gray-500">👤 গ্যারান্টার-২</span>
+            <p class="font-semibold text-gray-800">${loan.guarantor2_name} ${loan.guarantor2_mobile ? '('+loan.guarantor2_mobile+')' : ''}</p>
         </div>` : '';
     
-    // ✅ HTML তৈরি
     content.innerHTML = `
         <div class="space-y-4">
             <!-- হেডার -->
@@ -6320,9 +6295,9 @@ function renderLoanDetailsModal(loan, branchName) {
                     <span class="text-xs text-gray-500">💰 পরিমাণ</span>
                     <p class="font-bold text-emerald-600 text-lg">${formatAmountWithText(loan.amount)}</p>
                 </div>
-                <div class="bg-white p-3 rounded-lg border">
+                <div class="bg-white p-3 rounded-lg border" style="border-color: #3b82f6; background: #eff6ff;">
                     <span class="text-xs text-gray-500">🏢 ব্রাঞ্চ</span>
-                    <p class="font-semibold text-blue-600">${branchName}</p>
+                    <p class="font-semibold text-blue-700">${branchDisplay}</p>
                 </div>
                 <div class="bg-white p-3 rounded-lg border">
                     <span class="text-xs text-gray-500">📅 আবেদনের তারিখ</span>
@@ -6371,10 +6346,10 @@ function renderLoanDetailsModal(loan, branchName) {
             
             <!-- অ্যাকশন বাটন -->
             <div class="flex flex-wrap gap-2 pt-3 border-t no-print">
-                <button onclick="approveLoan('${loan.id}')" class="btn btn-success flex-1 min-w-[100px] py-2.5">
+                <button onclick="approveLoan(${loan.id})" class="btn btn-success flex-1 min-w-[100px] py-2.5">
                     <i class="fas fa-check mr-1"></i> অনুমোদন দিন
                 </button>
-                <button onclick="rejectLoan('${loan.id}')" class="btn btn-danger flex-1 min-w-[100px] py-2.5">
+                <button onclick="rejectLoan(${loan.id})" class="btn btn-danger flex-1 min-w-[100px] py-2.5">
                     <i class="fas fa-times mr-1"></i> বাতিল করুন
                 </button>
                 <button onclick="closePendingLoanDetailsModal()" class="btn btn-warning flex-1 min-w-[100px] py-2.5">
@@ -6384,13 +6359,13 @@ function renderLoanDetailsModal(loan, branchName) {
         </div>
     `;
     
-    // ✅ মডাল নিশ্চিত করুন
+    // ✅ মডাল দেখান
     const modal = document.getElementById('pendingLoanDetailsModal');
     if (modal) {
         modal.classList.remove('hidden');
         modal.classList.add('flex');
         modal.style.display = 'flex';
-        console.log('✅ Modal rendered successfully');
+        console.log('✅ Modal rendered with branch:', branchDisplay);
     }
 }
 
