@@ -5580,7 +5580,7 @@ function renderPendingPaymentsList() {
 }
 
 // ============================================================
-// ✅ FIXED: approvePayment() - ব্যালেন্স আপডেট + রিফ্রেশ
+// ✅ approvePayment() - member_id অথবা mobile যে কোনো একটি দিয়ে কাজ করবে
 // ============================================================
 async function approvePayment(paymentId) {
     const id = parseInt(paymentId);
@@ -5611,57 +5611,173 @@ async function approvePayment(paymentId) {
     
     try {
         console.log('🔄 পেমেন্ট অনুমোদন শুরু:', id);
+        console.log('📋 পেমেন্ট ডেটা:', payment);
         
-        // ✅ ১. সদস্যের বর্তমান ডেটা লোড করুন
-        const { data: member, error: memberError } = await client
-            .from('members')
-            .select('balance, status, full_name, member_id')
-            .eq('member_id', payment.member_id)
-            .single();
+        // ============================================================
+        // ✅ সদস্য খোঁজার লজিক (member_id অথবা mobile)
+        // ============================================================
+        let member = null;
+        let foundBy = '';
+        let searchResults = [];
         
-        if (memberError) {
-            console.error('❌ সদস্য লোড error:', memberError);
-            throw memberError;
+        // 📌 ১. member_id দিয়ে খোঁজুন (প্রথম পছন্দ)
+        if (payment.member_id && payment.member_id.trim() !== '') {
+            console.log('🔍 member_id দিয়ে খোঁজা হচ্ছে:', payment.member_id);
+            const { data: memberById, error: errorById } = await client
+                .from('members')
+                .select('member_id, full_name, mobile, balance, referral_bonus, status')
+                .eq('member_id', payment.member_id.trim())
+                .maybeSingle();
+            
+            if (memberById) {
+                member = memberById;
+                foundBy = 'member_id';
+                searchResults.push({ method: 'member_id', success: true, data: memberById });
+                console.log('✅ member_id দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
+            } else {
+                searchResults.push({ method: 'member_id', success: false, error: errorById });
+                console.log('❌ member_id দিয়ে সদস্য পাওয়া যায়নি');
+            }
         }
         
-        if (member.status !== 'active' && member.status !== 'approved') {
-            showToast(`⚠️ এই সদস্য (${member.full_name || payment.member_id}) সক্রিয় নয়!`, 'error');
+        // 📌 ২. member_id না মিললে mobile দিয়ে খোঁজুন
+        if (!member && payment.mobile && payment.mobile.trim() !== '') {
+            console.log('🔍 mobile দিয়ে খোঁজা হচ্ছে:', payment.mobile);
+            const { data: memberByMobile, error: errorByMobile } = await client
+                .from('members')
+                .select('member_id, full_name, mobile, balance, referral_bonus, status')
+                .eq('mobile', payment.mobile.trim())
+                .maybeSingle();
+            
+            if (memberByMobile) {
+                member = memberByMobile;
+                foundBy = 'mobile';
+                searchResults.push({ method: 'mobile', success: true, data: memberByMobile });
+                console.log('✅ mobile দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
+            } else {
+                searchResults.push({ method: 'mobile', success: false, error: errorByMobile });
+                console.log('❌ mobile দিয়ে সদস্য পাওয়া যায়নি');
+            }
+        }
+        
+        // 📌 ৩. member_name দিয়ে খোঁজুন (যদি উপরের দুইটি না মিলে)
+        if (!member && payment.member_name && payment.member_name.trim() !== '') {
+            console.log('🔍 member_name দিয়ে খোঁজা হচ্ছে:', payment.member_name);
+            const { data: memberByName, error: errorByName } = await client
+                .from('members')
+                .select('member_id, full_name, mobile, balance, referral_bonus, status')
+                .ilike('full_name', `%${payment.member_name.trim()}%`)
+                .maybeSingle();
+            
+            if (memberByName) {
+                member = memberByName;
+                foundBy = 'member_name';
+                searchResults.push({ method: 'member_name', success: true, data: memberByName });
+                console.log('✅ member_name দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
+            } else {
+                searchResults.push({ method: 'member_name', success: false, error: errorByName });
+                console.log('❌ member_name দিয়ে সদস্য পাওয়া যায়নি');
+            }
+        }
+        
+        // 📌 ৪. সব উপায়ে ব্যর্থ হলে
+        if (!member) {
+            console.error('❌ কোনো উপায়েই সদস্য পাওয়া যায়নি!');
+            console.log('📋 সার্চ রেজাল্ট:', searchResults);
+            
+            let errorMsg = '❌ সদস্য পাওয়া যায়নি! খোঁজার চেষ্টা করা হয়েছে:\n';
+            searchResults.forEach(r => {
+                errorMsg += `   - ${r.method}: ${r.success ? '✅ পাওয়া গেছে' : '❌ পাওয়া যায়নি'}\n`;
+            });
+            errorMsg += `\n📌 member_id: ${payment.member_id || 'N/A'}`;
+            errorMsg += `\n📌 mobile: ${payment.mobile || 'N/A'}`;
+            errorMsg += `\n📌 member_name: ${payment.member_name || 'N/A'}`;
+            
+            showToast(errorMsg, 'error');
             return;
         }
         
-        const currentBalance = member?.balance || 0;
-        const newBalance = currentBalance + payment.amount;
+        // ============================================================
+        // ✅ সদস্য পাওয়া গেলে ব্যালেন্স আপডেট করুন
+        // ============================================================
         
-        console.log(`📊 ব্যালেন্স আপডেট: ${currentBalance} → ${newBalance} (${payment.amount} যোগ)`);
+        // ✅ সদস্য সক্রিয় কিনা চেক করুন
+        if (member.status !== 'active' && member.status !== 'approved') {
+            showToast(`⚠️ এই সদস্য (${member.full_name}) সক্রিয় নয়! স্ট্যাটাস: ${member.status}`, 'error');
+            return;
+        }
         
-        // ✅ ২. ব্যালেন্স আপডেট (এটাই মূল ফিক্স!)
-        const { error: updateError } = await client
+        // ✅ বর্তমান ব্যালেন্স নিন
+        const currentBalance = Number(member.balance) || 0;
+        const paymentAmount = Number(payment.amount) || 0;
+        const newBalance = currentBalance + paymentAmount;
+        
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📊 ব্যালেন্স আপডেট তথ্য:');
+        console.log(`   👤 সদস্য: ${member.full_name}`);
+        console.log(`   🆔 member_id: ${member.member_id}`);
+        console.log(`   📱 mobile: ${member.mobile}`);
+        console.log(`   🔍 পাওয়া গেছে: ${foundBy} দিয়ে`);
+        console.log(`   💰 বর্তমান ব্যালেন্স: ${currentBalance}`);
+        console.log(`   ➕ পেমেন্টের পরিমাণ: ${paymentAmount}`);
+        console.log(`   🆕 নতুন ব্যালেন্স: ${newBalance}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        // ✅ সদস্যের ব্যালেন্স আপডেট করুন
+        const { data: updateResult, error: updateError } = await client
             .from('members')
             .update({ 
                 balance: newBalance,
                 updated_at: new Date().toISOString()
             })
-            .eq('member_id', payment.member_id);
+            .eq('member_id', member.member_id)
+            .select('balance');
         
         if (updateError) {
             console.error('❌ ব্যালেন্স আপডেট error:', updateError);
             throw updateError;
         }
         
-        // ✅ ৩. পেমেন্ট স্ট্যাটাস আপডেট
-        await client
+        const updatedBalance = updateResult?.[0]?.balance || newBalance;
+        console.log(`✅ ব্যালেন্স আপডেট সম্পন্ন! নতুন ব্যালেন্স: ${updatedBalance}`);
+        
+        // ✅ পেমেন্ট স্ট্যাটাস আপডেট করুন
+        const { error: statusError } = await client
             .from('payments')
             .update({
                 status: 'approved',
                 approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
-                approved_at: new Date().toISOString()
+                approved_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
             })
             .eq('id', id);
         
-        // ✅ ৪. পেন্ডিং লিস্ট থেকে রিমুভ
+        if (statusError) {
+            console.error('❌ পেমেন্ট স্ট্যাটাস আপডেট error:', statusError);
+            throw statusError;
+        }
+        
+        // ✅ (ঐচ্ছিক) ট্রানজেকশন হিস্টোরি যোগ করুন
+        try {
+            await client
+                .from('transaction_history')
+                .insert([{
+                    member_id: member.member_id,
+                    type: 'savings_deposit',
+                    amount: paymentAmount,
+                    description: `মাসিক সঞ্চয় জমা (${payment.month} ${payment.year})`,
+                    reference_id: String(id),
+                    created_at: new Date().toISOString()
+                }]);
+            console.log('✅ ট্রানজেকশন হিস্টোরি যোগ করা হয়েছে');
+        } catch(e) {
+            console.log('⚠️ ট্রানজেকশন হিস্টোরি টেবিল নাও থাকতে পারে:', e.message);
+        }
+        
+        // ✅ পেন্ডিং লিস্ট থেকে রিমুভ করুন
         pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
         
-        // ✅ ৫. membersData রিফ্রেশ করুন
+        // ✅ membersData রিফ্রেশ করুন
         const { data: freshMembers, error: loadError } = await client
             .from('members')
             .select('*')
@@ -5672,23 +5788,29 @@ async function approvePayment(paymentId) {
             console.log('✅ membersData রিফ্রেশ সম্পন্ন:', membersData.length);
         }
         
-        // ✅ ৬. পেমেন্ট লিস্ট রিলোড
+        // ✅ পেমেন্ট লিস্ট রিলোড
         await loadPendingPayments();
         
-        // ✅ ৭. ড্যাশবোর্ড রিলোড
+        // ✅ ড্যাশবোর্ড রিলোড
         await loadRealDashboard();
         
-        // ✅ ৮. ব্যাজ আপডেট
+        // ✅ ব্যাজ আপডেট
         await updateAllBadges();
         
-        // ✅ ৯. মেম্বার লিস্ট রিলোড
+        // ✅ মেম্বার লিস্ট রিলোড
         renderMembersList();
         renderPendingMembersList();
         
-        // ✅ ১০. সাফল্যের মেসেজ
-        showToast(`✅ ${member.full_name || payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদিত হয়েছে!\nনতুন ব্যালেন্স: ${formatAmount(newBalance)} টাকা`, 'success');
+        // ✅ সাফল্যের মেসেজ
+        showToast(
+            `✅ ${member.full_name} এর ${formatAmount(paymentAmount)} টাকা পেমেন্ট অনুমোদিত হয়েছে!\n` +
+            `📊 নতুন ব্যালেন্স: ${formatAmount(updatedBalance)} টাকা\n` +
+            `🔍 পাওয়া গেছে: ${foundBy} দিয়ে`,
+            'success'
+        );
         
-        console.log('✅ পেমেন্ট অনুমোদন সম্পূর্ণ! নতুন ব্যালেন্স:', newBalance);
+        console.log('✅ পেমেন্ট অনুমোদন সম্পূর্ণ!');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
     } catch(e) {
         console.error('❌ Approval error:', e);
