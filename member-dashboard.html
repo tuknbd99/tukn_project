@@ -570,6 +570,22 @@
         </div>
     </div>
 
+    <!-- ✅ কারেন্ট সদস্যদের জন্য স্ট্যাটাস বার -->
+<div id="currentMemberStatus" class="bg-gradient-to-r from-emerald-50 to-green-50 rounded-xl p-4 mb-4 border border-emerald-200" style="display:none;">
+    <div class="flex items-center gap-3">
+        <div class="w-12 h-12 rounded-full bg-emerald-500 text-white flex items-center justify-center text-xl">
+            <i class="fas fa-infinity"></i>
+        </div>
+        <div>
+            <p class="text-emerald-800 font-bold text-lg">♾️ কারেন্ট সদস্য (মেয়াদহীন)</p>
+            <p class="text-emerald-600 text-sm">আপনি সীমাহীনভাবে সঞ্চয় জমা ও উত্তোলন করতে পারবেন</p>
+        </div>
+    </div>
+</div>
+
+<!-- বকেয়া/আসন্ন পরিশোধ নোটিফিকেশন -->
+<div id="dueNotificationsContainer" class="mb-4"></div>
+    
     <!-- বকেয়া/আসন্ন পরিশোধ নোটিফিকেশন -->
     <div id="dueNotificationsContainer" class="mb-4"></div>
 
@@ -1624,7 +1640,7 @@ function startMembershipTimer(approvedAt) {
 }
 
 // ============================================================
-// লোনের বকেয়া ও আসন্ন পরিশোধ নোটিফিকেশন
+// বকেয়া/সর্বশেষ জমা নোটিফিকেশন
 // ============================================================
 
 async function checkDueNotifications() {
@@ -1632,14 +1648,20 @@ async function checkDueNotifications() {
     if (!container) return;
     
     container.innerHTML = '';
-    let hasNotification = false;
     
-    // 1. মাসিক সঞ্চয় বকেয়া চেক
+    // ✅ চেক করুন সদস্য কারেন্ট/মেয়াদহীন কিনা
+    const isCurrentMember = parseInt(currentUser.memberTerm) === 0;
+    
+    // 1. মাসিক সঞ্চয় চেক (কারেন্ট সদস্যদের জন্য সর্বশেষ জমা, মেয়াদী সদস্যদের জন্য বকেয়া)
     await checkMonthlySavingsDue(container);
     
-    // 2. লোনের কিস্তি বকেয়া/আসন্ন চেক
+    // 2. লোনের কিস্তি বকেয়া/আসন্ন চেক (সব সদস্যের জন্য)
     await checkLoanInstallmentsDue(container);
 }
+
+// ============================================================
+// মাসিক সঞ্চয় চেক - কারেন্ট সদস্যদের জন্য সর্বশেষ জমা দেখানো
+// ============================================================
 
 async function checkMonthlySavingsDue(container) {
     if (!currentUser) return;
@@ -1647,10 +1669,89 @@ async function checkMonthlySavingsDue(container) {
     const client = await initSupabase();
     if (!client) return;
     
+    // ✅ চেক করুন সদস্য কারেন্ট/মেয়াদহীন কিনা
+    const isCurrentMember = parseInt(currentUser.memberTerm) === 0;
+    
     try {
         const now = new Date();
         const currentMonth = banglaMonths[now.getMonth()];
         const currentYear = now.getFullYear();
+        
+        // ✅ কারেন্ট সদস্যদের জন্য সর্বশেষ জমা দেখান
+        if (isCurrentMember) {
+            // সর্বশেষ approved পেমেন্ট খুঁজুন
+            const { data: lastPayment, error: lastError } = await client
+                .from('payments')
+                .select('amount, month, year, submitted_at, status')
+                .eq('member_id', currentUser.id)
+                .eq('status', 'approved')
+                .order('submitted_at', { ascending: false })
+                .limit(1);
+            
+            if (lastError) {
+                console.error('❌ সর্বশেষ পেমেন্ট লোড error:', lastError);
+                return;
+            }
+            
+            if (lastPayment && lastPayment.length > 0) {
+                const payment = lastPayment[0];
+                const date = new Date(payment.submitted_at);
+                const banglaDate = date.toLocaleDateString('bn-BD', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                });
+                const banglaTime = date.toLocaleTimeString('bn-BD', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                });
+                
+                const dueEl = document.createElement('div');
+                dueEl.className = 'due-notification';
+                dueEl.style.background = '#ecfdf5';
+                dueEl.style.borderLeftColor = '#059669';
+                dueEl.innerHTML = `
+                    <div class="due-title" style="color:#065f46;">
+                        <i class="fas fa-check-circle text-emerald-600"></i> 
+                        সর্বশেষ সঞ্চয় জমা
+                    </div>
+                    <div class="due-details" style="color:#065f46;">
+                        <strong>${payment.amount.toLocaleString()} টাকা</strong> 
+                        ${payment.month !== 'কারেন্ট জমা' ? `${payment.month} ${payment.year}` : 'কারেন্ট জমা'} 
+                        তারিখে জমা করেছেন 
+                        <span style="color:#059669; font-weight:600;">${banglaDate}</span> 
+                        সময়: <span style="color:#059669; font-weight:600;">${banglaTime}</span>
+                    </div>
+                `;
+                container.appendChild(dueEl);
+                return;
+            } else {
+                // কোনো পেমেন্ট না থাকলে
+                const dueEl = document.createElement('div');
+                dueEl.className = 'due-notification';
+                dueEl.style.background = '#fef3c7';
+                dueEl.style.borderLeftColor = '#f59e0b';
+                dueEl.innerHTML = `
+                    <div class="due-title" style="color:#92400e;">
+                        <i class="fas fa-info-circle text-amber-600"></i> 
+                        এখনো কোনো সঞ্চয় জমা দেননি
+                    </div>
+                    <div class="due-details" style="color:#78350f;">
+                        আপনি এখনো কোনো সঞ্চয় জমা দেননি। 
+                        <button onclick="openPaymentModal()" class="bg-emerald-600 text-white px-3 py-1 rounded text-xs hover:bg-emerald-700 transition mt-1">
+                            এখনই জমা দিন
+                        </button>
+                    </div>
+                `;
+                container.appendChild(dueEl);
+                return;
+            }
+        }
+        
+        // ============================================================
+        // মেয়াদী সদস্যদের জন্য বকেয়া চেক (পুরোনো কোড)
+        // ============================================================
         
         const { data: payment } = await client
             .from('payments')
@@ -1951,6 +2052,18 @@ function handleLogout() {
 }
 
 // ============================================================
+// কারেন্ট সদস্য স্ট্যাটাস দেখানো/লুকানো
+// ============================================================
+
+function updateCurrentMemberStatus() {
+    const isCurrentMember = parseInt(currentUser.memberTerm) === 0;
+    const statusEl = document.getElementById('currentMemberStatus');
+    if (statusEl) {
+        statusEl.style.display = isCurrentMember ? 'block' : 'none';
+    }
+}
+    
+// ============================================================
 // UI Update
 // ============================================================
 async function updateUI() {
@@ -1975,6 +2088,7 @@ async function updateUI() {
     
     updateMembershipTypeDisplay();
     updateMembershipStatus();
+    updateCurrentMemberStatus(); 
     
     document.getElementById('monthlySavingsDisplay').innerHTML = currentUser.monthlySavings + ' টাকা';
     document.getElementById('perMonthSavings').innerHTML = currentUser.monthlySavings;
@@ -2712,6 +2826,10 @@ function updateFundsDisplayWithAnimation() {
 }
 
 
+// ============================================================
+// loadSavingsData() - কারেন্ট সদস্যদের জন্য বাকি মাস দেখাবে না
+// ============================================================
+
 async function loadSavingsData() {
     if(!currentUser) return;
     let client = await initSupabase();
@@ -2741,8 +2859,24 @@ async function loadSavingsData() {
             }
         }
         const dueMonths = Math.max(0, totalMonthsSinceJoin - paidMonthsCount);
+        
+        // ✅ চেক করুন সদস্য কারেন্ট/মেয়াদহীন কিনা
+        const isCurrentMember = parseInt(currentUser.memberTerm) === 0;
+        
         document.getElementById('paidMonthsDisplay').innerText = paidMonthsCount + ' মাস';
-        document.getElementById('dueMonthsDisplay').innerHTML = `<span class="${dueMonths > 0 ? 'text-red-500' : 'text-green-600'}">${dueMonths} মাস</span>`;
+        
+        // ✅ কারেন্ট সদস্যদের জন্য "বাকি" দেখাবেন না
+        if (isCurrentMember) {
+            document.getElementById('dueMonthsDisplay').innerHTML = `
+                <span class="text-green-600 font-bold">
+                    <i class="fas fa-infinity mr-1"></i> সীমাহীন
+                </span>
+                <span class="text-xs text-gray-400 block">(কারেন্ট সদস্য)</span>
+            `;
+        } else {
+            document.getElementById('dueMonthsDisplay').innerHTML = `<span class="${dueMonths > 0 ? 'text-red-500' : 'text-green-600'}">${dueMonths} মাস</span>`;
+        }
+        
         document.getElementById('totalPaidDisplay').innerText = totalPaid.toLocaleString() + ' টাকা';
     } catch(e) { console.error(e); }
 }
