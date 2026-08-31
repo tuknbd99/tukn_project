@@ -660,6 +660,9 @@
     
     <!-- অ্যাকশন বাটন -->
     <div class="grid grid-cols-2 md:grid-cols-8 gap-3 my-6">
+        <!-- ড্যাশবোর্ডের উপরের দিকে যোগ করুন -->
+        <button onclick="forceReloadAllData()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition text-sm font-semibold">
+    <i class="fas fa-sync-alt mr-1"></i> ডেটা রিফ্রেশ করুন</button>
         <button onclick="openPaymentModal()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-emerald-700 transition"><i class="fas fa-money-bill-wave mr-1"></i>সঞ্চয় জমা দিন</button>
         <button onclick="openWithdrawModal('bonus')" class="bg-amber-500 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-amber-600 transition"><i class="fas fa-code-branch mr-1"></i>রেফারেল বোনাস উত্তোলন</button>
         <button onclick="openWithdrawModal('savingsProfit')" class="bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-600 transition"><i class="fas fa-chart-line mr-1"></i>সঞ্চয় লভ্যাংশ উত্তোলন</button>
@@ -2356,6 +2359,8 @@ function updateFundsDisplay() {
     }
 }
 
+    
+
 async function refreshMemberDataFromSupabase() {
     if(!currentUser || !currentUser.id) {
         console.log('❌ currentUser নেই!');
@@ -2446,6 +2451,39 @@ async function loadUserFunds() {
         
     } catch(error) { 
         console.error('❌ ফান্ড লোড সমস্যা:', error); 
+    }
+}
+
+    // ============================================================
+// ✅ ফোর্স রিলোড - সব ডেটা রিফ্রেশ করবে
+// ============================================================
+
+async function forceReloadAllData() {
+    console.log('🔄 সব ডেটা ফোর্স রিলোড করা হচ্ছে...');
+    showToast('⏳ ডেটা রিফ্রেশ করা হচ্ছে...', 'info');
+    
+    try {
+        // ১. Supabase থেকে তাজা ডেটা নিন
+        await refreshMemberDataFromSupabase();
+        
+        // ২. ইউজার ফান্ড রিলোড করুন
+        await loadUserFunds();
+        
+        // ৩. UI আপডেট করুন
+        updateFundsDisplay();
+        
+        // ৪. অন্যান্য ডেটা রিফ্রেশ করুন
+        await loadPaymentHistory();
+        await loadWithdrawalHistory();
+        await loadLoanHistory();
+        await loadReferralData();
+        
+        console.log('✅ সব ডেটা রিফ্রেশ সম্পূর্ণ!');
+        showToast('✅ ডেটা রিফ্রেশ করা হয়েছে!', 'success');
+        
+    } catch(e) {
+        console.error('❌ রিলোড error:', e);
+        showToast('❌ রিলোড করতে সমস্যা!', 'error');
     }
 }
 
@@ -7523,14 +7561,106 @@ document.addEventListener('DOMContentLoaded', async function() {
     // ✅ রিয়েল-টাইম ব্যালেন্স চেক চালু করুন
     startRealTimeBalanceCheck();
     
+    // ✅ অ্যাডমিন আপডেট পোলিং চালু করুন
+    startAdminUpdatePolling();
+    
+    // ✅ ব্রডকাস্ট চ্যানেল সেটআপ
+    setupBroadcastChannel();
+    
     // ✅ ট্যাব ফোকাসে ব্যালেন্স রিফ্রেশ
     document.addEventListener('visibilitychange', function() {
         if (!document.hidden && currentUser) {
+            console.log('👁️ ট্যাব পুনরায় খোলা হয়েছে, ব্যালেন্স চেক করা হচ্ছে');
             refreshMemberDataFromSupabase();
             loadUserFunds();
         }
     });
+    
+    // ✅ অনলাইন স্ট্যাটাস চেক
+    window.addEventListener('online', function() {
+        console.log('🌐 ইন্টারনেট সংযোগ ফিরে এসেছে, ব্যালেন্স রিফ্রেশ করা হচ্ছে...');
+        refreshMemberDataFromSupabase();
+        loadUserFunds();
+        showToast('🌐 সংযোগ পুনরুদ্ধার! ব্যালেন্স আপডেট করা হয়েছে।', 'success');
+    });
+    
+    document.getElementById('statementPrintArea').style.display = 'none';
+    document.getElementById('paymentMethod')?.addEventListener('change', togglePaymentFields);
+    togglePaymentFields();
+    
+    // ✅ ৫ সেকেন্ড পর ফোর্স রিলোড চেক (যদি অ্যাডমিন থেকে আপডেট হয়ে থাকে)
+    setTimeout(async function() {
+        // চেক করুন ব্যালেন্স মিলছে কিনা
+        await checkAndFixBalanceMismatch();
+    }, 5000);
+    
+    console.log('💡 কনসোলে টাইপ করুন:');
+    console.log('  refreshMemberDataFromSupabase() - ব্যালেন্স রিফ্রেশ');
+    console.log('  forceBalanceUpdate() - ফোর্স আপডেট');
+    console.log('  forceReloadAllData() - সব ডেটা রিফ্রেশ');
+    console.log('  checkAndFixBalanceMismatch() - ব্যালেন্স মিসম্যাচ চেক');
 });
+
+    // ============================================================
+// ✅ ব্যালেন্স মিসম্যাচ চেক ও ফিক্স
+// ============================================================
+
+async function checkAndFixBalanceMismatch() {
+    if (!currentUser || !currentUser.id) return;
+    
+    try {
+        const client = await initSupabase();
+        if (!client) return;
+        
+        // ডাটাবেস থেকে বর্তমান ব্যালেন্স নিন
+        const { data: member, error } = await client
+            .from('members')
+            .select('balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
+            .eq('member_id', currentUser.id)
+            .single();
+        
+        if (error || !member) return;
+        
+        const dbBalance = Number(member.balance) || 0;
+        const localBalance = userFunds.monthlySavings || 0;
+        
+        // যদি মিসম্যাচ হয়
+        if (dbBalance !== localBalance) {
+            console.log(`⚠️ ব্যালেন্স মিসম্যাচ! DB: ${dbBalance}, Local: ${localBalance}`);
+            console.log('🔄 অটো-ফিক্স চলছে...');
+            
+            // ফান্ড আপডেট করুন
+            userFunds.monthlySavings = dbBalance;
+            userFunds.savingsProfit = Number(member.profit_balance_savings) || 0;
+            userFunds.investmentProfit = Number(member.profit_balance_investment) || 0;
+            userFunds.referralProfit = Number(member.profit_balance_referral) || 0;
+            userFunds.referralBonus = Number(member.referral_bonus) || 0;
+            
+            // UI আপডেট করুন
+            updateFundsDisplay();
+            
+            // localStorage আপডেট
+            try {
+                const storedUser = localStorage.getItem('tukn_logged_member') || sessionStorage.getItem('tukn_logged_member');
+                if (storedUser) {
+                    const user = JSON.parse(storedUser);
+                    user.balance = dbBalance;
+                    user.referral_bonus = userFunds.referralBonus;
+                    user.profit_balance_savings = userFunds.savingsProfit;
+                    user.profit_balance_investment = userFunds.investmentProfit;
+                    user.profit_balance_referral = userFunds.referralProfit;
+                    localStorage.setItem('tukn_logged_member', JSON.stringify(user));
+                    sessionStorage.setItem('tukn_logged_member', JSON.stringify(user));
+                }
+            } catch(e) {}
+            
+            showToast(`💰 আপনার ব্যালেন্স আপডেট হয়েছে! নতুন ব্যালেন্স: ${dbBalance.toLocaleString()} টাকা`, 'success');
+        }
+        
+    } catch(e) {
+        console.error('❌ মিসম্যাচ চেক error:', e);
+    }
+}
 
 window.forceBalanceUpdate = async function() {
     console.log('🔍 ফোর্স ব্যালেন্স আপডেট শুরু...');
