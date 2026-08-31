@@ -15328,7 +15328,216 @@ async function saveBookConfig() {
     }
 }
 
-// পেজ লোড হলে কনফিগ লোড করুন
+    // ============================================================
+// ✅ অটো-ফিক্স: সব পেমেন্ট অটোমেটিক ব্যালেন্স আপডেট
+// ============================================================
+
+async function autoFixAllPayments() {
+    console.log('🔧 সব পেমেন্ট অটো-ফিক্স শুরু...');
+    showToast('⏳ পেমেন্ট ফিক্স করা হচ্ছে... দয়া করে অপেক্ষা করুন', 'info');
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // ✅ ১. সব অনুমোদিত পেমেন্ট খুঁজুন (যাদের ব্যালেন্স আপডেট হয়নি)
+        const { data: approvedPayments, error: payError } = await client
+            .from('payments')
+            .select('*')
+            .eq('status', 'approved')
+            .order('submitted_at', { ascending: true });
+        
+        if (payError) {
+            console.error('❌ পেমেন্ট লোড error:', payError);
+            showToast('❌ পেমেন্ট লোড করতে সমস্যা!', 'error');
+            return;
+        }
+        
+        if (!approvedPayments || approvedPayments.length === 0) {
+            showToast('✅ কোনো পেমেন্ট নেই!', 'success');
+            return;
+        }
+        
+        console.log(`📊 মোট অনুমোদিত পেমেন্ট: ${approvedPayments.length} টি`);
+        
+        // ✅ ২. প্রতিটি সদস্যের জন্য টোটাল পেমেন্ট ক্যালকুলেট করুন
+        const memberPayments = {};
+        const memberNames = {};
+        const memberMobiles = {};
+        
+        for (const payment of approvedPayments) {
+            const memberId = payment.member_id;
+            if (!memberPayments[memberId]) {
+                memberPayments[memberId] = 0;
+                memberNames[memberId] = payment.member_name || 'অজানা';
+                memberMobiles[memberId] = payment.mobile || '';
+            }
+            memberPayments[memberId] += Number(payment.amount) || 0;
+        }
+        
+        console.log(`👥 মোট সদস্য: ${Object.keys(memberPayments).length} জন`);
+        
+        // ✅ ৩. প্রতিটি সদস্যের ব্যালেন্স আপডেট করুন
+        let successCount = 0;
+        let failCount = 0;
+        let updateLog = [];
+        
+        for (const [memberId, totalAmount] of Object.entries(memberPayments)) {
+            try {
+                console.log(`📤 প্রক্রিয়াকরণ: ${memberId} - ${totalAmount} টাকা`);
+                
+                // সদস্যের বর্তমান ব্যালেন্স চেক করুন
+                const { data: member, error: mError } = await client
+                    .from('members')
+                    .select('balance')
+                    .eq('member_id', memberId)
+                    .single();
+                
+                if (mError || !member) {
+                    console.error(`❌ সদস্য পাওয়া যায়নি: ${memberId}`, mError);
+                    failCount++;
+                    updateLog.push({
+                        memberId,
+                        name: memberNames[memberId],
+                        status: 'failed',
+                        reason: 'সদস্য পাওয়া যায়নি'
+                    });
+                    continue;
+                }
+                
+                const currentBalance = Number(member.balance) || 0;
+                const newBalance = currentBalance + totalAmount;
+                
+                // ব্যালেন্স আপডেট করুন
+                const { error: updateError } = await client
+                    .from('members')
+                    .update({ 
+                        balance: newBalance,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('member_id', memberId);
+                
+                if (updateError) {
+                    console.error(`❌ ব্যালেন্স আপডেট error: ${memberId}`, updateError);
+                    failCount++;
+                    updateLog.push({
+                        memberId,
+                        name: memberNames[memberId],
+                        status: 'failed',
+                        reason: updateError.message
+                    });
+                    continue;
+                }
+                
+                successCount++;
+                updateLog.push({
+                    memberId,
+                    name: memberNames[memberId],
+                    mobile: memberMobiles[memberId],
+                    oldBalance: currentBalance,
+                    addedAmount: totalAmount,
+                    newBalance: newBalance,
+                    paymentCount: approvedPayments.filter(p => p.member_id === memberId).length,
+                    status: 'success'
+                });
+                
+                console.log(`✅ ${memberNames[memberId]} (${memberId}): ${currentBalance} → ${newBalance} (+${totalAmount})`);
+                
+            } catch(e) {
+                console.error(`❌ প্রক্রিয়াকরণ error: ${memberId}`, e);
+                failCount++;
+                updateLog.push({
+                    memberId,
+                    name: memberNames[memberId] || 'অজানা',
+                    status: 'failed',
+                    reason: e.message || 'অজানা ত্রুটি'
+                });
+            }
+        }
+        
+        // ✅ ৪. রিপোর্ট দেখান
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📊 অটো-ফিক্স রিপোর্ট');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`✅ সফল: ${successCount} জন সদস্য`);
+        console.log(`❌ ব্যর্থ: ${failCount} জন সদস্য`);
+        console.log(`📊 মোট পেমেন্ট প্রসেস: ${approvedPayments.length} টি`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        // ✅ ৫. সফল সদস্যদের তালিকা দেখান
+        const successList = updateLog.filter(log => log.status === 'success');
+        if (successList.length > 0) {
+            console.log('\n✅ সফলভাবে আপডেট হওয়া সদস্যদের তালিকা:');
+            console.table(successList.map(log => ({
+                'সদস্য': log.name,
+                'আইডি': log.memberId,
+                'পেমেন্ট': log.paymentCount,
+                'যোগ হয়েছে': log.addedAmount + ' টাকা',
+                'নতুন ব্যালেন্স': log.newBalance + ' টাকা'
+            })));
+        }
+        
+        // ✅ ৬. ব্যর্থ সদস্যদের তালিকা দেখান
+        const failList = updateLog.filter(log => log.status === 'failed');
+        if (failList.length > 0) {
+            console.log('\n❌ ব্যর্থ সদস্যদের তালিকা:');
+            console.table(failList.map(log => ({
+                'সদস্য': log.name,
+                'আইডি': log.memberId,
+                'কারণ': log.reason
+            })));
+        }
+        
+        // ✅ ৭. UI আপডেট
+        await loadRealDashboard();
+        await updateAllBadges();
+        await loadMembers();
+        
+        // ✅ ৮. সাফল্যের মেসেজ
+        let message = `✅ ${successCount} জন সদস্যের ব্যালেন্স আপডেট করা হয়েছে!\n`;
+        message += `📊 মোট ${approvedPayments.length} টি পেমেন্ট প্রসেস করা হয়েছে।\n`;
+        if (failCount > 0) {
+            message += `❌ ${failCount} জন সদস্যের আপডেট ব্যর্থ হয়েছে। কনসোল দেখুন।`;
+        }
+        showToast(message, successCount > 0 ? 'success' : 'error');
+        
+        // ✅ ৯. ডিটেইল রিপোর্ট ডাউনলোড অপশন
+        if (successList.length > 0) {
+            const reportBtn = document.createElement('button');
+            reportBtn.innerHTML = '📥 রিপোর্ট ডাউনলোড করুন (CSV)';
+            reportBtn.className = 'btn btn-success btn-sm mt-3';
+            reportBtn.onclick = function() {
+                downloadPaymentFixReport(successList, failList);
+            };
+            
+            const container = document.getElementById('autoFixReportContainer') || document.createElement('div');
+            container.id = 'autoFixReportContainer';
+            container.innerHTML = `
+                <div class="mt-4 p-4 bg-white rounded-lg border border-emerald-200">
+                    <h4 class="font-bold text-emerald-700 mb-2">📊 অটো-ফিক্স রিপোর্ট</h4>
+                    <p>✅ সফল: <span class="font-bold text-emerald-600">${successCount}</span> জন</p>
+                    <p>❌ ব্যর্থ: <span class="font-bold text-red-600">${failCount}</span> জন</p>
+                    <p>📊 মোট পেমেন্ট: <span class="font-bold text-blue-600">${approvedPayments.length}</span> টি</p>
+                </div>
+            `;
+            document.querySelector('.main-content')?.prepend(container);
+        }
+        
+        return { successCount, failCount, updateLog };
+        
+    } catch(e) {
+        console.error('❌ autoFixAllPayments error:', e);
+        showToast('❌ প্রক্রিয়াকরণ ব্যর্থ!', 'error');
+        return { successCount: 0, failCount: 0, updateLog: [] };
+    }
+}
+
+    
+
+ // পেজ লোড হলে কনফিগ লোড করুন
 document.addEventListener('DOMContentLoaded', function() {
     if (document.getElementById('bookConfigTab')) {
         loadBookConfig();
