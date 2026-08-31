@@ -2406,16 +2406,12 @@ async function loadUserFunds() {
             userFunds.investmentProfit = Number(member.profit_balance_investment) || 0;
             userFunds.referralProfit = Number(member.profit_balance_referral) || 0;
             
-            // ✅ referral_bonus শুধুমাত্র আপডেট করুন যদি ডাটাবেসে মান থাকে
-            // যদি ডাটাবেসে referral_bonus = 0 হয়, তাহলে রেফারেল ডাটা লোডের সময় সেট আপডেট হবে
-            const dbReferralBonus = Number(member.referral_bonus) || 0;
-            
-            // যদি ডাটাবেসে 0 থাকে কিন্তু userFunds এ অন্য মান থাকে, তাহলে userFunds এর মান রাখুন
-            if (dbReferralBonus > 0) {
-                userFunds.referralBonus = dbReferralBonus;
+            // ✅ referral_bonus: শুধুমাত্র ডাটাবেসে মান থাকলেই আপডেট করুন
+            const dbBonus = Number(member.referral_bonus) || 0;
+            if (dbBonus > 0) {
+                userFunds.referralBonus = dbBonus;
             }
-            // যদি dbReferralBonus 0 হয়, তাহলে userFunds.referralBonus এর মান অপরিবর্তিত রাখুন
-            // (কারণ loadReferralData() ইতিমধ্যে সঠিক মান সেট করে থাকতে পারে)
+            // যদি dbBonus 0 হয়, তাহলে userFunds.referralBonus এর মান অপরিবর্তিত রাখুন
             
             // UI আপডেট করুন
             updateFundsDisplay();
@@ -2427,10 +2423,6 @@ async function loadUserFunds() {
         console.error('❌ ফান্ড লোড সমস্যা:', error); 
     }
 }
-
-// ============================================================
-// ✅ ডাটাবেস রিফ্রেশ (শুধু Supabase থেকে)
-// ============================================================
 
 async function refreshMemberDataFromSupabase() {
     if(!currentUser || !currentUser.id) {
@@ -2465,7 +2457,14 @@ async function refreshMemberDataFromSupabase() {
             userFunds.savingsProfit = Number(data.profit_balance_savings) || 0;
             userFunds.investmentProfit = Number(data.profit_balance_investment) || 0;
             userFunds.referralProfit = Number(data.profit_balance_referral) || 0;
-            userFunds.referralBonus = Number(data.referral_bonus) || 0;
+            
+            // ✅ referral_bonus আপডেট করুন কিন্তু শুধুমাত্র যদি ডাটাবেসে মান > 0 হয়
+            // অথবা যদি userFunds.referralBonus এর মান 0 না হয়, তাহলে সেট রাখুন
+            const dbBonus = Number(data.referral_bonus) || 0;
+            if (dbBonus > 0) {
+                userFunds.referralBonus = dbBonus;
+            }
+            // যদি dbBonus 0 হয়, তাহলে userFunds.referralBonus এর মান অপরিবর্তিত রাখুন
             
             if(data.member_term !== undefined) currentUser.memberTerm = data.member_term;
             if(data.status) currentUser.status = data.status;
@@ -6268,32 +6267,34 @@ async function loadReferralData() {
             }
         }
         
-        const myTotalBonus = totalCommission;
-        const roundedMyBonus = Math.round(myTotalBonus);
-        
-        // 🔥 ডাটাবেসে referral_bonus আপডেট করুন
-        const { data: currentMember } = await client
-            .from('members')
-            .select('referral_bonus')
-            .eq('member_id', currentUser.id)
-            .single();
-        
-        if (currentMember && Math.round(currentMember.referral_bonus || 0) !== roundedMyBonus) {
-            const { error: myUpdateError } = await client
-                .from('members')
-                .update({ referral_bonus: roundedMyBonus })
-                .eq('member_id', currentUser.id);
-            
-            if(myUpdateError) {
-                console.error('❌ আপনার referral_bonus আপডেট ব্যর্থ:', myUpdateError);
-            } else {
-                console.log(`✅ আপনার referral_bonus আপডেট: ${roundedMyBonus}`);
-                userFunds.referralBonus = roundedMyBonus;
-            }
-        } else {
-            console.log(`ℹ️ আপনার referral_bonus ইতিমধ্যে আপডেটেড: ${roundedMyBonus}`);
-            userFunds.referralBonus = roundedMyBonus;
-        }
+const myTotalBonus = totalCommission;
+const roundedMyBonus = Math.round(myTotalBonus);
+
+// ✅ সরাসরি userFunds.referralBonus আপডেট করুন
+userFunds.referralBonus = roundedMyBonus;
+
+// ✅ ডাটাবেসেও আপডেট করুন
+const { error: myUpdateError } = await client
+    .from('members')
+    .update({ referral_bonus: roundedMyBonus })
+    .eq('member_id', currentUser.id);
+
+if(myUpdateError) {
+    console.error('❌ আপনার referral_bonus আপডেট ব্যর্থ:', myUpdateError);
+} else {
+    console.log(`✅ আপনার referral_bonus ডাটাবেসে আপডেট: ${roundedMyBonus}`);
+}
+
+// ✅ রেফারেল বোনাস কার্ড আপডেট করুন (তৎক্ষণাৎ)
+const referralBonusCard = document.getElementById('referralBonusFund');
+if(referralBonusCard) {
+    const formattedBonus = roundedMyBonus.toLocaleString() + ' টাকা';
+    referralBonusCard.innerText = formattedBonus;
+    console.log('✅ referralBonusFund আপডেট:', formattedBonus);
+}
+
+// ✅ অন্য কার্ডগুলোও আপডেট করুন
+updateFundsDisplay();
         
         document.getElementById('totalReferrals').innerText = totalReferrals;
         document.getElementById('totalCommission').innerText = Math.floor(totalCommission).toLocaleString();
