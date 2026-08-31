@@ -5595,6 +5595,10 @@ function renderPendingPaymentsList() {
     `).join('');
 }
 
+// ============================================================
+// ✅ সম্পূর্ণ approvePayment() - মোবাইল/নাম দিয়ে খোঁজা ও আপডেট
+// ============================================================
+
 async function approvePayment(paymentId) {
     const id = parseInt(paymentId);
     if (isNaN(id) || id <= 0) {
@@ -5627,14 +5631,13 @@ async function approvePayment(paymentId) {
         console.log('📋 পেমেন্ট ডেটা:', payment);
         
         // ============================================================
-        // ✅ সদস্য খোঁজার লজিক (মোবাইল → আইডি → নাম)
+        // ✅ সদস্য খোঁজার লজিক (মোবাইল → নাম → আইডি)
         // ============================================================
         let member = null;
         let foundBy = '';
         let searchLog = [];
-        let matchedMembers = [];
         
-        // 📌 ১. মোবাইল নম্বর দিয়ে খোঁজুন (সর্বোচ্চ অগ্রাধিকার)
+        // 📌 ১. মোবাইল দিয়ে খোঁজুন (সর্বোচ্চ অগ্রাধিকার)
         if (payment.mobile && payment.mobile.trim() !== '') {
             const mobileClean = payment.mobile.trim();
             console.log('🔍 [১] মোবাইল দিয়ে খোঁজা হচ্ছে:', mobileClean);
@@ -5647,8 +5650,8 @@ async function approvePayment(paymentId) {
             
             if (memberByMobile) {
                 member = memberByMobile;
-                foundBy = 'মোবাইল';
-                searchLog.push({ step: 1, method: 'mobile', success: true, data: memberByMobile });
+                foundBy = '📱 মোবাইল';
+                searchLog.push({ step: 1, method: 'mobile', success: true });
                 console.log('✅ [১] মোবাইল দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
             } else {
                 searchLog.push({ step: 1, method: 'mobile', success: false });
@@ -5656,12 +5659,34 @@ async function approvePayment(paymentId) {
             }
         }
         
-        // 📌 ২. মোবাইল না মিললে আইডি দিয়ে খোঁজুন
+        // 📌 ২. মোবাইল না পেলে নাম দিয়ে খোঁজুন
+        if (!member && payment.member_name && payment.member_name.trim() !== '') {
+            const nameClean = payment.member_name.trim();
+            console.log('🔍 [২] নাম দিয়ে খোঁজা হচ্ছে:', nameClean);
+            
+            // নাম দিয়ে খোঁজুন (ILIKE ব্যবহার করছে)
+            const { data: memberByName, error: errorByName } = await client
+                .from('members')
+                .select('member_id, full_name, mobile, balance, referral_bonus, status')
+                .ilike('full_name', `%${nameClean}%`)
+                .maybeSingle();  // প্রথম ম্যাচটা নিবে
+            
+            if (memberByName) {
+                member = memberByName;
+                foundBy = '📛 নাম';
+                searchLog.push({ step: 2, method: 'name', success: true });
+                console.log('✅ [২] নাম দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
+            } else {
+                searchLog.push({ step: 2, method: 'name', success: false });
+                console.log('❌ [২] নাম দিয়ে সদস্য পাওয়া যায়নি');
+            }
+        }
+        
+        // 📌 ৩. কিছুই না পেলে member_id দিয়ে খোঁজুন (শেষ উপায়)
         if (!member && payment.member_id && payment.member_id.trim() !== '') {
             const memberIdClean = payment.member_id.trim();
-            console.log('🔍 [২] আইডি দিয়ে খোঁজা হচ্ছে:', memberIdClean);
+            console.log('🔍 [৩] member_id দিয়ে খোঁজা হচ্ছে (শেষ উপায়):', memberIdClean);
             
-            // ✅ ২.১ পুরো আইডি দিয়ে খোঁজুন
             const { data: memberById, error: errorById } = await client
                 .from('members')
                 .select('member_id, full_name, mobile, balance, referral_bonus, status')
@@ -5670,160 +5695,12 @@ async function approvePayment(paymentId) {
             
             if (memberById) {
                 member = memberById;
-                foundBy = 'আইডি (পুরো)';
-                searchLog.push({ step: 2, method: 'member_id_full', success: true, data: memberById });
-                console.log('✅ [২.১] পুরো আইডি দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
+                foundBy = '🆔 member_id (শেষ উপায়)';
+                searchLog.push({ step: 3, method: 'member_id', success: true });
+                console.log('✅ [৩] member_id দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
             } else {
-                searchLog.push({ step: 2, method: 'member_id_full', success: false });
-                console.log('❌ [২.১] পুরো আইডি দিয়ে সদস্য পাওয়া যায়নি');
-                
-                // ✅ ২.২ আইডির শেষ ৪ ডিজিট দিয়ে খোঁজুন
-                const last4Digits = memberIdClean.slice(-4);
-                console.log('🔍 [২.২] আইডির শেষ ৪ ডিজিট দিয়ে খোঁজা হচ্ছে:', last4Digits);
-                
-                // সব সদস্য থেকে শেষ ৪ ডিজিট মিলিয়ে খোঁজুন
-                const { data: allMembers, error: allError } = await client
-                    .from('members')
-                    .select('member_id, full_name, mobile, balance, referral_bonus, status')
-                    .like('member_id', `%${last4Digits}`);
-                
-                if (allError) {
-                    console.error('❌ সদস্য লোড error:', allError);
-                } else if (allMembers && allMembers.length > 0) {
-                    matchedMembers = allMembers;
-                    console.log(`🔍 [২.২] শেষ ৪ ডিজিট (${last4Digits}) মিলেছে ${allMembers.length} জন সদস্যের সাথে`);
-                    
-                    // যদি একাধিক সদস্য মেলে, তাহলে সঠিকটি নির্বাচন করুন
-                    if (allMembers.length === 1) {
-                        member = allMembers[0];
-                        foundBy = `আইডি (শেষ ৪ ডিজিট: ${last4Digits})`;
-                        searchLog.push({ step: 2, method: 'member_id_last4', success: true, data: member });
-                        console.log('✅ [২.২] শেষ ৪ ডিজিট দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
-                    } else {
-                        // একাধিক সদস্য মিলেছে - ব্যবহারকারীকে নির্বাচন করতে বলুন
-                        console.log(`⚠️ [২.২] শেষ ৪ ডিজিটে ${allMembers.length} জন সদস্য মিলেছে`);
-                        searchLog.push({ step: 2, method: 'member_id_last4', success: true, multiple: true, count: allMembers.length });
-                        
-                        // মডাল তৈরি করুন
-                        const memberOptions = allMembers.map((m, index) => {
-                            return `${index + 1}. ${m.full_name} (${m.member_id}) - ${m.mobile}`;
-                        }).join('\n');
-                        
-                        const userChoice = prompt(
-                            `⚠️ আইডির শেষ ৪ ডিজিট (${last4Digits}) দিয়ে ${allMembers.length} জন সদস্য পাওয়া গেছে!\n\n` +
-                            `পেমেন্টের তথ্য:\n` +
-                            `   member_id: ${payment.member_id}\n` +
-                            `   mobile: ${payment.mobile || 'N/A'}\n` +
-                            `   নাম: ${payment.member_name}\n\n` +
-                            `নিচ থেকে সঠিক সদস্য নির্বাচন করুন:\n` +
-                            memberOptions + '\n\n' +
-                            `নম্বর দিন (1-${allMembers.length}):`
-                        );
-                        
-                        if (userChoice) {
-                            const selectedIndex = parseInt(userChoice) - 1;
-                            if (selectedIndex >= 0 && selectedIndex < allMembers.length) {
-                                member = allMembers[selectedIndex];
-                                foundBy = `আইডি (শেষ ৪ ডিজিট: ${last4Digits}) - ব্যবহারকারী নির্বাচিত`;
-                                searchLog.push({ step: 2, method: 'member_id_last4_user_selected', success: true, data: member });
-                                console.log('✅ [২.২] ব্যবহারকারী নির্বাচিত সদস্য:', member.member_id);
-                            }
-                        }
-                    }
-                } else {
-                    searchLog.push({ step: 2, method: 'member_id_last4', success: false });
-                    console.log('❌ [২.২] শেষ ৪ ডিজিট দিয়ে কোনো সদস্য পাওয়া যায়নি');
-                }
-            }
-        }
-        
-        // 📌 ৩. মোবাইল এবং আইডি না মিললে নাম দিয়ে খোঁজুন (সর্বশেষ)
-        if (!member && payment.member_name && payment.member_name.trim() !== '') {
-            const nameClean = payment.member_name.trim();
-            console.log('🔍 [৩] নাম দিয়ে খোঁজা হচ্ছে:', nameClean);
-            console.log('⚠️ সতর্কতা: নাম দিয়ে খোঁজা হচ্ছে, এটি ভুল সদস্য নির্বাচন করতে পারে!');
-            
-            // নাম দিয়ে খোঁজুন
-            const { data: memberByName, error: errorByName } = await client
-                .from('members')
-                .select('member_id, full_name, mobile, balance, referral_bonus, status')
-                .ilike('full_name', `%${nameClean}%`)
-                .limit(5);
-            
-            if (errorByName) {
-                console.error('❌ নাম দিয়ে খোঁজা error:', errorByName);
-            } else if (memberByName && memberByName.length > 0) {
-                matchedMembers = memberByName;
-                console.log(`🔍 [৩] নাম মিলেছে ${memberByName.length} জন সদস্যের সাথে`);
-                
-                // যদি একাধিক সদস্য মেলে
-                if (memberByName.length === 1) {
-                    // একটি সদস্য পেলে, মোবাইল বা আইডি মিল আছে কিনা চেক করুন
-                    const foundMember = memberByName[0];
-                    const hasMatchingMobile = payment.mobile && foundMember.mobile === payment.mobile.trim();
-                    const hasMatchingId = payment.member_id && foundMember.member_id === payment.member_id.trim();
-                    
-                    if (hasMatchingMobile || hasMatchingId) {
-                        member = foundMember;
-                        foundBy = `নাম (মোবাইল/আইডি মিলেছে)`;
-                        searchLog.push({ step: 3, method: 'member_name', success: true, data: foundMember });
-                        console.log('✅ [৩] নাম দিয়ে সদস্য পাওয়া গেছে (মোবাইল/আইডি মিলেছে):', member.member_id);
-                    } else {
-                        // নাম মিললেও মোবাইল/আইডি মিলছে না
-                        console.warn('⚠️ [৩] নাম মিললেও মোবাইল/আইডি মিলছে না!');
-                        searchLog.push({ step: 3, method: 'member_name', success: false, reason: 'mobile/id mismatch' });
-                        
-                        const confirmMsg = `⚠️ সতর্কতা!\n\n` +
-                            `পেমেন্টের তথ্য:\n` +
-                            `   member_id: ${payment.member_id || 'N/A'}\n` +
-                            `   mobile: ${payment.mobile || 'N/A'}\n` +
-                            `   নাম: ${payment.member_name}\n\n` +
-                            `পাওয়া সদস্য:\n` +
-                            `   member_id: ${foundMember.member_id}\n` +
-                            `   mobile: ${foundMember.mobile}\n` +
-                            `   নাম: ${foundMember.full_name}\n\n` +
-                            `⚠️ মোবাইল/আইডি মিলছে না! তবুও কি এই সদস্যের ব্যালেন্স আপডেট করবেন?`;
-                        
-                        if (confirm(confirmMsg)) {
-                            member = foundMember;
-                            foundBy = `নাম (⚠️ মোবাইল/আইডি মিলছে না)`;
-                            searchLog.push({ step: 3, method: 'member_name', success: true, data: foundMember, forced: true });
-                            console.log('⚠️ [৩] নাম দিয়ে সদস্য ফোর্স করা হয়েছে:', member.member_id);
-                        }
-                    }
-                } else {
-                    // একাধিক সদস্য মিলেছে
-                    console.log(`⚠️ [৩] নামে ${memberByName.length} জন সদস্য মিলেছে`);
-                    searchLog.push({ step: 3, method: 'member_name', success: true, multiple: true, count: memberByName.length });
-                    
-                    const memberOptions = memberByName.map((m, index) => {
-                        return `${index + 1}. ${m.full_name} (${m.member_id}) - ${m.mobile}`;
-                    }).join('\n');
-                    
-                    const userChoice = prompt(
-                        `⚠️ নাম দিয়ে ${memberByName.length} জন সদস্য পাওয়া গেছে!\n\n` +
-                        `পেমেন্টের তথ্য:\n` +
-                        `   member_id: ${payment.member_id || 'N/A'}\n` +
-                        `   mobile: ${payment.mobile || 'N/A'}\n` +
-                        `   নাম: ${payment.member_name}\n\n` +
-                        `নিচ থেকে সঠিক সদস্য নির্বাচন করুন:\n` +
-                        memberOptions + '\n\n' +
-                        `নম্বর দিন (1-${memberByName.length}):`
-                    );
-                    
-                    if (userChoice) {
-                        const selectedIndex = parseInt(userChoice) - 1;
-                        if (selectedIndex >= 0 && selectedIndex < memberByName.length) {
-                            member = memberByName[selectedIndex];
-                            foundBy = `নাম (ব্যবহারকারী নির্বাচিত)`;
-                            searchLog.push({ step: 3, method: 'member_name_user_selected', success: true, data: member });
-                            console.log('✅ [৩] ব্যবহারকারী নির্বাচিত সদস্য:', member.member_id);
-                        }
-                    }
-                }
-            } else {
-                searchLog.push({ step: 3, method: 'member_name', success: false });
-                console.log('❌ [৩] নাম দিয়ে কোনো সদস্য পাওয়া যায়নি');
+                searchLog.push({ step: 3, method: 'member_id', success: false });
+                console.log('❌ [৩] member_id দিয়ে সদস্য পাওয়া যায়নি');
             }
         }
         
@@ -5835,8 +5712,7 @@ async function approvePayment(paymentId) {
             let errorMsg = '❌ সদস্য পাওয়া যায়নি!\n\n';
             errorMsg += 'খোঁজার চেষ্টা:\n';
             searchLog.forEach(r => {
-                let status = r.success ? '✅ পাওয়া গেছে' : '❌ পাওয়া যায়নি';
-                if (r.multiple) status = `⚠️ ${r.count} জন পাওয়া গেছে`;
+                const status = r.success ? '✅ পাওয়া গেছে' : '❌ পাওয়া যায়নি';
                 errorMsg += `   ${r.step}. ${r.method}: ${status}\n`;
             });
             errorMsg += `\n📌 member_id: ${payment.member_id || 'N/A'}`;
@@ -5848,7 +5724,7 @@ async function approvePayment(paymentId) {
         }
         
         // ============================================================
-        // ✅ সদস্য পাওয়া গেলে ব্যালেন্স আপডেট করুন
+        // ✅ সদস্য পাওয়া গেলে ব্যালেন্স আপডেট করুন (মোবাইল দিয়ে)
         // ============================================================
         
         // ✅ সদস্য সক্রিয় কিনা চেক করুন
@@ -5865,22 +5741,21 @@ async function approvePayment(paymentId) {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('📊 ব্যালেন্স আপডেট তথ্য:');
         console.log(`   👤 সদস্য: ${member.full_name}`);
-        console.log(`   🆔 member_id: ${member.member_id}`);
-        console.log(`   📱 mobile: ${member.mobile}`);
-        console.log(`   🔍 পাওয়া গেছে: ${foundBy} দিয়ে`);
+        console.log(`   📱 মোবাইল: ${member.mobile}`);
+        console.log(`   🔍 পাওয়া গেছে: ${foundBy}`);
         console.log(`   💰 বর্তমান ব্যালেন্স: ${currentBalance}`);
         console.log(`   ➕ পেমেন্টের পরিমাণ: ${paymentAmount}`);
         console.log(`   🆕 নতুন ব্যালেন্স: ${newBalance}`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
-        // ✅ সদস্যের ব্যালেন্স আপডেট করুন
+        // ✅ মোবাইল দিয়ে ব্যালেন্স আপডেট করুন (দ্রুত)
         const { data: updateResult, error: updateError } = await client
             .from('members')
             .update({ 
                 balance: newBalance,
                 updated_at: new Date().toISOString()
             })
-            .eq('member_id', member.member_id)
+            .eq('mobile', member.mobile)  // ← মোবাইল দিয়ে আপডেট!
             .select('balance');
         
         if (updateError) {
@@ -5935,35 +5810,30 @@ async function approvePayment(paymentId) {
         renderPendingMembersList();
         
         // ============================================================
-        // 🔥 ব্রডকাস্ট চ্যানেল - সদস্য ড্যাশবোর্ডে আপডেট পাঠানোর জন্য
+        // 🔥 BroadcastChannel - সদস্য ড্যাশবোর্ডে আপডেট পাঠান
         // ============================================================
         try {
             const bc = new BroadcastChannel('tuknbd_updates');
             bc.postMessage({ 
                 type: 'payment_approved', 
-                memberId: member.member_id, 
+                memberId: member.member_id,
+                mobile: member.mobile,
                 amount: paymentAmount,
                 timestamp: new Date().toISOString()
             });
             setTimeout(() => { 
                 try { bc.close(); } catch(e) {} 
             }, 1000);
-            console.log('📢 সদস্য ড্যাশবোর্ডে পেমেন্ট অনুমোদন মেসেজ পাঠানো হয়েছে:', member.member_id);
+            console.log('📢 সদস্য ড্যাশবোর্ডে পেমেন্ট মেসেজ পাঠানো হয়েছে (📱', member.mobile, ')');
         } catch(e) {
             console.log('BroadcastChannel সমর্থিত নয়:', e);
         }
-        // ============================================================
         
         // ✅ সাফল্যের মেসেজ
-        let warningMsg = '';
-        if (foundBy.includes('⚠️') || foundBy.includes('মিলছে না')) {
-            warningMsg = '\n⚠️ সতর্কতা: মোবাইল/আইডি মিলছে না!';
-        }
-        
         showToast(
-            `✅ ${member.full_name} এর ${formatAmount(paymentAmount)} টাকা পেমেন্ট অনুমোদিত হয়েছে!\n` +
+            `✅ ${member.full_name} (📱${member.mobile}) এর ${formatAmount(paymentAmount)} টাকা পেমেন্ট অনুমোদিত!\n` +
             `📊 নতুন ব্যালেন্স: ${formatAmount(updatedBalance)} টাকা\n` +
-            `🔍 পাওয়া গেছে: ${foundBy}${warningMsg}`,
+            `🔍 পাওয়া গেছে: ${foundBy}`,
             'success'
         );
         
