@@ -4193,8 +4193,9 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
     
     try {
         let normalizedType = type || '';
-        let updateField = 'balance';
+        let updateField = 'balance'; // ডিফল্ট
         
+        // ✅ সঠিক ফিল্ড নির্ধারণ
         if (normalizedType.includes('রেফারেল বোনাস')) {
             updateField = 'referral_bonus';
             normalizedType = 'রেফারেল বোনাস';
@@ -4213,14 +4214,12 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
         } else if (normalizedType.includes('সব লভ্যাংশ')) {
             await approveAllProfitWithdrawal(id, amount, memberId, noteText);
             return;
-        } else {
-            updateField = 'balance';
-            normalizedType = 'মূলধন';
         }
         
+        // ✅ সঠিক ফিল্ড থেকে ব্যালেন্স পড়ুন
         const { data: member, error: memberError } = await client
             .from('members')
-            .select(updateField)
+            .select(`${updateField}`)
             .eq('member_id', memberId)
             .single();
         
@@ -4229,15 +4228,20 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
         const currentAmount = member?.[updateField] || 0;
         
         if (currentAmount < amount) {
-            showToast(`❌ ব্যালেন্স ${formatAmount(currentAmount)} টাকা। এর বেশি উত্তোলন সম্ভব নয়!`, 'error');
+            showToast(`❌ ${updateField} ব্যালেন্স ${formatAmount(currentAmount)} টাকা। এর বেশি উত্তোলন সম্ভব নয়!`, 'error');
             return;
         }
         
+        // ✅ সঠিক ফিল্ড আপডেট করুন
         await client
             .from('members')
-            .update({ [updateField]: currentAmount - amount })
+            .update({ 
+                [updateField]: currentAmount - amount,
+                updated_at: new Date().toISOString()
+            })
             .eq('member_id', memberId);
         
+        // ✅ উইথড্রয়াল স্ট্যাটাস আপডেট
         await client
             .from('withdrawals')
             .update({
@@ -4255,27 +4259,35 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
         await updateAllBadges();
         await loadRealDashboard();
         
-        showToast(`✅ ${formatAmount(amount)} টাকা উত্তোলন অনুমোদিত হয়েছে! (${normalizedType})${noteText ? '\n📝 নোট: ' + noteText : ''}`, 'success');
+        // ✅ সাফল্যের মেসেজ (সঠিক ফিল্ডের নাম দেখান)
+        const fieldLabels = {
+            'balance': 'মূলধন',
+            'referral_bonus': 'রেফারেল বোনাস',
+            'profit_balance_savings': 'সঞ্চয় লভ্যাংশ',
+            'profit_balance_investment': 'বিনিয়োগ লভ্যাংশ',
+            'profit_balance_referral': 'রেফারেল লভ্যাংশ'
+        };
+        const fieldLabel = fieldLabels[updateField] || normalizedType;
         
-        // ============================================================
-        // 🔥 ব্রডকাস্ট চ্যানেল - সদস্য ড্যাশবোর্ডে আপডেট পাঠানোর জন্য
-        // ============================================================
+        showToast(`✅ ${formatAmount(amount)} টাকা উত্তোলন অনুমোদিত হয়েছে! (${fieldLabel})${noteText ? '\n📝 নোট: ' + noteText : ''}`, 'success');
+        
+        // 🔥 BroadcastChannel - সদস্য ড্যাশবোর্ডে আপডেট পাঠান
         try {
             const bc = new BroadcastChannel('tuknbd_updates');
             bc.postMessage({ 
                 type: 'withdrawal_approved', 
                 memberId: memberId, 
                 amount: amount,
+                field: updateField,
                 timestamp: new Date().toISOString()
             });
             setTimeout(() => { 
                 try { bc.close(); } catch(e) {} 
             }, 1000);
-            console.log('📢 সদস্য ড্যাশবোর্ডে উত্তোলন অনুমোদন মেসেজ পাঠানো হয়েছে:', memberId);
+            console.log(`📢 সদস্য ড্যাশবোর্ডে ${fieldLabel} উত্তোলন মেসেজ পাঠানো হয়েছে:`, memberId);
         } catch(e) {
             console.log('BroadcastChannel সমর্থিত নয়:', e);
         }
-        // ============================================================
         
     } catch(e) {
         console.error('Withdrawal approval error:', e);
