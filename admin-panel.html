@@ -15374,6 +15374,119 @@ async function autoFixAllPayments() {
     }
 }
 
+    // ================================================================
+// 🔥 অনুপস্থিত ফাংশনসমূহ
+// ================================================================
+
+// ১. বিক্রয় সারাংশ আপডেট
+async function updateBookSalesSummary(orderId) {
+    try {
+        const client = initSupabaseClient();
+        if (!client) return;
+        
+        // অর্ডারের মোট পেমেন্ট ক্যালকুলেট
+        const { data: payments, error } = await client
+            .from('book_payments')
+            .select('amount')
+            .eq('order_id', orderId)
+            .eq('status', 'approved');
+        
+        if (error) throw error;
+        
+        const totalPaid = payments ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) : 0;
+        
+        // অর্ডার আপডেট
+        await client
+            .from('book_orders')
+            .update({
+                total_paid: totalPaid,
+                remaining: (await client.from('book_orders').select('total_price').eq('order_id', orderId).single()).data?.total_price - totalPaid || 0
+            })
+            .eq('order_id', orderId);
+            
+    } catch(e) {
+        console.error('Update sales summary error:', e);
+    }
+}
+
+// ================================================================
+// 🔥 অনুপস্থিত ফাংশনসমূহ
+// ================================================================
+
+// ১. অর্ডার এক্সপোর্ট
+function exportOrders() {
+    const table = document.querySelector('#bookOrdersList table');
+    if (!table) {
+        showToast('কোনো ডেটা নেই!', 'error');
+        return;
+    }
+    
+    let csv = "তারিখ,ছাত্র,আইডি,শ্রেণী,মোট,স্ট্যাটাস\n";
+    const rows = table.querySelectorAll('tbody tr');
+    rows.forEach(row => {
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 6) {
+            csv += `"${cells[0]?.textContent.trim() || ''}","${cells[1]?.textContent.trim() || ''}","${cells[2]?.textContent.trim() || ''}","${cells[3]?.textContent.trim() || ''}","${cells[4]?.textContent.trim() || ''}","${cells[5]?.textContent.trim() || ''}"\n`;
+        }
+    });
+    
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `orders_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    showToast('✅ অর্ডার এক্সপোর্ট সম্পূর্ণ!', 'success');
+}
+
+// ২. বিক্রয় সারাংশ আপডেট
+async function updateBookSalesSummary(orderId) {
+    try {
+        const client = initSupabaseClient();
+        if (!client) return;
+        
+        // অর্ডারের মোট পেমেন্ট ক্যালকুলেট
+        const { data: payments, error } = await client
+            .from('book_payments')
+            .select('amount')
+            .eq('order_id', orderId)
+            .eq('status', 'approved');
+        
+        if (error) throw error;
+        
+        const totalPaid = payments ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) : 0;
+        
+        // অর্ডার আপডেট
+        const { data: order } = await client
+            .from('book_orders')
+            .select('total_price')
+            .eq('order_id', orderId)
+            .single();
+        
+        if (order) {
+            await client
+                .from('book_orders')
+                .update({
+                    total_paid: totalPaid,
+                    remaining: (order.total_price || 0) - totalPaid
+                })
+                .eq('order_id', orderId);
+        }
+            
+    } catch(e) {
+        console.error('Update sales summary error:', e);
+    }
+}
+
+// ৩. ব্যাজ আপডেট (যদি ডিফাইন না থাকে)
+function updateBookBadge(count) {
+    const badge = document.getElementById('pendingBookBadge');
+    if (badge) {
+        badge.innerText = count;
+        badge.style.display = count > 0 ? 'flex' : 'none';
+    }
+}
+    
 // ============================================================
 // ✅ রিপোর্ট ডাউনলোড ফাংশন
 // ============================================================
