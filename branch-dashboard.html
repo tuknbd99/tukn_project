@@ -913,20 +913,23 @@ function updateSidebarIcons() {
 }
 
 // ============================================================
-// Badges Update
+// Badges Update - COMPLETE FIX
 // ============================================================
 async function updateBadges() {
     try {
         const client = supabaseClient;
         if (!client) return;
         
-        const { data: bm } = await client.from('branch_members').select('member_id').eq('branch_id', branchId);
-        const ids = bm?.map(m => m.member_id) || [];
-        
+        // ১. পেন্ডিং সদস্য
         const { count: pm } = await client.from('branch_members').select('*', { count: 'exact', head: true }).eq('branch_id', branchId).eq('status', 'pending');
         const pb = document.getElementById('pendingBadge');
         if (pb) { pb.textContent = pm || 0; pb.style.display = (pm || 0) > 0 ? 'inline' : 'none'; }
         
+        // ২. ব্রাঞ্চের সব সদস্যের আইডি বের করুন
+        const { data: bm } = await client.from('branch_members').select('member_id').eq('branch_id', branchId);
+        const ids = bm?.map(m => m.member_id) || [];
+        
+        // ৩. পেন্ডিং পেমেন্ট
         if (ids.length) {
             const { count: pp } = await client.from('payments').select('*', { count: 'exact', head: true }).in('member_id', ids).eq('status', 'pending');
             const ppb = document.getElementById('pendingPaymentBadge');
@@ -935,18 +938,28 @@ async function updateBadges() {
             const { count: pw } = await client.from('withdrawals').select('*', { count: 'exact', head: true }).in('member_id', ids).eq('status', 'pending');
             const pwb = document.getElementById('pendingWithdrawalBadge');
             if (pwb) { pwb.textContent = pw || 0; pwb.style.display = (pw || 0) > 0 ? 'inline' : 'none'; }
+        } else {
+            const ppb = document.getElementById('pendingPaymentBadge');
+            if (ppb) { ppb.textContent = '0'; ppb.style.display = 'none'; }
+            const pwb = document.getElementById('pendingWithdrawalBadge');
+            if (pwb) { pwb.textContent = '0'; pwb.style.display = 'none'; }
         }
         
+        // ৪. পেন্ডিং লোন
         const { count: pl } = await client.from('loan_applications').select('*', { count: 'exact', head: true }).eq('branch_id', branchId).eq('status', 'pending');
         const plb = document.getElementById('pendingLoanBadge');
         if (plb) { plb.textContent = pl || 0; plb.style.display = (pl || 0) > 0 ? 'inline' : 'none'; }
         
+        // ৫. পেন্ডিং লোন পেমেন্ট (pending + pending_verification উভয়)
         const { data: loans } = await client.from('loan_applications').select('id').eq('branch_id', branchId);
         const loanIds = loans?.map(l => l.id) || [];
         if (loanIds.length) {
-            const { count: plp } = await client.from('loan_payments').select('*', { count: 'exact', head: true }).in('loan_id', loanIds).eq('status', 'pending_verification');
+            const { count: plp } = await client.from('loan_payments').select('*', { count: 'exact', head: true }).in('loan_id', loanIds).in('status', ['pending', 'pending_verification']);
             const plpb = document.getElementById('pendingLoanPaymentBadge');
             if (plpb) { plpb.textContent = plp || 0; plpb.style.display = (plp || 0) > 0 ? 'inline' : 'none'; }
+        } else {
+            const plpb = document.getElementById('pendingLoanPaymentBadge');
+            if (plpb) { plpb.textContent = '0'; plpb.style.display = 'none'; }
         }
     } catch(e) { console.error('Badge error:', e); }
 }
@@ -956,16 +969,13 @@ async function updateBadges() {
 // ============================================================
 function getDefaultPermissions(role) {
     const base = {
-        // ড্যাশবোর্ড (১)
         view_dashboard: true,
-        // সদস্য ব্যবস্থাপনা (৬)
         view_members: true,
         view_pending_members: true,
         view_deleted_members: false,
         view_member_details: true,
         transfer_member: false,
         add_member: false,
-        // আর্থিক লেনদেন (৭)
         view_payments: true,
         view_pending_payments: true,
         view_rejected_payments: false,
@@ -973,22 +983,18 @@ function getDefaultPermissions(role) {
         view_withdrawals: true,
         view_pending_withdrawals: true,
         view_transactions: true,
-        // লোন ব্যবস্থাপনা (৬)
         view_loans: true,
         view_pending_loans: true,
         view_loan_payments: true,
         view_pending_loan_payments: true,
         view_loan_collection: true,
         create_loan: false,
-        // রিপোর্ট (৪)
         view_reports: true,
         view_savings_loan_report: true,
         view_savings_due: true,
         view_loan_report: true,
-        // সেটিংস (২)
         view_settings: false,
         view_permissions: true,
-        // অন্যান্য (৫)
         approve_payment: false,
         approve_loan: false,
         delete_member: false,
@@ -1055,7 +1061,6 @@ function showTab(tab) {
             const c = document.getElementById(cid) || document.getElementById(tab + 'Content');
             if (c) {
                 c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-spinner fa-spin text-2xl block mb-2 text-emerald-500"></i><p>ডেটা লোড হচ্ছে...</p></div>`;
-                // ডামি ডেটা লোড
                 setTimeout(() => {
                     if (tab === 'deletedMembers') loadDeletedMembers();
                     else if (tab === 'memberDetails') loadMemberDetails();
@@ -1086,35 +1091,36 @@ function logout() {
 }
 
 // ============================================================
-// Dashboard Load
+// Dashboard Load - COMPLETE FIX
 // ============================================================
 async function loadDashboard() {
     const client = supabaseClient;
     if (!client) return;
     try {
-        const { data: bm } = await client.from('branch_members').select('member_id').eq('branch_id', branchId).eq('status', 'active');
-        const ids = bm?.map(m => m.member_id) || [];
-        const { count: mc } = await client.from('branch_members').select('*', { count: 'exact', head: true }).eq('branch_id', branchId);
-        const { data: bal } = await client.from('branch_balances').select('total_savings, total_loan_given, total_loan_collected, total_withdrawal').eq('branch_id', branchId).maybeSingle();
+        // ✅ সঠিক: active + pending উভয় কাউন্ট
+        const { count: mc } = await client.from('branch_members').select('*', { count: 'exact', head: true }).eq('branch_id', branchId).in('status', ['active', 'pending']);
+        document.getElementById('totalMembers').textContent = mc || 0;
         
-        let savings = 0, loanCollected = 0, loanGiven = 0, withdrawal = 0;
+        const { data: bm } = await client.from('branch_members').select('member_id').eq('branch_id', branchId);
+        const ids = bm?.map(m => m.member_id) || [];
+        
+        let savings = 0, withdrawal = 0;
         if (ids.length) {
             const { data: p } = await client.from('payments').select('amount').eq('status', 'approved').in('member_id', ids);
             if (p) savings = p.reduce((s, v) => s + (v.amount || 0), 0);
             const { data: w } = await client.from('withdrawals').select('amount').eq('status', 'approved').in('member_id', ids);
             if (w) withdrawal = w.reduce((s, v) => s + (v.amount || 0), 0);
         }
-        const { data: loans } = await client.from('loan_applications').select('id').eq('branch_id', branchId).eq('status', 'approved');
+        const { data: loans } = await client.from('loan_applications').select('id, amount').eq('branch_id', branchId).eq('status', 'approved');
         const loanIds = loans?.map(l => l.id) || [];
+        let loanCollected = 0, loanGiven = 0;
         if (loanIds.length) {
-            const { data: lp } = await client.from('loan_payments').select('total_amount, emi_amount').eq('status', 'approved').in('loan_id', loanIds);
+            const { data: lp } = await client.from('loan_payments').select('total_amount, emi_amount').in('loan_id', loanIds).eq('status', 'approved');
             if (lp) loanCollected = lp.reduce((s, v) => s + (v.total_amount || v.emi_amount || 0), 0);
+            loanGiven = loans.reduce((s, l) => s + (l.amount || 0), 0);
         }
-        const { data: lg } = await client.from('loan_applications').select('amount').eq('branch_id', branchId).eq('status', 'approved');
-        if (lg) loanGiven = lg.reduce((s, v) => s + (v.amount || 0), 0);
         
         const net = savings + loanCollected - loanGiven - withdrawal;
-        document.getElementById('totalMembers').textContent = mc || 0;
         document.getElementById('totalSavings').textContent = formatAmountWithText(savings);
         document.getElementById('totalLoans').textContent = formatAmountWithText(loanGiven);
         document.getElementById('netBalance').textContent = formatAmountWithText(net);
@@ -1132,13 +1138,14 @@ async function loadDashboard() {
 }
 
 // ============================================================
-// Members Load
+// Members Load - COMPLETE FIX
 // ============================================================
 async function loadMembers() {
     const client = supabaseClient;
     if (!client) return;
     try {
-        const { data } = await client.from('branch_members').select('members(*)').eq('branch_id', branchId).eq('status', 'active');
+        // ✅ সঠিক: active + pending উভয় দেখান
+        const { data } = await client.from('branch_members').select('members(*)').eq('branch_id', branchId).in('status', ['active', 'pending']);
         const tbody = document.getElementById('branchMembersList');
         if (!data?.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center text-gray-400 py-3">কোনো সদস্য নেই</td></tr>'; return; }
         tbody.innerHTML = data.map(b => {
@@ -1148,6 +1155,9 @@ async function loadMembers() {
     } catch(e) { console.error('Load members error:', e); }
 }
 
+// ============================================================
+// Pending Members - COMPLETE FIX
+// ============================================================
 async function loadPendingMembers() {
     const c = document.getElementById('pendingMembersList');
     const client = supabaseClient;
@@ -1162,11 +1172,15 @@ async function loadPendingMembers() {
     } catch(e) { console.error('Load pending members error:', e); }
 }
 
+// ============================================================
+// Approve/Reject Member - COMPLETE FIX
+// ============================================================
 async function approveMember(memberId) {
     const client = supabaseClient;
     if (!client) return;
     try {
-        await client.from('members').update({ status: 'active' }).eq('member_id', memberId);
+        await client.from('members').update({ status: 'active', approved_at: new Date().toISOString() }).eq('member_id', memberId);
+        await client.from('branch_members').update({ status: 'active' }).eq('member_id', memberId).eq('branch_id', branchId);
         showToast('✅ সদস্য অনুমোদিত হয়েছে!');
         loadPendingMembers(); loadMembers(); loadDashboard(); updateBadges();
     } catch(e) { showToast('❌ অনুমোদন ব্যর্থ!', 'error'); }
@@ -1177,11 +1191,15 @@ async function rejectMember(memberId) {
     if (!client) return;
     try {
         await client.from('members').update({ status: 'rejected' }).eq('member_id', memberId);
+        await client.from('branch_members').update({ status: 'rejected' }).eq('member_id', memberId).eq('branch_id', branchId);
         showToast('❌ সদস্য বাতিল করা হয়েছে!', 'warning');
         loadPendingMembers(); loadMembers(); loadDashboard(); updateBadges();
     } catch(e) { showToast('❌ বাতিল ব্যর্থ!', 'error'); }
 }
 
+// ============================================================
+// Add New Member
+// ============================================================
 async function addNewMember() {
     if (!hasPermission('add_member')) { showPermissionDenied('addMember'); return; }
     const name = document.getElementById('newMemberName').value.trim();
@@ -1199,6 +1217,7 @@ async function addNewMember() {
             profit_balance_savings: 0, profit_balance_investment: 0, profit_balance_referral: 0,
             created_at: new Date().toISOString()
         }]);
+        await client.from('branch_members').insert([{ branch_id: branchId, member_id: id, status: 'pending', joined_at: new Date().toISOString() }]);
         showToast('✅ নতুন সদস্য যোগ করা হয়েছে!');
         document.getElementById('newMemberName').value = '';
         document.getElementById('newMemberMobile').value = '';
@@ -1208,7 +1227,7 @@ async function addNewMember() {
 }
 
 // ============================================================
-// Payments Load
+// Payments - COMPLETE FIX
 // ============================================================
 async function loadPayments() {
     const client = supabaseClient;
@@ -1227,6 +1246,9 @@ async function loadPayments() {
     } catch(e) { console.error('Load payments error:', e); }
 }
 
+// ============================================================
+// Pending Payments - COMPLETE FIX
+// ============================================================
 async function loadPendingPayments() {
     const c = document.getElementById('pendingPaymentsList');
     const client = supabaseClient;
@@ -1244,14 +1266,20 @@ async function loadPendingPayments() {
     } catch(e) { console.error('Load pending payments error:', e); }
 }
 
+// ============================================================
+// Approve Payment - COMPLETE FIX
+// ============================================================
 async function approvePayment(paymentId) {
     const client = supabaseClient;
     if (!client) return;
     try {
         const { data: payment } = await client.from('payments').select('*').eq('id', paymentId).single();
         if (!payment) { showToast('পেমেন্ট পাওয়া যায়নি!', 'error'); return; }
-        await client.from('payments').update({ status: 'approved' }).eq('id', paymentId);
-        await client.from('members').update({ balance: (payment.balance || 0) + payment.amount }).eq('member_id', payment.member_id);
+        const { data: member } = await client.from('members').select('balance').eq('member_id', payment.member_id).single();
+        await client.from('payments').update({ status: 'approved', approved_at: new Date().toISOString() }).eq('id', paymentId);
+        await client.from('members').update({ 
+            balance: (member?.balance || 0) + payment.amount 
+        }).eq('member_id', payment.member_id);
         showToast('✅ পেমেন্ট অনুমোদিত হয়েছে!');
         loadPendingPayments(); loadPayments(); loadDashboard(); updateBadges();
     } catch(e) { showToast('❌ অনুমোদন ব্যর্থ!', 'error'); }
@@ -1296,7 +1324,7 @@ async function approveLoan(loanId) {
     const client = supabaseClient;
     if (!client) return;
     try {
-        await client.from('loan_applications').update({ status: 'approved' }).eq('id', loanId);
+        await client.from('loan_applications').update({ status: 'approved', approved_at: new Date().toISOString() }).eq('id', loanId);
         showToast('✅ লোন অনুমোদিত হয়েছে!');
         loadPendingLoans(); loadLoans(); loadDashboard(); updateBadges();
     } catch(e) { showToast('❌ অনুমোদন ব্যর্থ!', 'error'); }
@@ -1313,7 +1341,203 @@ async function rejectLoan(loanId) {
 }
 
 // ============================================================
-// Reports Load
+// Withdrawals - COMPLETE FIX
+// ============================================================
+async function loadWithdrawals() {
+    const c = document.getElementById('withdrawalsList');
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        const { data: bm } = await client.from('branch_members').select('member_id').eq('branch_id', branchId);
+        const ids = bm?.map(m => m.member_id) || [];
+        let data = [];
+        if (ids.length) {
+            const { data: d } = await client.from('withdrawals').select('*').in('member_id', ids).eq('status', 'approved').order('requested_at', { ascending: false });
+            data = d || [];
+        }
+        if (!data.length) { c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-check-circle text-2xl block mb-1 text-gray-300"></i><p>কোনো উত্তোলন নেই</p></div>`; return; }
+        c.innerHTML = data.map(w => `<div class="flex justify-between items-center border-b py-2 last:border-0"><div><p class="font-medium text-sm">${w.member_name || '-'}</p><p class="text-xs text-gray-400">${formatAmountWithText(w.amount)}</p></div><span class="status-badge status-approved">✅ অনুমোদিত</span></div>`).join('');
+    } catch(e) { console.error('Load withdrawals error:', e); }
+}
+
+async function loadPendingWithdrawals() {
+    const c = document.getElementById('pendingWithdrawalsList');
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        const { data: bm } = await client.from('branch_members').select('member_id').eq('branch_id', branchId);
+        const ids = bm?.map(m => m.member_id) || [];
+        let data = [];
+        if (ids.length) {
+            const { data: d } = await client.from('withdrawals').select('*').in('member_id', ids).eq('status', 'pending').order('requested_at', { ascending: false });
+            data = d || [];
+        }
+        if (!data.length) { c.innerHTML = `<div class="text-center text-emerald-600 py-4"><i class="fas fa-check-circle text-2xl block mb-1"></i><p>✅ কোনো পেন্ডিং উত্তোলন নেই</p></div>`; return; }
+        c.innerHTML = data.map(w => `<div class="flex justify-between items-center border-b py-2 last:border-0"><div><p class="font-medium text-sm">${w.member_name || '-'}</p><p class="text-xs text-gray-400">${formatAmountWithText(w.amount)}</p></div><div class="flex gap-1"><button onclick="approveWithdrawal('${w.id}')" class="btn btn-success btn-xs">✅</button><button onclick="rejectWithdrawal('${w.id}')" class="btn btn-danger btn-xs">❌</button></div></div>`).join('');
+    } catch(e) { console.error('Load pending withdrawals error:', e); }
+}
+
+// ============================================================
+// Approve Withdrawal - COMPLETE FIX
+// ============================================================
+async function approveWithdrawal(id) {
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        const { data: withdrawal } = await client.from('withdrawals').select('member_id, amount').eq('id', id).single();
+        if (!withdrawal) { showToast('উত্তোলন পাওয়া যায়নি!', 'error'); return; }
+        const { data: member } = await client.from('members').select('balance').eq('member_id', withdrawal.member_id).single();
+        if ((member?.balance || 0) < withdrawal.amount) {
+            showToast('❌ পর্যাপ্ত ব্যালেন্স নেই!', 'error');
+            return;
+        }
+        await client.from('withdrawals').update({ status: 'approved', approved_at: new Date().toISOString() }).eq('id', id);
+        await client.from('members').update({ 
+            balance: (member?.balance || 0) - withdrawal.amount 
+        }).eq('member_id', withdrawal.member_id);
+        showToast('✅ উত্তোলন অনুমোদিত হয়েছে!');
+        loadPendingWithdrawals(); loadWithdrawals(); loadDashboard(); updateBadges();
+    } catch(e) { showToast('❌ অনুমোদন ব্যর্থ!', 'error'); }
+}
+
+async function rejectWithdrawal(id) {
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        await client.from('withdrawals').update({ status: 'rejected' }).eq('id', id);
+        showToast('❌ উত্তোলন বাতিল করা হয়েছে!', 'warning');
+        loadPendingWithdrawals(); loadWithdrawals(); loadDashboard(); updateBadges();
+    } catch(e) { showToast('❌ বাতিল ব্যর্থ!', 'error'); }
+}
+
+// ============================================================
+// Loan Payments - COMPLETE FIX
+// ============================================================
+async function loadLoanPayments() {
+    const c = document.getElementById('loanPaymentsList');
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        const { data: loans } = await client.from('loan_applications').select('id').eq('branch_id', branchId);
+        const loanIds = loans?.map(l => l.id) || [];
+        let data = [];
+        if (loanIds.length) {
+            const { data: d } = await client.from('loan_payments').select('*').in('loan_id', loanIds).eq('status', 'approved').order('payment_date', { ascending: false });
+            data = d || [];
+        }
+        if (!data.length) { c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-check-circle text-2xl block mb-1 text-gray-300"></i><p>কোনো লোন পেমেন্ট নেই</p></div>`; return; }
+        c.innerHTML = data.map(lp => `<div class="flex justify-between items-center border-b py-2 last:border-0"><div><p class="font-medium text-sm">কিস্তি #${lp.installment_no || '-'}</p><p class="text-xs text-gray-400">${formatAmountWithText(lp.total_amount || lp.emi_amount || 0)}</p></div><span class="status-badge status-approved">✅ অনুমোদিত</span></div>`).join('');
+    } catch(e) { console.error('Load loan payments error:', e); }
+}
+
+// ============================================================
+// Pending Loan Payments - COMPLETE FIX ✅
+// ============================================================
+async function loadPendingLoanPayments() {
+    const c = document.getElementById('pendingLoanPaymentsList');
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        const { data: loans } = await client.from('loan_applications').select('id').eq('branch_id', branchId);
+        const loanIds = loans?.map(l => l.id) || [];
+        let data = [];
+        if (loanIds.length) {
+            // ✅ সঠিক: pending + pending_verification উভয়
+            const { data: d } = await client.from('loan_payments').select('*').in('loan_id', loanIds).in('status', ['pending', 'pending_verification']).order('payment_date', { ascending: false });
+            data = d || [];
+        }
+        if (!data.length) { c.innerHTML = `<div class="text-center text-emerald-600 py-4"><i class="fas fa-check-circle text-2xl block mb-1"></i><p>✅ কোনো পেন্ডিং লোন পেমেন্ট নেই</p></div>`; return; }
+        c.innerHTML = data.map(lp => `<div class="flex justify-between items-center border-b py-2 last:border-0"><div><p class="font-medium text-sm">কিস্তি #${lp.installment_no || '-'}</p><p class="text-xs text-gray-400">${formatAmountWithText(lp.total_amount || lp.emi_amount || 0)}</p></div><div class="flex gap-1"><button onclick="approveLoanPayment('${lp.id}')" class="btn btn-success btn-xs">✅</button><button onclick="rejectLoanPayment('${lp.id}')" class="btn btn-danger btn-xs">❌</button></div></div>`).join('');
+    } catch(e) { console.error('Load pending loan payments error:', e); }
+}
+
+async function approveLoanPayment(id) {
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        await client.from('loan_payments').update({ status: 'approved', approved_at: new Date().toISOString() }).eq('id', id);
+        showToast('✅ লোন পেমেন্ট অনুমোদিত হয়েছে!');
+        loadPendingLoanPayments(); loadLoanPayments(); loadDashboard(); updateBadges();
+    } catch(e) { showToast('❌ অনুমোদন ব্যর্থ!', 'error'); }
+}
+
+async function rejectLoanPayment(id) {
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        await client.from('loan_payments').update({ status: 'rejected' }).eq('id', id);
+        showToast('❌ লোন পেমেন্ট বাতিল করা হয়েছে!', 'warning');
+        loadPendingLoanPayments(); loadLoanPayments(); loadDashboard(); updateBadges();
+    } catch(e) { showToast('❌ বাতিল ব্যর্থ!', 'error'); }
+}
+
+// ============================================================
+// Submit Loan - COMPLETE FIX
+// ============================================================
+async function submitLoan() {
+    if (!hasPermission('create_loan')) { showPermissionDenied('loanForm'); return; }
+    const memberId = document.getElementById('loanMemberId').value.trim();
+    const loanType = document.getElementById('loanType').value;
+    const amount = parseFloat(document.getElementById('loanAmount').value);
+    const duration = parseInt(document.getElementById('loanDuration').value);
+    if (!memberId || !loanType || !amount || !duration) { showToast('সব তথ্য পূরণ করুন!', 'error'); return; }
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        await client.from('loan_applications').insert([{
+            member_id: memberId, branch_id: branchId, loan_type: loanType,
+            amount: amount, duration_months: duration, status: 'pending',
+            submitted_at: new Date().toISOString()
+        }]);
+        showToast('✅ লোন আবেদন জমা হয়েছে!');
+        loadLoans(); loadPendingLoans(); updateBadges();
+    } catch(e) { showToast('❌ লোন আবেদন ব্যর্থ!', 'error'); }
+}
+
+// ============================================================
+// Direct Deposit - COMPLETE FIX
+// ============================================================
+async function directDeposit() {
+    if (!hasPermission('direct_deposit')) { showPermissionDenied('directDeposit'); return; }
+    const memberId = document.getElementById('depositMemberId').value.trim();
+    const amount = parseFloat(document.getElementById('depositAmount').value);
+    const month = document.getElementById('depositMonth').value;
+    if (!memberId || !amount || !month) { showToast('সব তথ্য পূরণ করুন!', 'error'); return; }
+    const [year, monthNum] = month.split('-');
+    const monthNames = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
+    const monthName = monthNames[parseInt(monthNum) - 1];
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        const { data: member } = await client.from('members').select('balance').eq('member_id', memberId).single();
+        if (!member) { showToast('সদস্য পাওয়া যায়নি!', 'error'); return; }
+        await client.from('payments').insert([{
+            member_id: memberId, member_name: (await client.from('members').select('full_name').eq('member_id', memberId).single()).data?.full_name || '',
+            month: monthName, year: year, amount: amount,
+            payment_method: 'direct_deposit', status: 'pending',
+            submitted_at: new Date().toISOString()
+        }]);
+        showToast('✅ সরাসরি জমা করা হয়েছে!');
+        loadPayments(); loadPendingPayments(); loadDashboard(); updateBadges();
+    } catch(e) { showToast('❌ জমা ব্যর্থ!', 'error'); }
+}
+
+// ============================================================
+// Restore Deleted Member
+// ============================================================
+async function restoreMember(memberId) {
+    const client = supabaseClient;
+    if (!client) return;
+    try {
+        await client.from('members').update({ status: 'pending' }).eq('member_id', memberId);
+        await client.from('branch_members').update({ status: 'pending' }).eq('member_id', memberId).eq('branch_id', branchId);
+        showToast('✅ সদস্য পুনরুদ্ধার করা হয়েছে!');
+        loadDeletedMembers(); loadMembers(); loadDashboard(); updateBadges();
+    } catch(e) { showToast('❌ পুনরুদ্ধার ব্যর্থ!', 'error'); }
+}
+
+// ============================================================
+// Reports, Settings, etc.
 // ============================================================
 async function loadReports() {
     const client = supabaseClient;
@@ -1327,13 +1551,11 @@ async function loadReports() {
     } catch(e) { console.error('Load reports error:', e); }
 }
 
-// ============================================================
-// Settings
-// ============================================================
 function loadSettings() {
     document.getElementById('branchNameSetting').value = document.getElementById('branchNameDisplay').textContent || '';
     document.getElementById('branchCodeSetting').value = document.getElementById('branchCodeDisplay').textContent || '';
 }
+
 function saveSettings() {
     const name = document.getElementById('branchNameSetting').value.trim();
     const code = document.getElementById('branchCodeSetting').value.trim();
@@ -1348,9 +1570,6 @@ function saveSettings() {
     }
 }
 
-// ============================================================
-// Permissions Display - ৩১টি পারমিশন দেখাবে
-// ============================================================
 function renderPermissions() {
     const c = document.getElementById('permissionsDisplay');
     const labels = {
@@ -1389,7 +1608,6 @@ function renderPermissions() {
     const enabled = Object.keys(branchAdminPermissions).filter(k => branchAdminPermissions[k]);
     const disabled = Object.keys(branchAdminPermissions).filter(k => !branchAdminPermissions[k]);
     
-    // পারমিশন কাউন্ট আপডেট
     document.getElementById('permCountBadge').textContent = `${enabled.length} পারমিশন`;
     
     c.innerHTML = `
@@ -1404,40 +1622,20 @@ function renderPermissions() {
 }
 
 // ============================================================
-// সব ফিচার লোড ফাংশন (পূর্ণাঙ্গ)
+// Dummy functions (search, etc.)
 // ============================================================
-async function loadDeletedMembers() {
+function loadDeletedMembers() {
     const c = document.getElementById('deletedMembersList');
     const client = supabaseClient;
     if (!client) return;
     try {
-        const { data } = await client.from('branch_members').select('members(*)').eq('branch_id', branchId).eq('status', 'deleted');
+        const { data } = await client.from('branch_members').select('members(*)').eq('branch_id', branchId).eq('status', 'rejected');
         if (!data?.length) { c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-check-circle text-2xl block mb-1 text-emerald-500"></i><p>কোনো বাতিল সদস্য নেই</p></div>`; return; }
         c.innerHTML = data.map(b => {
             const m = b.members;
             return `<div class="flex justify-between items-center border-b py-2 last:border-0"><div><p class="font-medium text-sm">${m?.full_name || '-'}</p><p class="text-xs text-gray-400">${m?.member_id || '-'}</p></div><button onclick="restoreMember('${m?.member_id}')" class="btn btn-warning btn-xs">↩️ পুনরুদ্ধার</button></div>`;
         }).join('');
     } catch(e) { c.innerHTML = `<div class="text-center text-red-400 py-4">❌ লোড করতে সমস্যা!</div>`; }
-}
-
-async function restoreMember(memberId) {
-    const client = supabaseClient;
-    if (!client) return;
-    try {
-        await client.from('members').update({ status: 'pending' }).eq('member_id', memberId);
-        showToast('✅ সদস্য পুনরুদ্ধার করা হয়েছে!');
-        loadDeletedMembers(); loadMembers(); loadDashboard(); updateBadges();
-    } catch(e) { showToast('❌ পুনরুদ্ধার ব্যর্থ!', 'error'); }
-}
-
-function loadMemberDetails() {
-    const c = document.getElementById('memberDetailsContent');
-    c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-search text-2xl block mb-2 text-gray-300"></i><p>সদস্য খুঁজুন</p></div>`;
-}
-
-function loadMemberTransfer() {
-    const c = document.getElementById('transferContent');
-    c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-exchange-alt text-2xl block mb-2 text-gray-300"></i><p>সদস্য খুঁজুন</p></div>`;
 }
 
 async function loadRejectedPayments() {
@@ -1455,72 +1653,6 @@ async function loadRejectedPayments() {
         if (!data.length) { c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-check-circle text-2xl block mb-1 text-emerald-500"></i><p>কোনো বাতিল পেমেন্ট নেই</p></div>`; return; }
         c.innerHTML = data.map(p => `<div class="flex justify-between items-center border-b py-2 last:border-0"><div><p class="font-medium text-sm">${p.member_name || '-'}</p><p class="text-xs text-gray-400">${formatAmountWithText(p.amount)}</p></div><span class="status-badge status-rejected">❌ বাতিল</span></div>`).join('');
     } catch(e) { c.innerHTML = `<div class="text-center text-red-400 py-4">❌ লোড করতে সমস্যা!</div>`; }
-}
-
-function loadDirectDeposit() {
-    const c = document.getElementById('directDepositTab').querySelector('.card-body');
-    c.innerHTML = `
-        <div class="grid md:grid-cols-3 gap-3">
-            <div><label class="block text-sm font-medium text-gray-700 mb-1">সদস্য আইডি</label><input type="text" id="depositMemberId" class="form-input" placeholder="সদস্য আইডি"></div>
-            <div><label class="block text-sm font-medium text-gray-700 mb-1">পরিমাণ (টাকা)</label><input type="number" id="depositAmount" class="form-input" placeholder="পরিমাণ"></div>
-            <div><label class="block text-sm font-medium text-gray-700 mb-1">মাস</label><input type="month" id="depositMonth" class="form-input"></div>
-        </div>
-        <button onclick="directDeposit()" class="btn btn-success w-full mt-3 py-2">💰 জমা দিন</button>
-    `;
-}
-
-async function loadWithdrawals() {
-    const c = document.getElementById('withdrawalsList');
-    const client = supabaseClient;
-    if (!client) return;
-    try {
-        const { data: bm } = await client.from('branch_members').select('member_id').eq('branch_id', branchId);
-        const ids = bm?.map(m => m.member_id) || [];
-        let data = [];
-        if (ids.length) {
-            const { data: d } = await client.from('withdrawals').select('*').in('member_id', ids).eq('status', 'approved').order('requested_at', { ascending: false });
-            data = d || [];
-        }
-        if (!data.length) { c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-check-circle text-2xl block mb-1 text-gray-300"></i><p>কোনো উত্তোলন নেই</p></div>`; return; }
-        c.innerHTML = data.map(w => `<div class="flex justify-between items-center border-b py-2 last:border-0"><div><p class="font-medium text-sm">${w.member_name || '-'}</p><p class="text-xs text-gray-400">${formatAmountWithText(w.amount)}</p></div><span class="status-badge status-approved">✅ অনুমোদিত</span></div>`).join('');
-    } catch(e) { c.innerHTML = `<div class="text-center text-red-400 py-4">❌ লোড করতে সমস্যা!</div>`; }
-}
-
-async function loadPendingWithdrawals() {
-    const c = document.getElementById('pendingWithdrawalsList');
-    const client = supabaseClient;
-    if (!client) return;
-    try {
-        const { data: bm } = await client.from('branch_members').select('member_id').eq('branch_id', branchId);
-        const ids = bm?.map(m => m.member_id) || [];
-        let data = [];
-        if (ids.length) {
-            const { data: d } = await client.from('withdrawals').select('*').in('member_id', ids).eq('status', 'pending').order('requested_at', { ascending: false });
-            data = d || [];
-        }
-        if (!data.length) { c.innerHTML = `<div class="text-center text-emerald-600 py-4"><i class="fas fa-check-circle text-2xl block mb-1"></i><p>✅ কোনো পেন্ডিং উত্তোলন নেই</p></div>`; return; }
-        c.innerHTML = data.map(w => `<div class="flex justify-between items-center border-b py-2 last:border-0"><div><p class="font-medium text-sm">${w.member_name || '-'}</p><p class="text-xs text-gray-400">${formatAmountWithText(w.amount)}</p></div><div class="flex gap-1"><button onclick="approveWithdrawal('${w.id}')" class="btn btn-success btn-xs">✅</button><button onclick="rejectWithdrawal('${w.id}')" class="btn btn-danger btn-xs">❌</button></div></div>`).join('');
-    } catch(e) { c.innerHTML = `<div class="text-center text-red-400 py-4">❌ লোড করতে সমস্যা!</div>`; }
-}
-
-async function approveWithdrawal(id) {
-    const client = supabaseClient;
-    if (!client) return;
-    try {
-        await client.from('withdrawals').update({ status: 'approved' }).eq('id', id);
-        showToast('✅ উত্তোলন অনুমোদিত হয়েছে!');
-        loadPendingWithdrawals(); loadWithdrawals(); loadDashboard(); updateBadges();
-    } catch(e) { showToast('❌ অনুমোদন ব্যর্থ!', 'error'); }
-}
-
-async function rejectWithdrawal(id) {
-    const client = supabaseClient;
-    if (!client) return;
-    try {
-        await client.from('withdrawals').update({ status: 'rejected' }).eq('id', id);
-        showToast('❌ উত্তোলন বাতিল করা হয়েছে!', 'warning');
-        loadPendingWithdrawals(); loadWithdrawals(); loadDashboard(); updateBadges();
-    } catch(e) { showToast('❌ বাতিল ব্যর্থ!', 'error'); }
 }
 
 async function loadAllTransactions() {
@@ -1543,60 +1675,6 @@ async function loadAllTransactions() {
     } catch(e) { c.innerHTML = `<div class="text-center text-red-400 py-4">❌ লোড করতে সমস্যা!</div>`; }
 }
 
-async function loadLoanPayments() {
-    const c = document.getElementById('loanPaymentsList');
-    const client = supabaseClient;
-    if (!client) return;
-    try {
-        const { data: loans } = await client.from('loan_applications').select('id').eq('branch_id', branchId);
-        const loanIds = loans?.map(l => l.id) || [];
-        let data = [];
-        if (loanIds.length) {
-            const { data: d } = await client.from('loan_payments').select('*').in('loan_id', loanIds).eq('status', 'approved').order('payment_date', { ascending: false });
-            data = d || [];
-        }
-        if (!data.length) { c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-check-circle text-2xl block mb-1 text-gray-300"></i><p>কোনো লোন পেমেন্ট নেই</p></div>`; return; }
-        c.innerHTML = data.map(lp => `<div class="flex justify-between items-center border-b py-2 last:border-0"><div><p class="font-medium text-sm">কিস্তি #${lp.installment_no || '-'}</p><p class="text-xs text-gray-400">${formatAmountWithText(lp.total_amount || lp.emi_amount || 0)}</p></div><span class="status-badge status-approved">✅ অনুমোদিত</span></div>`).join('');
-    } catch(e) { c.innerHTML = `<div class="text-center text-red-400 py-4">❌ লোড করতে সমস্যা!</div>`; }
-}
-
-async function loadPendingLoanPayments() {
-    const c = document.getElementById('pendingLoanPaymentsList');
-    const client = supabaseClient;
-    if (!client) return;
-    try {
-        const { data: loans } = await client.from('loan_applications').select('id').eq('branch_id', branchId);
-        const loanIds = loans?.map(l => l.id) || [];
-        let data = [];
-        if (loanIds.length) {
-            const { data: d } = await client.from('loan_payments').select('*').in('loan_id', loanIds).eq('status', 'pending_verification').order('payment_date', { ascending: false });
-            data = d || [];
-        }
-        if (!data.length) { c.innerHTML = `<div class="text-center text-emerald-600 py-4"><i class="fas fa-check-circle text-2xl block mb-1"></i><p>✅ কোনো পেন্ডিং লোন পেমেন্ট নেই</p></div>`; return; }
-        c.innerHTML = data.map(lp => `<div class="flex justify-between items-center border-b py-2 last:border-0"><div><p class="font-medium text-sm">কিস্তি #${lp.installment_no || '-'}</p><p class="text-xs text-gray-400">${formatAmountWithText(lp.total_amount || lp.emi_amount || 0)}</p></div><div class="flex gap-1"><button onclick="approveLoanPayment('${lp.id}')" class="btn btn-success btn-xs">✅</button><button onclick="rejectLoanPayment('${lp.id}')" class="btn btn-danger btn-xs">❌</button></div></div>`).join('');
-    } catch(e) { c.innerHTML = `<div class="text-center text-red-400 py-4">❌ লোড করতে সমস্যা!</div>`; }
-}
-
-async function approveLoanPayment(id) {
-    const client = supabaseClient;
-    if (!client) return;
-    try {
-        await client.from('loan_payments').update({ status: 'approved' }).eq('id', id);
-        showToast('✅ লোন পেমেন্ট অনুমোদিত হয়েছে!');
-        loadPendingLoanPayments(); loadLoanPayments(); loadDashboard(); updateBadges();
-    } catch(e) { showToast('❌ অনুমোদন ব্যর্থ!', 'error'); }
-}
-
-async function rejectLoanPayment(id) {
-    const client = supabaseClient;
-    if (!client) return;
-    try {
-        await client.from('loan_payments').update({ status: 'rejected' }).eq('id', id);
-        showToast('❌ লোন পেমেন্ট বাতিল করা হয়েছে!', 'warning');
-        loadPendingLoanPayments(); loadLoanPayments(); loadDashboard(); updateBadges();
-    } catch(e) { showToast('❌ বাতিল ব্যর্থ!', 'error'); }
-}
-
 async function loadLoanCollection() {
     const c = document.getElementById('loanCollectionList');
     const client = supabaseClient;
@@ -1617,31 +1695,9 @@ async function loadLoanCollection() {
                 <div class="bg-emerald-50 p-3 rounded-xl text-center"><p class="text-xs text-gray-500">আদায়</p><p class="text-xl font-bold text-emerald-600">${formatAmountWithText(totalCollected)}</p></div>
                 <div class="bg-red-50 p-3 rounded-xl text-center"><p class="text-xs text-gray-500">বকেয়া</p><p class="text-xl font-bold text-red-600">${formatAmountWithText(totalGiven - totalCollected)}</p></div>
             </div>
-            <div class="text-xs text-gray-400 text-center">${data.length} টি লোন | ${data.filter(l => l.status === 'approved').length} টি সক্রিয়</div>
+            <div class="text-xs text-gray-400 text-center">${data.length} টি লোন</div>
         `;
     } catch(e) { c.innerHTML = `<div class="text-center text-red-400 py-4">❌ লোড করতে সমস্যা!</div>`; }
-}
-
-function loadLoanForm() {
-    const c = document.getElementById('loanFormTab').querySelector('.card-body');
-    c.innerHTML = `
-        <div class="grid md:grid-cols-2 gap-3">
-            <div><label class="block text-sm font-medium text-gray-700 mb-1">সদস্য আইডি</label><input type="text" id="loanMemberId" class="form-input" placeholder="সদস্য আইডি"></div>
-            <div><label class="block text-sm font-medium text-gray-700 mb-1">লোনের ধরন</label>
-                <select id="loanType" class="form-select">
-                    <option value="">লোনের ধরন নির্বাচন করুন</option>
-                    <option value="শিক্ষা লোন">শিক্ষা লোন</option>
-                    <option value="ব্যবসায়িক লোন">ব্যবসায়িক লোন</option>
-                    <option value="জরুরি লোন">জরুরি লোন</option>
-                    <option value="চিকিৎসা লোন">চিকিৎসা লোন</option>
-                    <option value="ঘর নির্মাণ লোন">ঘর নির্মাণ লোন</option>
-                </select>
-            </div>
-            <div><label class="block text-sm font-medium text-gray-700 mb-1">পরিমাণ (টাকা)</label><input type="number" id="loanAmount" class="form-input" placeholder="পরিমাণ"></div>
-            <div><label class="block text-sm font-medium text-gray-700 mb-1">মেয়াদ (মাস)</label><input type="number" id="loanDuration" class="form-input" placeholder="মাস"></div>
-        </div>
-        <button onclick="submitLoan()" class="btn btn-success w-full mt-3 py-2">📝 লোন আবেদন করুন</button>
-    `;
 }
 
 async function loadSavingsLoanReport() {
@@ -1673,7 +1729,7 @@ async function loadSavingsDue() {
     const client = supabaseClient;
     if (!client) return;
     try {
-        const { data: members } = await client.from('branch_members').select('members(balance, monthly_savings, full_name, member_id)').eq('branch_id', branchId).eq('status', 'active');
+        const { data: members } = await client.from('branch_members').select('members(balance, monthly_savings, full_name, member_id)').eq('branch_id', branchId).in('status', ['active', 'pending']);
         if (!members?.length) { c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-check-circle text-2xl block mb-1 text-emerald-500"></i><p>কোনো সদস্য নেই</p></div>`; return; }
         const dueMembers = members.filter(b => (b.members?.balance || 0) < (b.members?.monthly_savings || 0));
         if (!dueMembers.length) { c.innerHTML = `<div class="text-center text-emerald-600 py-4"><i class="fas fa-check-circle text-2xl block mb-1"></i><p>✅ কোনো বকেয়া সদস্য নেই</p></div>`; return; }
@@ -1705,6 +1761,24 @@ async function loadLoanReport() {
     } catch(e) { c.innerHTML = `<div class="text-center text-red-400 py-4">❌ লোড করতে সমস্যা!</div>`; }
 }
 
+function loadMemberDetails() {
+    const c = document.getElementById('memberDetailsContent');
+    c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-search text-2xl block mb-2 text-gray-300"></i><p>সদস্য খুঁজুন</p></div>`;
+}
+
+function loadMemberTransfer() {
+    const c = document.getElementById('transferContent');
+    c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-exchange-alt text-2xl block mb-2 text-gray-300"></i><p>সদস্য খুঁজুন</p></div>`;
+}
+
+function loadDirectDeposit() {
+    // Already in HTML
+}
+
+function loadLoanForm() {
+    // Already in HTML
+}
+
 function searchMember() {
     const input = document.getElementById('memberSearchInput').value.trim();
     if (!input) { showToast('সদস্য আইডি বা মোবাইল দিন!', 'error'); return; }
@@ -1729,23 +1803,6 @@ function searchMemberForTransfer() {
             <div class="mt-3 flex gap-2"><select class="form-select flex-1"><option value="">ব্রাঞ্চ নির্বাচন করুন</option><option>ঢাকা সিটি ব্রাঞ্চ</option><option>চট্টগ্রাম ব্রাঞ্চ</option></select><button class="btn btn-warning">🔄 স্থানান্তর</button></div>
         </div>
     `;
-}
-
-function directDeposit() {
-    const id = document.getElementById('depositMemberId').value.trim();
-    const amt = document.getElementById('depositAmount').value.trim();
-    const month = document.getElementById('depositMonth').value;
-    if (!id || !amt || !month) { showToast('সব তথ্য পূরণ করুন!', 'error'); return; }
-    showToast('💰 সরাসরি জমা ফিচার শীঘ্রই আসছে', 'info');
-}
-
-function submitLoan() {
-    const id = document.getElementById('loanMemberId').value.trim();
-    const type = document.getElementById('loanType').value;
-    const amt = document.getElementById('loanAmount').value.trim();
-    const dur = document.getElementById('loanDuration').value.trim();
-    if (!id || !type || !amt || !dur) { showToast('সব তথ্য পূরণ করুন!', 'error'); return; }
-    showToast('📝 লোন আবেদন ফিচার শীঘ্রই আসছে', 'info');
 }
 
 // ============================================================
