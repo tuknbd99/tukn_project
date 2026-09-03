@@ -1813,7 +1813,7 @@ async function checkLoanInstallmentsDue(container) {
     if (!client) return;
     
     try {
-        // ১. লোন ডাটা লোড করুন (total_payable সহ)
+        // ১. লোন ডাটা লোড করুন
         const { data: loans, error } = await client
             .from('loan_applications')
             .select('id, amount, total_payable, remaining_balance, duration_months, emi_amount, approved_at')
@@ -1825,15 +1825,15 @@ async function checkLoanInstallmentsDue(container) {
         
         const loan = loans[0];
         
-        // ✅ সঠিক: total_payable ব্যবহার করুন (লাভ সহ)
-        const totalPrincipal = Number(loan.amount) || 0;           // মূলধন
-        const totalPayable = Number(loan.total_payable) || totalPrincipal;  // মূলধন + লাভ
-        const remainingBalance = Number(loan.remaining_balance) || 0;
+        // ✅ সঠিক ভেরিয়েবল
+        const totalPrincipal = Number(loan.amount) || 0;              // ৪৫০০
+        const totalPayable = Number(loan.total_payable) || totalPrincipal; // ৪৬৩৫
+        const totalEmi = loan.duration_months || 12;
         
-        // ২. ✅ শুধু approved/paid কিস্তি গণনা করুন
+        // ২. ✅ সব approved/paid কিস্তি লোড করুন
         const { data: approvedPayments, error: payError } = await client
             .from('loan_payments')
-            .select('installment_no, total_amount, emi_amount, status')
+            .select('installment_no, total_amount, emi_amount, status, payment_date')
             .eq('loan_id', loan.id)
             .in('status', ['approved', 'paid'])
             .order('installment_no', { ascending: true });
@@ -1842,86 +1842,68 @@ async function checkLoanInstallmentsDue(container) {
             console.error('❌ পেমেন্ট লোড error:', payError);
         }
         
-        // ৩. মোট পরিশোধিত টাকা ক্যালকুলেট করুন (total_amount ব্যবহার করুন)
+        // ৩. ✅ সঠিকভাবে পরিশোধিত তথ্য ক্যালকুলেট করুন
         let totalPaid = 0;
-        let paidInstallments = 0;
+        let paidInstallments = [];
         let paidInstallmentNumbers = [];
         
         if (approvedPayments && approvedPayments.length > 0) {
+            // total_amount ব্যবহার করুন (লাভ সহ)
             totalPaid = approvedPayments.reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0);
-            paidInstallments = approvedPayments.length;
+            
+            paidInstallments = approvedPayments.map(p => ({
+                no: p.installment_no,
+                amount: p.total_amount || p.emi_amount || 0,
+                date: p.payment_date ? new Date(p.payment_date).toLocaleDateString('bn-BD') : '-'
+            }));
+            
             paidInstallmentNumbers = approvedPayments.map(p => p.installment_no);
         }
         
-        // ✅ সঠিক: totalPayable থেকে বাকি ক্যালকুলেট করুন
-        const remaining = totalPayable - totalPaid;
+        // ৪. ✅ সঠিকভাবে বাকি ক্যালকুলেট করুন (total_payable থেকে)
+        const remaining = totalPayable - totalPaid;  // ৪৬৩৫ - ৩০৯০ = ১৫৪৫ ✅
         
-        // ৫. কত কিস্তি বাকি আছে তা বের করুন (totalPayable থেকে)
-        const emiAmount = loan.emi_amount || (totalPayable / (loan.duration_months || 12));
+        // ৫. ✅ সঠিকভাবে কিস্তি সংখ্যা ক্যালকুলেট করুন
+        const emiAmount = loan.emi_amount || (totalPayable / totalEmi);
         const pendingInstallments = Math.ceil(remaining / emiAmount);
         
-        // ৬. বিলম্ব ফি ক্যালকুলেট করুন
-        let lateFeeTotal = 0;
-        let overdueCount = 0;
-        
-        const { data: allPayments } = await client
-            .from('loan_payments')
-            .select('installment_no, status, due_date, late_fee')
-            .eq('loan_id', loan.id)
-            .order('installment_no', { ascending: true });
-        
-        if (allPayments) {
-            const now = new Date();
-            now.setHours(0, 0, 0, 0);
-            
-            allPayments.forEach(p => {
-                if (p.status === 'pending' || p.status === 'pending_verification') {
-                    const dueDate = new Date(p.due_date);
-                    dueDate.setHours(0, 0, 0, 0);
-                    if (dueDate < now) {
-                        overdueCount++;
-                        lateFeeTotal += Number(p.late_fee) || 0;
-                    }
-                }
-            });
-        }
-        
-        // ৭. পরিশোধের হার ক্যালকুলেট করুন (totalPayable থেকে)
+        // ৬. ✅ পরিশোধের হার ক্যালকুলেট করুন
         const paidPercent = totalPayable > 0 ? (totalPaid / totalPayable * 100) : 0;
         const profitAmount = totalPayable - totalPrincipal;
         
-        // ৮. কনসোলে লগ করুন
+        // ৭. ✅ কনসোলে ডিবাগ তথ্য দেখান
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('📊 লোন পরিশোধের সারাংশ');
+        console.log('📊 লোন পরিশোধের সঠিক সারাংশ');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log(`💰 মূল লোন: ${totalPrincipal} টাকা`);
-        console.log(`📈 লাভ/সার্ভিস চার্জ: ${profitAmount} টাকা`);
+        console.log(`📈 লাভ: ${profitAmount} টাকা`);
         console.log(`💳 মোট পরিশোধ্য: ${totalPayable} টাকা`);
-        console.log(`✅ পরিশোধিত: ${totalPaid} টাকা (${paidInstallments} টি কিস্তি)`);
+        console.log(`✅ পরিশোধিত: ${totalPaid} টাকা`);
         console.log(`📋 পরিশোধিত কিস্তি: ${paidInstallmentNumbers.join(', ')}`);
         console.log(`⏳ বাকি: ${remaining} টাকা (${pendingInstallments} টি কিস্তি)`);
         console.log(`📊 পরিশোধের হার: ${paidPercent.toFixed(1)}%`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
-        // ৯. নোটিফিকেশন দেখান
+        // ৮. ✅ নোটিফিকেশন তৈরি করুন
         if (remaining > 0) {
             const dueEl = document.createElement('div');
             dueEl.className = 'due-notification warning';
             
-            let statusText = '';
-            let statusColor = '';
-            
-            if (overdueCount > 0) {
-                statusText = `⚠️ ${overdueCount}টি কিস্তি বিলম্বিত!`;
-                statusColor = 'text-red-600';
-            } else if (pendingInstallments > 0) {
-                statusText = `⏳ ${pendingInstallments}টি কিস্তি বাকি`;
-                statusColor = 'text-amber-600';
-            }
-            
-            let paidInfo = '';
-            if (paidInstallments > 0) {
-                paidInfo = `<div class="text-xs text-green-600 mt-1">✅ পরিশোধিত কিস্তি: ${paidInstallmentNumbers.map(n => `#${n}`).join(', ')}</div>`;
+            // ✅ পরিশোধিত কিস্তির বিস্তারিত HTML
+            let paidDetailsHtml = '';
+            if (paidInstallments.length > 0) {
+                paidDetailsHtml = `
+                    <div class="mt-2 pt-2 border-t border-red-200">
+                        <div class="text-xs font-semibold text-green-700">✅ পরিশোধিত কিস্তি:</div>
+                        ${paidInstallments.map(p => `
+                            <div class="flex justify-between text-xs text-gray-600 mt-1">
+                                <span>কিস্তি #${p.no}</span>
+                                <span class="font-medium text-green-600">${p.amount.toFixed(2)} টাকা</span>
+                                <span class="text-gray-400">${p.date}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
             }
             
             dueEl.innerHTML = `
@@ -1955,13 +1937,12 @@ async function checkLoanInstallmentsDue(container) {
                             <span class="text-gray-600">পরিশোধের হার:</span>
                             <strong class="text-blue-600">${paidPercent.toFixed(1)}%</strong>
                         </div>
-                        <div class="col-span-2 ${statusColor} font-semibold text-center">
-                            ${statusText}
-                            ${lateFeeTotal > 0 ? ` | বিলম্ব ফি: ${lateFeeTotal.toFixed(2)} টাকা` : ''}
+                        <div class="col-span-2 text-amber-600 font-semibold text-center">
+                            ⏳ ${pendingInstallments}টি কিস্তি বাকি
                         </div>
-                        ${paidInfo}
                     </div>
-                    <div class="mt-2 flex gap-2 flex-wrap">
+                    ${paidDetailsHtml}
+                    <div class="mt-3 flex gap-2 flex-wrap">
                         <button onclick="openLoanRepaymentModal()" class="bg-rose-600 text-white px-4 py-1.5 rounded text-xs hover:bg-rose-700 transition">
                             💳 এখন পরিশোধ করুন
                         </button>
@@ -1975,26 +1956,37 @@ async function checkLoanInstallmentsDue(container) {
             return;
         }
         
-        // ১০. লোন সম্পূর্ণ পরিশোধিত
+        // ৯. লোন সম্পূর্ণ পরিশোধিত
         if (remaining === 0 && totalPrincipal > 0) {
             const dueEl = document.createElement('div');
             dueEl.className = 'due-notification';
             dueEl.style.background = '#d1fae5';
             dueEl.style.borderLeftColor = '#059669';
+            
+            let paidDetailsHtml = paidInstallments.map(p => `
+                <div class="flex justify-between text-xs text-gray-600">
+                    <span>কিস্তি #${p.no}</span>
+                    <span class="font-medium text-green-600">${p.amount.toFixed(2)} টাকা</span>
+                    <span class="text-gray-400">${p.date}</span>
+                </div>
+            `).join('');
+            
             dueEl.innerHTML = `
                 <div class="due-title" style="color:#065f46;">
                     <i class="fas fa-check-circle text-emerald-600 mr-1"></i>
                     ✅ লোন সম্পূর্ণ পরিশোধিত!
                 </div>
                 <div class="due-details" style="color:#065f46;">
-                    আপনার লোন সম্পূর্ণ পরিশোধ করা হয়েছে।
-                    <div class="grid grid-cols-2 gap-2 mt-1 text-sm">
+                    <div class="grid grid-cols-2 gap-2 mt-1">
                         <div><span class="text-gray-600">মূল লোন:</span> <strong>${totalPrincipal.toLocaleString()} টাকা</strong></div>
-                        <div><span class="text-gray-600">লাভ/সার্ভিস চার্জ:</span> <strong>${profitAmount.toLocaleString()} টাকা</strong></div>
+                        <div><span class="text-gray-600">লাভ:</span> <strong>${profitAmount.toLocaleString()} টাকা</strong></div>
                         <div class="col-span-2"><span class="text-gray-600">মোট পরিশোধিত:</span> <strong class="text-green-600">${totalPayable.toLocaleString()} টাকা</strong></div>
                     </div>
-                    <div class="text-xs text-green-600 mt-1">✅ ${paidInstallments}টি কিস্তি পরিশোধিত: ${paidInstallmentNumbers.map(n => `#${n}`).join(', ')}</div>
-                    <span class="text-xs text-gray-500 block mt-1">ধন্যবাদ! সময়মতো পরিশোধের জন্য অভিনন্দন।</span>
+                    <div class="mt-2 pt-2 border-t border-emerald-200">
+                        <div class="text-xs font-semibold text-green-700">✅ পরিশোধিত কিস্তি:</div>
+                        ${paidDetailsHtml}
+                    </div>
+                    <span class="text-xs text-gray-500 block mt-2">ধন্যবাদ! সময়মতো পরিশোধের জন্য অভিনন্দন।</span>
                 </div>
             `;
             container.appendChild(dueEl);
