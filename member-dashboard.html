@@ -1813,111 +1813,137 @@ async function checkLoanInstallmentsDue(container) {
     if (!client) return;
     
     try {
-        const { data: loans } = await client
+        // ✅ ১. সরাসরি remaining_balance চেক করুন
+        const { data: loans, error } = await client
             .from('loan_applications')
-            .select('*')
+            .select('id, amount, remaining_balance, total_payable, duration_months, emi_amount, approved_at')
             .eq('member_id', currentUser.id)
             .eq('status', 'approved')
             .order('approved_at', { ascending: false });
         
+        if (error) {
+            console.error('❌ লোন লোড error:', error);
+            return;
+        }
+        
         if (!loans || loans.length === 0) return;
         
         const loan = loans[0];
-        const startDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
-        const totalEmi = loan.duration_months || 12;
-        const emiAmount = loan.emi_amount || (loan.amount / totalEmi);
-        const gracePeriod = loan.grace_period_days || 5;
-        const lateFeePercent = loan.late_fee_percent || 0;
+        const remaining = Number(loan.remaining_balance) || 0;
+        const totalAmount = Number(loan.amount) || 0;
+        const paidAmount = totalAmount - remaining;
+        const paidPercent = totalAmount > 0 ? (paidAmount / totalAmount * 100) : 0;
         
-        const { data: payments } = await client
-            .from('loan_payments')
-            .select('*')
-            .eq('loan_id', loan.id)
-            .order('installment_no', { ascending: true });
-        
-        const paymentMap = {};
-        if (payments) {
-            payments.forEach(p => {
-                paymentMap[p.installment_no] = p;
-            });
-        }
-        
-        const now = new Date();
-        now.setHours(0, 0, 0, 0);
-        let notifications = [];
-        
-        for (let i = 1; i <= totalEmi; i++) {
-            let dueDate = new Date(startDate);
-            dueDate.setMonth(startDate.getMonth() + i);
-            dueDate.setHours(0, 0, 0, 0);
-            
-            const payment = paymentMap[i];
-            if (payment && (payment.status === 'approved' || payment.status === 'paid')) {
-                continue;
-            }
-            
-            const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
-            
-            if (daysUntilDue <= 7 && daysUntilDue >= 0) {
-                notifications.push({
-                    installmentNo: i,
-                    dueDate: dueDate,
-                    daysUntilDue: daysUntilDue,
-                    emiAmount: emiAmount,
-                    status: 'upcoming',
-                    title: daysUntilDue === 0 ? 'আজ শেষ তারিখ!' : `${daysUntilDue} দিন বাকি`,
-                    message: `কিস্তি #${i} পরিশোধের শেষ তারিখ ${dueDate.toLocaleDateString('bn-BD')}। পরিমাণ: ${emiAmount.toFixed(2)} টাকা।`
-                });
-            }
-            
-            if (daysUntilDue < 0) {
-                const daysOverdue = Math.abs(daysUntilDue);
-                const monthsOverdue = Math.ceil(daysOverdue / 30);
-                const lateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
-                
-                notifications.push({
-                    installmentNo: i,
-                    dueDate: dueDate,
-                    daysOverdue: daysOverdue,
-                    emiAmount: emiAmount,
-                    lateFee: lateFee,
-                    status: 'overdue',
-                    title: `⚠️ বিলম্বিত (${daysOverdue} দিন)`,
-                    message: `কিস্তি #${i} ${daysOverdue} দিন বিলম্বিত! পরিমাণ: ${emiAmount.toFixed(2)} টাকা, বিলম্ব ফি: ${lateFee.toFixed(2)} টাকা। দ্রুত পরিশোধ করুন।`
-                });
-            }
-        }
-        
-        notifications.sort((a, b) => {
-            if (a.status === 'overdue' && b.status !== 'overdue') return -1;
-            if (a.status !== 'overdue' && b.status === 'overdue') return 1;
-            return a.daysUntilDue - b.daysUntilDue;
-        });
-        
-        const topNotifications = notifications.slice(0, 3);
-        
-        topNotifications.forEach(n => {
+        // ✅ ২. যদি remaining_balance > 0 হয়, তাহলে বকেয়া দেখান
+        if (remaining > 0) {
             const dueEl = document.createElement('div');
-            dueEl.className = n.status === 'overdue' ? 'due-notification warning' : 'due-notification';
+            dueEl.className = 'due-notification warning';
             
-            let actionBtn = '';
-            if (n.status === 'overdue' || n.daysUntilDue <= 3) {
-                actionBtn = `<button onclick="openLoanRepaymentModal()" class="bg-rose-600 text-white px-3 py-1 rounded text-xs hover:bg-rose-700 transition mt-1">
-                    💳 এখন পরিশোধ করুন
-                </button>`;
+            // ✅ কত কিস্তি বাকি আছে তা বের করুন
+            const emiAmount = loan.emi_amount || (totalAmount / (loan.duration_months || 12));
+            const pendingInstallments = Math.ceil(remaining / emiAmount);
+            
+            // ✅ বিলম্ব ফি ক্যালকুলেট করুন (যদি কোনো কিস্তি overdue হয়)
+            let lateFeeTotal = 0;
+            let overdueCount = 0;
+            
+            const { data: payments } = await client
+                .from('loan_payments')
+                .select('installment_no, status, due_date, late_fee')
+                .eq('loan_id', loan.id)
+                .order('installment_no', { ascending: true });
+            
+            if (payments) {
+                const now = new Date();
+                now.setHours(0, 0, 0, 0);
+                
+                payments.forEach(p => {
+                    if (p.status === 'pending' || p.status === 'pending_verification') {
+                        const dueDate = new Date(p.due_date);
+                        dueDate.setHours(0, 0, 0, 0);
+                        if (dueDate < now) {
+                            overdueCount++;
+                            lateFeeTotal += Number(p.late_fee) || 0;
+                        }
+                    }
+                });
+            }
+            
+            let statusText = '';
+            let statusColor = '';
+            
+            if (overdueCount > 0) {
+                statusText = `⚠️ ${overdueCount}টি কিস্তি বিলম্বিত!`;
+                statusColor = 'text-red-600';
+            } else if (pendingInstallments > 0) {
+                statusText = `⏳ ${pendingInstallments}টি কিস্তি বাকি`;
+                statusColor = 'text-amber-600';
             }
             
             dueEl.innerHTML = `
-                <div class="due-title">${n.status === 'overdue' ? '❌' : '⏰'} ${n.title}</div>
-                <div class="due-details">${n.message}</div>
-                ${actionBtn}
+                <div class="due-title" style="color:#991b1b;">
+                    <i class="fas fa-exclamation-triangle text-red-600 mr-1"></i>
+                    ❌ লোন বকেয়া: ${remaining.toFixed(2)} টাকা
+                </div>
+                <div class="due-details" style="color:#7f1d1d;">
+                    <div class="grid grid-cols-2 gap-2 mt-1">
+                        <div>
+                            <span class="text-gray-600">মোট লোন:</span>
+                            <strong class="text-gray-800">${totalAmount.toLocaleString()} টাকা</strong>
+                        </div>
+                        <div>
+                            <span class="text-gray-600">পরিশোধিত:</span>
+                            <strong class="text-green-600">${paidAmount.toLocaleString()} টাকা</strong>
+                        </div>
+                        <div>
+                            <span class="text-gray-600">বাকি:</span>
+                            <strong class="text-red-600">${remaining.toLocaleString()} টাকা</strong>
+                        </div>
+                        <div>
+                            <span class="text-gray-600">পরিশোধের হার:</span>
+                            <strong class="text-blue-600">${paidPercent.toFixed(1)}%</strong>
+                        </div>
+                        <div class="col-span-2 ${statusColor} font-semibold text-center">
+                            ${statusText}
+                            ${lateFeeTotal > 0 ? ` | বিলম্ব ফি: ${lateFeeTotal.toFixed(2)} টাকা` : ''}
+                        </div>
+                    </div>
+                    <div class="mt-2 flex gap-2 flex-wrap">
+                        <button onclick="openLoanRepaymentModal()" class="bg-rose-600 text-white px-4 py-1.5 rounded text-xs hover:bg-rose-700 transition">
+                            💳 এখন পরিশোধ করুন
+                        </button>
+                        <button onclick="viewLoanDetail('${loan.id}')" class="bg-blue-600 text-white px-4 py-1.5 rounded text-xs hover:bg-blue-700 transition">
+                            📋 বিস্তারিত
+                        </button>
+                    </div>
+                </div>
             `;
             container.appendChild(dueEl);
-            hasNotification = true;
-        });
+            return;
+        }
+        
+        // ✅ ৩. যদি কোনো বকেয়া না থাকে, তাহলে "✅ লোন সম্পূর্ণ পরিশোধিত" দেখান
+        if (remaining === 0 && totalAmount > 0) {
+            const dueEl = document.createElement('div');
+            dueEl.className = 'due-notification';
+            dueEl.style.background = '#d1fae5';
+            dueEl.style.borderLeftColor = '#059669';
+            dueEl.innerHTML = `
+                <div class="due-title" style="color:#065f46;">
+                    <i class="fas fa-check-circle text-emerald-600 mr-1"></i>
+                    ✅ লোন সম্পূর্ণ পরিশোধিত!
+                </div>
+                <div class="due-details" style="color:#065f46;">
+                    আপনার লোন (${totalAmount.toLocaleString()} টাকা) সম্পূর্ণ পরিশোধ করা হয়েছে। 
+                    <span class="text-xs text-gray-500 block mt-1">ধন্যবাদ! সময়মতো পরিশোধের জন্য অভিনন্দন।</span>
+                </div>
+            `;
+            container.appendChild(dueEl);
+            return;
+        }
         
     } catch(e) {
-        console.error('লোন কিস্তি চেক error:', e);
+        console.error('❌ লোন কিস্তি চেক error:', e);
     }
 }
 
