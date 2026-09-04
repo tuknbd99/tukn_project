@@ -1772,10 +1772,139 @@ function renderCombinedDueView(memberData, totalExpected, totalPaid, totalDue, c
     return html;
 }
 
+    // ============================================================
+// সঞ্চয় বকেয়া রিপোর্ট
+// ============================================================
+async function loadSavingsDue() {
+    const c = document.getElementById('savingsDueContent');
+    const client = supabaseClient;
+    if (!client) {
+        c.innerHTML = `<div class="text-center text-red-400 py-4">❌ সংযোগ সমস্যা!</div>`;
+        return;
+    }
+    
+    c.innerHTML = `<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">ডেটা লোড হচ্ছে...</p></div>`;
+    
+    try {
+        // ব্রাঞ্চের সব সদস্য লোড করুন
+        const { data: members, error: memberError } = await client
+            .from('branch_members')
+            .select('members(*)')
+            .eq('branch_id', branchId)
+            .in('status', ['active', 'pending']);
+        
+        if (memberError) throw memberError;
+        if (!members?.length) {
+            c.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-users text-3xl block mb-2 text-gray-300"></i><p>এই ব্রাঞ্চে কোনো সদস্য নেই</p></div>`;
+            return;
+        }
+        
+        // সদস্য ডেটা প্রসেস করুন
+        const memberData = [];
+        let totalExpected = 0, totalPaid = 0, totalDue = 0;
+        let membersWithDue = 0, membersWithoutDue = 0;
+        
+        for (const bm of members) {
+            const member = bm.members;
+            if (!member) continue;
+            
+            const monthlySavings = Number(member.monthly_savings) || 0;
+            const joinDate = new Date(member.join_date || member.created_at);
+            const now = new Date();
+            
+            let months = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth()) + 1;
+            if (months < 0) months = 0;
+            
+            const expectedTotal = months * monthlySavings;
+            
+            const { data: payments } = await client
+                .from('payments')
+                .select('amount, status')
+                .eq('member_id', member.member_id)
+                .eq('status', 'approved');
+            
+            const paidTotal = payments ? payments.reduce((sum, p) => sum + (p.amount || 0), 0) : 0;
+            const dueAmount = expectedTotal - paidTotal;
+            
+            totalExpected += expectedTotal;
+            totalPaid += paidTotal;
+            totalDue += dueAmount > 0 ? dueAmount : 0;
+            
+            if (dueAmount > 0) membersWithDue++;
+            else membersWithoutDue++;
+            
+            memberData.push({
+                member_id: member.member_id,
+                name: member.full_name || 'নাম নেই',
+                mobile: member.mobile || '-',
+                monthlySavings: monthlySavings,
+                joinDate: joinDate,
+                months: months,
+                expectedTotal: expectedTotal,
+                paidTotal: paidTotal,
+                dueAmount: dueAmount,
+                status: member.status
+            });
+        }
+        
+        memberData.sort((a, b) => b.dueAmount - a.dueAmount);
+        const collectionRate = totalExpected > 0 ? (totalPaid / totalExpected * 100) : 0;
+        
+        // HTML তৈরি করুন
+        let html = `
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <div class="bg-blue-50 p-3 rounded-xl text-center border border-blue-200">
+                    <p class="text-xs text-gray-500">📊 ধার্য</p>
+                    <p class="text-xl font-bold text-blue-700">${totalExpected.toFixed(2)} টাকা</p>
+                    <p class="text-xs text-gray-400">${memberData.length} জন সদস্য</p>
+                </div>
+                <div class="bg-emerald-50 p-3 rounded-xl text-center border border-emerald-200">
+                    <p class="text-xs text-gray-500">💰 আদায়</p>
+                    <p class="text-xl font-bold text-emerald-700">${totalPaid.toFixed(2)} টাকা</p>
+                    <p class="text-xs text-gray-400">হার: ${collectionRate.toFixed(1)}%</p>
+                </div>
+                <div class="bg-red-50 p-3 rounded-xl text-center border border-red-200">
+                    <p class="text-xs text-gray-500">⏳ বকেয়া</p>
+                    <p class="text-xl font-bold text-red-700">${totalDue.toFixed(2)} টাকা</p>
+                    <p class="text-xs text-gray-400">${membersWithDue} জন সদস্য</p>
+                </div>
+                <div class="bg-purple-50 p-3 rounded-xl text-center border border-purple-200">
+                    <p class="text-xs text-gray-500">✅ বকেয়ামুক্ত</p>
+                    <p class="text-xl font-bold text-purple-700">${membersWithoutDue} জন</p>
+                </div>
+            </div>
+            <div class="flex gap-2 mb-3 no-print">
+                <button onclick="toggleDueView('combined')" id="dueViewCombined" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition">
+                    📊 একসাথে দেখুন
+                </button>
+                <button onclick="toggleDueView('separate')" id="dueViewSeparate" class="px-4 py-2 rounded-lg bg-gray-200 text-gray-700 text-sm font-semibold hover:bg-gray-300 transition">
+                    📋 পৃথকভাবে দেখুন
+                </button>
+                <button onclick="exportDueData()" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition">
+                    📥 এক্সেল
+                </button>
+            </div>
+            <div id="dueCombinedView">
+                ${renderCombinedDueView(memberData, totalExpected, totalPaid, totalDue, collectionRate)}
+            </div>
+            <div id="dueSeparateView" style="display:none;">
+                ${renderSeparateDueView(memberData)}
+            </div>
+        `;
+        
+        c.innerHTML = html;
+        
+    } catch(e) {
+        console.error('❌ সঞ্চয় বকেয়া লোড error:', e);
+        c.innerHTML = `<div class="text-center text-red-400 py-4">❌ ডেটা লোড করতে সমস্যা! ${e.message}</div>`;
+    }
+}
+
 // ============================================================
 // পৃথক ভিউ
 // ============================================================
-function renderSeparateDueView(memberData) {
+
+    function renderSeparateDueView(memberData) {
     if (!memberData || memberData.length === 0) {
         return `<div class="text-center text-gray-400 py-4">কোনো সদস্য নেই</div>`;
     }
