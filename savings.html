@@ -1173,6 +1173,54 @@
 </div>
 
 <script>
+        // ============================================================
+        // URL প্যারামিটার থেকে ডেটা লোড করুন (Branch Dashboard থেকে আসা)
+        // ============================================================
+        function loadParamsFromURL() {
+            const params = new URLSearchParams(window.location.search);
+            
+            const memberId = params.get('member_id');
+            const memberName = params.get('member_name');
+            const dueAmount = params.get('due_amount');
+            const monthlySavings = params.get('monthly_savings');
+            const memberType = params.get('member_type');
+            const source = params.get('source');
+            
+            // শুধুমাত্র branch_dashboard থেকে আসা ডেটা প্রসেস করবে
+            if (memberId && source === 'branch_dashboard') {
+                console.log('📥 Branch Dashboard থেকে ডেটা পাওয়া গেছে:', { memberId, memberName, dueAmount, memberType });
+                
+                // ১. সার্চ ইনপুটে আইডি সেট করুন
+                const searchInput = document.getElementById('searchInput');
+                if (searchInput) {
+                    searchInput.value = memberId;
+                }
+                
+                // ২. অটো সার্চ করুন
+                setTimeout(() => {
+                    searchMember();
+                }, 500);
+                
+                // ৩. নোট ফিল্ডে তথ্য দিন
+                setTimeout(() => {
+                    const noteField = document.getElementById('paymentNote');
+                    if (noteField) {
+                        noteField.value = `📌 ব্রাঞ্চ ড্যাশবোর্ড থেকে ${memberName} এর বকেয়া সঞ্চয় পরিশোধ (বকেয়া: ${dueAmount} টাকা)`;
+                    }
+                }, 1000);
+                
+                // ৪. টোস্ট মেসেজ দেখান
+                setTimeout(() => {
+                    showToast(`✅ ${memberName} এর পেমেন্ট ফর্ম লোড করা হয়েছে`, 'success');
+                }, 1500);
+            }
+        }
+        
+        // পেজ লোড হলে প্যারামিটার চেক করুন
+        document.addEventListener('DOMContentLoaded', function() {
+            loadParamsFromURL();
+        });
+    
 // ============================================================
 // Supabase কনফিগারেশন
 // ============================================================
@@ -1199,6 +1247,7 @@ async function initSupabase() {
     }
 }
 
+    
 // ============================================================
 // Toast Notification
 // ============================================================
@@ -1281,10 +1330,15 @@ function onYearChange() {
     }
 }
 
-// ============================================================
-// সদস্য ধরণ নির্বাচন
-// ============================================================
 function selectMemberType(type) {
+    // 🔥 সদস্যের আসল ধরণ চেক করুন
+    if (currentMember && currentMember.actualMemberType) {
+        if (type !== currentMember.actualMemberType) {
+            showToast(`⚠️ আপনি ${currentMember.actualMemberType === 'term' ? 'মেয়াদী' : 'কারেন্ট'} সদস্য, অন্য ধরণে জমা দিতে পারবেন না!`, 'error');
+            return;
+        }
+    }
+    
     selectedMemberType = type;
     
     const termBtn = document.getElementById('typeTerm');
@@ -1371,9 +1425,6 @@ async function populateMonths() {
     }
 }
 
-// ============================================================
-// Member Search
-// ============================================================
 async function searchMember() {
     const searchTerm = document.getElementById('searchInput').value.trim();
     if (!searchTerm) { showToast('সদস্য আইডি বা মোবাইল নম্বর দিন!', 'error'); return; }
@@ -1396,6 +1447,11 @@ async function searchMember() {
         const resultDiv = document.getElementById('searchResult');
         if (data && (data.status === 'active' || data.status === 'approved')) {
             currentMember = data;
+            
+            // সদস্যের আসল ধরণ সংরক্ষণ
+            const isTermMember = (data.member_term || 0) > 0;
+            currentMember.actualMemberType = isTermMember ? 'term' : 'current';
+            
             document.getElementById('displayMemberName').innerText = data.full_name || data.name;
             document.getElementById('displayMemberId').innerText = data.member_id || data.id;
             document.getElementById('displayMemberMobile').innerText = data.mobile;
@@ -1408,16 +1464,45 @@ async function searchMember() {
             let termText = (data.member_term || 0) === 0 ? 'মেয়াদহীন' : (data.member_term + ' বছর');
             document.getElementById('displayMemberTerm').innerText = termText;
             
-            const isTermMember = (data.member_term || 0) > 0;
-            const typeLabel = isTermMember ? '📅 মেয়াদী সদস্য' : '⚡ কারেন্ট সদস্য';
+            const typeLabel = isTermMember ? '📅 মেয়াদী সদস্য' : '⚡ কারেন্ট সদস্য (মেয়াদহীন)';
             const typeColor = isTermMember ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700';
             document.getElementById('displayMemberType').innerHTML = typeLabel;
             document.getElementById('displayMemberType').className = `px-2 py-0.5 rounded-full text-xs font-semibold ${typeColor}`;
             
+            // 🔥 সদস্য ধরণ অনুযায়ী বাটন সেট করুন
             if (isTermMember) {
+                // মেয়াদী সদস্য - শুধু মেয়াদী সিলেক্ট করতে পারবে
                 selectMemberType('term');
+                
+                // কারেন্ট বাটন ডিজেবল
+                const currentBtn = document.getElementById('typeCurrent');
+                currentBtn.style.opacity = '0.4';
+                currentBtn.style.cursor = 'not-allowed';
+                currentBtn.onclick = null;
+                currentBtn.title = '⚠️ মেয়াদী সদস্য কারেন্ট হিসেবে জমা দিতে পারবেন না';
+                
+                // মেয়াদী বাটন সক্রিয়
+                const termBtn = document.getElementById('typeTerm');
+                termBtn.style.opacity = '1';
+                termBtn.style.cursor = 'pointer';
+                termBtn.onclick = function() { selectMemberType('term'); };
+                
             } else {
+                // কারেন্ট সদস্য - শুধু কারেন্ট সিলেক্ট করতে পারবে
                 selectMemberType('current');
+                
+                // মেয়াদী বাটন ডিজেবল
+                const termBtn = document.getElementById('typeTerm');
+                termBtn.style.opacity = '0.4';
+                termBtn.style.cursor = 'not-allowed';
+                termBtn.onclick = null;
+                termBtn.title = '⚠️ কারেন্ট সদস্য মেয়াদী হিসেবে জমা দিতে পারবেন না';
+                
+                // কারেন্ট বাটন সক্রিয়
+                const currentBtn = document.getElementById('typeCurrent');
+                currentBtn.style.opacity = '1';
+                currentBtn.style.cursor = 'pointer';
+                currentBtn.onclick = function() { selectMemberType('current'); };
             }
             
             const photoUrl = data.profile_image || getMemberPhoto(data.full_name || data.name, data.member_id || data.id);
@@ -1429,12 +1514,11 @@ async function searchMember() {
             document.getElementById('memberInfo').classList.remove('hidden');
             document.getElementById('paymentForm').style.display = 'block';
             
-            // সন নির্বাচন পপুলেট করুন
             populateYears();
-            
             await populateMonths();
             updateTotalAmount();
-            showToast(`সদস্য পাওয়া গেছে: ${data.full_name || data.name}`, 'success');
+            showToast(`✅ ${data.full_name || data.name} (${isTermMember ? 'মেয়াদী' : 'কারেন্ট'}) সদস্য পাওয়া গেছে`, 'success');
+            
         } else {
             resultDiv.innerHTML = `<i class="fas fa-exclamation-circle text-red-600"></i> সদস্য পাওয়া যায়নি বা অনুমোদিত নয়!`;
             resultDiv.className = 'bg-red-50 p-3 rounded-lg text-sm text-red-700';
