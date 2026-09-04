@@ -576,6 +576,9 @@
                 <button onclick="openAddLibraryModal()" class="btn btn-warning">
                     <i class="fas fa-plus"></i> নতুন লাইব্রেরী
                 </button>
+                <button onclick="openAddCategoryModal()" class="btn btn-warning">
+                    <i class="fas fa-tags"></i> নতুন জামাত
+                </button>
                 <button onclick="openEditLibraryModal()" class="btn btn-primary">
                     <i class="fas fa-pen"></i> লাইব্রেরী সম্পাদনা
                 </button>
@@ -645,6 +648,40 @@
                 <div class="text-center text-gray-400 py-4 text-sm">
                     <i class="fas fa-inbox text-2xl block mb-2 text-gray-300"></i>
                     <p>কোনো আবেদন নেই</p>
+                </div>
+            </div>
+
+<!-- ========================================================== -->
+<!-- 🏷️ নতুন ক্যাটাগরি যোগ মোডাল -->
+<!-- ========================================================== -->
+<div id="addCategoryModal" class="modal-overlay" onclick="if(event.target===this) closeAddCategoryModal()">
+    <div class="modal-box">
+        <div class="flex justify-between items-center border-b pb-3 mb-4">
+            <h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-tags mr-2"></i>নতুন জামাত যোগ করুন</h3>
+            <button onclick="closeAddCategoryModal()" class="text-gray-400 hover:text-red-500 text-2xl">&times;</button>
+        </div>
+        <div>
+            <div class="mb-4">
+                <label class="form-label">জামাতের নাম <span class="required">*</span></label>
+                <input type="text" id="newCategoryName" class="form-control" placeholder="যেমন: হাদীস শরীফ">
+            </div>
+            <div class="mb-4">
+                <label class="form-label">বিবরণ <span class="text-gray-400 text-xs">(ঐচ্ছিক)</span></label>
+                <input type="text" id="newCategoryDescription" class="form-control" placeholder="যেমন: হাদীস সম্পর্কিত বই">
+            </div>
+            <button onclick="addNewCategory()" class="btn btn-success w-full py-3 text-base">
+                <i class="fas fa-save mr-2"></i> জামাত যোগ করুন
+            </button>
+        </div>
+    </div>
+</div>
+            
+            <!-- ===== ক্যাটাগরি সমূহ ===== -->
+            <div class="section-title mt-8"><i class="fas fa-tags"></i> জামাত সমূহ</div>
+            <div id="categoryListContainer">
+                <div class="text-center py-8">
+                    <div class="loading-spinner"></div>
+                    <p class="text-gray-500 mt-2">🏷️ জামাত লোড হচ্ছে...</p>
                 </div>
             </div>
 
@@ -2557,6 +2594,106 @@ async function updateLibraryNameFromModal() {
     }
 }
 
+    // ============================================================
+// 🏷️ CATEGORY - ADD
+// ============================================================
+function openAddCategoryModal() {
+    document.getElementById('addCategoryModal').classList.add('active');
+    document.getElementById('newCategoryName').value = '';
+    document.getElementById('newCategoryDescription').value = '';
+}
+
+function closeAddCategoryModal() {
+    document.getElementById('addCategoryModal').classList.remove('active');
+}
+
+async function addNewCategory() {
+    const name = document.getElementById('newCategoryName').value.trim();
+    if (!name) {
+        showToast('জামাতের নাম লিখুন!', 'error');
+        document.getElementById('newCategoryName').focus();
+        return;
+    }
+    
+    const description = document.getElementById('newCategoryDescription').value.trim();
+    
+    const sb = await initSupabase();
+    if (!sb) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const btn = document.querySelector('#addCategoryModal .btn-success');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> যোগ করা হচ্ছে...';
+    }
+    
+    try {
+        const { data, error } = await sb
+            .from('categories')
+            .insert([{ 
+                name: name, 
+                description: description || '',
+                icon: 'fas fa-book',
+                status: 'active',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            }])
+            .select();
+        
+        if (error) throw error;
+        
+        if (data && data.length > 0) {
+            categories.push(data[0]);
+        }
+        
+        renderCategories();
+        updateStats();
+        closeAddCategoryModal();
+        showToast(`✅ "${name}" জামাত যোগ করা হয়েছে!`, 'success');
+        
+    } catch(e) {
+        console.error('Add category error:', e);
+        showToast('❌ জামাত যোগ করতে সমস্যা!', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-save mr-2"></i> জামাত যোগ করুন';
+        }
+    }
+}
+
+// ============================================================
+// 🏷️ RENDER CATEGORIES
+// ============================================================
+function renderCategories() {
+    const container = document.getElementById('categoryListContainer');
+    if (!container) return;
+    
+    if (!categories || categories.length === 0) {
+        container.innerHTML = `<div class="text-center text-gray-400 py-4">
+            <i class="fas fa-tags text-3xl block mb-2 text-gray-300"></i>
+            <p>কোনো জামাত নেই</p>
+        </div>`;
+        return;
+    }
+    
+    let html = `<div class="flex flex-wrap gap-2">`;
+    categories.forEach(cat => {
+        const count = books.filter(b => b.category === cat.name).length;
+        html += `
+            <div class="bg-white border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2 shadow-sm hover:shadow-md transition">
+                <i class="fas fa-tag text-emerald-600"></i>
+                <span class="font-medium text-gray-700">${cat.name}</span>
+                <span class="text-xs bg-gray-100 px-2 py-0.5 rounded-full text-gray-500">${count} টি</span>
+            </div>
+        `;
+    });
+    html += `</div>`;
+    container.innerHTML = html;
+}
+
 async function deleteLibrary() {
     const name = document.getElementById('editLibrarySelect').value;
     if (!name) {
@@ -2692,6 +2829,7 @@ async function init() {
     await loadBooksFromSupabase();
     await loadRecentApplications();
     await renderAuditLogs();
+    await renderCategories();
     
     document.getElementById('profitPercent').value = config.profit_percent;
     document.getElementById('serviceChargePercent').value = config.service_charge_percent;
