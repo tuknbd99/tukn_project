@@ -264,7 +264,7 @@
 
             <!-- ===== সুপার অ্যাডমিন কনফিগ ===== -->
             <div class="admin-config-box" id="adminConfigSection">
-                <label><i class="fas fa-percent text-emerald-600"></i> লাভাংশ (%)</label>
+                <label><i class="fas fa-percent text-emerald-600"></i> লভ্যাংশ (%)</label>
                 <input type="number" id="profitPercent" value="10" min="0" step="0.5">
                 
                 <label><i class="fas fa-hand-holding-usd text-emerald-600"></i> সার্ভিস চার্জ (%)</label>
@@ -727,7 +727,7 @@ async function updateConfig() {
         config.delivery_charge_min = deliveryMin || 100;
         config.delivery_charge_max = deliveryMax || 150;
         
-        showToast(`✅ লাভাংশ ${profit}%, সার্ভিস চার্জ ${service}% ও ডেলিভারি চার্জ ${deliveryMin}-${deliveryMax} টাকা সংরক্ষিত!`, 'success');
+        showToast(`✅ লভ্যাংশ ${profit}%, সার্ভিস চার্জ ${service}% ও ডেলিভারি চার্জ ${deliveryMin}-${deliveryMax} টাকা সংরক্ষিত!`, 'success');
     } catch(e) {
         console.error('❌ Config update error:', e);
         showToast('কনফিগ সংরক্ষণে সমস্যা!', 'error');
@@ -856,27 +856,27 @@ function getDefaultBooks() {
 // 📊 STATISTICS UPDATE
 // ============================================================
 function updateStats() {
-    const totalBooks = books.length;
-    const categories = [...new Set(books.map(b => b.category).filter(Boolean))];
-    const libraries = [...new Set(books.map(b => b.library).filter(Boolean))];
+    // ✅ ডামি বই বাদ দিন
+    const realBooks = books.filter(b => !b.is_dummy);
+    const totalBooks = realBooks.length;
+    const categories = [...new Set(realBooks.map(b => b.category).filter(Boolean))];
+    const libraries = [...new Set(realBooks.map(b => b.library).filter(Boolean))];
     
     document.getElementById('statTotalBooks').textContent = totalBooks;
     document.getElementById('statTotalCategories').textContent = categories.length;
     document.getElementById('statTotalLibraries').textContent = libraries.length;
-    
-    // বিক্রিত কিতাব (বর্তমানে 0, পরে আপডেট করা যাবে)
     document.getElementById('statTotalBooksSold').textContent = '0';
 }
 
-// ============================================================
-// RENDER CATALOG
-// ============================================================
 function renderCatalog() {
     const container = document.getElementById('bookCatalogContainer');
     if (!container) return;
 
+    // ✅ ডামি বই বাদ দিন
+    const realBooks = books.filter(b => !b.is_dummy);
+    
     const groups = {};
-    books.forEach(book => {
+    realBooks.forEach(book => {
         const cat = book.category || 'অন্যান্য';
         if (!groups[cat]) groups[cat] = [];
         groups[cat].push(book);
@@ -944,7 +944,11 @@ function updateEditBookSelect() {
     if (!select) return;
     const current = select.value;
     select.innerHTML = '<option value="">-- কিতাব নির্বাচন করুন --</option>';
-    books.forEach(book => {
+    
+    // ✅ ডামি বই বাদ দিন
+    const realBooks = books.filter(b => !b.is_dummy);
+    
+    realBooks.forEach(book => {
         const option = document.createElement('option');
         option.value = book.id;
         option.textContent = `${book.name} (${book.category || 'অন্যান্য'})`;
@@ -953,14 +957,13 @@ function updateEditBookSelect() {
     if (current) select.value = current;
 }
 
-// ============================================================
-// RENDER LIBRARIES
-// ============================================================
 function renderLibraries() {
     const container = document.getElementById('libraryListContainer');
     if (!container) return;
     
-    const libraries = [...new Set(books.map(b => b.library).filter(Boolean))].sort();
+    // ✅ ডামি বই বাদ দিন
+    const realBooks = books.filter(b => !b.is_dummy);
+    const libraries = [...new Set(realBooks.map(b => b.library).filter(Boolean))].sort();
     
     if (libraries.length === 0) {
         container.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-building text-3xl block mb-2 text-gray-300"></i><p>কোনো লাইব্রেরী নেই</p></div>`;
@@ -983,7 +986,7 @@ function renderLibraries() {
     
     let html = `<div class="flex flex-wrap gap-2">`;
     libraries.forEach(lib => {
-        const count = books.filter(b => b.library === lib).length;
+        const count = realBooks.filter(b => b.library === lib).length;
         html += `
             <div class="bg-white border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2 shadow-sm hover:shadow-md transition">
                 <i class="fas fa-building text-emerald-600"></i>
@@ -1253,9 +1256,28 @@ async function addNewLibrary() {
         return;
     }
     
-    // লাইব্রেরী শুধু লিস্টে যোগ হবে (ডাটাবেসে আলাদা টেবিল নেই)
+    // ✅ লাইব্রেরীকে books অ্যারেতে ডামি বই হিসেবে যোগ করুন (শুধু ড্রপডাউনের জন্য)
+    // কিন্তু ডাটাবেসে সেভ করবেন না
+    const dummyBook = {
+        id: Date.now() * -1, // নেগেটিভ আইডি যাতে ডাটাবেসে না যায়
+        name: `__LIBRARY__${name}`, // ডামি নাম
+        category: '__LIBRARY__',
+        library: name,
+        selling_price: 0,
+        purchase_price: 0,
+        discount: 0,
+        profit: 0,
+        print_type: '',
+        is_dummy: true // ডামি মার্কার
+    };
+    
+    books.push(dummyBook);
+    
+    // রেন্ডার আপডেট
     renderLibraries();
     updateEditBookSelect();
+    populateCategorySelects(); // ক্যাটাগরি লিস্ট আপডেট
+    
     closeAddLibraryModal();
     showToast(`✅ "${name}" লাইব্রেরী যোগ করা হয়েছে!`, 'success');
 }
@@ -1374,6 +1396,271 @@ async function deleteLibrary() {
     }
 }
 
+    // ============================================================
+// 📚 লাইব্রেরী ম্যানেজমেন্ট (Supabase টেবিল ব্যবহার করে)
+// ============================================================
+
+let libraries = [];
+
+// ✅ লাইব্রেরী লোড করুন
+async function loadLibraries() {
+    const sb = await initSupabase();
+    if (!sb) return;
+    
+    try {
+        const { data, error } = await sb
+            .from('libraries')
+            .select('*')
+            .order('name');
+        
+        if (error) throw error;
+        
+        libraries = data || [];
+        console.log(`✅ ${libraries.length} টি লাইব্রেরী লোড হয়েছে`);
+        updateLibraryDropdowns();
+        renderLibraries();
+    } catch(e) {
+        console.error('❌ লাইব্রেরী লোড error:', e);
+        libraries = [];
+    }
+}
+
+// ✅ লাইব্রেরী ড্রপডাউন আপডেট করুন
+function updateLibraryDropdowns() {
+    const selects = ['newLibrary', 'editLibrary'];
+    selects.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const current = el.value;
+        el.innerHTML = '<option value="">-- নির্বাচন করুন --</option>';
+        libraries.forEach(lib => {
+            const option = document.createElement('option');
+            option.value = lib.name;
+            option.textContent = lib.name;
+            el.appendChild(option);
+        });
+        if (current) el.value = current;
+    });
+}
+
+// ✅ নতুন লাইব্রেরী যোগ করুন (Supabase এ)
+async function addNewLibrary() {
+    const name = document.getElementById('newLibraryName').value.trim();
+    if (!name) {
+        showToast('লাইব্রেরীর নাম লিখুন!', 'error');
+        return;
+    }
+    
+    // চেক করুন লাইব্রেরী ইতিমধ্যে আছে কিনা
+    const existing = libraries.some(l => l.name === name);
+    if (existing) {
+        showToast(`⚠️ "${name}" ইতিমধ্যে আছে!`, 'warning');
+        closeAddLibraryModal();
+        return;
+    }
+    
+    const sb = await initSupabase();
+    if (!sb) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data, error } = await sb
+            .from('libraries')
+            .insert([{ name: name, created_at: new Date().toISOString() }])
+            .select();
+        
+        if (error) throw error;
+        
+        if (data && data.length > 0) {
+            libraries.push(data[0]);
+        }
+        
+        updateLibraryDropdowns();
+        renderLibraries();
+        closeAddLibraryModal();
+        showToast(`✅ "${name}" লাইব্রেরী যোগ করা হয়েছে!`, 'success');
+    } catch(e) {
+        console.error('Add library error:', e);
+        showToast('❌ লাইব্রেরী যোগ করতে সমস্যা!', 'error');
+    }
+}
+
+// ✅ লাইব্রেরী সম্পাদনা করুন (Supabase এ)
+async function updateLibraryNameFromModal() {
+    const oldName = document.getElementById('editLibraryOldName').value;
+    const newName = document.getElementById('editLibraryName').value.trim();
+    
+    if (!oldName) {
+        showToast('লাইব্রেরী নির্বাচন করুন!', 'error');
+        return;
+    }
+    if (!newName) {
+        showToast('নতুন নাম লিখুন!', 'error');
+        return;
+    }
+    if (oldName === newName) {
+        showToast('নাম পরিবর্তন করা হয়নি!', 'info');
+        closeEditLibraryModal();
+        return;
+    }
+    
+    const sb = await initSupabase();
+    if (!sb) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // ১. লাইব্রেরী টেবিল আপডেট করুন
+        const { error: libError } = await sb
+            .from('libraries')
+            .update({ name: newName, updated_at: new Date().toISOString() })
+            .eq('name', oldName);
+        
+        if (libError) throw libError;
+        
+        // ২. book_catalog টেবিলের library ফিল্ড আপডেট করুন
+        const { error: bookError } = await sb
+            .from('book_catalog')
+            .update({ library: newName })
+            .eq('library', oldName);
+        
+        if (bookError) throw bookError;
+        
+        // ৩. লোকাল ডেটা আপডেট করুন
+        libraries = libraries.map(l => l.name === oldName ? { ...l, name: newName } : l);
+        books.forEach(book => {
+            if (book.library === oldName) {
+                book.library = newName;
+            }
+        });
+        
+        updateLibraryDropdowns();
+        renderCatalog();
+        renderLibraries();
+        updateEditBookSelect();
+        closeEditLibraryModal();
+        showToast(`✅ "${oldName}" → "${newName}" আপডেট করা হয়েছে!`, 'success');
+    } catch(e) {
+        console.error('Update library error:', e);
+        showToast('❌ লাইব্রেরী আপডেট করতে সমস্যা!', 'error');
+    }
+}
+
+// ✅ লাইব্রেরী ডিলিট করুন (Supabase এ)
+async function deleteLibrary() {
+    const name = document.getElementById('editLibrarySelect').value;
+    if (!name) {
+        showToast('লাইব্রেরী নির্বাচন করুন!', 'error');
+        return;
+    }
+    if (!confirm(`"${name}" লাইব্রেরী মুছে ফেলতে চান? (সব কিতাবের লাইব্রেরী খালি হবে)`)) return;
+    
+    const sb = await initSupabase();
+    if (!sb) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // ১. লাইব্রেরী টেবিল থেকে ডিলিট করুন
+        const { error: libError } = await sb
+            .from('libraries')
+            .delete()
+            .eq('name', name);
+        
+        if (libError) throw libError;
+        
+        // ২. book_catalog টেবিলের library ফিল্ড খালি করুন
+        const { error: bookError } = await sb
+            .from('book_catalog')
+            .update({ library: '' })
+            .eq('library', name);
+        
+        if (bookError) throw bookError;
+        
+        // ৩. লোকাল ডেটা আপডেট করুন
+        libraries = libraries.filter(l => l.name !== name);
+        books.forEach(book => {
+            if (book.library === name) {
+                book.library = '';
+            }
+        });
+        
+        updateLibraryDropdowns();
+        renderCatalog();
+        renderLibraries();
+        updateEditBookSelect();
+        closeEditLibraryModal();
+        showToast(`✅ "${name}" লাইব্রেরী মুছে ফেলা হয়েছে!`, 'info');
+    } catch(e) {
+        console.error('Delete library error:', e);
+        showToast('❌ লাইব্রেরী মুছে ফেলতে সমস্যা!', 'error');
+    }
+}
+
+// ✅ লাইব্রেরী রেন্ডার করুন
+function renderLibraries() {
+    const container = document.getElementById('libraryListContainer');
+    if (!container) return;
+    
+    if (libraries.length === 0) {
+        container.innerHTML = `<div class="text-center text-gray-400 py-4"><i class="fas fa-building text-3xl block mb-2 text-gray-300"></i><p>কোনো লাইব্রেরী নেই</p></div>`;
+        return;
+    }
+    
+    // লাইব্রেরী সম্পাদনা সিলেক্ট আপডেট
+    const editSelect = document.getElementById('editLibrarySelect');
+    if (editSelect) {
+        const current = editSelect.value;
+        editSelect.innerHTML = '<option value="">-- লাইব্রেরী নির্বাচন করুন --</option>';
+        libraries.forEach(lib => {
+            const option = document.createElement('option');
+            option.value = lib.name;
+            option.textContent = lib.name;
+            editSelect.appendChild(option);
+        });
+        if (current) editSelect.value = current;
+    }
+    
+    // লাইব্রেরী তালিকা দেখান
+    let html = `<div class="flex flex-wrap gap-2">`;
+    libraries.forEach(lib => {
+        const count = books.filter(b => b.library === lib.name).length;
+        html += `
+            <div class="bg-white border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2 shadow-sm hover:shadow-md transition">
+                <i class="fas fa-building text-emerald-600"></i>
+                <span class="font-medium text-gray-700">${lib.name}</span>
+                <span class="text-xs bg-gray-100 px-2 py-0.5 rounded-full text-gray-500">${count} টি</span>
+            </div>
+        `;
+    });
+    html += `</div>`;
+    container.innerHTML = html;
+}
+
+// ✅ init ফাংশনে loadLibraries() যোগ করুন
+async function init() {
+    console.log('🚀 কিতাব ম্যানেজমেন্ট লোড হচ্ছে...');
+    
+    setupBackLink();
+    await loadConfig();
+    await loadLibraries(); // ✅ লাইব্রেরী লোড করুন
+    await loadBooksFromSupabase();
+    await loadRecentApplications();
+    
+    document.getElementById('profitPercent').value = config.profit_percent;
+    document.getElementById('serviceChargePercent').value = config.service_charge_percent;
+    document.getElementById('deliveryChargeMin').value = config.delivery_charge_min || 100;
+    document.getElementById('deliveryChargeMax').value = config.delivery_charge_max || 150;
+    
+    console.log('✅ পেজ লোড সম্পূর্ণ!');
+    console.log(`📚 মোট কিতাব: ${books.length}`);
+    console.log(`🏷️ মোট লাইব্রেরী: ${libraries.length}`);
+}
+    
 // ============================================================
 // RECENT APPLICATIONS
 // ============================================================
