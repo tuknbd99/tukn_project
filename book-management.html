@@ -418,6 +418,7 @@
         .stat-card-custom.blue .number { color: #2563eb; }
         .stat-card-custom.purple .number { color: #7c3aed; }
         .stat-card-custom.orange .number { color: #f59e0b; }
+        .stat-card-custom.red .number { color: #dc2626; }
         
         .duplicate-warning {
             animation: shake 0.5s ease-in-out;
@@ -456,6 +457,26 @@
             justify-content: center;
         }
         .image-preview-container .remove-image-btn:hover { background: #dc2626; }
+        
+        /* অডিট লগ স্টাইল */
+        .audit-log-container {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .audit-log-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        .audit-log-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        .audit-log-container::-webkit-scrollbar-thumb {
+            background: #d1d5db;
+            border-radius: 10px;
+        }
+        .audit-log-container::-webkit-scrollbar-thumb:hover {
+            background: #9ca3af;
+        }
         
         @media (max-width: 640px) {
             .book-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
@@ -624,6 +645,21 @@
                 <div class="text-center text-gray-400 py-4 text-sm">
                     <i class="fas fa-inbox text-2xl block mb-2 text-gray-300"></i>
                     <p>কোনো আবেদন নেই</p>
+                </div>
+            </div>
+
+            <!-- ===== অডিট লগ সেকশন ===== -->
+            <div class="section-title mt-8">
+                <i class="fas fa-history"></i> 
+                📝 অডিট লগ
+                <button onclick="renderAuditLogs()" class="btn btn-sm btn-outline ml-auto">
+                    <i class="fas fa-sync-alt"></i> রিফ্রেশ
+                </button>
+            </div>
+            <div id="auditLogContainer" class="bg-gray-50 rounded-lg p-4 border border-gray-200 audit-log-container">
+                <div class="text-center text-gray-400 py-4 text-sm">
+                    <i class="fas fa-spinner fa-spin text-2xl block mb-2 text-gray-300"></i>
+                    <p>লগ লোড হচ্ছে...</p>
                 </div>
             </div>
 
@@ -916,6 +952,180 @@
 <!-- JavaScript -->
 <!-- ========================================================== -->
 <script>
+
+// ============================================================
+// 📝 AUDIT LOG FUNCTIONS
+// ============================================================
+
+// বর্তমান ইউজার তথ্য পাওয়া
+function getCurrentUser() {
+    try {
+        const userData = localStorage.getItem('currentUser');
+        if (userData) {
+            return JSON.parse(userData);
+        }
+        const sessionUser = sessionStorage.getItem('currentUser');
+        if (sessionUser) {
+            return JSON.parse(sessionUser);
+        }
+        return { name: 'admin', role: 'super_admin' };
+    } catch(e) {
+        return { name: 'admin', role: 'super_admin' };
+    }
+}
+
+// অডিট লগ সংরক্ষণ করুন
+async function saveAuditLog(tableName, recordId, action, oldData, newData) {
+    const sb = await initSupabase();
+    if (!sb) {
+        console.warn('⚠️ Supabase সংযোগ নেই, অডিট লগ সংরক্ষণ করা যায়নি');
+        return;
+    }
+    
+    const user = getCurrentUser();
+    
+    try {
+        let ip = 'unknown';
+        try {
+            const response = await fetch('https://api.ipify.org?format=json');
+            const data = await response.json();
+            ip = data.ip || 'unknown';
+        } catch(e) {
+            ip = 'unknown';
+        }
+        
+        const { error } = await sb
+            .from('audit_logs')
+            .insert([{
+                table_name: tableName,
+                record_id: String(recordId),
+                action: action,
+                old_data: oldData || null,
+                new_data: newData || null,
+                changed_by: user.name || 'unknown',
+                user_ip: ip,
+                user_agent: navigator.userAgent || 'unknown',
+                created_at: new Date().toISOString()
+            }]);
+        
+        if (error) {
+            console.error('❌ অডিট লগ সংরক্ষণে সমস্যা:', error);
+        } else {
+            console.log(`✅ অডিট লগ সংরক্ষিত: ${action} on ${tableName}#${recordId}`);
+        }
+    } catch(e) {
+        console.error('❌ অডিট লগ error:', e);
+    }
+}
+
+// অডিট লগ লোড করুন
+async function loadAuditLogs(limit = 50) {
+    const sb = await initSupabase();
+    if (!sb) return [];
+    
+    try {
+        const { data, error } = await sb
+            .from('audit_logs')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(limit);
+        
+        if (error) throw error;
+        return data || [];
+    } catch(e) {
+        console.error('❌ অডিট লগ লোড error:', e);
+        return [];
+    }
+}
+
+// অডিট লগ UI-তে দেখানো
+async function renderAuditLogs() {
+    const container = document.getElementById('auditLogContainer');
+    if (!container) return;
+    
+    container.innerHTML = `
+        <div class="text-center text-gray-400 py-4 text-sm">
+            <i class="fas fa-spinner fa-spin text-2xl block mb-2 text-gray-300"></i>
+            <p>লগ লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const logs = await loadAuditLogs(20);
+    
+    if (logs.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-gray-400 py-4">
+                <i class="fas fa-inbox text-2xl block mb-2 text-gray-300"></i>
+                <p>কোনো লগ নেই</p>
+            </div>
+        `;
+        return;
+    }
+    
+    let html = `<div class="space-y-2">`;
+    logs.forEach(log => {
+        const actionColor = log.action === 'INSERT' ? 'bg-green-100 text-green-700' :
+                           log.action === 'UPDATE' ? 'bg-blue-100 text-blue-700' :
+                           'bg-red-100 text-red-700';
+        
+        const actionIcon = log.action === 'INSERT' ? 'fa-plus-circle' :
+                          log.action === 'UPDATE' ? 'fa-edit' :
+                          'fa-trash-alt';
+        
+        const actionLabel = log.action === 'INSERT' ? 'যোগ' :
+                           log.action === 'UPDATE' ? 'সম্পাদনা' :
+                           'মুছে ফেলা';
+        
+        let detailsHtml = '';
+        if (log.action !== 'DELETE' && log.new_data) {
+            let displayData = log.new_data;
+            if (typeof displayData === 'object') {
+                displayData = JSON.stringify(displayData, null, 2);
+            }
+            detailsHtml = `
+                <details class="mt-1 text-xs text-gray-500">
+                    <summary class="cursor-pointer hover:text-gray-700">📋 বিস্তারিত দেখুন</summary>
+                    <pre class="mt-1 p-2 bg-gray-50 rounded overflow-x-auto text-xs">${displayData}</pre>
+                </details>
+            `;
+        }
+        
+        if (log.action === 'DELETE' && log.old_data) {
+            let oldData = log.old_data;
+            if (typeof oldData === 'object') {
+                oldData = JSON.stringify(oldData, null, 2);
+            }
+            detailsHtml = `
+                <details class="mt-1 text-xs text-gray-500">
+                    <summary class="cursor-pointer hover:text-gray-700">📋 মুছে ফেলা ডেটা দেখুন</summary>
+                    <pre class="mt-1 p-2 bg-gray-50 rounded overflow-x-auto text-xs">${oldData}</pre>
+                </details>
+            `;
+        }
+        
+        html += `
+            <div class="bg-white border border-gray-200 rounded-lg p-3 hover:shadow-sm transition">
+                <div class="flex justify-between items-start">
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <span class="text-xs px-2 py-1 rounded-full ${actionColor}">
+                            <i class="fas ${actionIcon} mr-1"></i> ${actionLabel}
+                        </span>
+                        <span class="font-medium text-gray-700 text-sm">${log.table_name}</span>
+                        <span class="text-xs text-gray-400">#${log.record_id}</span>
+                        <span class="text-xs bg-gray-100 px-2 py-0.5 rounded-full text-gray-600">
+                            <i class="fas fa-user mr-1"></i> ${log.changed_by}
+                        </span>
+                    </div>
+                    <span class="text-xs text-gray-400 whitespace-nowrap">${new Date(log.created_at).toLocaleString('bn-BD')}</span>
+                </div>
+                ${detailsHtml}
+            </div>
+        `;
+    });
+    html += `</div>`;
+    
+    container.innerHTML = html;
+}
 
 // ============================================================
 // SUPABASE CONFIG
@@ -1336,7 +1546,6 @@ function updateFilterDropdowns() {
         librarySelect.value = currentValue;
     }
     
-    // ক্যাটাগরি ফিল্টার ঠিক রাখা
     const categorySelect = document.getElementById('filterCategory');
     if (categorySelect) {
         const currentCatValue = categorySelect.value;
@@ -1355,7 +1564,6 @@ function updateFilterDropdowns() {
             'অন্যান্য'
         ];
         
-        // শুধু যদি অপশন কম থাকে তাহলে রিফ্রেশ করুন
         if (categorySelect.options.length <= 2) {
             categorySelect.innerHTML = '<option value="">সব জামাত</option>';
             staticCategories.forEach(cat => {
@@ -1383,7 +1591,7 @@ function setView(view) {
 }
 
 // ============================================================
-// 📊 STATISTICS UPDATE (স্টক সহ)
+// 📊 STATISTICS UPDATE
 // ============================================================
 function updateStats() {
     const realBooks = books.filter(b => !b.is_dummy);
@@ -1400,7 +1608,7 @@ function updateStats() {
 }
 
 // ============================================================
-// RENDER CATALOG (স্টক সহ)
+// RENDER CATALOG
 // ============================================================
 function renderCatalog() {
     const container = document.getElementById('bookCatalogContainer');
@@ -1518,7 +1726,7 @@ function renderBookListItem(book) {
 }
 
 // ============================================================
-// POPULATE CATEGORY SELECTS (লুগাতসমূহ সহ)
+// POPULATE CATEGORY SELECTS
 // ============================================================
 function populateCategorySelects() {
     const categoryList = [
@@ -1758,7 +1966,7 @@ async function uploadImage(file, bookId) {
 }
 
 // ============================================================
-// BOOK - ADD (স্টক সহ)
+// BOOK - ADD
 // ============================================================
 function openAddBookModal() {
     document.getElementById('addBookModal').classList.add('active');
@@ -1875,6 +2083,8 @@ async function addNewBook() {
         
         let bookData = data[0];
         
+        await saveAuditLog('book_catalog', bookData.id, 'INSERT', null, bookData);
+        
         if (newImageFile && bookData) {
             const imageUrl = await uploadImage(newImageFile, bookData.id);
             if (imageUrl) {
@@ -1885,6 +2095,7 @@ async function addNewBook() {
                 
                 if (!updateError) {
                     bookData.image_url = imageUrl;
+                    await saveAuditLog('book_catalog', bookData.id, 'UPDATE', null, { image_url: imageUrl });
                 }
             }
         }
@@ -1899,6 +2110,7 @@ async function addNewBook() {
         updateEditBookSelect();
         renderLibraries();
         updateFilterDropdowns();
+        renderAuditLogs();
         closeAddBookModal();
         showToast(`✅ "${finalName}" কিতাব যুক্ত হয়েছে! (স্টক: ${stock})`, 'success');
     } catch(e) {
@@ -1913,7 +2125,7 @@ async function addNewBook() {
 }
 
 // ============================================================
-// BOOK - EDIT (স্টক সহ)
+// BOOK - EDIT
 // ============================================================
 function openEditBookModalList() {
     document.getElementById('editBookModal').classList.add('active');
@@ -1998,6 +2210,8 @@ async function saveBookEdit() {
         return;
     }
     
+    const oldData = { ...book };
+    
     const name = document.getElementById('editBookName').value.trim();
     if (!name) {
         showToast('নাম লিখুন!', 'error');
@@ -2062,6 +2276,8 @@ async function saveBookEdit() {
         
         if (error) throw error;
         
+        await saveAuditLog('book_catalog', id, 'UPDATE', oldData, updateData);
+        
         Object.assign(book, updateData);
         filteredBooks = [...books];
         renderCatalog();
@@ -2069,6 +2285,7 @@ async function saveBookEdit() {
         updateEditBookSelect();
         renderLibraries();
         updateFilterDropdowns();
+        renderAuditLogs();
         closeEditBookModal();
         showToast(`✅ "${name}" কিতাব আপডেট করা হয়েছে! (স্টক: ${stock})`, 'success');
     } catch(e) {
@@ -2086,6 +2303,14 @@ async function deleteBook() {
     const id = parseInt(document.getElementById('editBookId').value);
     if (!confirm('এই কিতাবটি মুছে ফেলতে চান?')) return;
     
+    const book = books.find(b => b.id === id);
+    if (!book) {
+        showToast('কিতাব পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    const oldData = { ...book };
+    
     const sb = await initSupabase();
     if (!sb) {
         showToast('সংযোগ সমস্যা!', 'error');
@@ -2100,6 +2325,8 @@ async function deleteBook() {
         
         if (error) throw error;
         
+        await saveAuditLog('book_catalog', id, 'DELETE', oldData, null);
+        
         books = books.filter(b => b.id !== id);
         filteredBooks = [...books];
         renderCatalog();
@@ -2107,6 +2334,7 @@ async function deleteBook() {
         updateEditBookSelect();
         renderLibraries();
         updateFilterDropdowns();
+        renderAuditLogs();
         closeEditBookModal();
         showToast('✅ কিতাব মুছে ফেলা হয়েছে!', 'info');
     } catch(e) {
@@ -2168,11 +2396,13 @@ async function addNewLibrary() {
         
         if (data && data.length > 0) {
             libraries.push(data[0]);
+            await saveAuditLog('libraries', data[0].id, 'INSERT', null, data[0]);
         }
         
         updateLibraryDropdowns();
         renderLibraries();
         updateFilterDropdowns();
+        renderAuditLogs();
         closeAddLibraryModal();
         showToast(`✅ "${name}" লাইব্রেরী যোগ করা হয়েছে!`, 'success');
         
@@ -2231,6 +2461,8 @@ async function updateLibraryNameFromModal() {
         return;
     }
     
+    const oldLibData = libraries.find(l => l.name === oldName);
+    
     const sb = await initSupabase();
     if (!sb) {
         showToast('সংযোগ সমস্যা!', 'error');
@@ -2252,6 +2484,8 @@ async function updateLibraryNameFromModal() {
         
         if (bookError) throw bookError;
         
+        await saveAuditLog('libraries', oldLibData?.id || 'unknown', 'UPDATE', { name: oldName }, { name: newName });
+        
         libraries = libraries.map(l => l.name === oldName ? { ...l, name: newName } : l);
         books.forEach(book => {
             if (book.library === oldName) {
@@ -2264,6 +2498,7 @@ async function updateLibraryNameFromModal() {
         renderLibraries();
         updateEditBookSelect();
         updateFilterDropdowns();
+        renderAuditLogs();
         closeEditLibraryModal();
         showToast(`✅ "${oldName}" → "${newName}" আপডেট করা হয়েছে!`, 'success');
     } catch(e) {
@@ -2279,6 +2514,8 @@ async function deleteLibrary() {
         return;
     }
     if (!confirm(`"${name}" লাইব্রেরী মুছে ফেলতে চান? (সব কিতাবের লাইব্রেরী খালি হবে)`)) return;
+    
+    const oldLibData = libraries.find(l => l.name === name);
     
     const sb = await initSupabase();
     if (!sb) {
@@ -2301,6 +2538,8 @@ async function deleteLibrary() {
         
         if (bookError) throw bookError;
         
+        await saveAuditLog('libraries', oldLibData?.id || 'unknown', 'DELETE', oldLibData, null);
+        
         libraries = libraries.filter(l => l.name !== name);
         books.forEach(book => {
             if (book.library === name) {
@@ -2313,6 +2552,7 @@ async function deleteLibrary() {
         renderLibraries();
         updateEditBookSelect();
         updateFilterDropdowns();
+        renderAuditLogs();
         closeEditLibraryModal();
         showToast(`✅ "${name}" লাইব্রেরী মুছে ফেলা হয়েছে!`, 'info');
     } catch(e) {
@@ -2393,6 +2633,29 @@ async function loadRecentApplications() {
 }
 
 // ============================================================
+// INIT
+// ============================================================
+async function init() {
+    console.log('🚀 কিতাব ম্যানেজমেন্ট লোড হচ্ছে...');
+    
+    setupBackLink();
+    await loadConfig();
+    await loadLibraries();
+    await loadBooksFromSupabase();
+    await loadRecentApplications();
+    await renderAuditLogs();
+    
+    document.getElementById('profitPercent').value = config.profit_percent;
+    document.getElementById('serviceChargePercent').value = config.service_charge_percent;
+    document.getElementById('deliveryChargeMin').value = config.delivery_charge_min || 100;
+    document.getElementById('deliveryChargeMax').value = config.delivery_charge_max || 150;
+    
+    console.log('✅ পেজ লোড সম্পূর্ণ!');
+    console.log(`📚 মোট কিতাব: ${books.length}`);
+    console.log(`🏷️ মোট লাইব্রেরী: ${libraries.length}`);
+}
+
+// ============================================================
 // EVENT LISTENERS
 // ============================================================
 document.addEventListener('DOMContentLoaded', function() {
@@ -2409,27 +2672,8 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ============================================================
-// INIT
+// START
 // ============================================================
-async function init() {
-    console.log('🚀 কিতাব ম্যানেজমেন্ট লোড হচ্ছে...');
-    
-    setupBackLink();
-    await loadConfig();
-    await loadLibraries();
-    await loadBooksFromSupabase();
-    await loadRecentApplications();
-    
-    document.getElementById('profitPercent').value = config.profit_percent;
-    document.getElementById('serviceChargePercent').value = config.service_charge_percent;
-    document.getElementById('deliveryChargeMin').value = config.delivery_charge_min || 100;
-    document.getElementById('deliveryChargeMax').value = config.delivery_charge_max || 150;
-    
-    console.log('✅ পেজ লোড সম্পূর্ণ!');
-    console.log(`📚 মোট কিতাব: ${books.length}`);
-    console.log(`🏷️ মোট লাইব্রেরী: ${libraries.length}`);
-}
-
 document.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
