@@ -1723,7 +1723,155 @@ async function loadSavingsLoanReport() {
     } catch(e) { c.innerHTML = `<div class="text-center text-red-400 py-4">❌ লোড করতে সমস্যা!</div>`; }
 }
 
-async function loadSavingsDue() {
+// ============================================================
+// একসাথে ভিউ
+// ============================================================
+function renderCombinedDueView(memberData, totalExpected, totalPaid, totalDue, collectionRate) {
+    if (!memberData || memberData.length === 0) {
+        return `<div class="text-center text-gray-400 py-4">কোনো সদস্য নেই</div>`;
+    }
+    
+    const barData = memberData.slice(0, 10);
+    const maxValue = Math.max(...barData.map(d => d.expectedTotal), 1);
+    
+    let html = `<div class="bg-white p-4 rounded-lg border"><h4 class="font-bold text-gray-700 mb-3"><i class="fas fa-chart-bar text-emerald-600 mr-2"></i>সদস্য ভিত্তিক আদায়</h4><div class="space-y-2">`;
+    
+    barData.forEach(d => {
+        const paidPercent = maxValue > 0 ? (d.paidTotal / maxValue * 100) : 0;
+        const duePercent = maxValue > 0 ? (d.dueAmount / maxValue * 100) : 0;
+        
+        html += `
+            <div>
+                <div class="flex justify-between text-xs">
+                    <span class="font-medium">${d.name}</span>
+                    <span>${d.expectedTotal.toFixed(0)} টাকা</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-4 relative overflow-hidden">
+                    <div class="bg-emerald-500 h-4 rounded-full" style="width: ${Math.min(paidPercent, 100)}%;"></div>
+                    ${d.dueAmount > 0 ? `<div class="bg-red-400 h-4 rounded-full absolute top-0 left-0 opacity-50" style="width: ${Math.min(duePercent, 100)}%;"></div>` : ''}
+                </div>
+                <div class="flex justify-between text-xs">
+                    <span class="text-emerald-600">✅ ${d.paidTotal.toFixed(0)} টাকা</span>
+                    ${d.dueAmount > 0 ? `<span class="text-red-500">⏳ ${d.dueAmount.toFixed(0)} টাকা</span>` : '<span class="text-green-500">✅ সম্পূর্ণ</span>'}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += `
+            </div>
+            <div class="mt-3 grid grid-cols-4 gap-2 pt-3 border-t">
+                <div class="text-center"><span class="text-xs text-gray-500">ধার্য</span><p class="font-bold text-blue-600">${totalExpected.toFixed(2)} টাকা</p></div>
+                <div class="text-center"><span class="text-xs text-gray-500">আদায়</span><p class="font-bold text-emerald-600">${totalPaid.toFixed(2)} টাকা</p></div>
+                <div class="text-center"><span class="text-xs text-gray-500">বকেয়া</span><p class="font-bold text-red-600">${totalDue.toFixed(2)} টাকা</p></div>
+                <div class="text-center"><span class="text-xs text-gray-500">হার</span><p class="font-bold text-purple-600">${collectionRate.toFixed(1)}%</p></div>
+            </div>
+        </div>
+    `;
+    
+    return html;
+}
+
+// ============================================================
+// পৃথক ভিউ
+// ============================================================
+function renderSeparateDueView(memberData) {
+    if (!memberData || memberData.length === 0) {
+        return `<div class="text-center text-gray-400 py-4">কোনো সদস্য নেই</div>`;
+    }
+    
+    let html = `<div class="overflow-x-auto"><table class="w-full text-sm border"><thead class="bg-gray-50"><tr>
+        <th class="p-2 border">ক্রম</th><th class="p-2 border">সদস্য</th><th class="p-2 border">আইডি</th>
+        <th class="p-2 border text-right">মাসিক</th><th class="p-2 border">মাস</th><th class="p-2 border text-right">ধার্য</th>
+        <th class="p-2 border text-right">আদায়</th><th class="p-2 border text-right">বকেয়া</th><th class="p-2 border text-right">হার</th>
+    </tr></thead><tbody>`;
+    
+    memberData.forEach((m, i) => {
+        const rate = m.expectedTotal > 0 ? (m.paidTotal / m.expectedTotal * 100) : 0;
+        html += `
+            <tr class="${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}">
+                <td class="p-2 border text-center">${i + 1}</td>
+                <td class="p-2 border font-medium">${m.name}</td>
+                <td class="p-2 border text-xs">${m.member_id}</td>
+                <td class="p-2 border text-right">${m.monthlySavings} টাকা</td>
+                <td class="p-2 border text-center">${m.months}</td>
+                <td class="p-2 border text-right text-blue-600">${m.expectedTotal.toFixed(2)} টাকা</td>
+                <td class="p-2 border text-right text-emerald-600">${m.paidTotal.toFixed(2)} টাকা</td>
+                <td class="p-2 border text-right ${m.dueAmount > 0 ? 'text-red-600 font-bold' : 'text-green-600'}">${m.dueAmount.toFixed(2)} টাকা</td>
+                <td class="p-2 border text-right">${rate.toFixed(1)}%</td>
+            </tr>
+        `;
+    });
+    
+    const totalExpected = memberData.reduce((s, m) => s + m.expectedTotal, 0);
+    const totalPaid = memberData.reduce((s, m) => s + m.paidTotal, 0);
+    const totalDue = memberData.reduce((s, m) => s + (m.dueAmount > 0 ? m.dueAmount : 0), 0);
+    const overallRate = totalExpected > 0 ? (totalPaid / totalExpected * 100) : 0;
+    
+    html += `
+            <tr class="bg-gray-100 font-bold border-t-2">
+                <td colspan="5" class="p-2 border text-right">মোট:</td>
+                <td class="p-2 border text-right text-blue-700">${totalExpected.toFixed(2)} টাকা</td>
+                <td class="p-2 border text-right text-emerald-700">${totalPaid.toFixed(2)} টাকা</td>
+                <td class="p-2 border text-right text-red-700">${totalDue.toFixed(2)} টাকা</td>
+                <td class="p-2 border text-right text-purple-700">${overallRate.toFixed(1)}%</td>
+            </tr>
+        </tbody></table></div>
+        <div class="mt-2 text-xs text-gray-400 text-right">${memberData.length} জন সদস্য</div>
+    `;
+    
+    return html;
+}
+
+// ============================================================
+// ভিউ টগল
+// ============================================================
+function toggleDueView(view) {
+    const combined = document.getElementById('dueCombinedView');
+    const separate = document.getElementById('dueSeparateView');
+    const btnCombined = document.getElementById('dueViewCombined');
+    const btnSeparate = document.getElementById('dueViewSeparate');
+    
+    if (view === 'combined') {
+        combined.style.display = 'block';
+        separate.style.display = 'none';
+        btnCombined.className = 'px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition';
+        btnSeparate.className = 'px-4 py-2 rounded-lg bg-gray-200 text-gray-700 text-sm font-semibold hover:bg-gray-300 transition';
+    } else {
+        combined.style.display = 'none';
+        separate.style.display = 'block';
+        btnSeparate.className = 'px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition';
+        btnCombined.className = 'px-4 py-2 rounded-lg bg-gray-200 text-gray-700 text-sm font-semibold hover:bg-gray-300 transition';
+    }
+}
+
+// ============================================================
+// এক্সেল ডাউনলোড
+// ============================================================
+function exportDueData() {
+    const table = document.querySelector('#dueSeparateView table');
+    if (!table) {
+        showToast('কোনো ডেটা নেই!', 'error');
+        return;
+    }
+    
+    let csv = 'ক্রম,সদস্য,আইডি,মাসিক,মাস,ধার্য,আদায়,বকেয়া,হার\n';
+    const rows = table.querySelectorAll('tbody tr');
+    rows.forEach(row => {
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 9) {
+            csv += `"${cells[0]?.textContent.trim() || ''}","${cells[1]?.textContent.trim() || ''}","${cells[2]?.textContent.trim() || ''}","${cells[3]?.textContent.trim() || ''}","${cells[4]?.textContent.trim() || ''}","${cells[5]?.textContent.trim() || ''}","${cells[6]?.textContent.trim() || ''}","${cells[7]?.textContent.trim() || ''}","${cells[8]?.textContent.trim() || ''}"\n`;
+        }
+    });
+    
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `savings_due_report_${new Date().toISOString().slice(0,10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    showToast('✅ এক্সেল ডাউনলোড শুরু হয়েছে!', 'success');
+}
 
 async function loadLoanReport() {
     const c = document.getElementById('loanReportContent');
@@ -1806,63 +1954,67 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 });
 
-// ============================================================
-// Global Expose
-// ============================================================
-window.showTab = showTab;
-window.logout = logout;
-window.handleNavClick = handleNavClick;
-window.loadDashboard = loadDashboard;
-window.loadMembers = loadMembers;
-window.loadPendingMembers = loadPendingMembers;
-window.loadPayments = loadPayments;
-window.loadPendingPayments = loadPendingPayments;
-window.loadLoans = loadLoans;
-window.loadPendingLoans = loadPendingLoans;
-window.loadReports = loadReports;
-window.loadSettings = loadSettings;
-window.saveSettings = saveSettings;
-window.renderPermissions = renderPermissions;
-window.showToast = showToast;
-window.hasPermission = hasPermission;
-window.formatAmount = formatAmount;
-window.formatAmountWithText = formatAmountWithText;
-window.showPermissionDenied = showPermissionDenied;
-window.closePermissionDenied = closePermissionDenied;
-window.updateSidebarIcons = updateSidebarIcons;
-window.updateBadges = updateBadges;
-window.checkAuth = checkAuth;
-window.addNewMember = addNewMember;
-window.approveMember = approveMember;
-window.rejectMember = rejectMember;
-window.approvePayment = approvePayment;
-window.rejectPayment = rejectPayment;
-window.approveLoan = approveLoan;
-window.rejectLoan = rejectLoan;
-window.approveWithdrawal = approveWithdrawal;
-window.rejectWithdrawal = rejectWithdrawal;
-window.approveLoanPayment = approveLoanPayment;
-window.rejectLoanPayment = rejectLoanPayment;
-window.restoreMember = restoreMember;
-window.searchMember = searchMember;
-window.searchMemberForTransfer = searchMemberForTransfer;
-window.directDeposit = directDeposit;
-window.submitLoan = submitLoan;
-window.loadDeletedMembers = loadDeletedMembers;
-window.loadMemberDetails = loadMemberDetails;
-window.loadMemberTransfer = loadMemberTransfer;
-window.loadRejectedPayments = loadRejectedPayments;
-window.loadDirectDeposit = loadDirectDeposit;
-window.loadWithdrawals = loadWithdrawals;
-window.loadPendingWithdrawals = loadPendingWithdrawals;
-window.loadAllTransactions = loadAllTransactions;
-window.loadLoanPayments = loadLoanPayments;
-window.loadPendingLoanPayments = loadPendingLoanPayments;
-window.loadLoanCollection = loadLoanCollection;
-window.loadLoanForm = loadLoanForm;
-window.loadSavingsLoanReport = loadSavingsLoanReport;
-window.loadSavingsDue = loadSavingsDue;
-window.loadLoanReport = loadLoanReport;
+        // ============================================================
+        // Global Expose
+        // ============================================================
+        window.showTab = showTab;
+        window.logout = logout;
+        window.handleNavClick = handleNavClick;
+        window.loadDashboard = loadDashboard;
+        window.loadMembers = loadMembers;
+        window.loadPendingMembers = loadPendingMembers;
+        window.loadPayments = loadPayments;
+        window.loadPendingPayments = loadPendingPayments;
+        window.loadLoans = loadLoans;
+        window.loadPendingLoans = loadPendingLoans;
+        window.loadReports = loadReports;
+        window.loadSettings = loadSettings;
+        window.saveSettings = saveSettings;
+        window.renderPermissions = renderPermissions;
+        window.showToast = showToast;
+        window.hasPermission = hasPermission;
+        window.formatAmount = formatAmount;
+        window.formatAmountWithText = formatAmountWithText;
+        window.showPermissionDenied = showPermissionDenied;
+        window.closePermissionDenied = closePermissionDenied;
+        window.updateSidebarIcons = updateSidebarIcons;
+        window.updateBadges = updateBadges;
+        window.checkAuth = checkAuth;
+        window.addNewMember = addNewMember;
+        window.approveMember = approveMember;
+        window.rejectMember = rejectMember;
+        window.approvePayment = approvePayment;
+        window.rejectPayment = rejectPayment;
+        window.approveLoan = approveLoan;
+        window.rejectLoan = rejectLoan;
+        window.approveWithdrawal = approveWithdrawal;
+        window.rejectWithdrawal = rejectWithdrawal;
+        window.approveLoanPayment = approveLoanPayment;
+        window.rejectLoanPayment = rejectLoanPayment;
+        window.restoreMember = restoreMember;
+        window.searchMember = searchMember;
+        window.searchMemberForTransfer = searchMemberForTransfer;
+        window.directDeposit = directDeposit;
+        window.submitLoan = submitLoan;
+        window.loadDeletedMembers = loadDeletedMembers;
+        window.loadMemberDetails = loadMemberDetails;
+        window.loadMemberTransfer = loadMemberTransfer;
+        window.loadRejectedPayments = loadRejectedPayments;
+        window.loadDirectDeposit = loadDirectDeposit;
+        window.loadWithdrawals = loadWithdrawals;
+        window.loadPendingWithdrawals = loadPendingWithdrawals;
+        window.loadAllTransactions = loadAllTransactions;
+        window.loadLoanPayments = loadLoanPayments;
+        window.loadPendingLoanPayments = loadPendingLoanPayments;
+        window.loadLoanCollection = loadLoanCollection;
+        window.loadLoanForm = loadLoanForm;
+        window.loadSavingsLoanReport = loadSavingsLoanReport;
+        window.loadSavingsDue = loadSavingsDue;
+        window.loadLoanReport = loadLoanReport;
+        window.toggleDueView = toggleDueView;
+        window.exportDueData = exportDueData;
+        window.renderCombinedDueView = renderCombinedDueView;
+        window.renderSeparateDueView = renderSeparateDueView;
 </script>
 </body>
 </html>
