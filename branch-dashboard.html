@@ -1900,10 +1900,6 @@ async function loadSavingsDue() {
     }
 }
 
-// ============================================================
-// পৃথক ভিউ
-// ============================================================
-
 function renderSeparateDueView(memberData) {
     if (!memberData || memberData.length === 0) {
         return `<div class="text-center text-gray-400 py-4">কোনো সদস্য নেই</div>`;
@@ -1925,6 +1921,7 @@ function renderSeparateDueView(memberData) {
     memberData.forEach((m, i) => {
         const rate = m.expectedTotal > 0 ? (m.paidTotal / m.expectedTotal * 100) : 0;
         const hasDue = m.dueAmount > 0;
+        const memberType = m.status === 'current' ? 'current' : 'term';
         
         html += `
             <tr class="${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}">
@@ -1942,7 +1939,7 @@ function renderSeparateDueView(memberData) {
                 <td class="p-2 border text-right">${rate.toFixed(1)}%</td>
                 <td class="p-2 border text-center">
                     ${hasDue ? `
-                        <button onclick="quickPayDue('${m.member_id}', '${m.name}', ${m.dueAmount})" 
+                        <button onclick="quickPayDue('${m.member_id}', '${m.name}', ${m.dueAmount}, ${m.monthlySavings}, '${memberType}')" 
                                 class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 shadow-sm hover:shadow flex items-center gap-1 mx-auto">
                             <i class="fas fa-hand-holding-usd"></i> 💳 পেমেন্ট
                         </button>
@@ -1960,6 +1957,7 @@ function renderSeparateDueView(memberData) {
     const totalPaid = memberData.reduce((s, m) => s + m.paidTotal, 0);
     const totalDue = memberData.reduce((s, m) => s + (m.dueAmount > 0 ? m.dueAmount : 0), 0);
     const overallRate = totalExpected > 0 ? (totalPaid / totalExpected * 100) : 0;
+    const dueCount = memberData.filter(m => m.dueAmount > 0).length;
     
     html += `
             <tr class="bg-gray-100 font-bold border-t-2">
@@ -1968,14 +1966,19 @@ function renderSeparateDueView(memberData) {
                 <td class="p-2 border text-right text-emerald-700">${totalPaid.toFixed(2)} টাকা</td>
                 <td class="p-2 border text-right text-red-700">${totalDue.toFixed(2)} টাকা</td>
                 <td class="p-2 border text-right text-purple-700">${overallRate.toFixed(1)}%</td>
-                <td class="p-2 border text-center text-gray-400 text-xs">${memberData.filter(m => m.dueAmount > 0).length} জনের বকেয়া</td>
+                <td class="p-2 border text-center">
+                    ${dueCount > 0 ? `
+                        <button onclick="payAllDue()" class="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 shadow-sm hover:shadow flex items-center gap-1 mx-auto">
+                            <i class="fas fa-hand-holding-usd"></i> সব বকেয়া পরিশোধ
+                        </button>
+                    ` : `
+                        <span class="text-green-600 text-xs font-semibold">✅ সব পরিশোধিত</span>
+                    `}
+                </td>
             </tr>
         </tbody></table></div>
         <div class="mt-2 text-xs text-gray-400 text-right flex justify-between items-center">
-            <span>${memberData.length} জন সদস্য | বকেয়াপ্রাপ্ত: ${memberData.filter(m => m.dueAmount > 0).length} জন</span>
-            <button onclick="payAllDue()" class="bg-rose-600 hover:bg-rose-700 text-white px-4 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 shadow-sm hover:shadow flex items-center gap-1">
-                <i class="fas fa-hand-holding-usd"></i> সব বকেয়া পরিশোধ
-            </button>
+            <span>${memberData.length} জন সদস্য | বকেয়াপ্রাপ্ত: ${dueCount} জন</span>
         </div>
     `;
     
@@ -1983,18 +1986,338 @@ function renderSeparateDueView(memberData) {
 }
 
 // ============================================================
-// দ্রুত বকেয়া পেমেন্ট
+// দ্রুত বকেয়া পেমেন্ট (আপডেটেড)
 // ============================================================
-function quickPayDue(memberId, memberName, dueAmount) {
-    // বকেয়ার পরিমাণ রাউন্ড আপ করুন
-    const roundedAmount = Math.ceil(dueAmount / 100) * 100;
+function quickPayDue(memberId, memberName, dueAmount, monthlySavings, memberType) {
+    // মাসিক সঞ্চয়
+    const monthly = monthlySavings || 500;
     
-    const confirmMsg = `💳 পেমেন্ট নিশ্চিতকরণ\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n👤 সদস্য: ${memberName}\n🆔 আইডি: ${memberId}\n💰 বকেয়া: ${dueAmount.toFixed(2)} টাকা\n📌 পরিশোধ: ${roundedAmount.toFixed(0)} টাকা\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nএই পরিমাণ পেমেন্ট করতে চান?`;
+    // বকেয়া মাস সংখ্যা ক্যালকুলেট করুন
+    const dueMonths = Math.ceil(dueAmount / monthly);
     
-    if (!confirm(confirmMsg)) return;
+    // ফর্ম HTML তৈরি করুন
+    const formHtml = `
+        <div style="background:white; border-radius:12px; padding:20px; max-width:420px; margin:0 auto; box-shadow:0 4px 20px rgba(0,0,0,0.1);">
+            <div style="text-align:center; margin-bottom:16px;">
+                <div style="background:linear-gradient(135deg, #059669, #047857); color:white; padding:12px; border-radius:10px;">
+                    <i class="fas fa-hand-holding-usd" style="font-size:24px;"></i>
+                    <h3 style="margin:4px 0 0; font-size:18px; font-weight:700;">পেমেন্ট ফর্ম</h3>
+                </div>
+            </div>
+            
+            <div style="background:#f0fdf4; padding:12px; border-radius:8px; border:1px solid #d1fae5; margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; font-size:14px; padding:3px 0;">
+                    <span style="color:#4b5563;">👤 সদস্য</span>
+                    <span style="font-weight:600;">${memberName}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:14px; padding:3px 0;">
+                    <span style="color:#4b5563;">🆔 আইডি</span>
+                    <span style="font-weight:600;">${memberId}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:14px; padding:3px 0;">
+                    <span style="color:#4b5563;">📊 মাসিক সঞ্চয়</span>
+                    <span style="font-weight:600;">${monthly} টাকা</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:14px; padding:3px 0; border-top:1px dashed #d1fae5; margin-top:4px; padding-top:6px;">
+                    <span style="color:#4b5563;">💰 মোট বকেয়া</span>
+                    <span style="font-weight:700; color:#dc2626;">${dueAmount.toFixed(2)} টাকা</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:14px; padding:3px 0;">
+                    <span style="color:#4b5563;">⏳ বকেয়া মাস</span>
+                    <span style="font-weight:600; color:#f59e0b;">${dueMonths} মাস</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:14px; padding:3px 0;">
+                    <span style="color:#4b5563;">${memberType === 'current' ? '♾️' : '📌'} সদস্য ধরন</span>
+                    <span style="font-weight:600; ${memberType === 'current' ? 'color:#059669;' : 'color:#7c3aed;'}">${memberType === 'current' ? '✅ কারেন্ট সদস্য' : '📋 মেয়াদী সদস্য'}</span>
+                </div>
+            </div>
+            
+            <div style="margin-bottom:12px;">
+                <label style="display:block; font-size:13px; font-weight:600; color:#374151; margin-bottom:4px;">
+                    <i class="fas fa-calendar-alt" style="color:#059669;"></i> 
+                    কোন মাসের জন্য পরিশোধ করছেন?
+                </label>
+                <input type="month" id="duePaymentMonth" style="width:100%; padding:10px 12px; border:1.5px solid #e5e7eb; border-radius:8px; font-size:14px; transition:all 0.3s;" 
+                       value="${new Date().toISOString().slice(0,7)}">
+            </div>
+            
+            <div style="margin-bottom:12px;">
+                <label style="display:block; font-size:13px; font-weight:600; color:#374151; margin-bottom:4px;">
+                    <i class="fas fa-money-bill-wave" style="color:#059669;"></i> 
+                    পরিশোধের পরিমাণ (টাকা)
+                    <span style="font-size:11px; font-weight:400; color:#6b7280;">(সর্বোচ্চ: ${dueAmount.toFixed(2)})</span>
+                </label>
+                <input type="number" id="duePaymentAmount" style="width:100%; padding:10px 12px; border:1.5px solid #e5e7eb; border-radius:8px; font-size:14px; transition:all 0.3s;" 
+                       value="${Math.min(dueAmount, monthly)}" min="1" max="${dueAmount}" step="1"
+                       oninput="updateDuePaymentSummary()">
+                <div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;">
+                    <button onclick="setDueAmount(${monthly})" style="background:#e5e7eb; border:none; padding:3px 10px; border-radius:4px; font-size:11px; cursor:pointer;">${monthly} টাকা</button>
+                    <button onclick="setDueAmount(${dueMonths > 1 ? monthly * 2 : monthly})" style="background:#e5e7eb; border:none; padding:3px 10px; border-radius:4px; font-size:11px; cursor:pointer;">${dueMonths > 1 ? monthly * 2 : monthly} টাকা</button>
+                    <button onclick="setDueAmount(${dueAmount})" style="background:#fef3c7; border:none; padding:3px 10px; border-radius:4px; font-size:11px; cursor:pointer; color:#92400e;">সব (${dueAmount.toFixed(0)})</button>
+                    <button onclick="setDueAmount(${Math.ceil(dueAmount / 2)})" style="background:#dbeafe; border:none; padding:3px 10px; border-radius:4px; font-size:11px; cursor:pointer; color:#1e40af;">অর্ধেক</button>
+                </div>
+            </div>
+            
+            <div style="margin-bottom:12px;">
+                <label style="display:block; font-size:13px; font-weight:600; color:#374151; margin-bottom:4px;">
+                    <i class="fas fa-credit-card" style="color:#059669;"></i> 
+                    পেমেন্ট মাধ্যম
+                </label>
+                <select id="duePaymentMethod" style="width:100%; padding:10px 12px; border:1.5px solid #e5e7eb; border-radius:8px; font-size:14px; transition:all 0.3s; background:white;">
+                    <option value="bKash">💚 bKash</option>
+                    <option value="Nagad">🧡 Nagad</option>
+                    <option value="Rocket">💜 Rocket</option>
+                    <option value="bank">🏦 ব্যাংক</option>
+                    <option value="cash">💵 ক্যাশ</option>
+                </select>
+            </div>
+            
+            <div id="dueMobileField" style="margin-bottom:12px;">
+                <label style="display:block; font-size:13px; font-weight:600; color:#374151; margin-bottom:4px;">
+                    <i class="fas fa-mobile-alt" style="color:#059669;"></i> 
+                    সেন্ডার মোবাইল নম্বর <span style="color:#dc2626;">*</span>
+                </label>
+                <input type="tel" id="dueSenderMobile" style="width:100%; padding:10px 12px; border:1.5px solid #e5e7eb; border-radius:8px; font-size:14px; transition:all 0.3s;" 
+                       placeholder="01XXXXXXXXX">
+            </div>
+            
+            <div id="dueBankField" style="display:none; margin-bottom:12px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                    <div>
+                        <label style="display:block; font-size:12px; font-weight:600; color:#374151; margin-bottom:3px;">ব্যাংকের নাম *</label>
+                        <input type="text" id="dueBankName" style="width:100%; padding:8px 10px; border:1.5px solid #e5e7eb; border-radius:6px; font-size:13px;" placeholder="ব্যাংকের নাম">
+                    </div>
+                    <div>
+                        <label style="display:block; font-size:12px; font-weight:600; color:#374151; margin-bottom:3px;">একাউন্ট নম্বর *</label>
+                        <input type="text" id="dueAccountNo" style="width:100%; padding:8px 10px; border:1.5px solid #e5e7eb; border-radius:6px; font-size:13px;" placeholder="একাউন্ট নম্বর">
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin-bottom:12px;">
+                <label style="display:block; font-size:13px; font-weight:600; color:#374151; margin-bottom:4px;">
+                    <i class="fas fa-pen" style="color:#059669;"></i> 
+                    নোট (ঐচ্ছিক)
+                </label>
+                <textarea id="duePaymentNote" rows="2" style="width:100%; padding:10px 12px; border:1.5px solid #e5e7eb; border-radius:8px; font-size:14px; transition:all 0.3s; resize:vertical;" 
+                          placeholder="যেমন: ${memberName} এর ${dueMonths} মাসের বকেয়া সঞ্চয় পরিশোধ"></textarea>
+            </div>
+            
+            <div style="background:#f8fafc; padding:10px 14px; border-radius:8px; border:1px solid #e5e7eb; margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; font-size:14px; padding:2px 0;">
+                    <span style="color:#4b5563;">📊 পরিশোধের পর বাকি থাকবে</span>
+                    <span id="dueRemainingDisplay" style="font-weight:700; color:#059669;">${(dueAmount - Math.min(dueAmount, monthly)).toFixed(2)} টাকা</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:14px; padding:2px 0; border-top:1px dashed #e5e7eb; margin-top:4px; padding-top:4px;">
+                    <span style="color:#4b5563;">💳 মোট পরিশোধ</span>
+                    <span id="dueTotalDisplay" style="font-weight:700; color:#059669; font-size:16px;">${Math.min(dueAmount, monthly).toFixed(2)} টাকা</span>
+                </div>
+            </div>
+            
+            <div style="display:flex; gap:8px;">
+                <button onclick="submitDuePayment('${memberId}', '${memberName}')" 
+                        style="flex:1; background:linear-gradient(135deg, #059669, #047857); color:white; border:none; padding:12px; border-radius:8px; font-weight:700; font-size:15px; cursor:pointer; transition:all 0.3s;">
+                    <i class="fas fa-check-circle"></i> 💳 পেমেন্ট নিশ্চিত করুন
+                </button>
+                <button onclick="closeDuePaymentModal()" 
+                        style="background:#e5e7eb; color:#374151; border:none; padding:12px 16px; border-radius:8px; font-weight:600; cursor:pointer; transition:all 0.3s;">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+    `;
     
-    // পেমেন্ট মডালে ডাটা পাঠান
-    openDirectPayment(memberId, memberName, roundedAmount);
+    // মডাল তৈরি করুন
+    showCustomModal('💳 বকেয়া পেমেন্ট', formHtml);
+    
+    // ইভেন্ট লিসেনার
+    document.getElementById('duePaymentMethod')?.addEventListener('change', toggleDuePaymentFields);
+    document.getElementById('duePaymentAmount')?.addEventListener('input', updateDuePaymentSummary);
+    
+    // ব্যাংক ফিল্ড টগল
+    toggleDuePaymentFields();
+    
+    // অটো নোট
+    const noteField = document.getElementById('duePaymentNote');
+    if (noteField && !noteField.value) {
+        const dueMonthsText = dueMonths === 1 ? '১ মাস' : `${dueMonths} মাস`;
+        noteField.value = `${memberName} এর ${dueMonthsText} বকেয়া সঞ্চয় পরিশোধ (মোট ${dueAmount.toFixed(2)} টাকা)`;
+    }
+}
+
+// ============================================================
+// পেমেন্ট ফিল্ড টগল
+// ============================================================
+function toggleDuePaymentFields() {
+    const method = document.getElementById('duePaymentMethod')?.value;
+    const mobileField = document.getElementById('dueMobileField');
+    const bankField = document.getElementById('dueBankField');
+    
+    if (mobileField) mobileField.style.display = 'block';
+    if (bankField) bankField.style.display = 'none';
+    
+    if (method === 'bank') {
+        if (mobileField) mobileField.style.display = 'none';
+        if (bankField) bankField.style.display = 'block';
+    }
+}
+
+// ============================================================
+// দ্রুত পরিমাণ সেট করুন
+// ============================================================
+function setDueAmount(amount) {
+    const field = document.getElementById('duePaymentAmount');
+    if (field) {
+        field.value = Math.round(amount);
+        updateDuePaymentSummary();
+    }
+}
+
+// ============================================================
+// সারাংশ আপডেট
+// ============================================================
+function updateDuePaymentSummary() {
+    const amountField = document.getElementById('duePaymentAmount');
+    const remainingDisplay = document.getElementById('dueRemainingDisplay');
+    const totalDisplay = document.getElementById('dueTotalDisplay');
+    
+    if (!amountField || !remainingDisplay || !totalDisplay) return;
+    
+    const totalDue = parseFloat(amountField.dataset.totalDue) || 0;
+    const amount = parseFloat(amountField.value) || 0;
+    const remaining = Math.max(0, totalDue - amount);
+    
+    remainingDisplay.textContent = remaining.toFixed(2) + ' টাকা';
+    totalDisplay.textContent = amount.toFixed(2) + ' টাকা';
+    
+    // রঙ পরিবর্তন
+    if (remaining === 0) {
+        remainingDisplay.style.color = '#059669';
+        remainingDisplay.textContent = '✅ সম্পূর্ণ পরিশোধিত';
+    } else {
+        remainingDisplay.style.color = '#dc2626';
+    }
+}
+
+// ============================================================
+// পেমেন্ট সাবমিট
+// ============================================================
+async function submitDuePayment(memberId, memberName) {
+    const amount = parseFloat(document.getElementById('duePaymentAmount')?.value);
+    const month = document.getElementById('duePaymentMonth')?.value;
+    const method = document.getElementById('duePaymentMethod')?.value;
+    const senderMobile = document.getElementById('dueSenderMobile')?.value?.trim();
+    const note = document.getElementById('duePaymentNote')?.value?.trim();
+    const bankName = document.getElementById('dueBankName')?.value?.trim();
+    const accountNo = document.getElementById('dueAccountNo')?.value?.trim();
+    
+    if (!amount || amount <= 0) {
+        showToast('সঠিক পরিমাণ দিন!', 'error');
+        return;
+    }
+    
+    if (!month) {
+        showToast('মাস নির্বাচন করুন!', 'error');
+        return;
+    }
+    
+    if (!method) {
+        showToast('পেমেন্ট মাধ্যম নির্বাচন করুন!', 'error');
+        return;
+    }
+    
+    if ((method === 'bKash' || method === 'Nagad' || method === 'Rocket') && !senderMobile) {
+        showToast('সেন্ডার মোবাইল নম্বর দিন!', 'error');
+        return;
+    }
+    
+    if (method === 'bank' && (!bankName || !accountNo)) {
+        showToast('ব্যাংকের নাম ও একাউন্ট নম্বর দিন!', 'error');
+        return;
+    }
+    
+    if (!confirm(`💳 পেমেন্ট নিশ্চিতকরণ\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n👤 সদস্য: ${memberName}\n💰 পরিমাণ: ${amount.toFixed(2)} টাকা\n📅 মাস: ${month}\n🏦 মাধ্যম: ${method}\n📝 নোট: ${note || 'নেই'}\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nআপনি কি পেমেন্ট নিশ্চিত করতে চান?`)) return;
+    
+    const client = supabaseClient;
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const btn = document.querySelector('#customModal .btn-success') || document.querySelector('#customModal button[onclick*="submitDuePayment"]');
+    const originalText = btn?.innerHTML || 'পেমেন্ট নিশ্চিত করুন';
+    
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loading-spinner"></span> প্রক্রিয়াকরণ...';
+    }
+    
+    try {
+        // মাস ও বছর পার্স করুন
+        const [year, monthNum] = month.split('-');
+        const monthNames = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
+        const monthName = monthNames[parseInt(monthNum) - 1];
+        
+        // পেমেন্ট ডাটা তৈরি করুন
+        const paymentData = {
+            member_id: memberId,
+            member_name: memberName,
+            mobile: (await client.from('members').select('mobile').eq('member_id', memberId).single()).data?.mobile || '',
+            month: monthName,
+            year: year,
+            amount: amount,
+            payment_method: method,
+            sender_mobile: senderMobile || null,
+            transaction_id: `DUE-${Date.now()}`,
+            status: 'pending',
+            submitted_at: new Date().toISOString(),
+            voucher_slip_no: `TUK-DUE-${Date.now().toString().slice(-8)}`,
+            note: note || `${memberName} এর বকেয়া সঞ্চয় পরিশোধ`,
+            is_due_payment: true
+        };
+        
+        if (method === 'bank') {
+            paymentData.bank_name = bankName || null;
+            paymentData.account_number = accountNo || null;
+        }
+        
+        // পেমেন্ট ইনসার্ট করুন
+        const { data, error } = await client
+            .from('payments')
+            .insert([paymentData])
+            .select();
+        
+        if (error) {
+            console.error('❌ পেমেন্ট error:', error);
+            showToast('❌ পেমেন্ট জমা দিতে ব্যর্থ! ' + error.message, 'error');
+            return;
+        }
+        
+        showToast(`✅ ${amount.toFixed(2)} টাকা পেমেন্ট সফল!\n⏳ অ্যাডমিন অনুমোদনের জন্য অপেক্ষা করুন।`, 'success');
+        
+        closeCustomModal();
+        
+        // ডেটা রিফ্রেশ
+        await loadSavingsDue();
+        await loadDashboard();
+        await updateBadges();
+        
+    } catch(e) {
+        console.error('❌ পেমেন্ট error:', e);
+        showToast('❌ পেমেন্ট জমা দিতে ব্যর্থ!', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    }
+}
+
+// ============================================================
+// পেমেন্ট মডাল বন্ধ
+// ============================================================
+function closeDuePaymentModal() {
+    closeCustomModal();
 }
 
 // ============================================================
@@ -2028,11 +2351,7 @@ function openDirectPayment(memberId, memberName, amount) {
     }, 400);
 }
 
-// ============================================================
-// সব বকেয়া পরিশোধ (গ্লোবাল অ্যাকশন)
-// ============================================================
 function payAllDue() {
-    // সব বকেয়া সদস্য সংগ্রহ করুন
     const dueRows = document.querySelectorAll('#dueSeparateView table tbody tr');
     const dueMembers = [];
     
@@ -2043,8 +2362,11 @@ function payAllDue() {
             const id = cells[2]?.textContent.trim() || '';
             const dueText = cells[7]?.textContent.trim() || '0';
             const dueAmount = parseFloat(dueText.replace(/[^\d.]/g, '')) || 0;
+            const savingsText = cells[3]?.textContent.trim() || '500';
+            const monthlySavings = parseFloat(savingsText.replace(/[^\d.]/g, '')) || 500;
+            
             if (dueAmount > 0) {
-                dueMembers.push({ name, id, dueAmount });
+                dueMembers.push({ name, id, dueAmount, monthlySavings });
             }
         }
     });
@@ -2055,31 +2377,15 @@ function payAllDue() {
     }
     
     const totalDue = dueMembers.reduce((sum, m) => sum + m.dueAmount, 0);
-    const confirmMsg = `💰 সব বকেয়া পরিশোধ\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n👥 মোট সদস্য: ${dueMembers.length} জন\n💳 মোট বকেয়া: ${totalDue.toFixed(2)} টাকা\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nসব বকেয়া পরিশোধ করতে চান?`;
     
-    if (!confirm(confirmMsg)) return;
+    // প্রথম সদস্যের পেমেন্ট ফর্ম খুলুন
+    const first = dueMembers[0];
+    const memberType = 'term'; // ডিফল্ট
+    quickPayDue(first.id, first.name, first.dueAmount, first.monthlySavings, memberType);
     
-    // Direct Deposit ট্যাব খুলুন
-    showTab('directDeposit');
+    showToast(`💰 ${dueMembers.length} জন সদস্যের বকেয়া পেমেন্ট ফর্ম খোলা হয়েছে`, 'info');
+}
     
-    setTimeout(() => {
-        const amountField = document.getElementById('depositAmount');
-        const monthField = document.getElementById('depositMonth');
-        
-        if (amountField) {
-            amountField.value = Math.ceil(totalDue / 100) * 100;
-            amountField.focus();
-            amountField.select();
-        }
-        if (monthField) {
-            const now = new Date();
-            const month = String(now.getMonth() + 1).padStart(2, '0');
-            monthField.value = `${now.getFullYear()}-${month}`;
-        }
-        
-        showToast(`💰 ${dueMembers.length} জন সদস্যের মোট ${Math.ceil(totalDue / 100) * 100} টাকা পেমেন্ট ফর্ম প্রস্তুত`, 'success');
-    }, 400);
-}    
 // ============================================================
 // ভিউ টগল
 // ============================================================
