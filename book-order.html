@@ -1563,22 +1563,34 @@ async function verifyMember() {
     }
 }
 
-// ================================================================
-// LOAD MEMBER ORDERS
-// ================================================================
-
 async function loadMemberOrders(memberId) {
     const sb = await initSupabase();
     if (!sb) return;
     
     try {
-        const { data, error } = await sb
-            .from('book_orders')
-            .select('*')
-            .or(`member_id.eq.${memberId},mobile.eq.${memberId}`)
-            .order('submitted_at', { ascending: false });
+        // ✅ book_orders টেবিলে member_id কলাম আছে কিনা চেক করুন
+        // যদি না থাকে, তাহলে mobile দিয়ে সার্চ করুন
         
-        if (error) throw error;
+        let query = sb.from('book_orders').select('*');
+        
+        // member_id বা mobile দিয়ে সার্চ
+        if (memberId) {
+            query = query.or(`member_id.eq.${memberId},mobile.eq.${memberId}`);
+        }
+        
+        const { data, error } = await query.order('submitted_at', { ascending: false });
+        
+        if (error) {
+            console.error('❌ Orders error:', error);
+            // যদি টেবিল না থাকে, তাহলে এরর দেখাবেন না
+            if (error.code === 'PGRST116' || error.message.includes('does not exist')) {
+                console.log('ℹ️ book_orders টেবিল নেই বা খালি');
+                currentMemberOrders = [];
+                renderMemberOrders();
+                return;
+            }
+            throw error;
+        }
         
         currentMemberOrders = data || [];
         renderMemberOrders();
@@ -1589,6 +1601,9 @@ async function loadMemberOrders(memberId) {
         
     } catch(e) {
         console.error('Error loading orders:', e);
+        // Error দেখাবেন না, শুধু খালি অ্যারে সেট করুন
+        currentMemberOrders = [];
+        renderMemberOrders();
     }
 }
 
