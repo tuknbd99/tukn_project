@@ -3439,7 +3439,7 @@
     </div>
 </div>
 
-<<!-- ===== LEDGER MODAL ===== -->
+<!-- ===== LEDGER MODAL (আপডেটেড) ===== -->
 <div id="ledgerModal" class="modal-overlay">
     <div class="modal-container max-w-2xl">
         <div class="flex justify-between items-center border-b pb-2 mb-4">
@@ -3472,11 +3472,7 @@
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">📅 তারিখ <span class="text-red-500">*</span></label>
-                    <input type="date" id="ledgerDate" class="w-full border rounded-lg p-2" required onchange="autoGenerateTime()">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">🕐 সময় <span class="text-red-500">*</span></label>
-                    <input type="time" id="ledgerTime" class="w-full border rounded-lg p-2" required>
+                    <input type="date" id="ledgerDate" class="w-full border rounded-lg p-2" required>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">📄 ভাউচার নম্বর <span class="text-red-500">*</span></label>
@@ -3486,7 +3482,7 @@
                     <label class="block text-sm font-medium text-gray-700 mb-1">💰 পরিমাণ (টাকা) <span class="text-red-500">*</span></label>
                     <input type="number" id="ledgerAmount" class="w-full border rounded-lg p-2" placeholder="পরিমাণ লিখুন" required min="0" step="0.01">
                 </div>
-                <div class="col-span-2">
+                <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">🏦 ব্যাংক খাত</label>
                     <select id="ledgerBank" class="w-full border rounded-lg p-2">
                         <option value="">-- ব্যাংক নির্বাচন করুন --</option>
@@ -7999,30 +7995,7 @@ let ledgerCategories = [];
 let ledgerBanks = [];
 
 // ============================================================
-// ১. সময় অটো জেনারেট
-// ============================================================
-function autoGenerateTime() {
-    const dateInput = document.getElementById('ledgerDate');
-    const timeInput = document.getElementById('ledgerTime');
-    
-    if (dateInput && dateInput.value) {
-        // আজকের তারিখ হলে বর্তমান সময় দেখান
-        const today = new Date().toISOString().split('T')[0];
-        if (dateInput.value === today) {
-            const now = new Date();
-            const hours = String(now.getHours()).padStart(2, '0');
-            const minutes = String(now.getMinutes()).padStart(2, '0');
-            timeInput.value = `${hours}:${minutes}`;
-        } else {
-            // অন্য তারিখ হলে ১২:০০ সেট করুন
-            timeInput.value = '12:00';
-        }
-        timeInput.required = true;
-    }
-}
-
-// ============================================================
-// ২. লেজার ডেটা লোড
+// ১. লেজার ডেটা লোড (ক্যাটাগরি সহ)
 // ============================================================
 async function loadLedgerData() {
     const container = document.getElementById('ledgerTableContainer');
@@ -8047,13 +8020,14 @@ async function loadLedgerData() {
     const categoryFilter = document.getElementById('ledgerFilterCategory')?.value || 'all';
     
     try {
+        // ✅ ক্যাটাগরি এবং ব্যাংক লোড করুন (প্রথমে)
         await loadLedgerCategoriesAndBanks();
         
         let query = client
             .from('ledger_transactions')
             .select('*')
             .order('date', { ascending: false })
-            .order('time', { ascending: false });
+            .order('created_at', { ascending: false });
         
         if (currentAdmin && currentAdmin.branch_id && currentAdmin.role !== 'super_admin' && currentAdmin.role !== 'সুপার অ্যাডমিন') {
             query = query.eq('branch_id', currentAdmin.branch_id);
@@ -8100,23 +8074,35 @@ async function loadLedgerData() {
 }
 
 // ============================================================
-// ৩. ক্যাটাগরি এবং ব্যাংক লোড
+// ২. ক্যাটাগরি এবং ব্যাংক লোড
 // ============================================================
 async function loadLedgerCategoriesAndBanks() {
     const client = initSupabaseClient();
     if (!client) return;
     
     try {
-        // ক্যাটাগরি লোড
+        // ✅ ক্যাটাগরি লোড
         const { data: categories, error: catError } = await client
             .from('ledger_categories')
             .select('*')
             .order('name');
         
-        if (!catError && categories) {
+        if (!catError && categories && categories.length > 0) {
             ledgerCategories = categories;
-            populateCategorySelects(categories);
+            console.log('✅ ক্যাটাগরি লোড সম্পূর্ণ:', categories.length);
+        } else {
+            console.log('⚠️ কোনো ক্যাটাগরি নেই, ডিফল্ট তৈরি করা হচ্ছে...');
+            // ✅ ডিফল্ট ক্যাটাগরি তৈরি করুন
+            await createDefaultCategories();
+            // পুনরায় লোড করুন
+            const { data: newCategories } = await client
+                .from('ledger_categories')
+                .select('*')
+                .order('name');
+            ledgerCategories = newCategories || [];
         }
+        
+        populateCategorySelects(ledgerCategories);
         
         // ব্যাংক লোড
         const { data: banks, error: bankError } = await client
@@ -8132,6 +8118,54 @@ async function loadLedgerCategoriesAndBanks() {
         
     } catch(e) {
         console.error('Load categories/banks error:', e);
+    }
+}
+
+// ============================================================
+// ৩. ডিফল্ট ক্যাটাগরি তৈরি করুন
+// ============================================================
+async function createDefaultCategories() {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    const defaultCategories = [
+        { name: 'সদস্য ফি', type: 'income', description: 'মাসিক সদস্য ফি' },
+        { name: 'দান', type: 'income', description: 'দান ও অনুদান' },
+        { name: 'লভ্যাংশ', type: 'income', description: 'বিনিয়োগ থেকে লভ্যাংশ' },
+        { name: 'প্রশিক্ষণ ফি', type: 'income', description: 'প্রশিক্ষণ থেকে আয়' },
+        { name: 'অন্যান্য আয়', type: 'income', description: 'অন্যান্য আয়' },
+        { name: 'প্রশিক্ষণ ব্যয়', type: 'expense', description: 'প্রশিক্ষণ খরচ' },
+        { name: 'পরিচালনা ব্যয়', type: 'expense', description: 'দৈনন্দিন পরিচালনা খরচ' },
+        { name: 'বেতন', type: 'expense', description: 'স্টাফ বেতন' },
+        { name: 'ভাড়া', type: 'expense', description: 'অফিস ভাড়া' },
+        { name: 'ইউটিলিটি', type: 'expense', description: 'বিদ্যুৎ, পানি, ইন্টারনেট' },
+        { name: 'অন্যান্য ব্যয়', type: 'expense', description: 'অন্যান্য খরচ' }
+    ];
+    
+    try {
+        for (const cat of defaultCategories) {
+            // চেক করুন ক্যাটাগরি ইতিমধ্যে আছে কিনা
+            const { data: existing } = await client
+                .from('ledger_categories')
+                .select('name')
+                .eq('name', cat.name)
+                .maybeSingle();
+            
+            if (!existing) {
+                await client
+                    .from('ledger_categories')
+                    .insert([{
+                        name: cat.name,
+                        type: cat.type,
+                        description: cat.description,
+                        created_at: new Date().toISOString()
+                    }]);
+                console.log(`✅ ডিফল্ট ক্যাটাগরি তৈরি: ${cat.name}`);
+            }
+        }
+        console.log('✅ ডিফল্ট ক্যাটাগরি তৈরি সম্পূর্ণ!');
+    } catch(e) {
+        console.error('❌ ডিফল্ট ক্যাটাগরি তৈরি error:', e);
     }
 }
 
@@ -8225,7 +8259,6 @@ function populateBankSelects(banks) {
 function showAddCategoryModal() {
     document.getElementById('addCategoryModal').classList.add('active');
     document.getElementById('addCategoryForm').reset();
-    // ডিফল্ট টাইপ সেট করুন
     const currentType = document.getElementById('ledgerType')?.value || 'income';
     document.getElementById('newCategoryType').value = currentType;
 }
@@ -8260,7 +8293,6 @@ document.getElementById('addCategoryForm')?.addEventListener('submit', async fun
     }
     
     try {
-        // চেক করুন এই নামে ক্যাটাগরি ইতিমধ্যে আছে কিনা
         const { data: existing } = await client
             .from('ledger_categories')
             .select('name')
@@ -8286,10 +8318,8 @@ document.getElementById('addCategoryForm')?.addEventListener('submit', async fun
         showToast(`✅ "${name}" খাত যোগ করা হয়েছে!`, 'success');
         closeAddCategoryModal();
         
-        // ক্যাটাগরি রিলোড
         await loadLedgerCategoriesAndBanks();
         
-        // সিলেক্টে নতুন ক্যাটাগরি সেট করুন
         setTimeout(() => {
             const categorySelect = document.getElementById('ledgerCategory');
             if (categorySelect) {
@@ -8309,7 +8339,7 @@ document.getElementById('addCategoryForm')?.addEventListener('submit', async fun
 });
 
 // ============================================================
-// ৮. লেজার এন্ট্রি মডাল দেখান
+// ৮. লেজার এন্ট্রি মডাল দেখান (সময় অটো)
 // ============================================================
 function showAddLedgerModal(editData = null) {
     const modal = document.getElementById('ledgerModal');
@@ -8323,20 +8353,20 @@ function showAddLedgerModal(editData = null) {
     
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
-    const timeStr = now.toTimeString().slice(0, 5);
     
+    // ✅ তারিখ সেট করুন
     document.getElementById('ledgerDate').value = dateStr;
-    document.getElementById('ledgerTime').value = timeStr;
     
+    // ✅ ভাউচার নম্বর জেনারেট
     if (!document.getElementById('ledgerVoucher').value) {
         document.getElementById('ledgerVoucher').value = generateVoucherNumber();
     }
     
     const adminName = currentAdmin?.full_name || currentAdmin?.username || 'অ্যাডমিন';
     document.getElementById('ledgerEnteredByName').textContent = adminName;
-    document.getElementById('ledgerCurrentTime').textContent = new Date().toLocaleString('bn-BD');
+    document.getElementById('ledgerCurrentTime').textContent = now.toLocaleString('bn-BD');
     
-    // ক্যাটাগরি লোড
+    // ✅ ক্যাটাগরি লোড
     setTimeout(() => {
         loadLedgerCategoriesAndBanks();
     }, 200);
@@ -8347,7 +8377,6 @@ function showAddLedgerModal(editData = null) {
         document.getElementById('ledgerType').value = editData.type || 'income';
         document.getElementById('ledgerCategory').value = editData.category || '';
         document.getElementById('ledgerDate').value = editData.date || dateStr;
-        document.getElementById('ledgerTime').value = editData.time || timeStr;
         document.getElementById('ledgerVoucher').value = editData.voucher || '';
         document.getElementById('ledgerAmount').value = editData.amount || '';
         document.getElementById('ledgerBank').value = editData.bank_id || '';
@@ -8365,16 +8394,12 @@ function showAddLedgerModal(editData = null) {
             submitBtn.innerHTML = '<i class="fas fa-save mr-2"></i> এন্ট্রি সংরক্ষণ করুন';
         }
         
-        // টাইপ অনুযায়ী ক্যাটাগরি ফিল্টার
         setTimeout(() => {
             filterLedgerCategories();
         }, 300);
     }
     
     modal.classList.add('active');
-    
-    // তারিখ পরিবর্তনে সময় অটো জেনারেট
-    document.getElementById('ledgerDate').addEventListener('change', autoGenerateTime);
 }
 
 function closeLedgerModal() {
@@ -8395,7 +8420,7 @@ function generateVoucherNumber() {
 }
 
 // ============================================================
-// ১০. ফর্ম সাবমিট
+// ১০. ফর্ম সাবমিট (সময় অটো জেনারেট সহ)
 // ============================================================
 document.getElementById('ledgerForm')?.addEventListener('submit', async function(e) {
     e.preventDefault();
@@ -8404,12 +8429,15 @@ document.getElementById('ledgerForm')?.addEventListener('submit', async function
     const type = document.getElementById('ledgerType').value;
     const category = document.getElementById('ledgerCategory').value;
     const date = document.getElementById('ledgerDate').value;
-    const time = document.getElementById('ledgerTime').value;
     const voucher = document.getElementById('ledgerVoucher').value.trim();
     const amount = parseFloat(document.getElementById('ledgerAmount').value);
     const bankId = document.getElementById('ledgerBank').value;
     const description = document.getElementById('ledgerDescription').value.trim();
     const note = document.getElementById('ledgerNote').value.trim();
+    
+    // ✅ সময় অটো জেনারেট (বর্তমান সময়)
+    const now = new Date();
+    const timeStr = now.toTimeString().slice(0, 5); // HH:MM ফরম্যাট
     
     if (!category) {
         showToast('❌ খাত নির্বাচন করুন!', 'error');
@@ -8420,12 +8448,6 @@ document.getElementById('ledgerForm')?.addEventListener('submit', async function
     if (!date) {
         showToast('❌ তারিখ দিন!', 'error');
         document.getElementById('ledgerDate').focus();
-        return;
-    }
-    
-    if (!time) {
-        showToast('❌ সময় দিন!', 'error');
-        document.getElementById('ledgerTime').focus();
         return;
     }
     
@@ -8459,7 +8481,7 @@ document.getElementById('ledgerForm')?.addEventListener('submit', async function
             type: type,
             category: category,
             date: date,
-            time: time || null,
+            time: timeStr, // ✅ অটো জেনারেটেড সময়
             voucher: voucher,
             amount: amount,
             bank_id: bankId || null,
@@ -8478,7 +8500,7 @@ document.getElementById('ledgerForm')?.addEventListener('submit', async function
         } else {
             data.created_at = new Date().toISOString();
             await client.from('ledger_transactions').insert([data]);
-            showToast('✅ নতুন লেজার এন্ট্রি সংরক্ষিত হয়েছে!', 'success');
+            showToast(`✅ নতুন লেজার এন্ট্রি সংরক্ষিত হয়েছে! (${timeStr})`, 'success');
         }
         
         closeLedgerModal();
@@ -8588,17 +8610,9 @@ async function renderLedgerTable(data) {
                 <tbody>
     `;
     
-    let runningBalance = 0;
-    
     data.forEach((item) => {
         const amount = Number(item.amount) || 0;
         const isIncome = item.type === 'income';
-        
-        if (isIncome) {
-            runningBalance += amount;
-        } else {
-            runningBalance -= amount;
-        }
         
         const typeLabel = isIncome ? '📈 আয়' : '📉 ব্যয়';
         const typeClass = isIncome ? 'text-emerald-600' : 'text-red-600';
@@ -8876,24 +8890,6 @@ function exportLedgerExcel() {
     URL.revokeObjectURL(link.href);
     showToast('✅ লেজার এক্সপোর্ট সম্পূর্ণ!', 'success');
 }
-
-    function showAddLedgerModal() { document.getElementById('ledgerModal').classList.add('active'); document.getElementById('ledgerDate').value = new Date().toISOString().split('T')[0]; }
-    function closeLedgerModal() { document.getElementById('ledgerModal').classList.remove('active'); }
-
-    document.getElementById('ledgerForm')?.addEventListener('submit', async function(e) {
-        e.preventDefault();
-        const client = initSupabaseClient();
-        if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-        await client.from('ledger_transactions').insert([{ date: document.getElementById('ledgerDate').value, type: document.getElementById('ledgerType').value, title: document.getElementById('ledgerTitle').value, amount: parseFloat(document.getElementById('ledgerAmount').value), created_at: new Date().toISOString() }]);
-        closeLedgerModal(); loadLedgerData(); showToast('নতুন এন্ট্রি যোগ করা হয়েছে!');
-    });
-
-    function deleteLedgerEntry(id) {
-        if (!confirm('এন্ট্রি ডিলিট করবেন?')) return;
-        const client = initSupabaseClient();
-        if (client) client.from('ledger_transactions').delete().eq('id', id);
-        loadLedgerData(); showToast('এন্ট্রি ডিলিট করা হয়েছে');
-    }
 
     // ============================================================
     // ===== ADMIN FUNCTIONS =====
