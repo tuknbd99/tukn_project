@@ -18870,6 +18870,517 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 1500);
 });
 
+    // ============================================================
+// ✅ সম্পূর্ণ ফিক্স: ব্যাংক ও ক্যাটাগরি ব্যবস্থাপনা
+// ============================================================
+
+// ============================================================
+// ১. ব্যাংক ড্রপডাউন রিফ্রেশ - FIXED
+// ============================================================
+async function refreshBankDropdown() {
+    console.log('🔄 ব্যাংক ড্রপডাউন রিফ্রেশ করা হচ্ছে...');
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        console.error('❌ Supabase ক্লায়েন্ট পাওয়া যায়নি');
+        return;
+    }
+    
+    try {
+        // ব্যাংক লোড করুন
+        const { data: banks, error } = await client
+            .from('bank_accounts')
+            .select('*')
+            .eq('status', 'active')
+            .order('account_name');
+        
+        if (error) throw error;
+        
+        // গ্লোবাল ভেরিয়েবল আপডেট
+        ledgerBanks = banks || [];
+        
+        // ড্রপডাউন পপুলেট
+        populateBankSelects(ledgerBanks);
+        
+        console.log(`✅ ${ledgerBanks.length} টি ব্যাংক লোড হয়েছে`);
+        
+    } catch(e) {
+        console.error('❌ ব্যাংক রিফ্রেশ error:', e);
+    }
+}
+
+// ============================================================
+// ২. ব্যাংক যোগ করার মডাল - FIXED
+// ============================================================
+function showAddBankModal() {
+    const html = `
+        <div class="space-y-3">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">🏛️ ব্যাংকের নাম <span class="text-red-500">*</span></label>
+                <input type="text" id="newBankName" class="w-full border rounded-lg p-2" placeholder="যেমন: ইসলামী ব্যাংক">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">👤 একাউন্টের নাম</label>
+                <input type="text" id="newBankAccountName" class="w-full border rounded-lg p-2" placeholder="যেমন: TUKNBD">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">🔢 একাউন্ট নম্বর <span class="text-red-500">*</span></label>
+                <input type="text" id="newBankAccountNumber" class="w-full border rounded-lg p-2" placeholder="যেমন: 1234567890">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">📍 শাখা</label>
+                <input type="text" id="newBankBranch" class="w-full border rounded-lg p-2" placeholder="যেমন: ঢাকা">
+            </div>
+            <div class="flex gap-3 mt-4">
+                <button onclick="saveNewBank()" class="btn btn-success flex-1 py-2.5">
+                    <i class="fas fa-save mr-2"></i> সংরক্ষণ
+                </button>
+                <button onclick="closeCustomModal()" class="btn btn-danger flex-1 py-2.5">
+                    <i class="fas fa-times mr-2"></i> বাতিল
+                </button>
+            </div>
+        </div>
+    `;
+    
+    showCustomModal('🏦 নতুন ব্যাংক যোগ করুন', html);
+}
+
+// ============================================================
+// ৩. নতুন ব্যাংক সংরক্ষণ - FIXED
+// ============================================================
+async function saveNewBank() {
+    const name = document.getElementById('newBankName')?.value.trim();
+    const accountName = document.getElementById('newBankAccountName')?.value.trim();
+    const accountNumber = document.getElementById('newBankAccountNumber')?.value.trim();
+    const branch = document.getElementById('newBankBranch')?.value.trim();
+    
+    if (!name) {
+        showToast('❌ ব্যাংকের নাম দিন!', 'error');
+        document.getElementById('newBankName')?.focus();
+        return;
+    }
+    
+    if (!accountNumber) {
+        showToast('❌ একাউন্ট নম্বর দিন!', 'error');
+        document.getElementById('newBankAccountNumber')?.focus();
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('bank_accounts')
+            .insert([{
+                bank_name: name,
+                account_name: accountName || name,
+                account_number: accountNumber,
+                branch: branch || '',
+                status: 'active',
+                created_at: new Date().toISOString()
+            }])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast(`✅ "${name}" ব্যাংক যোগ করা হয়েছে!`, 'success');
+        closeCustomModal();
+        
+        // ব্যাংক ড্রপডাউন রিফ্রেশ
+        await refreshBankDropdown();
+        
+        // ব্যাংক ম্যানেজমেন্ট রিফ্রেশ (যদি খোলা থাকে)
+        if (document.getElementById('bankManagementContainer')) {
+            loadBankManagement();
+        }
+        
+    } catch(e) {
+        console.error('❌ ব্যাংক যোগ error:', e);
+        showToast(`❌ ব্যাংক যোগ করতে সমস্যা: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ৪. ব্যাংক এডিট - FIXED
+// ============================================================
+async function editBank(bankId) {
+    console.log('✏️ ব্যাংক সম্পাদনা:', bankId);
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: bank, error } = await client
+            .from('bank_accounts')
+            .select('*')
+            .eq('id', bankId)
+            .single();
+        
+        if (error) throw error;
+        if (!bank) {
+            showToast('❌ ব্যাংক পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        const html = `
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">🏛️ ব্যাংকের নাম <span class="text-red-500">*</span></label>
+                    <input type="text" id="editBankName" class="w-full border rounded-lg p-2" value="${bank.bank_name || ''}" placeholder="যেমন: ইসলামী ব্যাংক">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">👤 একাউন্টের নাম</label>
+                    <input type="text" id="editBankAccountName" class="w-full border rounded-lg p-2" value="${bank.account_name || ''}" placeholder="যেমন: TUKNBD">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">🔢 একাউন্ট নম্বর <span class="text-red-500">*</span></label>
+                    <input type="text" id="editBankAccountNumber" class="w-full border rounded-lg p-2" value="${bank.account_number || ''}" placeholder="যেমন: 1234567890">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">📍 শাখা</label>
+                    <input type="text" id="editBankBranch" class="w-full border rounded-lg p-2" value="${bank.branch || ''}" placeholder="যেমন: ঢাকা">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">📊 স্ট্যাটাস</label>
+                    <select id="editBankStatus" class="w-full border rounded-lg p-2">
+                        <option value="active" ${bank.status === 'active' ? 'selected' : ''}>✅ সক্রিয়</option>
+                        <option value="inactive" ${bank.status === 'inactive' ? 'selected' : ''}>⛔ নিষ্ক্রিয়</option>
+                    </select>
+                </div>
+                <div class="flex gap-3 mt-4">
+                    <button onclick="saveBankEdit('${bank.id}')" class="btn btn-success flex-1 py-2.5">
+                        <i class="fas fa-save mr-2"></i> সংরক্ষণ
+                    </button>
+                    <button onclick="closeCustomModal()" class="btn btn-danger flex-1 py-2.5">
+                        <i class="fas fa-times mr-2"></i> বাতিল
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        showCustomModal('✏️ ব্যাংক সম্পাদনা করুন', html);
+        
+    } catch(e) {
+        console.error('❌ Edit error:', e);
+        showToast('❌ ব্যাংক লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ৫. ব্যাংক এডিট সংরক্ষণ - FIXED
+// ============================================================
+async function saveBankEdit(bankId) {
+    const bankName = document.getElementById('editBankName').value.trim();
+    const accountName = document.getElementById('editBankAccountName').value.trim();
+    const accountNumber = document.getElementById('editBankAccountNumber').value.trim();
+    const branch = document.getElementById('editBankBranch').value.trim();
+    const status = document.getElementById('editBankStatus').value;
+    
+    if (!bankName) {
+        showToast('❌ ব্যাংকের নাম দিন!', 'error');
+        document.getElementById('editBankName').focus();
+        return;
+    }
+    
+    if (!accountNumber) {
+        showToast('❌ একাউন্ট নম্বর দিন!', 'error');
+        document.getElementById('editBankAccountNumber').focus();
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { error } = await client
+            .from('bank_accounts')
+            .update({
+                bank_name: bankName,
+                account_name: accountName || bankName,
+                account_number: accountNumber,
+                branch: branch || '',
+                status: status,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', bankId);
+        
+        if (error) throw error;
+        
+        showToast(`✅ "${bankName}" ব্যাংক আপডেট করা হয়েছে!`, 'success');
+        closeCustomModal();
+        
+        // ড্রপডাউন রিফ্রেশ
+        await refreshBankDropdown();
+        if (document.getElementById('bankManagementContainer')) {
+            loadBankManagement();
+        }
+        
+    } catch(e) {
+        console.error('❌ Save edit error:', e);
+        showToast(`❌ আপডেট ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ৬. ব্যাংক ডিলিট - FIXED
+// ============================================================
+async function deleteBank(bankId) {
+    if (!confirm('এই ব্যাংক ডিলিট করবেন? (সতর্কতা: এটি স্থায়ীভাবে মুছে যাবে!)')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // চেক করুন এই ব্যাংক ব্যবহার করা হচ্ছে কিনা
+        const { data: transactions, error: checkError } = await client
+            .from('ledger_transactions')
+            .select('id', { count: 'exact' })
+            .eq('bank_id', bankId)
+            .limit(1);
+        
+        if (transactions && transactions.length > 0) {
+            showToast('⚠️ এই ব্যাংক লেজার এন্ট্রিতে ব্যবহৃত হচ্ছে! প্রথমে এন্ট্রিগুলো পরিবর্তন করুন।', 'warning');
+            return;
+        }
+        
+        const { error } = await client
+            .from('bank_accounts')
+            .delete()
+            .eq('id', bankId);
+        
+        if (error) throw error;
+        
+        showToast('✅ ব্যাংক ডিলিট করা হয়েছে!', 'success');
+        
+        // ড্রপডাউন রিফ্রেশ
+        await refreshBankDropdown();
+        if (document.getElementById('bankManagementContainer')) {
+            loadBankManagement();
+        }
+        
+    } catch(e) {
+        console.error('❌ Delete error:', e);
+        showToast(`❌ ডিলিট ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ৭. ক্যাটাগরি এডিট - FIXED
+// ============================================================
+async function editCategory(categoryId) {
+    console.log('✏️ ক্যাটাগরি সম্পাদনা:', categoryId);
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: cat, error } = await client
+            .from('ledger_categories')
+            .select('*')
+            .eq('id', categoryId)
+            .single();
+        
+        if (error) throw error;
+        if (!cat) {
+            showToast('❌ ক্যাটাগরি পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        const html = `
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">📂 ক্যাটাগরির নাম <span class="text-red-500">*</span></label>
+                    <input type="text" id="editCatName" class="w-full border rounded-lg p-2" value="${cat.name}" placeholder="যেমন: সদস্য ফি">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">📋 লেনদেনের ধরন <span class="text-red-500">*</span></label>
+                    <select id="editCatType" class="w-full border rounded-lg p-2">
+                        <option value="income" ${cat.type === 'income' ? 'selected' : ''}>📈 আয়</option>
+                        <option value="expense" ${cat.type === 'expense' ? 'selected' : ''}>📉 ব্যয়</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">📝 বিবরণ (ঐচ্ছিক)</label>
+                    <input type="text" id="editCatDescription" class="w-full border rounded-lg p-2" value="${cat.description || ''}" placeholder="খাত সম্পর্কে সংক্ষিপ্ত বিবরণ">
+                </div>
+                <div class="flex gap-3 mt-4">
+                    <button onclick="saveCategoryEdit('${cat.id}')" class="btn btn-success flex-1 py-2.5">
+                        <i class="fas fa-save mr-2"></i> সংরক্ষণ
+                    </button>
+                    <button onclick="closeCustomModal()" class="btn btn-danger flex-1 py-2.5">
+                        <i class="fas fa-times mr-2"></i> বাতিল
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        showCustomModal('✏️ ক্যাটাগরি সম্পাদনা করুন', html);
+        
+    } catch(e) {
+        console.error('❌ Edit error:', e);
+        showToast('❌ ক্যাটাগরি লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ৮. ক্যাটাগরি এডিট সংরক্ষণ - FIXED
+// ============================================================
+async function saveCategoryEdit(categoryId) {
+    const name = document.getElementById('editCatName').value.trim();
+    const type = document.getElementById('editCatType').value;
+    const description = document.getElementById('editCatDescription').value.trim();
+    
+    if (!name) {
+        showToast('❌ ক্যাটাগরির নাম দিন!', 'error');
+        document.getElementById('editCatName').focus();
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // চেক করুন অন্য কোনো ক্যাটাগরি এই নামে আছে কিনা
+        const { data: existing, error: checkError } = await client
+            .from('ledger_categories')
+            .select('id')
+            .eq('name', name)
+            .neq('id', categoryId)
+            .maybeSingle();
+        
+        if (existing) {
+            showToast(`⚠️ "${name}" নামে একটি ক্যাটাগরি ইতিমধ্যে আছে!`, 'warning');
+            return;
+        }
+        
+        const { error } = await client
+            .from('ledger_categories')
+            .update({
+                name: name,
+                type: type,
+                description: description || null,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', categoryId);
+        
+        if (error) throw error;
+        
+        showToast(`✅ "${name}" ক্যাটাগরি আপডেট করা হয়েছে!`, 'success');
+        closeCustomModal();
+        
+        // ড্রপডাউন রিফ্রেশ
+        await forceFixLedgerCategories();
+        if (document.getElementById('categoryManagementContainer')) {
+            loadCategoryManagement();
+        }
+        
+    } catch(e) {
+        console.error('❌ Save edit error:', e);
+        showToast(`❌ আপডেট ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ৯. ক্যাটাগরি ডিলিট - FIXED
+// ============================================================
+async function deleteCategory(categoryId) {
+    if (!confirm('এই ক্যাটাগরি ডিলিট করবেন? (সতর্কতা: এটি স্থায়ীভাবে মুছে যাবে!)')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // চেক করুন এই ক্যাটাগরি ব্যবহার করা হচ্ছে কিনা
+        const { data: cat } = await client
+            .from('ledger_categories')
+            .select('name')
+            .eq('id', categoryId)
+            .single();
+        
+        if (cat) {
+            const { data: transactions, error: checkError } = await client
+                .from('ledger_transactions')
+                .select('id', { count: 'exact' })
+                .eq('category', cat.name)
+                .limit(1);
+            
+            if (transactions && transactions.length > 0) {
+                showToast('⚠️ এই ক্যাটাগরি লেজার এন্ট্রিতে ব্যবহৃত হচ্ছে! প্রথমে এন্ট্রিগুলো পরিবর্তন করুন।', 'warning');
+                return;
+            }
+        }
+        
+        const { error } = await client
+            .from('ledger_categories')
+            .delete()
+            .eq('id', categoryId);
+        
+        if (error) throw error;
+        
+        showToast('✅ ক্যাটাগরি ডিলিট করা হয়েছে!', 'success');
+        
+        // ড্রপডাউন রিফ্রেশ
+        await forceFixLedgerCategories();
+        if (document.getElementById('categoryManagementContainer')) {
+            loadCategoryManagement();
+        }
+        
+    } catch(e) {
+        console.error('❌ Delete error:', e);
+        showToast(`❌ ডিলিট ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ১০. সব ফাংশন গ্লোবাল স্কোপে এক্সপোজ করুন
+// ============================================================
+window.refreshBankDropdown = refreshBankDropdown;
+window.showAddBankModal = showAddBankModal;
+window.saveNewBank = saveNewBank;
+window.editBank = editBank;
+window.saveBankEdit = saveBankEdit;
+window.deleteBank = deleteBank;
+window.editCategory = editCategory;
+window.saveCategoryEdit = saveCategoryEdit;
+window.deleteCategory = deleteCategory;
+
+// ============================================================
+// ১১. পেজ লোডের সময় ব্যাংক ড্রপডাউন রিফ্রেশ
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(() => {
+        refreshBankDropdown();
+        forceFixLedgerCategories();
+    }, 2000);
+});
+
+console.log('✅ ব্যাংক ও ক্যাটাগরি ম্যানেজমেন্ট সম্পূর্ণ লোড হয়েছে!');
+console.log('💡 ব্যাংক যোগ করতে: showAddBankModal()');
+console.log('💡 ক্যাটাগরি ম্যানেজমেন্ট: showCategoryManagement()');
+console.log('💡 ব্যাংক ম্যানেজমেন্ট: showBankManagement()');
+    
 // ============================================================
 // ৯. গ্লোবাল এক্সপোজ
 // ============================================================
