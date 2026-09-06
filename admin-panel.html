@@ -19353,6 +19353,199 @@ async function deleteCategory(categoryId) {
     }
 }
 
+    // ============================================================
+// ✅ ফিক্স: লেজার ফিল্টার ও ড্রপডাউন রিফ্রেশ
+// ============================================================
+
+// ============================================================
+// ১. ওভাররাইড: loadLedgerData() - ফিল্টার প্রয়োগের পর ড্রপডাউন রিফ্রেশ
+// ============================================================
+const originalLoadLedgerData = window.loadLedgerData || loadLedgerData;
+
+window.loadLedgerData = async function() {
+    console.log('🔄 ফিল্টার সহ লেজার ডেটা লোড হচ্ছে...');
+    
+    // ✅ প্রথমে ক্যাটাগরি ও ব্যাংক রিফ্রেশ করুন
+    await refreshBankDropdown();
+    await forceFixLedgerCategories();
+    
+    // ✅ মূল ফাংশন কল করুন
+    if (typeof originalLoadLedgerData === 'function') {
+        await originalLoadLedgerData();
+    } else {
+        // যদি original ফাংশন না থাকে, তাহলে নিজের লজিক চালান
+        await loadLedgerDataInternal();
+    }
+    
+    console.log('✅ ফিল্টার সহ লেজার লোড সম্পূর্ণ!');
+};
+
+// ============================================================
+// ২. ইন্টারনাল লেজার লোড ফাংশন (যদি original না থাকে)
+// ============================================================
+async function loadLedgerDataInternal() {
+    const container = document.getElementById('ledgerTableContainer');
+    if (!container) return;
+    
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner"></div>
+            <p class="text-gray-500 mt-2">📒 লেজার ডেটা লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    const fromDate = document.getElementById('ledgerFilterFrom')?.value || '';
+    const toDate = document.getElementById('ledgerFilterTo')?.value || '';
+    const typeFilter = document.getElementById('ledgerFilterType')?.value || 'all';
+    const categoryFilter = document.getElementById('ledgerFilterCategory')?.value || 'all';
+    
+    try {
+        let query = client
+            .from('ledger_transactions')
+            .select('*')
+            .order('date', { ascending: false })
+            .order('created_at', { ascending: false });
+        
+        if (currentAdmin && currentAdmin.branch_id && currentAdmin.role !== 'super_admin' && currentAdmin.role !== 'সুপার অ্যাডমিন') {
+            query = query.eq('branch_id', currentAdmin.branch_id);
+        }
+        
+        if (fromDate) query = query.gte('date', fromDate);
+        if (toDate) query = query.lte('date', toDate);
+        if (typeFilter !== 'all') query = query.eq('type', typeFilter);
+        if (categoryFilter !== 'all') query = query.eq('category', categoryFilter);
+        
+        const { data, error } = await query;
+        
+        if (error) throw error;
+        
+        ledgerData = data || [];
+        
+        if (ledgerData.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fas fa-inbox text-5xl block mb-3 text-gray-300"></i>
+                    <p class="text-lg font-medium">📭 এই সময়সীমায় কোনো লেজার এন্ট্রি নেই</p>
+                    <button onclick="resetLedgerFilters()" class="btn btn-warning btn-sm mt-3">
+                        <i class="fas fa-undo mr-1"></i> ফিল্টার রিসেট
+                    </button>
+                </div>
+            `;
+            updateLedgerSummary([]);
+            return;
+        }
+        
+        updateLedgerSummary(ledgerData);
+        renderLedgerTable(ledgerData);
+        
+    } catch(e) {
+        console.error('❌ Ledger load error:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ লেজার ডেটা লোড করতে সমস্যা!</p>
+                <button onclick="loadLedgerData()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+    }
+}
+
+// ============================================================
+// ৩. ফিল্টার বাটনে ক্লিক করলে ড্রপডাউন রিফ্রেশ
+// ============================================================
+// ফিল্টার বাটন নির্বাচন করুন এবং ইভেন্ট যোগ করুন
+document.addEventListener('DOMContentLoaded', function() {
+    // ফিল্টার বাটন
+    const filterBtn = document.querySelector('#ledgerTab .btn-info.btn-sm');
+    if (filterBtn) {
+        // ইতিমধ্যে অন-ক্লিক থাকলে ওভাররাইড না করে নতুন ইভেন্ট যোগ করুন
+        const originalClick = filterBtn.onclick;
+        filterBtn.onclick = function(e) {
+            // ড্রপডাউন রিফ্রেশ
+            refreshBankDropdown();
+            forceFixLedgerCategories();
+            
+            // মূল ফাংশন কল
+            if (typeof originalClick === 'function') {
+                originalClick.call(this, e);
+            } else {
+                loadLedgerData();
+            }
+        };
+        console.log('✅ ফিল্টার বাটনে ড্রপডাউন রিফ্রেশ যোগ করা হয়েছে');
+    }
+    
+    // রিসেট বাটন
+    const resetBtn = document.querySelector('#ledgerTab .btn-warning.btn-sm');
+    if (resetBtn) {
+        const originalClick = resetBtn.onclick;
+        resetBtn.onclick = function(e) {
+            // ড্রপডাউন রিফ্রেশ
+            refreshBankDropdown();
+            forceFixLedgerCategories();
+            
+            if (typeof originalClick === 'function') {
+                originalClick.call(this, e);
+            } else {
+                resetLedgerFilters();
+            }
+        };
+        console.log('✅ রিসেট বাটনে ড্রপডাউন রিফ্রেশ যোগ করা হয়েছে');
+    }
+});
+
+// ============================================================
+// ৪. শো ট্যাব ফাংশন আপডেট - লেজার ট্যাব খোলার সময় রিফ্রেশ
+// ============================================================
+const originalShowTabForLedger = window.showTab || showTab;
+
+window.showTab = function(tabName) {
+    // মূল ফাংশন কল
+    if (typeof originalShowTabForLedger === 'function') {
+        originalShowTabForLedger(tabName);
+    }
+    
+    // লেজার ট্যাব খোলার সময় ড্রপডাউন রিফ্রেশ
+    if (tabName === 'ledger') {
+        setTimeout(() => {
+            refreshBankDropdown();
+            forceFixLedgerCategories();
+            console.log('✅ লেজার ট্যাবে ড্রপডাউন রিফ্রেশ সম্পূর্ণ!');
+        }, 500);
+    }
+};
+
+// ============================================================
+// ৫. রিসেট ফিল্টার ফাংশন আপডেট
+// ============================================================
+const originalResetLedgerFilters = window.resetLedgerFilters || resetLedgerFilters;
+
+window.resetLedgerFilters = function() {
+    document.getElementById('ledgerFilterFrom').value = '';
+    document.getElementById('ledgerFilterTo').value = '';
+    document.getElementById('ledgerFilterType').value = 'all';
+    document.getElementById('ledgerFilterCategory').value = 'all';
+    
+    // ড্রপডাউন রিফ্রেশ
+    refreshBankDropdown();
+    forceFixLedgerCategories();
+    
+    // ডেটা লোড
+    loadLedgerData();
+    
+    showToast('✅ ফিল্টার রিসেট করা হয়েছে!', 'success');
+};
+
+console.log('✅ লেজার ফিল্টার ফিক্স লোড হয়েছে!');
+console.log('💡 তারিখ ফিল্টার ব্যবহার করলেও ড্রপডাউন কাজ করবে!');
+
+    
 // ============================================================
 // ১০. সব ফাংশন গ্লোবাল স্কোপে এক্সপোজ করুন
 // ============================================================
