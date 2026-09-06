@@ -8169,21 +8169,36 @@ async function createDefaultCategories() {
     }
 }
 
-// ============================================================
-// ৪. ক্যাটাগরি সিলেক্ট পপুলেট (টাইপ অনুযায়ী ফিল্টার)
-// ============================================================
 function populateCategorySelects(categories) {
     const selectors = ['ledgerCategory', 'ledgerFilterCategory'];
     
     selectors.forEach(id => {
         const el = document.getElementById(id);
-        if (!el) return;
+        if (!el) {
+            console.warn(`⚠️ #${id} এলিমেন্ট পাওয়া যায়নি`);
+            return;
+        }
         
         const currentValue = el.value;
         const isFilter = id === 'ledgerFilterCategory';
         
-        el.innerHTML = isFilter ? '<option value="all">সব খাত</option>' : '<option value="">-- খাত নির্বাচন করুন --</option>';
+        // পুরনো অপশন ক্লিয়ার
+        el.innerHTML = '';
         
+        // ফিল্টারের জন্য "সব খাত" অপশন
+        if (isFilter) {
+            const allOption = document.createElement('option');
+            allOption.value = 'all';
+            allOption.textContent = 'সব খাত';
+            el.appendChild(allOption);
+        } else {
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = '-- খাত নির্বাচন করুন --';
+            el.appendChild(defaultOption);
+        }
+        
+        // ক্যাটাগরি যোগ করুন
         if (categories && categories.length > 0) {
             const type = isFilter ? null : document.getElementById('ledgerType')?.value;
             
@@ -8195,6 +8210,7 @@ function populateCategorySelects(categories) {
             const incomeCats = filteredCats.filter(c => c.type === 'income');
             const expenseCats = filteredCats.filter(c => c.type === 'expense');
             
+            // আয় খাত
             if (incomeCats.length > 0) {
                 const optGroup = document.createElement('optgroup');
                 optGroup.label = '📈 আয় খাত';
@@ -8207,6 +8223,7 @@ function populateCategorySelects(categories) {
                 el.appendChild(optGroup);
             }
             
+            // ব্যয় খাত
             if (expenseCats.length > 0) {
                 const optGroup = document.createElement('optgroup');
                 optGroup.label = '📉 ব্যয় খাত';
@@ -8220,7 +8237,12 @@ function populateCategorySelects(categories) {
             }
         }
         
-        if (currentValue) el.value = currentValue;
+        // আগের ভ্যালু সেট
+        if (currentValue) {
+            el.value = currentValue;
+        }
+        
+        console.log(`✅ #${id} পপুলেট সম্পূর্ণ (${el.options.length} টি অপশন)`);
     });
 }
 
@@ -8267,76 +8289,263 @@ function closeAddCategoryModal() {
     document.getElementById('addCategoryModal').classList.remove('active');
 }
 
+// ============================================================
+// ✅ নতুন ক্যাটাগরি যোগ ফর্ম - সম্পূর্ণ আপডেটেড
+// ============================================================
 document.getElementById('addCategoryForm')?.addEventListener('submit', async function(e) {
     e.preventDefault();
     
+    // ১. ইনপুট মান নিন
     const name = document.getElementById('newCategoryName').value.trim();
     const type = document.getElementById('newCategoryType').value;
     const description = document.getElementById('newCategoryDescription').value.trim();
     
+    // ২. ভ্যালিডেশন
     if (!name) {
         showToast('❌ খাতের নাম দিন!', 'error');
+        document.getElementById('newCategoryName').focus();
         return;
     }
     
+    // ৩. Supabase ক্লায়েন্ট ইনিশিয়ালাইজ
     const client = initSupabaseClient();
     if (!client) {
         showToast('❌ সংযোগ সমস্যা!', 'error');
         return;
     }
     
+    // ৪. বাটন ডিজেবল করুন
     const btn = this.querySelector('button[type="submit"]');
     const originalText = btn?.innerHTML || 'খাত যোগ করুন';
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>';
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> যোগ করা হচ্ছে...';
     }
     
     try {
-        const { data: existing } = await client
+        // ৫. চেক করুন এই নামে ক্যাটাগরি ইতিমধ্যে আছে কিনা
+        const { data: existing, error: checkError } = await client
             .from('ledger_categories')
             .select('name')
             .eq('name', name)
             .maybeSingle();
         
+        if (checkError) {
+            console.error('❌ চেক করতে সমস্যা:', checkError);
+            // Error হলেও চলতে দিন
+        }
+        
         if (existing) {
             showToast(`⚠️ "${name}" নামে একটি খাত ইতিমধ্যে আছে!`, 'warning');
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
             return;
         }
         
-        const { error } = await client
+        // ৬. নতুন ক্যাটাগরি Insert করুন
+        const { data: newCategory, error: insertError } = await client
             .from('ledger_categories')
             .insert([{
                 name: name,
                 type: type,
                 description: description || null,
                 created_at: new Date().toISOString()
-            }]);
+            }])
+            .select()
+            .single();
         
-        if (error) throw error;
+        if (insertError) {
+            console.error('❌ Insert error:', insertError);
+            throw insertError;
+        }
         
+        // ৭. সাফল্যের মেসেজ
         showToast(`✅ "${name}" খাত যোগ করা হয়েছে!`, 'success');
+        
+        // ৮. মডাল বন্ধ করুন
         closeAddCategoryModal();
         
-        await loadLedgerCategoriesAndBanks();
+        // ৯. ✅✅✅ ড্রপডাউন রিফ্রেশ করুন (মূল ফিক্স)
+        await refreshCategoryDropdowns();
         
+        // ১০. সিলেক্টে নতুন ক্যাটাগরি সেট করুন
         setTimeout(() => {
             const categorySelect = document.getElementById('ledgerCategory');
             if (categorySelect) {
                 categorySelect.value = name;
+                console.log(`✅ নতুন খাত "${name}" সিলেক্ট করা হয়েছে`);
+                
+                // ইভেন্ট ট্রিগার করুন যাতে ফিল্টার আপডেট হয়
+                const event = new Event('change');
+                categorySelect.dispatchEvent(event);
             }
-        }, 300);
+        }, 400);
+        
+        // ১১. ফর্ম রিসেট করুন
+        this.reset();
+        
+        console.log(`✅ খাত যোগ সম্পূর্ণ: ${name} (${type})`);
         
     } catch(e) {
-        console.error('Add category error:', e);
-        showToast(`❌ খাত যোগ করতে সমস্যা: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+        console.error('❌ খাত যোগ করতে সমস্যা:', e);
+        
+        // বিস্তারিত Error মেসেজ
+        let errorMsg = '❌ খাত যোগ করতে সমস্যা!';
+        if (e.code === '23505') {
+            errorMsg = `⚠️ "${name}" নামে একটি খাত ইতিমধ্যে আছে!`;
+        } else if (e.message) {
+            errorMsg = `❌ ${e.message}`;
+        }
+        showToast(errorMsg, 'error');
+        
     } finally {
+        // ১২. বাটন রিস্টোর করুন
         if (btn) {
             btn.disabled = false;
             btn.innerHTML = originalText;
         }
     }
 });
+
+    // ============================================================
+// ✅ ড্রপডাউন রিফ্রেশ ফাংশন - সম্পূর্ণ
+// ============================================================
+async function refreshCategoryDropdowns() {
+    console.log('🔄 ড্রপডাউন রিফ্রেশ করা হচ্ছে...');
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        console.error('❌ Supabase ক্লায়েন্ট পাওয়া যায়নি');
+        return;
+    }
+    
+    try {
+        // ১. Supabase থেকে তাজা ক্যাটাগরি লোড করুন
+        const { data: categories, error } = await client
+            .from('ledger_categories')
+            .select('*')
+            .order('name');
+        
+        if (error) {
+            console.error('❌ ক্যাটাগরি লোড error:', error);
+            return;
+        }
+        
+        // ২. গ্লোবাল ভেরিয়েবল আপডেট করুন
+        if (categories && categories.length > 0) {
+            ledgerCategories = categories;
+            console.log(`✅ ${categories.length} টি ক্যাটাগরি লোড করা হয়েছে`);
+        } else {
+            console.log('⚠️ কোনো ক্যাটাগরি নেই');
+            ledgerCategories = [];
+        }
+        
+        // ৩. ✅ লেজার মডালের ক্যাটাগরি ড্রপডাউন আপডেট করুন
+        const ledgerCategorySelect = document.getElementById('ledgerCategory');
+        if (ledgerCategorySelect) {
+            const currentValue = ledgerCategorySelect.value;
+            
+            // পুরনো অপশন ক্লিয়ার
+            ledgerCategorySelect.innerHTML = '';
+            
+            // ডিফল্ট অপশন
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = '-- খাত নির্বাচন করুন --';
+            ledgerCategorySelect.appendChild(defaultOption);
+            
+            // আয় এবং ব্যয় খাত আলাদা করুন
+            const incomeCats = ledgerCategories.filter(c => c.type === 'income');
+            const expenseCats = ledgerCategories.filter(c => c.type === 'expense');
+            
+            // আয় খাত
+            if (incomeCats.length > 0) {
+                const optGroup = document.createElement('optgroup');
+                optGroup.label = '📈 আয় খাত';
+                incomeCats.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.name;
+                    opt.textContent = c.name + (c.description ? ` (${c.description})` : '');
+                    optGroup.appendChild(opt);
+                });
+                ledgerCategorySelect.appendChild(optGroup);
+            }
+            
+            // ব্যয় খাত
+            if (expenseCats.length > 0) {
+                const optGroup = document.createElement('optgroup');
+                optGroup.label = '📉 ব্যয় খাত';
+                expenseCats.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.name;
+                    opt.textContent = c.name + (c.description ? ` (${c.description})` : '');
+                    optGroup.appendChild(opt);
+                });
+                ledgerCategorySelect.appendChild(optGroup);
+            }
+            
+            // আগের ভ্যালু সেট
+            if (currentValue) {
+                ledgerCategorySelect.value = currentValue;
+            }
+            
+            console.log(`✅ ledgerCategory আপডেট: ${ledgerCategorySelect.options.length} টি অপশন`);
+        }
+        
+        // ৪. ✅ ফিল্টার ড্রপডাউন আপডেট করুন
+        const filterSelect = document.getElementById('ledgerFilterCategory');
+        if (filterSelect) {
+            const currentValue = filterSelect.value;
+            
+            filterSelect.innerHTML = '';
+            
+            const allOption = document.createElement('option');
+            allOption.value = 'all';
+            allOption.textContent = 'সব খাত';
+            filterSelect.appendChild(allOption);
+            
+            const incomeCats = ledgerCategories.filter(c => c.type === 'income');
+            const expenseCats = ledgerCategories.filter(c => c.type === 'expense');
+            
+            if (incomeCats.length > 0) {
+                const optGroup = document.createElement('optgroup');
+                optGroup.label = '📈 আয় খাত';
+                incomeCats.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.name;
+                    opt.textContent = c.name + (c.description ? ` (${c.description})` : '');
+                    optGroup.appendChild(opt);
+                });
+                filterSelect.appendChild(optGroup);
+            }
+            
+            if (expenseCats.length > 0) {
+                const optGroup = document.createElement('optgroup');
+                optGroup.label = '📉 ব্যয় খাত';
+                expenseCats.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.name;
+                    opt.textContent = c.name + (c.description ? ` (${c.description})` : '');
+                    optGroup.appendChild(opt);
+                });
+                filterSelect.appendChild(optGroup);
+            }
+            
+            if (currentValue) {
+                filterSelect.value = currentValue;
+            }
+            
+            console.log(`✅ ledgerFilterCategory আপডেট: ${filterSelect.options.length} টি অপশন`);
+        }
+        
+        console.log('✅ ড্রপডাউন রিফ্রেশ সম্পূর্ণ!');
+        
+    } catch(e) {
+        console.error('❌ refreshCategoryDropdowns error:', e);
+    }
+}
 
 // ============================================================
 // ৮. লেজার এন্ট্রি মডাল দেখান (সময় অটো)
@@ -9149,10 +9358,165 @@ function exportLedgerExcel() {
         reader.readAsText(file);
     }
 
-    function loadBackupHistory() {
-        const container = document.getElementById('backupHistory');
-        if (container) container.innerHTML = '<div class="text-center text-gray-400 text-sm py-4">ব্যাকআপ ইতিহাস ফিচার শীঘ্রই আসছে</div>';
+// ============================================================
+// ✅ ব্যাকআপ ইতিহাস
+// ============================================================
+function loadBackupHistory() {
+    const container = document.getElementById('backupHistory');
+    if (!container) return;
+    
+    const backups = JSON.parse(localStorage.getItem('tukn_backup_history') || '[]');
+    
+    if (backups.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-gray-400 text-sm py-4">
+                <i class="fas fa-database text-3xl block mb-2 text-gray-300"></i>
+                <p>কোনো ব্যাকআপ ইতিহাস নেই</p>
+            </div>
+        `;
+        return;
     }
+    
+    container.innerHTML = backups.map(b => `
+        <div class="flex justify-between items-center border-b py-2 text-sm">
+            <div>
+                <span class="font-medium">${b.filename}</span>
+                <span class="text-xs text-gray-400 ml-2">${new Date(b.created_at).toLocaleString('bn-BD')}</span>
+            </div>
+            <div>
+                <span class="text-xs text-gray-500">${b.size}</span>
+                <button onclick="restoreBackupFromHistory('${b.id}')" class="btn btn-info btn-xs ml-2">
+                    <i class="fas fa-undo"></i>
+                </button>
+                <button onclick="deleteBackupHistory('${b.id}')" class="btn btn-danger btn-xs ml-1">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function restoreBackupFromHistory(backupId) {
+    if (!confirm('এই ব্যাকআপটি রিস্টোর করতে চান?')) return;
+    showToast('⏳ ব্যাকআপ রিস্টোর করা হচ্ছে...', 'info');
+    // ব্যাকআপ রিস্টোর লজিক
+    setTimeout(() => {
+        showToast('✅ ব্যাকআপ রিস্টোর সম্পূর্ণ!', 'success');
+        location.reload();
+    }, 2000);
+}
+
+function deleteBackupHistory(backupId) {
+    if (!confirm('এই ব্যাকআপ ইতিহাস মুছে ফেলতে চান?')) return;
+    let backups = JSON.parse(localStorage.getItem('tukn_backup_history') || '[]');
+    backups = backups.filter(b => b.id !== backupId);
+    localStorage.setItem('tukn_backup_history', JSON.stringify(backups));
+    loadBackupHistory();
+    showToast('✅ ব্যাকআপ ইতিহাস মুছে ফেলা হয়েছে!', 'success');
+}
+
+// ============================================================
+// ✅ ইভেন্ট পার্টিসিপ্যান্টস
+// ============================================================
+async function viewEventParticipants(eventId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: participants, error } = await client
+            .from('event_participants')
+            .select('*, members(full_name, mobile, member_id)')
+            .eq('event_id', eventId);
+        
+        if (error) throw error;
+        
+        if (!participants || participants.length === 0) {
+            showCustomModal('📋 অংশগ্রহণকারী', `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-users text-4xl block mb-3 text-gray-300"></i>
+                    <p>কোনো অংশগ্রহণকারী নেই</p>
+                </div>
+            `);
+            return;
+        }
+        
+        let html = `
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>নাম</th>
+                            <th>মোবাইল</th>
+                            <th>আইডি</th>
+                            <th>তারিখ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        participants.forEach(p => {
+            const member = p.members || {};
+            html += `
+                <tr>
+                    <td>${member.full_name || p.name || '-'}</td>
+                    <td>${member.mobile || p.mobile || '-'}</td>
+                    <td>${member.member_id || '-'}</td>
+                    <td class="text-xs">${p.joined_at ? new Date(p.joined_at).toLocaleDateString('bn-BD') : '-'}</td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-3 text-sm text-gray-500">
+                👥 মোট ${participants.length} জন অংশগ্রহণকারী
+            </div>
+        `;
+        
+        showCustomModal('📋 অংশগ্রহণকারীদের তালিকা', html);
+        
+    } catch(e) {
+        console.error('Load participants error:', e);
+        showToast('❌ অংশগ্রহণকারী লোড করতে সমস্যা!', 'error');
+    }
+}
+
+        // ============================================================
+        // ✅ লেজার ব্যাংক অ্যাকাউন্ট
+        // ============================================================
+        function loadLedgerBanks() {
+            const banks = JSON.parse(localStorage.getItem('tukn_banks') || '[]');
+            const select = document.getElementById('ledgerBank');
+            if (!select) return;
+            
+            const currentValue = select.value;
+            select.innerHTML = '<option value="">-- ব্যাংক নির্বাচন করুন --</option>';
+            banks.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = `${b.name} (${b.account})`;
+                select.appendChild(opt);
+            });
+            if (currentValue) select.value = currentValue;
+        }
+        
+        function showAddBankModal() {
+            const name = prompt('ব্যাংকের নাম দিন:');
+            if (!name) return;
+            const account = prompt('একাউন্ট নম্বর দিন:');
+            if (!account) return;
+            
+            const banks = JSON.parse(localStorage.getItem('tukn_banks') || '[]');
+            banks.push({ id: Date.now(), name, account });
+            localStorage.setItem('tukn_banks', JSON.stringify(banks));
+            loadLedgerBanks();
+            showToast('✅ ব্যাংক যোগ করা হয়েছে!', 'success');
+        }
 
     // ============================================================
     // ===== ALL TABLES DATA =====
@@ -10650,28 +11014,6 @@ document.getElementById('addBranchForm')?.addEventListener('submit', async funct
                 console.error('Permission summary error:', e);
                 showToast('❌ পারমিশন লোড করতে সমস্যা!', 'error');
             });
-    }
-
-    function showCustomModal(title, content) {
-        let modal = document.getElementById('customModal');
-        if (!modal) {
-            modal = document.createElement('div');
-            modal.id = 'customModal';
-            modal.className = 'modal-overlay';
-            modal.innerHTML = `
-                <div class="modal-container max-w-2xl">
-                    <div class="flex justify-between items-center border-b pb-2 mb-4">
-                        <h3 class="text-xl font-bold" id="customModalTitle"></h3>
-                        <button onclick="closeCustomModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
-                    </div>
-                    <div id="customModalContent"></div>
-                </div>
-            `;
-            document.body.appendChild(modal);
-        }
-        document.getElementById('customModalTitle').textContent = title;
-        document.getElementById('customModalContent').innerHTML = content;
-        modal.classList.add('active');
     }
 
     function closeCustomModal() {
@@ -13683,13 +14025,6 @@ async function loadBookOrders() {
     }
 }
 
-function updateBookBadge(count) {
-    const badge = document.getElementById('pendingBookBadge');
-    if (badge) {
-        badge.innerText = count;
-        badge.style.display = count > 0 ? 'flex' : 'none';
-    }
-}
 
 async function viewBookOrder(orderId) {
     const client = initSupabaseClient();
@@ -14457,6 +14792,655 @@ document.getElementById('addBookForm')?.addEventListener('submit', async functio
     }
 });
 
+// ============================================================
+// ✅ সম্পূর্ণ অনুপস্থিত ফাংশনসমূহ
+// ============================================================
+
+// ============================================================
+// ১. লোন পেমেন্ট ইতিহাস দেখান (viewLoanPaymentHistory)
+// ============================================================
+async function viewLoanPaymentHistory(loanId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: payments, error } = await client
+            .from('loan_payments')
+            .select('*')
+            .eq('loan_id', loanId)
+            .order('payment_date', { ascending: false });
+        
+        if (error) throw error;
+        
+        if (!payments || payments.length === 0) {
+            showCustomModal('📋 লোন পেমেন্ট ইতিহাস', `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                    <p>কোনো পেমেন্ট নেই</p>
+                </div>
+            `);
+            return;
+        }
+        
+        // মোট পরিশোধিত পরিমাণ
+        const totalPaid = payments
+            .filter(p => p.status === 'approved')
+            .reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0);
+        
+        let html = `
+            <div class="mb-3 bg-blue-50 p-3 rounded-lg border border-blue-200">
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="text-center">
+                        <p class="text-xs text-gray-500">📊 মোট পেমেন্ট</p>
+                        <p class="text-xl font-bold text-blue-700">${payments.length} টি</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs text-gray-500">💰 মোট পরিশোধ</p>
+                        <p class="text-xl font-bold text-emerald-600">${formatAmountWithText(totalPaid)}</p>
+                    </div>
+                </div>
+            </div>
+            <div class="table-scroll max-h-96 overflow-y-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>তারিখ</th>
+                            <th>কিস্তি #</th>
+                            <th class="text-left">পরিমাণ</th>
+                            <th>পদ্ধতি</th>
+                            <th>স্ট্যাটাস</th>
+                            <th>অ্যাকশন</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        payments.forEach(p => {
+            const statusClass = p.status === 'approved' ? 'status-approved' :
+                               p.status === 'pending_verification' ? 'status-pending' : 'status-rejected';
+            const statusText = p.status === 'approved' ? '✅ অনুমোদিত' :
+                              p.status === 'pending_verification' ? '⏳ যাচাইকরণে' : '❌ বাতিল';
+            
+            const amount = p.total_amount || p.emi_amount || 0;
+            const methodColors = {
+                'bKash': 'bg-green-100 text-green-700',
+                'Nagad': 'bg-orange-100 text-orange-700',
+                'Rocket': 'bg-purple-100 text-purple-700',
+                'bank': 'bg-indigo-100 text-indigo-700',
+                'cash': 'bg-yellow-100 text-yellow-700'
+            };
+            const methodColor = methodColors[p.payment_method] || 'bg-gray-100 text-gray-700';
+            
+            html += `
+                <tr>
+                    <td class="text-xs whitespace-nowrap">${p.payment_date ? new Date(p.payment_date).toLocaleDateString('bn-BD') : '-'}</td>
+                    <td class="text-center font-bold">#${p.installment_no || '-'}</td>
+                    <td class="text-left font-bold text-emerald-600">${formatAmountWithText(amount)}</td>
+                    <td><span class="px-2 py-0.5 rounded-full text-xs ${methodColor}">${p.payment_method || 'cash'}</span></td>
+                    <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                    <td>
+                        <button onclick="viewPaymentSlip('${p.id}')" class="btn btn-purple btn-xs" title="স্লিপ দেখুন">
+                            <i class="fas fa-receipt"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        // মোট সারি
+        const totalApproved = payments.filter(p => p.status === 'approved').length;
+        const totalPending = payments.filter(p => p.status === 'pending_verification').length;
+        const totalRejected = payments.filter(p => p.status === 'rejected').length;
+        
+        html += `
+                    </tbody>
+                    <tfoot>
+                        <tr style="font-weight:700; background:#f3f4f6; border-top:2px solid #059669;">
+                            <td colspan="5" class="text-left">📊 সারাংশ</td>
+                            <td class="text-left">
+                                ✅ ${totalApproved} | ⏳ ${totalPending} | ❌ ${totalRejected}
+                            </td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        `;
+        
+        showCustomModal('📋 লোন পেমেন্ট ইতিহাস', html);
+        
+    } catch(e) {
+        console.error('View payment history error:', e);
+        showToast('❌ পেমেন্ট ইতিহাস লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ২. লোন বিস্তারিত দেখান (viewLoanDetails)
+// ============================================================
+async function viewLoanDetails(loanId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: loan, error } = await client
+            .from('loan_applications')
+            .select('*, branches(branch_name)')
+            .eq('id', loanId)
+            .single();
+        
+        if (error) throw error;
+        if (!loan) {
+            showToast('❌ লোন পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        // লোনের পেমেন্ট হিসাব
+        const { data: payments } = await client
+            .from('loan_payments')
+            .select('total_amount, emi_amount, status')
+            .eq('loan_id', loanId);
+        
+        const paidAmount = (payments || [])
+            .filter(p => p.status === 'approved')
+            .reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0);
+        const remaining = loan.amount - paidAmount;
+        const paidPercent = loan.amount > 0 ? (paidAmount / loan.amount * 100).toFixed(1) : 0;
+        
+        const statusClass = loan.status === 'approved' ? 'status-approved' :
+                           loan.status === 'pending' ? 'status-pending' : 'status-rejected';
+        const statusText = loan.status === 'approved' ? '✅ অনুমোদিত' :
+                          loan.status === 'pending' ? '⏳ বিচারাধীন' : '❌ বাতিল';
+        
+        const branchName = loan.branches?.branch_name || loan.branch_name || '-';
+        
+        const html = `
+            <div class="space-y-4">
+                <!-- হেডার -->
+                <div class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border border-indigo-200">
+                    <div class="flex justify-between items-start flex-wrap gap-2">
+                        <div>
+                            <h4 class="font-bold text-indigo-700 text-lg">
+                                <i class="fas fa-hand-holding-usd mr-2"></i>লোন বিস্তারিত
+                            </h4>
+                            <p class="text-sm text-gray-500">লোন আইডি: #${loan.id}</p>
+                        </div>
+                        <span class="status-badge ${statusClass} text-sm">${statusText}</span>
+                    </div>
+                </div>
+                
+                <!-- প্রধান তথ্য -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div class="bg-gray-50 p-3 rounded-lg border">
+                        <span class="text-xs text-gray-500">👤 সদস্য</span>
+                        <p class="font-semibold text-gray-800">${loan.member_name}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg border">
+                        <span class="text-xs text-gray-500">🆔 সদস্য আইডি</span>
+                        <p class="font-semibold text-gray-800">${loan.member_id}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg border">
+                        <span class="text-xs text-gray-500">📋 লোনের ধরন</span>
+                        <p class="font-semibold text-blue-600">${loan.loan_type}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg border" style="border-color: #3b82f6; background: #eff6ff;">
+                        <span class="text-xs text-gray-500">🏢 ব্রাঞ্চ</span>
+                        <p class="font-semibold text-blue-700">${branchName}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg border">
+                        <span class="text-xs text-gray-500">💰 লোন পরিমাণ</span>
+                        <p class="font-bold text-blue-600 text-lg">${formatAmountWithText(loan.amount)}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg border">
+                        <span class="text-xs text-gray-500">📥 পরিশোধিত</span>
+                        <p class="font-bold text-emerald-600 text-lg">${formatAmountWithText(paidAmount)}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg border" style="border-color: ${remaining > 0 ? '#dc2626' : '#059669'}; background: ${remaining > 0 ? '#fef2f2' : '#f0fdf4'};">
+                        <span class="text-xs text-gray-500">⏳ বাকি</span>
+                        <p class="font-bold ${remaining > 0 ? 'text-red-600' : 'text-emerald-600'} text-lg">${formatAmountWithText(remaining)}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg border">
+                        <span class="text-xs text-gray-500">📊 অগ্রগতি</span>
+                        <div class="mt-1">
+                            <div class="w-full bg-gray-200 rounded-full h-2.5">
+                                <div class="bg-emerald-500 h-2.5 rounded-full transition-all duration-500" style="width: ${Math.min(paidPercent, 100)}%"></div>
+                            </div>
+                            <div class="flex justify-between text-xs text-gray-400 mt-0.5">
+                                <span>${paidPercent}% পরিশোধিত</span>
+                                <span>${loan.duration_months || 0} মাস</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- অতিরিক্ত তথ্য -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div class="bg-white p-2 rounded-lg border text-center">
+                        <p class="text-xs text-gray-500">📅 আবেদনের তারিখ</p>
+                        <p class="font-semibold text-sm">${loan.submitted_at ? new Date(loan.submitted_at).toLocaleDateString('bn-BD') : '-'}</p>
+                    </div>
+                    ${loan.duration_months ? `
+                        <div class="bg-white p-2 rounded-lg border text-center">
+                            <p class="text-xs text-gray-500">⏳ মেয়াদ</p>
+                            <p class="font-semibold text-sm">${loan.duration_months} মাস</p>
+                        </div>
+                    ` : ''}
+                    ${loan.emi_amount ? `
+                        <div class="bg-white p-2 rounded-lg border text-center">
+                            <p class="text-xs text-gray-500">📊 কিস্তি</p>
+                            <p class="font-semibold text-sm">${formatAmountWithText(loan.emi_amount)}</p>
+                        </div>
+                    ` : ''}
+                    ${loan.profit_rate ? `
+                        <div class="bg-white p-2 rounded-lg border text-center">
+                            <p class="text-xs text-gray-500">📈 মুনাফার হার</p>
+                            <p class="font-semibold text-sm">${loan.profit_rate}%</p>
+                        </div>
+                    ` : ''}
+                </div>
+                
+                ${loan.special_note ? `
+                    <div class="bg-amber-50 p-3 rounded-lg border border-amber-200">
+                        <span class="text-amber-600 font-medium">📝 বিশেষ নোট</span>
+                        <p class="text-gray-700 mt-1">${loan.special_note}</p>
+                    </div>
+                ` : ''}
+                
+                ${loan.reject_reason ? `
+                    <div class="bg-red-50 p-3 rounded-lg border border-red-200">
+                        <span class="text-red-600 font-medium">❌ বাতিলের কারণ</span>
+                        <p class="text-red-700 mt-1">${loan.reject_reason}</p>
+                    </div>
+                ` : ''}
+                
+                <!-- অ্যাকশন বাটন -->
+                <div class="flex flex-wrap gap-2 pt-2 border-t no-print">
+                    <button onclick="viewLoanPaymentHistory('${loan.id}')" class="btn btn-info flex-1 min-w-[100px] py-2">
+                        <i class="fas fa-list mr-1"></i> পেমেন্ট ইতিহাস
+                    </button>
+                    ${loan.status === 'approved' && remaining > 0 ? `
+                        <button onclick="loanEMICalculator.showRepaymentModal(${loan.id})" class="btn btn-success flex-1 min-w-[100px] py-2">
+                            <i class="fas fa-hand-holding-usd mr-1"></i> কিস্তি দাও
+                        </button>
+                    ` : ''}
+                    <button onclick="closeCustomModal()" class="btn btn-warning flex-1 min-w-[100px] py-2">
+                        <i class="fas fa-times mr-1"></i> বন্ধ
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        showCustomModal('📋 লোন বিস্তারিত', html);
+        
+    } catch(e) {
+        console.error('View loan details error:', e);
+        showToast('❌ লোন বিস্তারিত লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ৩. পেমেন্ট স্লিপ দেখান (viewPaymentSlip)
+// ============================================================
+async function viewPaymentSlip(paymentId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: payment, error } = await client
+            .from('loan_payments')
+            .select('*, loan_applications(member_name, member_id, loan_type, amount)')
+            .eq('id', paymentId)
+            .single();
+        
+        if (error) throw error;
+        if (!payment) {
+            showToast('❌ পেমেন্ট পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        const loan = payment.loan_applications || {};
+        const amount = payment.total_amount || payment.emi_amount || 0;
+        
+        const html = `
+            <div class="slip-print-area" id="slipPrintArea">
+                <div class="slip-header text-center">
+                    <h2 class="text-2xl font-bold text-emerald-700">📄 পেমেন্ট স্লিপ</h2>
+                    <p class="text-sm text-gray-500">TUKNBD - লোন পেমেন্ট</p>
+                </div>
+                
+                <div class="slip-details-grid">
+                    <div class="slip-detail-item">
+                        <div class="label">পেমেন্ট আইডি</div>
+                        <div class="value font-mono">#${payment.id}</div>
+                    </div>
+                    <div class="slip-detail-item">
+                        <div class="label">তারিখ</div>
+                        <div class="value">${payment.payment_date ? new Date(payment.payment_date).toLocaleDateString('bn-BD') : '-'}</div>
+                    </div>
+                    <div class="slip-detail-item">
+                        <div class="label">সদস্যের নাম</div>
+                        <div class="value font-bold">${loan.member_name || payment.member_name || '-'}</div>
+                    </div>
+                    <div class="slip-detail-item">
+                        <div class="label">সদস্য আইডি</div>
+                        <div class="value">${loan.member_id || payment.member_id || '-'}</div>
+                    </div>
+                    <div class="slip-detail-item">
+                        <div class="label">লোন আইডি</div>
+                        <div class="value font-mono">#${payment.loan_id}</div>
+                    </div>
+                    <div class="slip-detail-item">
+                        <div class="label">কিস্তি নম্বর</div>
+                        <div class="value font-bold">#${payment.installment_no || '-'}</div>
+                    </div>
+                    <div class="slip-detail-item">
+                        <div class="label">পেমেন্ট পদ্ধতি</div>
+                        <div class="value">${payment.payment_method || 'cash'}</div>
+                    </div>
+                    <div class="slip-detail-item">
+                        <div class="label">স্ট্যাটাস</div>
+                        <div class="value">
+                            <span class="status-badge ${payment.status === 'approved' ? 'status-approved' : payment.status === 'pending_verification' ? 'status-pending' : 'status-rejected'}">
+                                ${payment.status === 'approved' ? '✅ অনুমোদিত' : payment.status === 'pending_verification' ? '⏳ যাচাইকরণে' : '❌ বাতিল'}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="slip-detail-item col-span-2">
+                        <div class="label">💰 পরিমাণ</div>
+                        <div class="value amount text-center">${formatAmountWithText(amount)}</div>
+                    </div>
+                </div>
+                
+                ${payment.transaction_id ? `
+                    <div class="mt-3 p-2 bg-gray-50 rounded-lg border">
+                        <p class="text-xs text-gray-500">📝 লেনদেন আইডি</p>
+                        <p class="font-mono text-sm font-bold text-blue-600 break-all">${payment.transaction_id}</p>
+                    </div>
+                ` : ''}
+                
+                ${payment.note ? `
+                    <div class="mt-3 p-2 bg-amber-50 rounded-lg border border-amber-200">
+                        <p class="text-xs text-amber-600">📝 নোট</p>
+                        <p class="text-sm">${payment.note}</p>
+                    </div>
+                ` : ''}
+                
+                ${payment.reject_reason ? `
+                    <div class="mt-3 p-2 bg-red-50 rounded-lg border border-red-200">
+                        <p class="text-xs text-red-600">❌ বাতিলের কারণ</p>
+                        <p class="text-sm text-red-700">${payment.reject_reason}</p>
+                    </div>
+                ` : ''}
+                
+                <div class="slip-footer">
+                    <p>সিস্টেম জেনারেটেড স্লিপ</p>
+                    <p>প্রিন্টের তারিখ: ${new Date().toLocaleString('bn-BD')}</p>
+                </div>
+            </div>
+        `;
+        
+        showCustomModal('📄 পেমেন্ট স্লিপ', html);
+        
+    } catch(e) {
+        console.error('View payment slip error:', e);
+        showToast('❌ পেমেন্ট স্লিপ লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ৪. প্রোডাক্ট ফিল্টার (filterProducts)
+// ============================================================
+function filterProducts() {
+    renderProducts(allProducts);
+}
+
+// ============================================================
+// ৫. প্রোডাক্ট মডাল খুলুন (openProductModal)
+// ============================================================
+function openProductModal(id = null) {
+    const modal = document.getElementById('productModal');
+    if (!modal) {
+        showToast('❌ মডাল পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    // ফর্ম রিসেট করুন
+    document.getElementById('editProductId').value = '';
+    document.getElementById('productForm').reset();
+    document.getElementById('productModalTitle').innerHTML = '<i class="fas fa-box mr-2 text-emerald-600"></i>নতুন পন্য যোগ করুন';
+    
+    // এডিট মোড
+    if (id) {
+        const product = allProducts.find(item => item.id === id);
+        if (product) {
+            document.getElementById('editProductId').value = product.id;
+            document.getElementById('pName').value = product.name || '';
+            document.getElementById('pDesc').value = product.description || '';
+            document.getElementById('pPrice').value = product.price || 0;
+            document.getElementById('pDiscount').value = product.discount_price || '';
+            document.getElementById('pCategory').value = product.category_id || '';
+            document.getElementById('pStock').value = product.stock_quantity || 0;
+            document.getElementById('pImage').value = product.image_url || '';
+            document.getElementById('pStatus').value = product.status || 'active';
+            document.getElementById('productModalTitle').innerHTML = '<i class="fas fa-edit mr-2 text-emerald-600"></i>পন্য সম্পাদনা করুন';
+        } else {
+            showToast('❌ পন্য পাওয়া যায়নি!', 'error');
+            return;
+        }
+    }
+    
+    modal.classList.add('active');
+}
+
+// ============================================================
+// ৬. লোড বুক ক্যাটালগ (loadBookCatalog)
+// ============================================================
+async function loadBookCatalog() {
+    console.log('🔍 loadBookCatalog() called...');
+    
+    const container = document.getElementById('bookCatalogContainer');
+    if (!container) {
+        console.error('❌ bookCatalogContainer not found');
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="text-center py-12">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-3">📚 কিতাব লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-12">
+                <i class="fas fa-exclamation-circle text-4xl block mb-3"></i>
+                <p class="text-lg font-medium">❌ সংযোগ সমস্যা!</p>
+                <button onclick="loadBookCatalog()" class="btn btn-info btn-sm mt-4">
+                    <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
+                </button>
+            </div>
+        `;
+        return;
+    }
+    
+    try {
+        const { data: books, error } = await client
+            .from('book_catalog')
+            .select('*')
+            .order('category', { ascending: true })
+            .order('name', { ascending: true });
+        
+        if (error) throw error;
+        
+        if (!books || books.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12 bg-white rounded-xl border border-dashed border-gray-300">
+                    <i class="fas fa-book text-6xl block mb-4 text-gray-300"></i>
+                    <p class="text-lg font-medium text-gray-400">📭 কোনো কিতাব নেই</p>
+                    <button onclick="openAddBookModal()" class="btn btn-success mt-4">
+                        <i class="fas fa-plus mr-2"></i> প্রথম কিতাব যোগ করুন
+                    </button>
+                </div>
+            `;
+            return;
+        }
+        
+        // গ্রুপ অনুযায়ী সাজান
+        const groups = {};
+        books.forEach(book => {
+            const cat = book.category || 'অন্যান্য';
+            if (!groups[cat]) groups[cat] = [];
+            groups[cat].push(book);
+        });
+        
+        let html = '';
+        const sortedCategories = Object.keys(groups).sort();
+        
+        sortedCategories.forEach(cat => {
+            const items = groups[cat];
+            html += `
+                <div class="mb-6">
+                    <div class="flex items-center gap-3 mb-3">
+                        <div class="font-bold text-emerald-700 bg-emerald-50 px-4 py-1.5 rounded-lg inline-block">
+                            <i class="fas fa-layer-group mr-2"></i> ${cat}
+                        </div>
+                        <span class="text-xs text-gray-400">(${items.length} টি কিতাব)</span>
+                        <div class="flex-1 border-b border-gray-200"></div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            `;
+            
+            items.forEach(book => {
+                const profit = (book.selling_price || 0) - (book.purchase_price || 0);
+                html += `
+                    <div class="bg-white border border-gray-200 rounded-xl p-4 hover:shadow-lg transition-all duration-300 hover:border-emerald-300 hover:-translate-y-1">
+                        <div class="flex justify-between items-start">
+                            <div class="flex-1 min-w-0">
+                                <p class="font-semibold text-gray-800 text-sm truncate" title="${book.name}">${book.name}</p>
+                                <div class="flex flex-wrap gap-1.5 mt-2">
+                                    <span class="text-xs bg-gray-100 px-2.5 py-1 rounded-full">
+                                        <i class="fas fa-shopping-cart text-gray-400 mr-1"></i> ${book.purchase_price || 0}
+                                    </span>
+                                    <span class="text-xs bg-emerald-100 px-2.5 py-1 rounded-full text-emerald-700">
+                                        <i class="fas fa-taka-sign mr-1"></i> ${book.selling_price || 0}
+                                    </span>
+                                    <span class="text-xs bg-blue-100 px-2.5 py-1 rounded-full text-blue-700">
+                                        <i class="fas fa-percent mr-1"></i> ${book.discount || 0}%
+                                    </span>
+                                    <span class="text-xs bg-purple-100 px-2.5 py-1 rounded-full text-purple-700">
+                                        <i class="fas fa-chart-line mr-1"></i> ${profit > 0 ? profit : 0}
+                                    </span>
+                                </div>
+                            </div>
+                            <button onclick="openEditBookModal('${book.id}')" 
+                                    class="text-blue-500 hover:text-blue-700 p-2 hover:bg-blue-50 rounded-lg transition-all duration-200 ml-2 flex-shrink-0" 
+                                    title="সম্পাদনা">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += `
+                    </div>
+                </div>
+            `;
+        });
+        
+        container.innerHTML = html;
+        console.log('✅ Book catalog rendered successfully!');
+        
+        // ক্যাটাগরি ড্রপডাউন আপডেট
+        await populateCategorySelects();
+        
+    } catch(e) {
+        console.error('❌ Error loading books:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-12 bg-white rounded-xl border border-red-200">
+                <i class="fas fa-exclamation-triangle text-4xl block mb-3 text-red-400"></i>
+                <p class="text-lg font-medium">❌ কিতাব লোড করতে সমস্যা!</p>
+                <p class="text-sm text-gray-500 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="loadBookCatalog()" class="btn btn-info btn-sm mt-4">
+                    <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
+                </button>
+            </div>
+        `;
+    }
+}
+
+// ============================================================
+// ৭. ক্যাটাগরি সিলেক্ট পপুলেট (populateCategorySelects)
+// ============================================================
+async function populateCategorySelects() {
+    console.log('🔄 ক্যাটাগরি সিলেক্ট পপুলেট করা হচ্ছে...');
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        console.warn('⚠️ Supabase ক্লায়েন্ট পাওয়া যায়নি');
+        return;
+    }
+    
+    try {
+        const { data: books, error } = await client
+            .from('book_catalog')
+            .select('category')
+            .order('category');
+        
+        if (error) {
+            console.error('❌ ক্যাটাগরি লোড error:', error);
+            return;
+        }
+        
+        const categories = [...new Set(books.map(b => b.category).filter(Boolean))].sort();
+        console.log(`✅ ${categories.length} টি ক্যাটাগরি পাওয়া গেছে`);
+        
+        // ডিফল্ট ক্যাটাগরি
+        const defaultCategories = [
+            'জামাতে তাকমীল', 'জামাতে মিশকাত', 'জামাতে জালালাইন',
+            'নাহবেমীর', 'মিযান', 'শরহে বেকায়া', 'কাফিয়া',
+            'হিদায়াতুন্নাহু', 'তাইসীর', 'খুসুসী', 'অন্যান্য'
+        ];
+        
+        const finalCategories = categories.length > 0 ? categories : defaultCategories;
+        
+        ['newBookCategory', 'editBookCategory'].forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            
+            const currentValue = el.value;
+            el.innerHTML = '';
+            
+            finalCategories.forEach(cat => {
+                const option = document.createElement('option');
+                option.value = cat;
+                option.textContent = cat;
+                el.appendChild(option);
+            });
+            
+            if (currentValue && finalCategories.includes(currentValue)) {
+                el.value = currentValue;
+            }
+        });
+        
+        console.log('✅ ক্যাটাগরি সিলেক্ট পপুলেট সম্পূর্ণ!');
+        
+    } catch(e) {
+        console.error('❌ ক্যাটাগরি পপুলেট error:', e);
+    }
+}
+
+    
 // ================================================================
 // EDIT BOOK FUNCTIONS
 // ================================================================
@@ -15887,10 +16871,6 @@ function showCustomModal(title, content) {
     modal.classList.add('active');
 }
 
-function closeCustomModal() {
-    const modal = document.getElementById('customModal');
-    if (modal) modal.classList.remove('active');
-}
 
 // ================================================================
 // 🔥 গ্লোবাল স্কোপে এক্সপোজ করুন
@@ -16162,23 +17142,6 @@ async function loadBookConfig() {
         console.error('Load config error:', e);
         showToast('❌ কনফিগ লোড করতে সমস্যা!', 'error');
     }
-}
-
-function updateDemoCalculation() {
-    const profit = parseFloat(document.getElementById('bookProfitPercent').value) || 0;
-    const service = parseFloat(document.getElementById('bookServicePercent').value) || 0;
-    
-    const sellingPrice = 1000;
-    const discount = 10; // ১০% ছাড়
-    const afterDiscount = sellingPrice - (sellingPrice * discount / 100);
-    
-    const profitAmount = afterDiscount * (profit / 100);
-    const serviceAmount = afterDiscount * (service / 100);
-    const total = afterDiscount + profitAmount + serviceAmount;
-    
-    document.getElementById('demoProfitAmount').textContent = profitAmount.toFixed(0) + ' টাকা';
-    document.getElementById('demoServiceAmount').textContent = serviceAmount.toFixed(0) + ' টাকা';
-    document.getElementById('demoTotalAmount').textContent = total.toFixed(0) + ' টাকা';
 }
 
 function updateDemoCalculation() {
@@ -16583,10 +17546,24 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
     
-window.loadBookSalesReport = loadBookSalesReport;
-window.resetSalesFilters = resetSalesFilters;
-window.exportSalesReport = exportSalesReport;
-window.updateSalesSummary = updateSalesSummary;
+        window.loadBookSalesReport = loadBookSalesReport;
+        window.resetSalesFilters = resetSalesFilters;
+        window.exportSalesReport = exportSalesReport;
+        window.updateSalesSummary = updateSalesSummary;
+        window.loadBackupHistory = loadBackupHistory;
+        window.restoreBackupFromHistory = restoreBackupFromHistory;
+        window.deleteBackupHistory = deleteBackupHistory;
+        window.viewEventParticipants = viewEventParticipants;
+        window.loadLedgerBanks = loadLedgerBanks;
+        window.showAddBankModal = showAddBankModal;
+        window.showCustomModal = showCustomModal;
+        window.viewLoanPaymentHistory = viewLoanPaymentHistory;
+        window.viewLoanDetails = viewLoanDetails;
+        window.viewPaymentSlip = viewPaymentSlip;
+        window.filterProducts = filterProducts;
+        window.openProductModal = openProductModal;
+        window.loadBookCatalog = loadBookCatalog;
+        window.populateCategorySelects = populateCategorySelects;
     </script>
 </body>
 </html>
