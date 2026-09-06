@@ -17303,7 +17303,10 @@ async function showBookPaymentDetailsModal(paymentId) {
     }
 }
 
-// ৮. কাস্টম মডাল (যদি না থাকে)
+// ❌ সমস্যা: ২ বার ডিফাইন
+// ✅ সমাধান: শুধু একবার রাখুন, ডুপ্লিকেট সরান
+
+// এই ফাংশনটি শুধু একবার রাখুন (বাকি ডুপ্লিকেট ডিলিট করুন)
 function showCustomModal(title, content) {
     let modal = document.getElementById('customModal');
     if (!modal) {
@@ -17325,6 +17328,11 @@ function showCustomModal(title, content) {
     document.getElementById('customModalTitle').textContent = title;
     document.getElementById('customModalContent').innerHTML = content;
     modal.classList.add('active');
+}
+
+function closeCustomModal() {
+    const modal = document.getElementById('customModal');
+    if (modal) modal.classList.remove('active');
 }
 
 
@@ -17969,68 +17977,61 @@ function updateBookBadge(count) {
     }
 }
 
-    // ============================================================
-// ✅ ফোর্স ফিক্স: লেজার ক্যাটাগরি ড্রপডাউন
-// ============================================================
+// ❌ পুরনো সমস্যা: ক্যাটাগরি ড্রপডাউন খালি থাকে
 
-// ১. ক্যাটাগরি তৈরি এবং ড্রপডাউন রিফ্রেশ করার ফাংশন
+// এই ফাংশনটি ফাইলের যেকোনো জায়গায় যোগ করুন (যেমন showAddLedgerModal-এর কাছে)
 async function forceFixLedgerCategories() {
-    console.log('🔧 ফোর্স ফিক্স চালু হচ্ছে...');
-    
-    const client = initSupabaseClient();
-    if (!client) {
-        console.error('❌ Supabase ক্লায়েন্ট পাওয়া যায়নি');
-        return;
-    }
-    
     try {
-        // ✅ ১. ক্যাটাগরি টেবিল চেক করুন
-        const { data: existingCats, error: checkError } = await client
-            .from('ledger_categories')
-            .select('id', { count: 'exact' })
-            .limit(1);
+        const client = initSupabaseClient();
+        if (!client) return;
         
-        if (checkError) {
-            console.error('❌ ক্যাটাগরি চেক error:', checkError);
-            return;
-        }
-        
-        // ✅ ২. যদি কোনো ক্যাটাগরি না থাকে, ডিফল্ট তৈরি করুন
-        if (!existingCats || existingCats.length === 0) {
-            console.log('📝 কোনো ক্যাটাগরি নেই, ডিফল্ট তৈরি করা হচ্ছে...');
-            await createDefaultCategories();
-            console.log('✅ ডিফল্ট ক্যাটাগরি তৈরি সম্পূর্ণ!');
-        }
-        
-        // ✅ ৩. তাজা ক্যাটাগরি লোড করুন
-        const { data: categories, error: loadError } = await client
+        const { data: categories, error } = await client
             .from('ledger_categories')
             .select('*')
             .order('name');
         
-        if (loadError) {
-            console.error('❌ ক্যাটাগরি লোড error:', loadError);
-            return;
+        if (error) throw error;
+        
+        if (!categories || categories.length === 0) {
+            const defaultCats = [
+                { name: 'সদস্য ফি', type: 'income' },
+                { name: 'দান', type: 'income' },
+                { name: 'প্রশিক্ষণ ব্যয়', type: 'expense' },
+                { name: 'পরিচালনা ব্যয়', type: 'expense' }
+            ];
+            for (const cat of defaultCats) {
+                await client.from('ledger_categories').insert([cat]);
+            }
+            const { data: newCats } = await client
+                .from('ledger_categories')
+                .select('*')
+                .order('name');
+            ledgerCategories = newCats || [];
+        } else {
+            ledgerCategories = categories;
         }
         
-        // ✅ ৪. গ্লোবাল ভেরিয়েবল আপডেট
-        ledgerCategories = categories || [];
-        console.log(`✅ ${ledgerCategories.length} টি ক্যাটাগরি লোড করা হয়েছে`);
-        
-        // ✅ ৫. ড্রপডাউন পপুলেট করুন
         populateCategorySelects(ledgerCategories);
         
-        // ✅ ৬. ফিল্টার আপডেট করুন
-        if (document.getElementById('ledgerType')) {
-            filterLedgerCategories();
-        }
-        
-        console.log('✅ ফোর্স ফিক্স সম্পূর্ণ!');
-        showToast(`✅ ${ledgerCategories.length} টি ক্যাটাগরি লোড করা হয়েছে`, 'success');
-        
     } catch(e) {
-        console.error('❌ ফোর্স ফিক্স error:', e);
+        console.error('Force fix error:', e);
     }
+}
+
+// showAddLedgerModal ফাংশনের ভেতরে forceFix কল করুন
+function showAddLedgerModal(editData = null) {
+    // ... existing code ...
+    setTimeout(() => {
+        forceFixLedgerCategories();
+    }, 500);
+}
+
+// showAddLedgerModal-এ forceFix কল করুন
+function showAddLedgerModal(editData = null) {
+    // ... existing code ...
+    setTimeout(() => {
+        forceFixLedgerCategories();
+    }, 500);
 }
 
 // ২. showAddLedgerModal ওভাররাইড করুন (মূল ফিক্স)
@@ -18469,14 +18470,6 @@ function addCategoryManagementButton() {
     console.log('✅ ক্যাটাগরি ম্যানেজমেন্ট বাটন যোগ করা হয়েছে!');
 }
 
-// ============================================================
-// ৮. পেজ লোডের সময় বাটন যোগ করুন
-// ============================================================
-document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(() => {
-        addCategoryManagementButton();
-    }, 1000);
-});
 
     // ============================================================
 // ✅ BANK MANAGEMENT SYSTEM
@@ -18874,20 +18867,12 @@ document.addEventListener('DOMContentLoaded', function() {
 // ✅ সম্পূর্ণ ফিক্স: ব্যাংক ও ক্যাটাগরি ব্যবস্থাপনা
 // ============================================================
 
-// ============================================================
-// ১. ব্যাংক ড্রপডাউন রিফ্রেশ - FIXED
-// ============================================================
+// ✅ নতুন ফাংশন যোগ করুন
 async function refreshBankDropdown() {
-    console.log('🔄 ব্যাংক ড্রপডাউন রিফ্রেশ করা হচ্ছে...');
-    
-    const client = initSupabaseClient();
-    if (!client) {
-        console.error('❌ Supabase ক্লায়েন্ট পাওয়া যায়নি');
-        return;
-    }
-    
     try {
-        // ব্যাংক লোড করুন
+        const client = initSupabaseClient();
+        if (!client) return;
+        
         const { data: banks, error } = await client
             .from('bank_accounts')
             .select('*')
@@ -18896,16 +18881,23 @@ async function refreshBankDropdown() {
         
         if (error) throw error;
         
-        // গ্লোবাল ভেরিয়েবল আপডেট
         ledgerBanks = banks || [];
         
-        // ড্রপডাউন পপুলেট
-        populateBankSelects(ledgerBanks);
-        
-        console.log(`✅ ${ledgerBanks.length} টি ব্যাংক লোড হয়েছে`);
+        const el = document.getElementById('ledgerBank');
+        if (el) {
+            const currentValue = el.value;
+            el.innerHTML = '<option value="">-- ব্যাংক নির্বাচন করুন --</option>';
+            ledgerBanks.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = `${b.account_name} (${b.bank_name})`;
+                el.appendChild(opt);
+            });
+            if (currentValue) el.value = currentValue;
+        }
         
     } catch(e) {
-        console.error('❌ ব্যাংক রিফ্রেশ error:', e);
+        console.error('Bank refresh error:', e);
     }
 }
 
