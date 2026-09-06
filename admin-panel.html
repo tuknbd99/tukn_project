@@ -18478,6 +18478,411 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 1000);
 });
 
+    // ============================================================
+// ✅ BANK MANAGEMENT SYSTEM
+// ============================================================
+
+// ============================================================
+// ১. ব্যাংক লিস্ট লোড করুন
+// ============================================================
+async function loadBankManagement() {
+    console.log('🔄 ব্যাংক ম্যানেজমেন্ট লোড হচ্ছে...');
+    
+    const container = document.getElementById('bankManagementContainer');
+    if (!container) {
+        console.warn('⚠️ bankManagementContainer পাওয়া যায়নি');
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner"></div>
+            <p class="text-gray-500 mt-2">🏦 ব্যাংক লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        const { data: banks, error } = await client
+            .from('bank_accounts')
+            .select('*')
+            .order('account_name', { ascending: true });
+        
+        if (error) throw error;
+        
+        // ডিফল্ট ব্যাংকগুলোও দেখান (যেগুলো ডেটাবেজে নেই)
+        const defaultBanks = [
+            { id: 'cash', bank_name: 'নগদ', account_name: 'নগদ', account_number: '-', status: 'active', is_default: true },
+            { id: 'bkash', bank_name: 'bKash', account_name: 'bKash', account_number: '-', status: 'active', is_default: true },
+            { id: 'nagad', bank_name: 'Nagad', account_name: 'Nagad', account_number: '-', status: 'active', is_default: true },
+            { id: 'rocket', bank_name: 'Rocket', account_name: 'Rocket', account_number: '-', status: 'active', is_default: true }
+        ];
+        
+        const allBanks = [...defaultBanks, ...(banks || [])];
+        
+        if (!allBanks || allBanks.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fas fa-university text-4xl block mb-3 text-gray-300"></i>
+                    <p class="text-lg font-medium">🏦 কোনো ব্যাংক নেই</p>
+                    <button onclick="showAddBankModal()" class="btn btn-success mt-4">
+                        <i class="fas fa-plus mr-2"></i> প্রথম ব্যাংক যোগ করুন
+                    </button>
+                </div>
+            `;
+            return;
+        }
+        
+        let html = `
+            <div class="mb-4 flex justify-between items-center">
+                <div>
+                    <span class="text-sm text-gray-500">🏦 মোট ${allBanks.length} টি ব্যাংক</span>
+                    <span class="text-sm text-gray-400 ml-3">✅ সক্রিয়: ${allBanks.filter(b => b.status === 'active').length}</span>
+                </div>
+                <button onclick="showAddBankModal()" class="btn btn-success btn-sm">
+                    <i class="fas fa-plus mr-1"></i> নতুন ব্যাংক
+                </button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        `;
+        
+        allBanks.forEach(bank => {
+            const isDefault = bank.is_default === true;
+            const statusColor = bank.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
+            const statusText = bank.status === 'active' ? '✅ সক্রিয়' : '⛔ নিষ্ক্রিয়';
+            
+            html += `
+                <div class="border rounded-lg p-4 hover:shadow-md transition ${isDefault ? 'bg-gray-50 border-gray-300' : 'bg-white'}">
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xl">${isDefault ? getBankIcon(bank.id) : '🏦'}</span>
+                                <span class="font-bold text-gray-800">${bank.account_name || bank.bank_name}</span>
+                                ${isDefault ? '<span class="text-xs bg-gray-200 px-2 py-0.5 rounded-full text-gray-600">ডিফল্ট</span>' : ''}
+                            </div>
+                            <div class="text-sm text-gray-600 mt-1">
+                                <div>🏛️ ${bank.bank_name || '-'}</div>
+                                <div class="text-xs text-gray-400">🔢 ${bank.account_number || '-'}</div>
+                                ${bank.branch ? `<div class="text-xs text-gray-400">📍 ${bank.branch}</div>` : ''}
+                            </div>
+                            <div class="mt-2">
+                                <span class="text-xs px-2 py-0.5 rounded-full ${statusColor}">${statusText}</span>
+                            </div>
+                        </div>
+                        <div class="flex gap-1 ${isDefault ? 'opacity-50' : ''}">
+                            ${!isDefault ? `
+                                <button onclick="editBank('${bank.id}')" class="btn btn-info btn-xs" title="সম্পাদনা">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button onclick="deleteBank('${bank.id}')" class="btn btn-danger btn-xs" title="ডিলিট">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            ` : `
+                                <span class="text-xs text-gray-400 px-2 py-1">ডিফল্ট</span>
+                            `}
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+        
+        html += `</div>`;
+        container.innerHTML = html;
+        
+    } catch(e) {
+        console.error('❌ ব্যাংক লোড error:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ ব্যাংক লোড করতে সমস্যা!</p>
+                <button onclick="loadBankManagement()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+    }
+}
+
+// ============================================================
+// ২. ব্যাংক আইকন
+// ============================================================
+function getBankIcon(bankId) {
+    const icons = {
+        'cash': '💵',
+        'bkash': '💚',
+        'nagad': '🧡',
+        'rocket': '💜'
+    };
+    return icons[bankId] || '🏦';
+}
+
+// ============================================================
+// ৩. ব্যাংক সম্পাদনা
+// ============================================================
+async function editBank(bankId) {
+    console.log('✏️ ব্যাংক সম্পাদনা:', bankId);
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: bank, error } = await client
+            .from('bank_accounts')
+            .select('*')
+            .eq('id', bankId)
+            .single();
+        
+        if (error) throw error;
+        if (!bank) {
+            showToast('❌ ব্যাংক পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        // এডিট মডাল দেখান
+        const html = `
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">🏛️ ব্যাংকের নাম <span class="text-red-500">*</span></label>
+                    <input type="text" id="editBankName" class="w-full border rounded-lg p-2" value="${bank.bank_name || ''}" placeholder="যেমন: ইসলামী ব্যাংক">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">👤 একাউন্টের নাম</label>
+                    <input type="text" id="editBankAccountName" class="w-full border rounded-lg p-2" value="${bank.account_name || ''}" placeholder="যেমন: TUKNBD">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">🔢 একাউন্ট নম্বর <span class="text-red-500">*</span></label>
+                    <input type="text" id="editBankAccountNumber" class="w-full border rounded-lg p-2" value="${bank.account_number || ''}" placeholder="যেমন: 1234567890">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">📍 শাখা</label>
+                    <input type="text" id="editBankBranch" class="w-full border rounded-lg p-2" value="${bank.branch || ''}" placeholder="যেমন: ঢাকা">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">📊 স্ট্যাটাস</label>
+                    <select id="editBankStatus" class="w-full border rounded-lg p-2">
+                        <option value="active" ${bank.status === 'active' ? 'selected' : ''}>✅ সক্রিয়</option>
+                        <option value="inactive" ${bank.status === 'inactive' ? 'selected' : ''}>⛔ নিষ্ক্রিয়</option>
+                    </select>
+                </div>
+                <div class="flex gap-3 mt-4">
+                    <button onclick="saveBankEdit('${bank.id}')" class="btn btn-success flex-1 py-2.5">
+                        <i class="fas fa-save mr-2"></i> সংরক্ষণ
+                    </button>
+                    <button onclick="closeCustomModal()" class="btn btn-danger flex-1 py-2.5">
+                        <i class="fas fa-times mr-2"></i> বাতিল
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        showCustomModal('✏️ ব্যাংক সম্পাদনা করুন', html);
+        
+    } catch(e) {
+        console.error('❌ Edit error:', e);
+        showToast('❌ ব্যাংক লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ৪. ব্যাংক সম্পাদনা সংরক্ষণ
+// ============================================================
+async function saveBankEdit(bankId) {
+    const bankName = document.getElementById('editBankName').value.trim();
+    const accountName = document.getElementById('editBankAccountName').value.trim();
+    const accountNumber = document.getElementById('editBankAccountNumber').value.trim();
+    const branch = document.getElementById('editBankBranch').value.trim();
+    const status = document.getElementById('editBankStatus').value;
+    
+    if (!bankName) {
+        showToast('❌ ব্যাংকের নাম দিন!', 'error');
+        document.getElementById('editBankName').focus();
+        return;
+    }
+    
+    if (!accountNumber) {
+        showToast('❌ একাউন্ট নম্বর দিন!', 'error');
+        document.getElementById('editBankAccountNumber').focus();
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { error } = await client
+            .from('bank_accounts')
+            .update({
+                bank_name: bankName,
+                account_name: accountName || bankName,
+                account_number: accountNumber,
+                branch: branch || '',
+                status: status,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', bankId);
+        
+        if (error) throw error;
+        
+        showToast(`✅ "${bankName}" ব্যাংক আপডেট করা হয়েছে!`, 'success');
+        closeCustomModal();
+        
+        // ড্রপডাউন এবং লিস্ট রিফ্রেশ
+        await loadLedgerBanks();
+        await loadBankManagement();
+        await loadLedgerCategoriesAndBanks();
+        
+    } catch(e) {
+        console.error('❌ Save edit error:', e);
+        showToast(`❌ আপডেট ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ৫. ব্যাংক ডিলিট
+// ============================================================
+async function deleteBank(bankId) {
+    if (!confirm('এই ব্যাংক ডিলিট করবেন? (সতর্কতা: এটি স্থায়ীভাবে মুছে যাবে!)')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // চেক করুন এই ব্যাংক ব্যবহার করা হচ্ছে কিনা
+        const { data: transactions, error: checkError } = await client
+            .from('ledger_transactions')
+            .select('id', { count: 'exact' })
+            .eq('bank_id', bankId)
+            .limit(1);
+        
+        if (transactions && transactions.length > 0) {
+            showToast('⚠️ এই ব্যাংক লেজার এন্ট্রিতে ব্যবহৃত হচ্ছে! প্রথমে এন্ট্রিগুলো পরিবর্তন করুন।', 'warning');
+            return;
+        }
+        
+        const { error } = await client
+            .from('bank_accounts')
+            .delete()
+            .eq('id', bankId);
+        
+        if (error) throw error;
+        
+        showToast('✅ ব্যাংক ডিলিট করা হয়েছে!', 'success');
+        
+        // ড্রপডাউন এবং লিস্ট রিফ্রেশ
+        await loadLedgerBanks();
+        await loadBankManagement();
+        await loadLedgerCategoriesAndBanks();
+        
+    } catch(e) {
+        console.error('❌ Delete error:', e);
+        showToast(`❌ ডিলিট ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ৬. ব্যাংক ম্যানেজমেন্ট ট্যাব শো
+// ============================================================
+function showBankManagement() {
+    const html = `
+        <div class="bg-white rounded-xl shadow-lg p-6 max-w-4xl mx-auto">
+            <div class="flex justify-between items-center border-b pb-3 mb-4">
+                <h3 class="text-xl font-bold text-gray-800">
+                    <i class="fas fa-university text-emerald-600 mr-2"></i>
+                    🏦 ব্যাংক ব্যবস্থাপনা
+                </h3>
+                <div class="flex gap-2">
+                    <button onclick="loadBankManagement()" class="btn btn-info btn-sm">
+                        <i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ
+                    </button>
+                    <button onclick="closeCustomModal()" class="btn btn-danger btn-sm">
+                        <i class="fas fa-times mr-1"></i> বন্ধ
+                    </button>
+                </div>
+            </div>
+            <div id="bankManagementContainer">
+                <div class="text-center py-8">
+                    <div class="loading-spinner"></div>
+                    <p class="text-gray-500 mt-2">🏦 ব্যাংক লোড হচ্ছে...</p>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showCustomModal('🏦 ব্যাংক ব্যবস্থাপনা', html);
+    
+    setTimeout(() => {
+        loadBankManagement();
+    }, 300);
+}
+
+// ============================================================
+// ৭. সাইডবারে ব্যাংক ম্যানেজমেন্ট বাটন যোগ করুন
+// ============================================================
+function addBankManagementButton() {
+    const sidebar = document.querySelector('.sidebar-nav');
+    if (!sidebar) return;
+    
+    // চেক করুন বাটন ইতিমধ্যে আছে কিনা
+    if (document.getElementById('bankManagementBtn')) return;
+    
+    // ব্যাংক ম্যানেজমেন্ট সেকশন হেডার
+    const header = document.createElement('div');
+    header.className = 'px-3 pt-4 pb-2 text-[10px] text-white/30 uppercase tracking-wider font-semibold';
+    header.textContent = '🏦 ব্যাংক ব্যবস্থাপনা';
+    sidebar.appendChild(header);
+    
+    // ব্যাংক ম্যানেজমেন্ট বাটন
+    const btn = document.createElement('button');
+    btn.id = 'bankManagementBtn';
+    btn.className = 'nav-item';
+    btn.innerHTML = `
+        <i class="fas fa-university"></i>
+        <span>🏦 ব্যাংক ম্যানেজমেন্ট</span>
+        <span class="badge" style="background:#3b82f6; margin-left:auto;">নতুন</span>
+    `;
+    btn.onclick = function() {
+        showBankManagement();
+        closeSidebar();
+    };
+    sidebar.appendChild(btn);
+    
+    console.log('✅ ব্যাংক ম্যানেজমেন্ট বাটন যোগ করা হয়েছে!');
+}
+
+// ============================================================
+// ৮. পেজ লোডের সময় বাটন যোগ করুন
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(() => {
+        addBankManagementButton();
+    }, 1500);
+});
+
+// ============================================================
+// ৯. গ্লোবাল এক্সপোজ
+// ============================================================
+window.loadBankManagement = loadBankManagement;
+window.editBank = editBank;
+window.saveBankEdit = saveBankEdit;
+window.deleteBank = deleteBank;
+window.showBankManagement = showBankManagement;
+window.addBankManagementButton = addBankManagementButton;
+
+console.log('✅ ব্যাংক ম্যানেজমেন্ট সিস্টেম লোড হয়েছে!');
+console.log('💡 ব্যাংক ব্যবস্থাপনা খুলতে: showBankManagement()');
+
 // ============================================================
 // ৯. গ্লোবাল এক্সপোজ
 // ============================================================
