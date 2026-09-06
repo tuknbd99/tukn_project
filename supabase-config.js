@@ -169,7 +169,7 @@ const TABLES = {
     WITHDRAWALS: 'withdrawals',
     REFERRALS: 'referrals',
     COMMISSION_LOGS: 'commission_logs',
-    LEDGER_TRANSACTIONS: 'transactions',
+    LEDGER_TRANSACTIONS: 'ledger_transactions',
     WELFARE_FUND: 'welfare_fund',
     LOANS: 'loan_applications',
     LOAN_PAYMENTS: 'loan_payments',
