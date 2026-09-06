@@ -8076,9 +8076,17 @@ async function loadLedgerData() {
 // ============================================================
 // ২. ক্যাটাগরি এবং ব্যাংক লোড
 // ============================================================
+// ============================================================
+// ✅ FIXED: loadLedgerCategoriesAndBanks() - সম্পূর্ণ আপডেট
+// ============================================================
 async function loadLedgerCategoriesAndBanks() {
+    console.log('🔄 ক্যাটাগরি ও ব্যাংক লোড হচ্ছে...');
+    
     const client = initSupabaseClient();
-    if (!client) return;
+    if (!client) {
+        console.error('❌ Supabase ক্লায়েন্ট পাওয়া যায়নি');
+        return;
+    }
     
     try {
         // ✅ ক্যাটাগরি লোড
@@ -8087,12 +8095,9 @@ async function loadLedgerCategoriesAndBanks() {
             .select('*')
             .order('name');
         
-        if (!catError && categories && categories.length > 0) {
-            ledgerCategories = categories;
-            console.log('✅ ক্যাটাগরি লোড সম্পূর্ণ:', categories.length);
-        } else {
-            console.log('⚠️ কোনো ক্যাটাগরি নেই, ডিফল্ট তৈরি করা হচ্ছে...');
-            // ✅ ডিফল্ট ক্যাটাগরি তৈরি করুন
+        if (catError) {
+            console.error('❌ ক্যাটাগরি লোড error:', catError);
+            // ডিফল্ট ক্যাটাগরি তৈরি করুন
             await createDefaultCategories();
             // পুনরায় লোড করুন
             const { data: newCategories } = await client
@@ -8100,11 +8105,25 @@ async function loadLedgerCategoriesAndBanks() {
                 .select('*')
                 .order('name');
             ledgerCategories = newCategories || [];
+        } else {
+            ledgerCategories = categories || [];
+            console.log(`✅ ${ledgerCategories.length} টি ক্যাটাগরি লোড হয়েছে`);
+            
+            // যদি কোনো ক্যাটাগরি না থাকে, ডিফল্ট তৈরি করুন
+            if (ledgerCategories.length === 0) {
+                await createDefaultCategories();
+                const { data: newCategories } = await client
+                    .from('ledger_categories')
+                    .select('*')
+                    .order('name');
+                ledgerCategories = newCategories || [];
+            }
         }
         
+        // ✅ ক্যাটাগরি ড্রপডাউন পপুলেট
         populateCategorySelects(ledgerCategories);
         
-        // ব্যাংক লোড
+        // ✅ ব্যাংক লোড
         const { data: banks, error: bankError } = await client
             .from('bank_accounts')
             .select('*')
@@ -8114,11 +8133,172 @@ async function loadLedgerCategoriesAndBanks() {
         if (!bankError && banks) {
             ledgerBanks = banks;
             populateBankSelects(banks);
+            console.log(`✅ ${ledgerBanks.length} টি ব্যাংক লোড হয়েছে`);
+        } else {
+            console.log('⚠️ কোনো ব্যাংক নেই বা লোড করতে সমস্যা');
+            ledgerBanks = [];
+            populateBankSelects([]);
         }
         
+        console.log('✅ ক্যাটাগরি ও ব্যাংক লোড সম্পূর্ণ!');
+        
     } catch(e) {
-        console.error('Load categories/banks error:', e);
+        console.error('❌ loadLedgerCategoriesAndBanks error:', e);
+        showToast('ক্যাটাগরি লোড করতে সমস্যা!', 'error');
     }
+}
+
+// ============================================================
+// ✅ FIXED: populateCategorySelects() - সম্পূর্ণ আপডেট
+// ============================================================
+function populateCategorySelects(categories) {
+    console.log('🔄 ক্যাটাগরি ড্রপডাউন পপুলেট করা হচ্ছে...');
+    
+    // ক্যাটাগরি সিলেক্ট
+    const categorySelect = document.getElementById('ledgerCategory');
+    if (!categorySelect) {
+        console.warn('⚠️ ledgerCategory এলিমেন্ট পাওয়া যায়নি');
+        return;
+    }
+    
+    const currentValue = categorySelect.value;
+    
+    // পুরনো অপশন ক্লিয়ার
+    categorySelect.innerHTML = '';
+    
+    // ডিফল্ট অপশন
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = '-- খাত নির্বাচন করুন --';
+    categorySelect.appendChild(defaultOption);
+    
+    // ক্যাটাগরি গ্রুপ করুন
+    const incomeCats = (categories || []).filter(c => c.type === 'income');
+    const expenseCats = (categories || []).filter(c => c.type === 'expense');
+    
+    // আয় খাত
+    if (incomeCats.length > 0) {
+        const optGroup = document.createElement('optgroup');
+        optGroup.label = '📈 আয় খাত';
+        incomeCats.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.name;
+            opt.textContent = c.name + (c.description ? ` (${c.description})` : '');
+            optGroup.appendChild(opt);
+        });
+        categorySelect.appendChild(optGroup);
+    }
+    
+    // ব্যয় খাত
+    if (expenseCats.length > 0) {
+        const optGroup = document.createElement('optgroup');
+        optGroup.label = '📉 ব্যয় খাত';
+        expenseCats.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.name;
+            opt.textContent = c.name + (c.description ? ` (${c.description})` : '');
+            optGroup.appendChild(opt);
+        });
+        categorySelect.appendChild(optGroup);
+    }
+    
+    // আগের ভ্যালু সেট
+    if (currentValue) {
+        categorySelect.value = currentValue;
+    }
+    
+    // ফিল্টার ক্যাটাগরি ড্রপডাউন আপডেট
+    const filterSelect = document.getElementById('ledgerFilterCategory');
+    if (filterSelect) {
+        const filterValue = filterSelect.value;
+        filterSelect.innerHTML = '';
+        
+        const allOption = document.createElement('option');
+        allOption.value = 'all';
+        allOption.textContent = 'সব খাত';
+        filterSelect.appendChild(allOption);
+        
+        if (incomeCats.length > 0) {
+            const optGroup = document.createElement('optgroup');
+            optGroup.label = '📈 আয় খাত';
+            incomeCats.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.name;
+                opt.textContent = c.name + (c.description ? ` (${c.description})` : '');
+                optGroup.appendChild(opt);
+            });
+            filterSelect.appendChild(optGroup);
+        }
+        
+        if (expenseCats.length > 0) {
+            const optGroup = document.createElement('optgroup');
+            optGroup.label = '📉 ব্যয় খাত';
+            expenseCats.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.name;
+                opt.textContent = c.name + (c.description ? ` (${c.description})` : '');
+                optGroup.appendChild(opt);
+            });
+            filterSelect.appendChild(optGroup);
+        }
+        
+        if (filterValue) filterSelect.value = filterValue;
+    }
+    
+    console.log(`✅ ক্যাটাগরি ড্রপডাউন পপুলেট সম্পূর্ণ (${categorySelect.options.length} টি অপশন)`);
+}
+
+// ============================================================
+// ✅ FIXED: filterLedgerCategories() - টাইপ পরিবর্তনে ক্যাটাগরি ফিল্টার
+// ============================================================
+function filterLedgerCategories() {
+    const type = document.getElementById('ledgerType')?.value;
+    const categorySelect = document.getElementById('ledgerCategory');
+    
+    if (!categorySelect) return;
+    
+    const currentValue = categorySelect.value;
+    
+    // পুরনো অপশন ক্লিয়ার
+    categorySelect.innerHTML = '';
+    
+    // ডিফল্ট অপশন
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = '-- খাত নির্বাচন করুন --';
+    categorySelect.appendChild(defaultOption);
+    
+    // ক্যাটাগরি ফিল্টার
+    const filteredCats = ledgerCategories.filter(c => c.type === type);
+    const incomeCats = filteredCats.filter(c => c.type === 'income');
+    const expenseCats = filteredCats.filter(c => c.type === 'expense');
+    
+    if (incomeCats.length > 0) {
+        const optGroup = document.createElement('optgroup');
+        optGroup.label = '📈 আয় খাত';
+        incomeCats.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.name;
+            opt.textContent = c.name + (c.description ? ` (${c.description})` : '');
+            optGroup.appendChild(opt);
+        });
+        categorySelect.appendChild(optGroup);
+    }
+    
+    if (expenseCats.length > 0) {
+        const optGroup = document.createElement('optgroup');
+        optGroup.label = '📉 ব্যয় খাত';
+        expenseCats.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.name;
+            opt.textContent = c.name + (c.description ? ` (${c.description})` : '');
+            optGroup.appendChild(opt);
+        });
+        categorySelect.appendChild(optGroup);
+    }
+    
+    // আগের ভ্যালু সেট
+    if (currentValue) categorySelect.value = currentValue;
 }
 
 // ============================================================
@@ -8278,12 +8458,130 @@ function populateBankSelects(banks) {
 // ============================================================
 // ৭. নতুন ক্যাটাগরি যোগ করুন
 // ============================================================
+// ============================================================
+// ✅ FIXED: showAddCategoryModal() - ক্যাটাগরি মডাল
+// ============================================================
 function showAddCategoryModal() {
-    document.getElementById('addCategoryModal').classList.add('active');
+    const modal = document.getElementById('addCategoryModal');
+    if (!modal) {
+        showToast('❌ মডাল পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    modal.classList.add('active');
     document.getElementById('addCategoryForm').reset();
+    
+    // বর্তমান টাইপ সেট করুন
     const currentType = document.getElementById('ledgerType')?.value || 'income';
     document.getElementById('newCategoryType').value = currentType;
+    
+    // ফোকাস
+    setTimeout(() => {
+        document.getElementById('newCategoryName')?.focus();
+    }, 300);
 }
+
+// ============================================================
+// ✅ FIXED: closeAddCategoryModal()
+// ============================================================
+function closeAddCategoryModal() {
+    const modal = document.getElementById('addCategoryModal');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+}
+
+// ============================================================
+// ✅ FIXED: addCategoryForm সাবমিট
+// ============================================================
+document.getElementById('addCategoryForm')?.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const name = document.getElementById('newCategoryName').value.trim();
+    const type = document.getElementById('newCategoryType').value;
+    const description = document.getElementById('newCategoryDescription').value.trim();
+    
+    if (!name) {
+        showToast('❌ খাতের নাম দিন!', 'error');
+        document.getElementById('newCategoryName').focus();
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const btn = this.querySelector('button[type="submit"]');
+    const originalText = btn?.innerHTML || 'খাত যোগ করুন';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> যোগ করা হচ্ছে...';
+    }
+    
+    try {
+        // ✅ চেক করুন এই নামে ক্যাটাগরি আছে কিনা
+        const { data: existing, error: checkError } = await client
+            .from('ledger_categories')
+            .select('name')
+            .eq('name', name)
+            .maybeSingle();
+        
+        if (existing) {
+            showToast(`⚠️ "${name}" নামে একটি খাত ইতিমধ্যে আছে!`, 'warning');
+            return;
+        }
+        
+        // ✅ নতুন ক্যাটাগরি যোগ করুন
+        const { data: newCategory, error: insertError } = await client
+            .from('ledger_categories')
+            .insert([{
+                name: name,
+                type: type,
+                description: description || null,
+                created_at: new Date().toISOString()
+            }])
+            .select()
+            .single();
+        
+        if (insertError) throw insertError;
+        
+        showToast(`✅ "${name}" খাত যোগ করা হয়েছে!`, 'success');
+        closeAddCategoryModal();
+        
+        // ✅ ক্যাটাগরি লিস্ট রিফ্রেশ
+        await loadLedgerCategoriesAndBanks();
+        
+        // ✅ নতুন ক্যাটাগরি সিলেক্ট করুন
+        setTimeout(() => {
+            const categorySelect = document.getElementById('ledgerCategory');
+            if (categorySelect) {
+                categorySelect.value = name;
+                // ইভেন্ট ট্রিগার
+                const event = new Event('change');
+                categorySelect.dispatchEvent(event);
+            }
+        }, 500);
+        
+        this.reset();
+        
+    } catch(e) {
+        console.error('❌ ক্যাটাগরি যোগ error:', e);
+        let errorMsg = '❌ খাত যোগ করতে সমস্যা!';
+        if (e.code === '23505') {
+            errorMsg = `⚠️ "${name}" নামে একটি খাত ইতিমধ্যে আছে!`;
+        } else if (e.message) {
+            errorMsg = `❌ ${e.message}`;
+        }
+        showToast(errorMsg, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    }
+});
 
 function closeAddCategoryModal() {
     document.getElementById('addCategoryModal').classList.remove('active');
@@ -9489,21 +9787,238 @@ async function viewEventParticipants(eventId) {
         // ============================================================
         // ✅ লেজার ব্যাংক অ্যাকাউন্ট
         // ============================================================
-        function loadLedgerBanks() {
-            const banks = JSON.parse(localStorage.getItem('tukn_banks') || '[]');
-            const select = document.getElementById('ledgerBank');
-            if (!select) return;
+       // ============================================================
+// ✅ FIXED: loadLedgerBanks() - ব্যাংক লোড
+// ============================================================
+async function loadLedgerBanks() {
+    console.log('🔄 ব্যাংক লোড হচ্ছে...');
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        console.error('❌ Supabase ক্লায়েন্ট পাওয়া যায়নি');
+        return;
+    }
+    
+    try {
+        const { data: banks, error } = await client
+            .from('bank_accounts')
+            .select('*')
+            .eq('status', 'active')
+            .order('account_name');
+        
+        if (error) throw error;
+        
+        ledgerBanks = banks || [];
+        populateBankSelects(ledgerBanks);
+        console.log(`✅ ${ledgerBanks.length} টি ব্যাংক লোড হয়েছে`);
+        
+    } catch(e) {
+        console.error('❌ ব্যাংক লোড error:', e);
+        showToast('ব্যাংক লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ✅ FIXED: populateBankSelects() - ব্যাংক ড্রপডাউন পপুলেট
+// ============================================================
+function populateBankSelects(banks) {
+    const el = document.getElementById('ledgerBank');
+    if (!el) {
+        console.warn('⚠️ ledgerBank এলিমেন্ট পাওয়া যায়নি');
+        return;
+    }
+    
+    const currentValue = el.value;
+    el.innerHTML = '<option value="">-- ব্যাংক নির্বাচন করুন --</option>';
+    
+    if (banks && banks.length > 0) {
+        banks.forEach(b => {
+            const opt = document.createElement('option');
+            opt.value = b.id;
+            const displayName = b.account_name || b.bank_name || 'ব্যাংক';
+            const accountInfo = b.account_number ? `(${b.account_number})` : '';
+            opt.textContent = `${displayName} ${accountInfo}`;
+            el.appendChild(opt);
+        });
+    }
+    
+    if (currentValue) el.value = currentValue;
+    console.log(`✅ ব্যাংক ড্রপডাউন পপুলেট সম্পূর্ণ (${el.options.length} টি অপশন)`);
+}
+
+// ============================================================
+// ✅ FIXED: showAddBankModal() - নতুন ব্যাংক যোগ
+// ============================================================
+function showAddBankModal() {
+    // একটি মডাল বা প্রম্পট দেখান
+    const html = `
+        <div class="space-y-3">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">ব্যাংকের নাম *</label>
+                <input type="text" id="newBankName" class="w-full border rounded-lg p-2" placeholder="যেমন: ইসলামী ব্যাংক">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">একাউন্টের নাম</label>
+                <input type="text" id="newBankAccountName" class="w-full border rounded-lg p-2" placeholder="যেমন: TUKNBD">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">একাউন্ট নম্বর *</label>
+                <input type="text" id="newBankAccountNumber" class="w-full border rounded-lg p-2" placeholder="যেমন: 1234567890">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">শাখা</label>
+                <input type="text" id="newBankBranch" class="w-full border rounded-lg p-2" placeholder="যেমন: ঢাকা">
+            </div>
+            <div class="flex gap-3 mt-4">
+                <button onclick="saveNewBank()" class="btn btn-success flex-1 py-2">
+                    <i class="fas fa-save mr-2"></i> সংরক্ষণ
+                </button>
+                <button onclick="closeCustomModal()" class="btn btn-danger flex-1 py-2">
+                    <i class="fas fa-times mr-2"></i> বাতিল
+                </button>
+            </div>
+        </div>
+    `;
+    
+    showCustomModal('🏦 নতুন ব্যাংক যোগ করুন', html);
+}
+
+// ============================================================
+// ✅ saveNewBank() - নতুন ব্যাংক সেভ
+// ============================================================
+async function saveNewBank() {
+    const name = document.getElementById('newBankName')?.value.trim();
+    const accountName = document.getElementById('newBankAccountName')?.value.trim();
+    const accountNumber = document.getElementById('newBankAccountNumber')?.value.trim();
+    const branch = document.getElementById('newBankBranch')?.value.trim();
+    
+    if (!name) {
+        showToast('❌ ব্যাংকের নাম দিন!', 'error');
+        document.getElementById('newBankName')?.focus();
+        return;
+    }
+    
+    if (!accountNumber) {
+        showToast('❌ একাউন্ট নম্বর দিন!', 'error');
+        document.getElementById('newBankAccountNumber')?.focus();
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('bank_accounts')
+            .insert([{
+                bank_name: name,
+                account_name: accountName || name,
+                account_number: accountNumber,
+                branch: branch || '',
+                status: 'active',
+                created_at: new Date().toISOString()
+            }])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast(`✅ "${name}" ব্যাংক যোগ করা হয়েছে!`, 'success');
+        closeCustomModal();
+        
+        // ব্যাংক লিস্ট রিফ্রেশ
+        await loadLedgerBanks();
+        
+    } catch(e) {
+        console.error('❌ ব্যাংক যোগ error:', e);
+        showToast(`❌ ব্যাংক যোগ করতে সমস্যা: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ✅ showAddBankModal() - ব্যাংক ড্রপডাউনে বাটন
+// ============================================================
+// লেজার মডাল খোলার সময় ব্যাংক বাটন যোগ করুন
+function showAddLedgerModal(editData = null) {
+    const modal = document.getElementById('ledgerModal');
+    const title = document.getElementById('ledgerModalTitle');
+    const form = document.getElementById('ledgerForm');
+    
+    if (!modal) return;
+    
+    form.reset();
+    document.getElementById('ledgerEditId').value = '';
+    
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    document.getElementById('ledgerDate').value = dateStr;
+    
+    if (!document.getElementById('ledgerVoucher').value) {
+        document.getElementById('ledgerVoucher').value = generateVoucherNumber();
+    }
+    
+    const adminName = currentAdmin?.full_name || currentAdmin?.username || 'অ্যাডমিন';
+    document.getElementById('ledgerEnteredByName').textContent = adminName;
+    document.getElementById('ledgerCurrentTime').textContent = now.toLocaleString('bn-BD');
+    
+    // ✅ ক্যাটাগরি এবং ব্যাংক লোড
+    setTimeout(() => {
+        loadLedgerCategoriesAndBanks();
+    }, 100);
+    
+    // ✅ ব্যাংক বাটন যোগ করুন (যদি না থাকে)
+    const bankDiv = document.getElementById('ledgerBank')?.parentElement;
+    if (bankDiv) {
+        // চেক করুন বাটন ইতিমধ্যে আছে কিনা
+        let addBankBtn = bankDiv.querySelector('.add-bank-btn');
+        if (!addBankBtn) {
+            addBankBtn = document.createElement('button');
+            addBankBtn.type = 'button';
+            addBankBtn.className = 'btn btn-success btn-sm add-bank-btn whitespace-nowrap';
+            addBankBtn.innerHTML = '<i class="fas fa-plus"></i>';
+            addBankBtn.title = 'নতুন ব্যাংক যোগ করুন';
+            addBankBtn.onclick = showAddBankModal;
             
-            const currentValue = select.value;
-            select.innerHTML = '<option value="">-- ব্যাংক নির্বাচন করুন --</option>';
-            banks.forEach(b => {
-                const opt = document.createElement('option');
-                opt.value = b.id;
-                opt.textContent = `${b.name} (${b.account})`;
-                select.appendChild(opt);
-            });
-            if (currentValue) select.value = currentValue;
+            // ব্যাংক সিলেক্টের পাশে বাটন যোগ করুন
+            const selectContainer = bankDiv.querySelector('.flex');
+            if (selectContainer) {
+                selectContainer.appendChild(addBankBtn);
+            }
         }
+    }
+    
+    if (editData) {
+        title.innerHTML = '<i class="fas fa-edit mr-2 text-emerald-600"></i>লেজার এন্ট্রি সম্পাদনা করুন';
+        document.getElementById('ledgerEditId').value = editData.id;
+        document.getElementById('ledgerType').value = editData.type || 'income';
+        document.getElementById('ledgerCategory').value = editData.category || '';
+        document.getElementById('ledgerDate').value = editData.date || dateStr;
+        document.getElementById('ledgerVoucher').value = editData.voucher || '';
+        document.getElementById('ledgerAmount').value = editData.amount || '';
+        document.getElementById('ledgerBank').value = editData.bank_id || '';
+        document.getElementById('ledgerDescription').value = editData.description || '';
+        document.getElementById('ledgerNote').value = editData.note || '';
+        
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) {
+            submitBtn.innerHTML = '<i class="fas fa-save mr-2"></i> আপডেট করুন';
+        }
+    } else {
+        title.innerHTML = '<i class="fas fa-plus-circle mr-2 text-emerald-600"></i>নতুন লেজার এন্ট্রি';
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) {
+            submitBtn.innerHTML = '<i class="fas fa-save mr-2"></i> এন্ট্রি সংরক্ষণ করুন';
+        }
+        
+        setTimeout(() => {
+            filterLedgerCategories();
+        }, 300);
+    }
+    
+    modal.classList.add('active');
+}
         
         function showAddBankModal() {
             const name = prompt('ব্যাংকের নাম দিন:');
