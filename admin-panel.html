@@ -18067,12 +18067,430 @@ document.addEventListener('DOMContentLoaded', function() {
         forceFixLedgerCategories();
     }, 1500);
 });
+    
 
 // ৫. ম্যানুয়ালি রান করার জন্য গ্লোবাল ফাংশন
 window.forceFixLedgerCategories = forceFixLedgerCategories;
 
 console.log('✅ লেজার ফোর্স ফিক্স লোড হয়েছে!');
 console.log('💡 ম্যানুয়ালি রান করতে: forceFixLedgerCategories()');
+
+    // ============================================================
+// ✅ LEDGER CATEGORY MANAGEMENT SYSTEM
+// ============================================================
+
+// ============================================================
+// ১. ক্যাটাগরি লিস্ট লোড করুন
+// ============================================================
+async function loadCategoryManagement() {
+    console.log('🔄 ক্যাটাগরি ম্যানেজমেন্ট লোড হচ্ছে...');
+    
+    const container = document.getElementById('categoryManagementContainer');
+    if (!container) {
+        console.warn('⚠️ categoryManagementContainer পাওয়া যায়নি');
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner"></div>
+            <p class="text-gray-500 mt-2">📂 ক্যাটাগরি লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        const { data: categories, error } = await client
+            .from('ledger_categories')
+            .select('*')
+            .order('type', { ascending: true })
+            .order('name', { ascending: true });
+        
+        if (error) throw error;
+        
+        if (!categories || categories.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fas fa-folder-open text-4xl block mb-3 text-gray-300"></i>
+                    <p class="text-lg font-medium">📭 কোনো ক্যাটাগরি নেই</p>
+                    <button onclick="showAddCategoryModal()" class="btn btn-success mt-4">
+                        <i class="fas fa-plus mr-2"></i> প্রথম ক্যাটাগরি যোগ করুন
+                    </button>
+                </div>
+            `;
+            return;
+        }
+        
+        // ক্যাটাগরি গ্রুপ করুন
+        const incomeCats = categories.filter(c => c.type === 'income');
+        const expenseCats = categories.filter(c => c.type === 'expense');
+        
+        let html = `
+            <div class="mb-4 flex justify-between items-center">
+                <div>
+                    <span class="text-sm text-gray-500">📊 মোট ${categories.length} টি ক্যাটাগরি</span>
+                    <span class="text-sm text-gray-400 ml-3">📈 আয়: ${incomeCats.length} | 📉 ব্যয়: ${expenseCats.length}</span>
+                </div>
+                <button onclick="showAddCategoryModal()" class="btn btn-success btn-sm">
+                    <i class="fas fa-plus mr-1"></i> নতুন ক্যাটাগরি
+                </button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        `;
+        
+        // আয় ক্যাটাগরি
+        if (incomeCats.length > 0) {
+            html += `
+                <div class="border rounded-lg overflow-hidden">
+                    <div class="bg-emerald-50 px-4 py-2 font-bold text-emerald-700 border-b">
+                        <i class="fas fa-arrow-up mr-2"></i> আয় খাত (${incomeCats.length})
+                    </div>
+                    <div class="divide-y">
+            `;
+            incomeCats.forEach(cat => {
+                html += renderCategoryItem(cat);
+            });
+            html += `</div></div>`;
+        }
+        
+        // ব্যয় ক্যাটাগরি
+        if (expenseCats.length > 0) {
+            html += `
+                <div class="border rounded-lg overflow-hidden">
+                    <div class="bg-red-50 px-4 py-2 font-bold text-red-700 border-b">
+                        <i class="fas fa-arrow-down mr-2"></i> ব্যয় খাত (${expenseCats.length})
+                    </div>
+                    <div class="divide-y">
+            `;
+            expenseCats.forEach(cat => {
+                html += renderCategoryItem(cat);
+            });
+            html += `</div></div>`;
+        }
+        
+        html += `</div>`;
+        container.innerHTML = html;
+        
+    } catch(e) {
+        console.error('❌ ক্যাটাগরি লোড error:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ ক্যাটাগরি লোড করতে সমস্যা!</p>
+                <button onclick="loadCategoryManagement()" class="btn btn-info btn-sm mt-3">পুনরায় চেষ্টা করুন</button>
+            </div>
+        `;
+    }
+}
+
+// ============================================================
+// ২. ক্যাটাগরি আইটেম রেন্ডার
+// ============================================================
+function renderCategoryItem(cat) {
+    const typeColor = cat.type === 'income' ? 'text-emerald-600' : 'text-red-600';
+    const typeIcon = cat.type === 'income' ? '📈' : '📉';
+    const typeLabel = cat.type === 'income' ? 'আয়' : 'ব্যয়';
+    
+    return `
+        <div class="flex justify-between items-center p-3 hover:bg-gray-50 transition group" id="cat-${cat.id}">
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                    <span class="font-medium text-gray-800">${cat.name}</span>
+                    <span class="text-xs px-2 py-0.5 rounded-full ${cat.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}">
+                        ${typeIcon} ${typeLabel}
+                    </span>
+                </div>
+                ${cat.description ? `<p class="text-xs text-gray-400 mt-0.5 truncate">${cat.description}</p>` : ''}
+            </div>
+            <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onclick="editCategory('${cat.id}')" class="btn btn-info btn-xs" title="সম্পাদনা">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button onclick="deleteCategory('${cat.id}')" class="btn btn-danger btn-xs" title="ডিলিট">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+// ============================================================
+// ৩. ক্যাটাগরি সম্পাদনা
+// ============================================================
+async function editCategory(categoryId) {
+    console.log('✏️ ক্যাটাগরি সম্পাদনা:', categoryId);
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: cat, error } = await client
+            .from('ledger_categories')
+            .select('*')
+            .eq('id', categoryId)
+            .single();
+        
+        if (error) throw error;
+        if (!cat) {
+            showToast('❌ ক্যাটাগরি পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        // এডিট মডাল দেখান
+        const html = `
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">📂 ক্যাটাগরির নাম <span class="text-red-500">*</span></label>
+                    <input type="text" id="editCatName" class="w-full border rounded-lg p-2" value="${cat.name}" placeholder="যেমন: সদস্য ফি">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">📋 লেনদেনের ধরন <span class="text-red-500">*</span></label>
+                    <select id="editCatType" class="w-full border rounded-lg p-2">
+                        <option value="income" ${cat.type === 'income' ? 'selected' : ''}>📈 আয়</option>
+                        <option value="expense" ${cat.type === 'expense' ? 'selected' : ''}>📉 ব্যয়</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">📝 বিবরণ (ঐচ্ছিক)</label>
+                    <input type="text" id="editCatDescription" class="w-full border rounded-lg p-2" value="${cat.description || ''}" placeholder="খাত সম্পর্কে সংক্ষিপ্ত বিবরণ">
+                </div>
+                <div class="flex gap-3 mt-4">
+                    <button onclick="saveCategoryEdit('${cat.id}')" class="btn btn-success flex-1 py-2.5">
+                        <i class="fas fa-save mr-2"></i> সংরক্ষণ
+                    </button>
+                    <button onclick="closeCustomModal()" class="btn btn-danger flex-1 py-2.5">
+                        <i class="fas fa-times mr-2"></i> বাতিল
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        showCustomModal('✏️ ক্যাটাগরি সম্পাদনা করুন', html);
+        
+    } catch(e) {
+        console.error('❌ Edit error:', e);
+        showToast('❌ ক্যাটাগরি লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ৪. ক্যাটাগরি সম্পাদনা সংরক্ষণ
+// ============================================================
+async function saveCategoryEdit(categoryId) {
+    const name = document.getElementById('editCatName').value.trim();
+    const type = document.getElementById('editCatType').value;
+    const description = document.getElementById('editCatDescription').value.trim();
+    
+    if (!name) {
+        showToast('❌ ক্যাটাগরির নাম দিন!', 'error');
+        document.getElementById('editCatName').focus();
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // চেক করুন অন্য কোনো ক্যাটাগরি এই নামে আছে কিনা (নিজেকে বাদে)
+        const { data: existing, error: checkError } = await client
+            .from('ledger_categories')
+            .select('id')
+            .eq('name', name)
+            .neq('id', categoryId)
+            .maybeSingle();
+        
+        if (existing) {
+            showToast(`⚠️ "${name}" নামে একটি ক্যাটাগরি ইতিমধ্যে আছে!`, 'warning');
+            return;
+        }
+        
+        const { error } = await client
+            .from('ledger_categories')
+            .update({
+                name: name,
+                type: type,
+                description: description || null,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', categoryId);
+        
+        if (error) throw error;
+        
+        showToast(`✅ "${name}" ক্যাটাগরি আপডেট করা হয়েছে!`, 'success');
+        closeCustomModal();
+        
+        // ড্রপডাউন এবং লিস্ট রিফ্রেশ
+        await refreshCategoryDropdowns();
+        await loadCategoryManagement();
+        await loadLedgerCategoriesAndBanks();
+        
+    } catch(e) {
+        console.error('❌ Save edit error:', e);
+        showToast(`❌ আপডেট ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ৫. ক্যাটাগরি ডিলিট
+// ============================================================
+async function deleteCategory(categoryId) {
+    if (!confirm('এই ক্যাটাগরি ডিলিট করবেন? (সতর্কতা: এটি স্থায়ীভাবে মুছে যাবে!)')) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // চেক করুন এই ক্যাটাগরি ব্যবহার করা হচ্ছে কিনা
+        const { data: transactions, error: checkError } = await client
+            .from('ledger_transactions')
+            .select('id', { count: 'exact' })
+            .eq('category', categoryId)  // যদি category_id ফিল্ড থাকে
+            .limit(1);
+        
+        // যদি category নামে ফিল্ড থাকে
+        if (!transactions || transactions.length === 0) {
+            const { data: byName } = await client
+                .from('ledger_transactions')
+                .select('id', { count: 'exact' })
+                .eq('category', (await client.from('ledger_categories').select('name').eq('id', categoryId).single()).data?.name)
+                .limit(1);
+            
+            if (byName && byName.length > 0) {
+                showToast('⚠️ এই ক্যাটাগরি লেজার এন্ট্রিতে ব্যবহৃত হচ্ছে! প্রথমে এন্ট্রিগুলো পরিবর্তন করুন।', 'warning');
+                return;
+            }
+        }
+        
+        const { error } = await client
+            .from('ledger_categories')
+            .delete()
+            .eq('id', categoryId);
+        
+        if (error) throw error;
+        
+        showToast('✅ ক্যাটাগরি ডিলিট করা হয়েছে!', 'success');
+        
+        // ড্রপডাউন এবং লিস্ট রিফ্রেশ
+        await refreshCategoryDropdowns();
+        await loadCategoryManagement();
+        await loadLedgerCategoriesAndBanks();
+        
+    } catch(e) {
+        console.error('❌ Delete error:', e);
+        showToast(`❌ ডিলিট ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+// ============================================================
+// ৬. ক্যাটাগরি ম্যানেজমেন্ট ট্যাব শো
+// ============================================================
+function showCategoryManagement() {
+    // একটি নতুন ট্যাব বা মডাল হিসেবে দেখান
+    const html = `
+        <div class="bg-white rounded-xl shadow-lg p-6 max-w-4xl mx-auto">
+            <div class="flex justify-between items-center border-b pb-3 mb-4">
+                <h3 class="text-xl font-bold text-gray-800">
+                    <i class="fas fa-folder-tree text-emerald-600 mr-2"></i>
+                    📂 ক্যাটাগরি ব্যবস্থাপনা
+                </h3>
+                <div class="flex gap-2">
+                    <button onclick="loadCategoryManagement()" class="btn btn-info btn-sm">
+                        <i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ
+                    </button>
+                    <button onclick="closeCustomModal()" class="btn btn-danger btn-sm">
+                        <i class="fas fa-times mr-1"></i> বন্ধ
+                    </button>
+                </div>
+            </div>
+            <div id="categoryManagementContainer">
+                <div class="text-center py-8">
+                    <div class="loading-spinner"></div>
+                    <p class="text-gray-500 mt-2">📂 ক্যাটাগরি লোড হচ্ছে...</p>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showCustomModal('📂 ক্যাটাগরি ব্যবস্থাপনা', html);
+    
+    // ক্যাটাগরি লোড করুন
+    setTimeout(() => {
+        loadCategoryManagement();
+    }, 300);
+}
+
+// ============================================================
+// ৭. সাইডবারে ক্যাটাগরি ম্যানেজমেন্ট বাটন যোগ করুন
+// ============================================================
+// এই ফাংশনটি কল করে সাইডবারে বাটন যোগ করুন
+
+function addCategoryManagementButton() {
+    const sidebar = document.querySelector('.sidebar-nav');
+    if (!sidebar) return;
+    
+    // চেক করুন বাটন ইতিমধ্যে আছে কিনা
+    if (document.getElementById('categoryManagementBtn')) return;
+    
+    // ক্যাটাগরি ম্যানেজমেন্ট সেকশন হেডার
+    const header = document.createElement('div');
+    header.className = 'px-3 pt-4 pb-2 text-[10px] text-white/30 uppercase tracking-wider font-semibold';
+    header.textContent = '📂 ক্যাটাগরি ব্যবস্থাপনা';
+    sidebar.appendChild(header);
+    
+    // ক্যাটাগরি ম্যানেজমেন্ট বাটন
+    const btn = document.createElement('button');
+    btn.id = 'categoryManagementBtn';
+    btn.className = 'nav-item';
+    btn.innerHTML = `
+        <i class="fas fa-folder-tree"></i>
+        <span>📂 ক্যাটাগরি ম্যানেজমেন্ট</span>
+        <span class="badge" style="background:#059669; margin-left:auto;">নতুন</span>
+    `;
+    btn.onclick = function() {
+        showCategoryManagement();
+        closeSidebar();
+    };
+    sidebar.appendChild(btn);
+    
+    console.log('✅ ক্যাটাগরি ম্যানেজমেন্ট বাটন যোগ করা হয়েছে!');
+}
+
+// ============================================================
+// ৮. পেজ লোডের সময় বাটন যোগ করুন
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(() => {
+        addCategoryManagementButton();
+    }, 1000);
+});
+
+// ============================================================
+// ৯. গ্লোবাল এক্সপোজ
+// ============================================================
+window.loadCategoryManagement = loadCategoryManagement;
+window.editCategory = editCategory;
+window.saveCategoryEdit = saveCategoryEdit;
+window.deleteCategory = deleteCategory;
+window.showCategoryManagement = showCategoryManagement;
+window.addCategoryManagementButton = addCategoryManagementButton;
+window.forceFixLedgerCategories = forceFixLedgerCategories;
+
+console.log('✅ ক্যাটাগরি ম্যানেজমেন্ট সিস্টেম লোড হয়েছে!');
+console.log('💡 ক্যাটাগরি ব্যবস্থাপনা খুলতে: showCategoryManagement()');
     
 // ============================================================
 // ✅ রিপোর্ট ডাউনলোড ফাংশন
