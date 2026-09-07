@@ -220,6 +220,9 @@
         <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:2px;">
             <span class="role-badge" id="roleBadge">👤 ব্রাঞ্চ অফিসার</span>
             <span class="perm-count" id="permCountBadge">0 পারমিশন</span>
+            <button onclick="refreshPermissions()" class="btn btn-warning btn-xs" style="background:linear-gradient(135deg,#f59e0b,#d97706); color:white; border:none; padding:2px 8px; border-radius:4px; font-size:9px; cursor:pointer;">
+                <i class="fas fa-sync-alt"></i> রিফ্রেশ
+            </button>
         </div>
     </div>
     
@@ -229,7 +232,9 @@
     </nav>
 </div>
 
-<!-- ===== মেইন কন্টেন্ট - ট্যাবসমূহ ===== -->
+<!-- ========================================================== -->
+<!-- মেইন কন্টেন্ট - ট্যাবসমূহ                                 -->
+<!-- ========================================================== -->
 <div class="main-content" id="mainContent">
 
     <!-- ===== হেডার ===== -->
@@ -243,6 +248,7 @@
         </div>
         <div class="flex items-center gap-2 flex-wrap">
             <span id="branchCodeDisplay" class="text-xs text-gray-500 bg-gray-50 px-2 py-1 rounded border">📋 কোড</span>
+            <button onclick="refreshPermissions()" class="btn btn-warning btn-sm no-print"><i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ</button>
             <button onclick="window.print()" class="btn btn-purple btn-sm no-print"><i class="fas fa-print mr-1"></i> প্রিন্ট</button>
             <button onclick="logout()" class="btn btn-danger btn-sm"><i class="fas fa-sign-out-alt mr-1"></i> লগআউট</button>
         </div>
@@ -895,36 +901,153 @@ function updatePermCount() {
 }
 
 // ============================================================
-// Auth
+// 🔄 পারমিশন রিফ্রেশ ফাংশন - Supabase থেকে তাজা ডেটা লোড
+// ============================================================
+async function refreshPermissions() {
+    showToast('⏳ পারমিশন রিফ্রেশ করা হচ্ছে...', 'info');
+    
+    const client = supabaseClient;
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const adminId = branchAdmin?.id;
+        if (!adminId) {
+            showToast('❌ অ্যাডমিন আইডি পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        const { data: admin, error } = await client
+            .from('branch_admins')
+            .select('permissions, role, full_name, branch_id, status')
+            .eq('id', adminId)
+            .single();
+        
+        if (error) throw error;
+        if (!admin) {
+            showToast('❌ অ্যাডমিন ডেটা পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        // পুরনো ডেটা আপডেট করুন
+        branchAdmin.permissions = admin.permissions || {};
+        branchAdmin.role = admin.role || 'branch_officer';
+        branchAdmin.full_name = admin.full_name || branchAdmin.full_name;
+        branchAdmin.branch_id = admin.branch_id || branchAdmin.branch_id;
+        branchAdmin.status = admin.status || branchAdmin.status;
+        
+        // localStorage আপডেট করুন (শুধুমাত্র সেশন টিকে থাকার জন্য)
+        localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
+        
+        // গ্লোবাল ভেরিয়েবল আপডেট
+        branchAdminPermissions = branchAdmin.permissions;
+        
+        // মেনু রিজেনারেট করুন
+        generateBranchMenu();
+        updatePermCount();
+        renderPermissions();
+        await updateBadges();
+        await loadDashboard();
+        
+        const activeCount = Object.keys(branchAdminPermissions).filter(k => branchAdminPermissions[k]).length;
+        showToast(`✅ পারমিশন রিফ্রেশ সম্পূর্ণ! ${activeCount} টি পারমিশন সক্রিয়`, 'success');
+        
+        console.log('🔄 পারমিশন রিফ্রেশ সম্পূর্ণ:', branchAdminPermissions);
+        
+    } catch(e) {
+        console.error('❌ পারমিশন রিফ্রেশ error:', e);
+        showToast('❌ পারমিশন রিফ্রেশ ব্যর্থ! ' + e.message, 'error');
+    }
+}
+
+// ============================================================
+// Auth - Supabase থেকে তাজা ডেটা লোড করে
 // ============================================================
 async function checkAuth() {
     const stored = localStorage.getItem('currentBranchAdmin');
-    if (!stored) { window.location.href = 'branch-login.html'; return false; }
+    if (!stored) { 
+        window.location.href = 'branch-login.html'; 
+        return false; 
+    }
+    
     try {
         branchAdmin = JSON.parse(stored);
-        if (!branchAdmin.branch_id) { window.location.href = 'branch-login.html'; return false; }
+        if (!branchAdmin.branch_id) { 
+            window.location.href = 'branch-login.html'; 
+            return false; 
+        }
         branchId = branchAdmin.branch_id;
+        
+        // ✅ Supabase থেকে তাজা পারমিশন লোড করুন
+        const client = supabaseClient;
+        if (client && branchAdmin.id) {
+            try {
+                const { data: freshAdmin, error } = await client
+                    .from('branch_admins')
+                    .select('permissions, role, full_name, branch_id, status')
+                    .eq('id', branchAdmin.id)
+                    .single();
+                
+                if (!error && freshAdmin) {
+                    // তাজা ডেটা দিয়ে আপডেট করুন
+                    branchAdmin.permissions = freshAdmin.permissions || {};
+                    branchAdmin.role = freshAdmin.role || branchAdmin.role;
+                    branchAdmin.full_name = freshAdmin.full_name || branchAdmin.full_name;
+                    branchAdmin.branch_id = freshAdmin.branch_id || branchAdmin.branch_id;
+                    branchAdmin.status = freshAdmin.status || branchAdmin.status;
+                    
+                    // localStorage আপডেট করুন
+                    localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
+                    console.log('✅ তাজা পারমিশন লোড করা হয়েছে:', Object.keys(branchAdmin.permissions).length);
+                } else if (error) {
+                    console.warn('⚠️ তাজা পারমিশন লোড ব্যর্থ:', error.message);
+                }
+            } catch(e) {
+                console.warn('⚠️ তাজা পারমিশন লোড ব্যর্থ, localStorage ব্যবহার করা হচ্ছে:', e);
+            }
+        }
+        
+        // গ্লোবাল ভেরিয়েবল সেট করুন
         branchAdminPermissions = branchAdmin.permissions || {};
         
+        // ডিফল্ট পারমিশন সেট করুন (যদি খালি থাকে)
         if (Object.keys(branchAdminPermissions).length === 0) {
             branchAdminPermissions = getDefaultPermissions(branchAdmin.role);
             branchAdmin.permissions = branchAdminPermissions;
             localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
         }
         
+        // UI আপডেট করুন
         document.getElementById('branchNameDisplay').textContent = branchAdmin.branch_name || 'ব্রাঞ্চ';
         document.getElementById('branchCodeDisplay').textContent = branchAdmin.branch_code || '';
         document.getElementById('welcomeMessage').textContent = `স্বাগতম, ${branchAdmin.full_name || branchAdmin.username || 'অ্যাডমিন'}`;
         
-        const roleNames = { 'branch_officer': '👤 ব্রাঞ্চ অফিসার', 'admin': '🛡️ এডমিন', 'manager': '👑 ম্যানেজার', 'accounts': '💰 একাউন্টস', 'custom': '⚙️ কাস্টম' };
+        const roleNames = { 
+            'branch_officer': '👤 ব্রাঞ্চ অফিসার', 
+            'admin': '🛡️ এডমিন', 
+            'manager': '👑 ম্যানেজার', 
+            'accounts': '💰 একাউন্টস', 
+            'custom': '⚙️ কাস্টম' 
+        };
         document.getElementById('roleBadge').textContent = roleNames[branchAdmin.role] || '👤 ব্রাঞ্চ অফিসার';
         
+        // মেনু জেনারেট করুন
         generateBranchMenu();
         updatePermCount();
+        renderPermissions();
         
         await updateBadges();
+        await loadDashboard();
+        
         return true;
-    } catch(e) { console.error('Auth error:', e); window.location.href = 'branch-login.html'; return false; }
+        
+    } catch(e) { 
+        console.error('Auth error:', e); 
+        window.location.href = 'branch-login.html'; 
+        return false; 
+    }
 }
 
 function hasPermission(p) {
@@ -1052,7 +1175,7 @@ async function updateBadges() {
 }
 
 // ============================================================
-// ===== ALL DATA LOAD FUNCTIONS =====
+// ===== DATA LOAD FUNCTIONS =====
 // ============================================================
 
 // Dashboard Load
@@ -1540,7 +1663,7 @@ function renderPermissions() {
     `;
 }
 
-// Other functions (shortened for brevity - keep your existing implementations)
+// Other functions
 async function loadDeletedMembers() {
     const c = document.getElementById('deletedMembersList');
     const client = supabaseClient;
@@ -1855,6 +1978,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') closePermissionDenied();
         });
+        
+        // প্রতি 30 সেকেন্ডে পারমিশন চেক করুন (ঐচ্ছিক)
+        // setInterval(refreshPermissions, 30000);
+        
     } catch(e) {
         console.error('Page load error:', e);
     }
@@ -1885,22 +2012,6 @@ window.showPermissionDenied = showPermissionDenied;
 window.closePermissionDenied = closePermissionDenied;
 window.updateBadges = updateBadges;
 window.checkAuth = checkAuth;
-window.addNewMember = addNewMember;
-window.approveMember = approveMember;
-window.rejectMember = rejectMember;
-window.approvePayment = approvePayment;
-window.rejectPayment = rejectPayment;
-window.approveLoan = approveLoan;
-window.rejectLoan = rejectLoan;
-window.approveWithdrawal = approveWithdrawal;
-window.rejectWithdrawal = rejectWithdrawal;
-window.approveLoanPayment = approveLoanPayment;
-window.rejectLoanPayment = rejectLoanPayment;
-window.restoreMember = restoreMember;
-window.searchMember = searchMember;
-window.searchMemberForTransfer = searchMemberForTransfer;
-window.directDeposit = directDeposit;
-window.submitLoan = submitLoan;
 window.loadDeletedMembers = loadDeletedMembers;
 window.loadMemberDetails = loadMemberDetails;
 window.loadMemberTransfer = loadMemberTransfer;
@@ -1924,8 +2035,10 @@ window.rejectBookPayment = rejectBookPayment;
 window.resetSalesFilters = resetSalesFilters;
 window.generateBranchMenu = generateBranchMenu;
 window.updatePermCount = updatePermCount;
+window.refreshPermissions = refreshPermissions;
 
 console.log('✅ ব্রাঞ্চ ড্যাশবোর্ড লোড সম্পূর্ণ!');
+console.log('🔑 সক্রিয় পারমিশন:', Object.keys(branchAdminPermissions).filter(k => branchAdminPermissions[k]).length);
 </script>
 </body>
 </html>
