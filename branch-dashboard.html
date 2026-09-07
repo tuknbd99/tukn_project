@@ -2186,6 +2186,182 @@ async function saveBookConfig() {
     } catch(e) { console.error('Save config error:', e); document.getElementById('bookConfigStatus').innerHTML = `<div class="text-red-600 font-semibold">❌ সংরক্ষণ ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}</div>`; showToast('❌ সংরক্ষণ ব্যর্থ!', 'error'); } finally { if (btn) { btn.disabled = false; btn.innerHTML = originalText; } }
 }
 
+    // ============================================================
+// 📚 কিতাব যোগ করার মোডাল
+// ============================================================
+function openAddBookModal() {
+    // চেক করুন user এর পারমিশন আছে কিনা
+    if (!hasPermission('manage_book_catalog') && branchAdmin?.role !== 'admin' && branchAdmin?.role !== 'manager') {
+        showPermissionDenied('bookCatalog');
+        return;
+    }
+    
+    // মোডাল HTML তৈরি
+    const modalHtml = `
+        <div id="addBookModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this) closeAddBookModal()">
+            <div class="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-bold text-gray-800">📚 নতুন কিতাব যোগ করুন</h3>
+                    <button onclick="closeAddBookModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
+                </div>
+                
+                <form id="addBookForm" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">কিতাবের নাম <span class="text-red-500">*</span></label>
+                        <input type="text" id="newBookName" class="w-full border rounded-lg p-2" placeholder="কিতাবের নাম" required>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">লেখক <span class="text-red-500">*</span></label>
+                        <input type="text" id="newBookAuthor" class="w-full border rounded-lg p-2" placeholder="লেখকের নাম" required>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">শ্রেণী/বিভাগ</label>
+                        <select id="newBookCategory" class="w-full border rounded-lg p-2">
+                            <option value="">শ্রেণী নির্বাচন করুন</option>
+                            <option value="আল কুরআন">আল কুরআন</option>
+                            <option value="হাদিস">হাদিস</option>
+                            <option value="ফিকহ">ফিকহ</option>
+                            <option value="আকিদা">আকিদা</option>
+                            <option value="তাফসির">তাফসির</option>
+                            <option value="সীরাত">সীরাত</option>
+                            <option value="ইতিহাস">ইতিহাস</option>
+                            <option value="আত্মশুদ্ধি">আত্মশুদ্ধি</option>
+                            <option value="শিশু-কিশোর">শিশু-কিশোর</option>
+                            <option value="অন্যান্য">অন্যান্য</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">ক্রয়মূল্য (টাকা)</label>
+                        <input type="number" id="newPurchasePrice" class="w-full border rounded-lg p-2" placeholder="ক্রয়মূল্য" value="0" min="0">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">বিক্রয়মূল্য (টাকা) <span class="text-red-500">*</span></label>
+                        <input type="number" id="newSellingPrice" class="w-full border rounded-lg p-2" placeholder="বিক্রয়মূল্য" required min="0">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">ছাড় (%)</label>
+                        <input type="number" id="newDiscount" class="w-full border rounded-lg p-2" placeholder="ছাড়ের হার" value="0" min="0" max="100">
+                    </div>
+                    
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">বিবরণ</label>
+                        <textarea id="newBookDescription" rows="2" class="w-full border rounded-lg p-2" placeholder="কিতাবের বিবরণ লিখুন"></textarea>
+                    </div>
+                    
+                    <div class="md:col-span-2 flex gap-2 justify-end mt-2">
+                        <button type="button" onclick="closeAddBookModal()" class="btn btn-danger px-6 py-2">বাতিল</button>
+                        <button type="submit" class="btn btn-success px-6 py-2"><i class="fas fa-plus mr-1"></i> কিতাব যোগ করুন</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+    
+    // আগের মোডাল থাকলে রিমুভ
+    const existingModal = document.getElementById('addBookModal');
+    if (existingModal) existingModal.remove();
+    
+    // নতুন মোডাল যোগ
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
+    // ফর্ম সাবমিট ইভেন্ট
+    document.getElementById('addBookForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        await saveNewBook();
+    });
+}
+
+// ============================================================
+// 💾 নতুন কিতাব সংরক্ষণ
+// ============================================================
+async function saveNewBook() {
+    const name = document.getElementById('newBookName').value.trim();
+    const author = document.getElementById('newBookAuthor').value.trim();
+    const category = document.getElementById('newBookCategory').value || 'অন্যান্য';
+    const purchasePrice = parseFloat(document.getElementById('newPurchasePrice').value) || 0;
+    const sellingPrice = parseFloat(document.getElementById('newSellingPrice').value) || 0;
+    const discount = parseFloat(document.getElementById('newDiscount').value) || 0;
+    const description = document.getElementById('newBookDescription').value.trim();
+    
+    if (!name) {
+        showToast('❌ কিতাবের নাম দিন!', 'error');
+        document.getElementById('newBookName').focus();
+        return;
+    }
+    
+    if (!author) {
+        showToast('❌ লেখকের নাম দিন!', 'error');
+        document.getElementById('newBookAuthor').focus();
+        return;
+    }
+    
+    if (sellingPrice <= 0) {
+        showToast('❌ সঠিক বিক্রয়মূল্য দিন!', 'error');
+        document.getElementById('newSellingPrice').focus();
+        return;
+    }
+    
+    if (!supabaseClient) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const profit = sellingPrice - purchasePrice;
+    const btn = document.querySelector('#addBookForm button[type="submit"]');
+    const originalText = btn?.innerHTML || 'কিতাব যোগ করুন';
+    
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> যুক্ত করা হচ্ছে...';
+    }
+    
+    try {
+        const { data, error } = await supabaseClient
+            .from('book_catalog')
+            .insert([{
+                name: name,
+                author: author,
+                category: category,
+                purchase_price: purchasePrice,
+                selling_price: sellingPrice,
+                discount: discount,
+                profit: profit,
+                description: description || null,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            }])
+            .select();
+        
+        if (error) throw error;
+        
+        showToast(`✅ "${name}" কিতাব যুক্ত হয়েছে!`, 'success');
+        closeAddBookModal();
+        loadBookCatalog();
+        
+    } catch(e) {
+        console.error('Save book error:', e);
+        showToast(`❌ কিতাব যুক্ত করতে সমস্যা: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    }
+}
+
+// ============================================================
+// ❌ মোডাল বন্ধ
+// ============================================================
+function closeAddBookModal() {
+    const modal = document.getElementById('addBookModal');
+    if (modal) modal.remove();
+}
+    
 // ============================================================
 // 🛠️ ইউটিলিটি ফাংশনসমূহ
 // ============================================================
