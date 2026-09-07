@@ -984,60 +984,37 @@ async function refreshPermissions() {
             return;
         }
         
-        // ✅ RPC ফাংশন কল করুন
-        try {
-            const { data: adminData, error: rpcError } = await client
-                .rpc('get_branch_admin_by_id', { p_admin_id: adminId });
-            
-            if (!rpcError && adminData) {
-                const admin = typeof adminData === 'string' ? JSON.parse(adminData) : adminData;
-                if (admin && admin.id) {
-                    branchAdminPermissions = admin.permissions || {};
-                    branchAdmin.role = admin.role || branchAdmin.role;
-                    branchAdmin.full_name = admin.full_name || branchAdmin.full_name;
-                    branchAdmin.branch_id = admin.branch_id || branchAdmin.branch_id;
-                    branchAdmin.status = admin.status || branchAdmin.status;
-                    branchAdmin.permissions = branchAdminPermissions;
-                    localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
-                    
-                    generateBranchMenu();
-                    updatePermCount();
-                    renderPermissions();
-                    await updateBadges();
-                    await loadDashboard();
-                    
-                    const activeCount = Object.keys(branchAdminPermissions).filter(k => branchAdminPermissions[k]).length;
-                    showToast(`✅ পারমিশন রিফ্রেশ সম্পূর্ণ! ${activeCount} টি পারমিশন সক্রিয়`, 'success');
-                    return;
-                }
-            }
-        } catch(e) {
-            console.warn('⚠️ RPC কল ব্যর্থ:', e);
-        }
+        console.log(`🔄 পারমিশন রিফ্রেশ (ID: ${adminId})...`);
         
-        // ✅ সরাসরি SELECT
         const { data: admin, error } = await client
             .from('branch_admins')
             .select('permissions, role, full_name, branch_id, status')
             .eq('id', adminId)
             .maybeSingle();
         
-        if (error || !admin) {
-            console.warn('⚠️ Supabase থেকে ডেটা পাওয়া যায়নি');
-            const stored = JSON.parse(localStorage.getItem('currentBranchAdmin') || '{}');
-            branchAdminPermissions = stored.permissions || getDefaultPermissions(stored.role || 'branch_officer');
-            branchAdmin.permissions = branchAdminPermissions;
-            localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
-        } else {
-            branchAdminPermissions = admin.permissions || {};
-            branchAdmin.role = admin.role || branchAdmin.role;
-            branchAdmin.full_name = admin.full_name || branchAdmin.full_name;
-            branchAdmin.branch_id = admin.branch_id || branchAdmin.branch_id;
-            branchAdmin.status = admin.status || branchAdmin.status;
-            branchAdmin.permissions = branchAdminPermissions;
-            localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
+        if (error) {
+            console.error('❌ Supabase Error:', error);
+            showToast(`❌ পারমিশন লোড করতে সমস্যা: ${error.message}`, 'error');
+            return;
         }
         
+        if (!admin) {
+            showToast('❌ অ্যাডমিন পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        // ✅ আপডেট করুন
+        branchAdmin.permissions = admin.permissions || {};
+        branchAdmin.role = admin.role || branchAdmin.role;
+        branchAdmin.full_name = admin.full_name || branchAdmin.full_name;
+        branchAdmin.branch_id = admin.branch_id || branchAdmin.branch_id;
+        branchAdmin.status = admin.status || branchAdmin.status;
+        branchAdminPermissions = branchAdmin.permissions;
+        
+        // ✅ localStorage আপডেট করুন
+        localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
+        
+        // ✅ UI রিফ্রেশ
         generateBranchMenu();
         updatePermCount();
         renderPermissions();
@@ -1049,21 +1026,15 @@ async function refreshPermissions() {
         
     } catch(e) {
         console.error('❌ পারমিশন রিফ্রেশ error:', e);
-        const stored = JSON.parse(localStorage.getItem('currentBranchAdmin') || '{}');
-        branchAdminPermissions = stored.permissions || getDefaultPermissions(stored.role || 'branch_officer');
-        branchAdmin.permissions = branchAdminPermissions;
-        localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
-        generateBranchMenu();
-        updatePermCount();
-        renderPermissions();
-        showToast('✅ localStorage থেকে পারমিশন লোড করা হয়েছে', 'success');
+        showToast('❌ পারমিশন রিফ্রেশ ব্যর্থ!', 'error');
     }
 }
 
 // ============================================================
-// ✅ COMPLETE FIX - checkAuth() (Supabase RPC ব্যবহার)
+// ✅ COMPLETE FIX - checkAuth() (শুধু Supabase)
 // ============================================================
 async function checkAuth() {
+    // ✅ চেক করুন ইউজার লগইন করেছে কিনা
     const stored = localStorage.getItem('currentBranchAdmin');
     if (!stored) { 
         window.location.href = 'branch-login.html'; 
@@ -1071,14 +1042,14 @@ async function checkAuth() {
     }
     
     try {
+        // ✅ শুধু ইউজারনেম এবং পাসওয়ার্ড চেকের জন্য localStorage থেকে নিন
         const tempAdmin = JSON.parse(stored);
-        console.log('📦 localStorage থেকে ডেটা:', tempAdmin);
+        console.log('📦 টেম্প ডেটা:', tempAdmin);
         
-        if (!tempAdmin.branch_id) { 
+        if (!tempAdmin.username) { 
             window.location.href = 'branch-login.html'; 
             return false; 
         }
-        branchId = tempAdmin.branch_id;
         
         const client = supabaseClient;
         if (!client) {
@@ -1086,80 +1057,79 @@ async function checkAuth() {
             return false;
         }
         
-        // ✅ ১ম পদ্ধতি: RPC ফাংশন কল করুন (সবচেয়ে ভালো)
-        try {
-            console.log(`🔄 RPC ফাংশন কল করা হচ্ছে (ID: ${tempAdmin.id})...`);
-            const { data: adminData, error: rpcError } = await client
-                .rpc('get_branch_admin_by_id', { p_admin_id: tempAdmin.id });
-            
-            if (!rpcError && adminData) {
-                console.log('✅ RPC থেকে ডেটা পাওয়া গেছে');
-                const admin = typeof adminData === 'string' ? JSON.parse(adminData) : adminData;
-                
-                if (admin && admin.id) {
-                    branchAdmin = {
-                        id: admin.id,
-                        full_name: admin.full_name || tempAdmin.full_name,
-                        username: admin.username || tempAdmin.username,
-                        branch_id: admin.branch_id || tempAdmin.branch_id,
-                        branch_name: admin.branch_name || tempAdmin.branch_name || 'ব্রাঞ্চ',
-                        branch_code: admin.branch_code || tempAdmin.branch_code || '',
-                        role: admin.role || tempAdmin.role || 'branch_officer',
-                        permissions: admin.permissions || tempAdmin.permissions || {},
-                        status: admin.status || tempAdmin.status || 'active'
-                    };
-                    branchAdminPermissions = branchAdmin.permissions;
-                    localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
-                    
-                    // UI আপডেট
-                    updateUI();
-                    return true;
-                }
-            }
-        } catch(rpcError) {
-            console.warn('⚠️ RPC কল ব্যর্থ, ২য় পদ্ধতি ব্যবহার করা হচ্ছে:', rpcError);
-        }
+        // ✅ Supabase থেকে ইউজারনেম দিয়ে ডেটা লোড করুন
+        console.log(`🔄 Supabase থেকে ডেটা আনা হচ্ছে (Username: ${tempAdmin.username})...`);
         
-        // ✅ ২য় পদ্ধতি: সরাসরি SELECT (maybeSingle সহ)
-        console.log(`🔄 সরাসরি SELECT (ID: ${tempAdmin.id})...`);
         const { data: admin, error } = await client
             .from('branch_admins')
             .select('*')
-            .eq('id', tempAdmin.id)
+            .eq('username', tempAdmin.username)
             .maybeSingle();
         
         if (error) {
-            console.warn('⚠️ SELECT Error:', error);
-            // Error হলে localStorage থেকে ব্যবহার করুন
-            branchAdmin = tempAdmin;
-            branchAdminPermissions = tempAdmin.permissions || getDefaultPermissions(tempAdmin.role || 'branch_officer');
-            branchAdmin.permissions = branchAdminPermissions;
-            localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
-        } else if (admin) {
-            // ✅ সফল
-            console.log('✅ SELECT থেকে ডেটা পাওয়া গেছে');
-            branchAdmin = {
-                ...tempAdmin,
-                ...admin,
-                permissions: admin.permissions || tempAdmin.permissions || {}
-            };
-            branchAdminPermissions = branchAdmin.permissions;
-            localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
-        } else {
-            // ❌ ডেটা নেই
-            console.warn('⚠️ অ্যাডমিন পাওয়া যায়নি, localStorage ব্যবহার করা হচ্ছে');
-            branchAdmin = tempAdmin;
-            branchAdminPermissions = tempAdmin.permissions || getDefaultPermissions(tempAdmin.role || 'branch_officer');
-            branchAdmin.permissions = branchAdminPermissions;
-            localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
+            console.error('❌ Supabase Error:', error);
+            showToast('❌ ডেটা লোড করতে সমস্যা!', 'error');
+            window.location.href = 'branch-login.html';
+            return false;
         }
         
+        if (!admin) {
+            console.error('❌ অ্যাডমিন পাওয়া যায়নি!');
+            showToast('❌ এই ইউজারনেমে কোনো অ্যাডমিন নেই!', 'error');
+            window.location.href = 'branch-login.html';
+            return false;
+        }
+        
+        // ✅ সফল - Supabase থেকে ডেটা লোড হয়েছে
+        console.log('✅ Supabase থেকে ডেটা পাওয়া গেছে:', admin);
+        
+        // ✅ গ্লোবাল ভেরিয়েবল সেট করুন (শুধু Supabase ডেটা)
+        branchAdmin = {
+            id: admin.id,
+            full_name: admin.full_name,
+            username: admin.username,
+            branch_id: admin.branch_id,
+            branch_name: admin.branch_name || 'ব্রাঞ্চ',
+            branch_code: admin.branch_code || '',
+            role: admin.role || 'branch_officer',
+            permissions: admin.permissions || {},
+            status: admin.status || 'active'
+        };
+        
+        branchId = branchAdmin.branch_id;
+        branchAdminPermissions = branchAdmin.permissions;
+        
         // ✅ UI আপডেট
-        updateUI();
+        document.getElementById('branchNameDisplay').textContent = branchAdmin.branch_name || 'ব্রাঞ্চ';
+        document.getElementById('branchCodeDisplay').textContent = branchAdmin.branch_code || '';
+        document.getElementById('welcomeMessage').textContent = `স্বাগতম, ${branchAdmin.full_name || branchAdmin.username || 'অ্যাডমিন'}`;
+        
+        const roleNames = { 
+            'branch_officer': '👤 ব্রাঞ্চ অফিসার', 
+            'admin': '🛡️ এডমিন', 
+            'manager': '👑 ম্যানেজার', 
+            'accounts': '💰 একাউন্টস', 
+            'custom': '⚙️ কাস্টম',
+            'super_admin': '👑 সুপার অ্যাডমিন'
+        };
+        document.getElementById('roleBadge').textContent = roleNames[branchAdmin.role] || '👤 ব্রাঞ্চ অফিসার';
+        
+        // ✅ মেনু জেনারেট করুন
+        generateBranchMenu();
+        updatePermCount();
+        renderPermissions();
+        
+        await updateBadges();
+        await loadDashboard();
+        
+        // ✅ localStorage আপডেট করুন (শুধু সেশন টিকে থাকার জন্য)
+        localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
+        
         return true;
         
     } catch(e) { 
-        console.error('❌ Auth error:', e);
+        console.error('❌ Auth error:', e); 
+        showToast('❌ অথেন্টিকেশন ত্রুটি!', 'error');
         window.location.href = 'branch-login.html'; 
         return false; 
     }
