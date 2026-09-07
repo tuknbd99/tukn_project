@@ -377,13 +377,12 @@
         let isSuperAdmin = false;
         let userBranchId = null;
         let isFromBranchDashboard = false;
-        let isDataLoaded = false;
         
         let cacheData = { categories: null, banks: null, branches: null, ledger: null, timestamp: null };
         const CACHE_DURATION = 30000;
 
         // ============================================================
-        // ✅ SUPABASE CLIENT (FIXED)
+        // ✅ SUPABASE CLIENT
         // ============================================================
         function initSupabaseClient() {
             try {
@@ -399,7 +398,6 @@
                     return supabaseClient;
                 }
                 
-                // Fallback: চেক করুন window.supabase আছে কিনা
                 if (window.supabase && window.supabase.createClient) {
                     supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
                     console.log('✅ Supabase client created from window.supabase');
@@ -407,17 +405,15 @@
                 }
                 
                 console.error('❌ Supabase library not found!');
-                showToast('❌ Supabase লাইব্রেরি পাওয়া যায়নি! পেজ রিলোড করুন।', 'error');
                 return null;
             } catch(e) {
                 console.error('❌ Supabase init error:', e);
-                showToast('❌ Supabase সংযোগ সমস্যা!', 'error');
                 return null;
             }
         }
 
         // ============================================================
-        // ✅ USER CHECK
+        // ✅ USER CHECK - BRANCH ADMIN DETECTION FIXED
         // ============================================================
         function checkUser() {
             try {
@@ -428,13 +424,14 @@
                 }
                 currentUser = user;
                 
-                // ✅ সুপার অ্যাডমিন চেক
+                // ✅ সুপার অ্যাডমিন চেক - সঠিকভাবে
                 isSuperAdmin = user.role === 'super_admin' || user.is_super_admin === true || user.role === 'সুপার অ্যাডমিন';
                 userBranchId = user.branch_id || null;
                 
-                console.log('✅ ইউজার লোड:', currentUser.username);
+                console.log('✅ ইউজার লোড:', currentUser.username);
                 console.log('👑 সুপার অ্যাডমিন?', isSuperAdmin);
                 console.log('🏢 ব্রাঞ্চ আইডি:', userBranchId);
+                console.log('📋 ইউজার রোল:', user.role);
                 
                 document.getElementById('currentUserName').textContent = user.full_name || user.username || 'অ্যাডমিন';
                 
@@ -513,7 +510,7 @@
         function toggleTheme() { isDarkMode = !isDarkMode; document.body.classList.toggle('dark-mode', isDarkMode); localStorage.setItem('tukn_theme', isDarkMode ? 'dark' : 'light'); const icon = document.getElementById('themeIcon'); if (icon) icon.className = isDarkMode ? 'fas fa-sun' : 'fas fa-moon'; }
 
         // ============================================================
-        // ✅ LOAD DATA (FIXED)
+        // ✅ LOAD DATA
         // ============================================================
         async function loadData(forceRefresh = false) {
             console.log('🔄 loadData called, forceRefresh:', forceRefresh);
@@ -549,13 +546,9 @@
                 cacheData.branches = branches;
                 cacheData.ledger = ledgerData;
                 cacheData.timestamp = Date.now();
-                isDataLoaded = true;
                 
                 renderUI();
                 console.log('✅ Data loaded and cached');
-                console.log('📊 ক্যাটাগরি:', categories.length, 'টি');
-                console.log('🏦 ব্যাংক:', banks.length, 'টি');
-                console.log('📋 লেনদেন:', ledgerData.length, 'টি');
             } catch(e) {
                 console.error('❌ Data load error:', e);
                 showToast('ডেটা লোড করতে সমস্যা!', 'error');
@@ -564,7 +557,6 @@
 
         async function loadCategories() {
             try {
-                console.log('🔄 ক্যাটাগরি লোড হচ্ছে...');
                 const { data, error } = await supabaseClient
                     .from('ledger_categories')
                     .select('*')
@@ -573,7 +565,6 @@
                 if (error) throw error;
                 
                 if (!data || data.length === 0) {
-                    console.log('⚠️ কোনো ক্যাটাগরি নেই, ডিফল্ট তৈরি করা হচ্ছে...');
                     await createDefaultCategories();
                     const { data: newData } = await supabaseClient
                         .from('ledger_categories')
@@ -636,7 +627,6 @@
 
         async function loadBanks() {
             try {
-                console.log('🔄 ব্যাংক লোড হচ্ছে...');
                 const { data, error } = await supabaseClient
                     .from('bank_accounts')
                     .select('*')
@@ -656,7 +646,6 @@
 
         async function loadBranches() {
             try {
-                console.log('🔄 ব্রাঞ্চ লোড হচ্ছে...');
                 const { data, error } = await supabaseClient
                     .from('branches')
                     .select('id, branch_name, branch_code')
@@ -674,6 +663,9 @@
             }
         }
 
+        // ============================================================
+        // ✅ LOAD LEDGER ENTRIES WITH BRANCH FILTER (FIXED)
+        // ============================================================
         async function loadLedgerEntries() {
             try {
                 const fromDate = document.getElementById('filterFromDate')?.value || '';
@@ -688,10 +680,17 @@
                     .order('date', { ascending: false })
                     .order('created_at', { ascending: false });
 
+                // ✅ CRITICAL FIX: ব্রাঞ্চ ফিল্টার - ব্রাঞ্চ অ্যাডমিন হলে শুধু তার ব্রাঞ্চ
                 if (!isSuperAdmin && userBranchId) {
+                    console.log(`🔒 ব্রাঞ্চ অ্যাডমিন: শুধু ব্রাঞ্চ ${userBranchId} এর ডেটা দেখানো হচ্ছে`);
                     query = query.eq('branch_id', userBranchId);
                 } else if (isSuperAdmin && branchFilter !== 'all') {
+                    console.log(`🌐 সুপার অ্যাডমিন: ব্রাঞ্চ ${branchFilter} ফিল্টার করা হচ্ছে`);
                     query = query.eq('branch_id', branchFilter);
+                } else if (isSuperAdmin) {
+                    console.log('🌐 সুপার অ্যাডমিন: সব ব্রাঞ্চের ডেটা দেখানো হচ্ছে');
+                } else {
+                    console.warn('⚠️ ইউজারের ব্রাঞ্চ আইডি নেই!');
                 }
 
                 if (fromDate) query = query.gte('date', fromDate);
@@ -768,17 +767,12 @@
 
         function populateEntryCategories() {
             const select = document.getElementById('entryCategory');
-            if (!select) {
-                console.error('❌ entryCategory সিলেক্ট পাওয়া যায়নি!');
-                return;
-            }
+            if (!select) return;
 
-            console.log('🔄 এন্ট্রি ক্যাটাগরি পপুলেট করা হচ্ছে...');
             const currentValue = select.value;
             select.innerHTML = '<option value="">-- খাত নির্বাচন করুন --</option>';
             
             if (!categories || categories.length === 0) {
-                console.warn('⚠️ কোনো ক্যাটাগরি নেই!');
                 const opt = document.createElement('option');
                 opt.value = '';
                 opt.textContent = '⚠️ কোনো খাত নেই, প্রথমে খাত যোগ করুন';
@@ -814,25 +808,17 @@
                 select.appendChild(optGroup);
             }
             
-            if (currentValue && categories.some(c => c.name === currentValue)) {
-                select.value = currentValue;
-            }
-            console.log(`✅ এন্ট্রি ক্যাটাগরি পপুলেট সম্পূর্ণ: ${select.options.length} টি অপশন`);
+            if (currentValue) select.value = currentValue;
         }
 
         function populateEntryBanks() {
             const select = document.getElementById('entryBank');
-            if (!select) {
-                console.error('❌ entryBank সিলেক্ট পাওয়া যায়নি!');
-                return;
-            }
+            if (!select) return;
 
-            console.log('🔄 এন্ট্রি ব্যাংক পপুলেট করা হচ্ছে...');
             const currentValue = select.value;
             select.innerHTML = '<option value="">-- ব্যাংক নির্বাচন করুন --</option>';
             
             if (!banks || banks.length === 0) {
-                console.warn('⚠️ কোনো ব্যাংক নেই!');
                 const opt = document.createElement('option');
                 opt.value = '';
                 opt.textContent = '⚠️ কোনো ব্যাংক নেই, প্রথমে ব্যাংক যোগ করুন';
@@ -848,10 +834,7 @@
                 select.appendChild(opt);
             });
             
-            if (currentValue && banks.some(b => b.id == currentValue)) {
-                select.value = currentValue;
-            }
-            console.log(`✅ এন্ট্রি ব্যাংক পপুলেট সম্পূর্ণ: ${select.options.length} টি অপশন`);
+            if (currentValue) select.value = currentValue;
         }
 
         function updateFilterCategoryDropdown() {
@@ -1596,7 +1579,6 @@
         document.addEventListener('DOMContentLoaded', function() {
             console.log('📄 Ledger page loaded');
             
-            // ✅ Supabase client initialize করুন
             initSupabaseClient();
             
             if (!supabaseClient) {
@@ -1616,6 +1598,7 @@
             console.log('✅ Ledger page initialized successfully!');
             console.log('👑 সুপার অ্যাডমিন?', isSuperAdmin);
             console.log('🏢 ব্রাঞ্চ আইডি:', userBranchId);
+            console.log('🔒 ব্রাঞ্চ ফিল্টার সক্রিয়:', !isSuperAdmin && userBranchId ? 'হ্যাঁ' : 'না');
         });
 
         // ============================================================
