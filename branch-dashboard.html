@@ -1062,57 +1062,107 @@ async function refreshPermissions() {
 }
 
 // ============================================================
-// ✅ checkAuth()
+// ✅ FIXED: checkAuth() - localStorage থেকে সেশন চেক
 // ============================================================
 async function checkAuth() {
-    const stored = localStorage.getItem('currentBranchAdmin');
-    if (!stored) { 
-        window.location.href = 'branch-login.html'; 
-        return false; 
+    console.log('🔐 অথেন্টিকেশন চেক করা হচ্ছে...');
+    
+    // ✅ ১. localStorage থেকে সেশন লোড করুন
+    let stored = localStorage.getItem('currentBranchAdmin');
+    
+    // ✅ ২. না পেলে session manager থেকে চেক করুন
+    if (!stored) {
+        const session = SessionManager.get();
+        if (session && session.id) {
+            stored = JSON.stringify(session);
+            localStorage.setItem('currentBranchAdmin', stored);
+            console.log('✅ SessionManager থেকে ডেটা লোড করা হয়েছে');
+        }
     }
+    
+    // ✅ ৩. যদি সেশন না থাকে → লগইন পেজে রিডাইরেক্ট
+    if (!stored) {
+        console.warn('❌ কোনো সেশন পাওয়া যায়নি!');
+        window.location.href = 'branch-login.html';
+        return false;
+    }
+    
     try {
         const tempAdmin = JSON.parse(stored);
-        if (!tempAdmin.username) { 
-            window.location.href = 'branch-login.html'; 
-            return false; 
-        }
-        if (!supabaseClient) {
-            showToast('❌ Supabase সংযোগ সমস্যা!', 'error');
-            return false;
-        }
-        const { data: admin, error } = await supabaseClient
-            .from('branch_admins')
-            .select('*')
-            .eq('username', tempAdmin.username)
-            .maybeSingle();
-        if (error) {
-            console.error('❌ Supabase Error:', error);
-            showToast('❌ ডেটা লোড করতে সমস্যা!', 'error');
+        
+        // ✅ ৪. ইউজারনেম চেক
+        if (!tempAdmin.username) {
+            console.warn('❌ ইউজারনেম পাওয়া যায়নি!');
+            localStorage.removeItem('currentBranchAdmin');
+            SessionManager.clear();
             window.location.href = 'branch-login.html';
             return false;
         }
-        if (!admin) {
-            console.error('❌ অ্যাডমিন পাওয়া যায়নি!');
-            showToast('❌ এই ইউজারনেমে কোনো অ্যাডমিন নেই!', 'error');
+        
+        // ✅ ৫. সেশন এক্সপায়ার চেক (২৪ ঘন্টা)
+        const loggedInAt = new Date(tempAdmin.logged_in_at || tempAdmin.last_login);
+        const now = new Date();
+        const hoursDiff = (now - loggedInAt) / (1000 * 60 * 60);
+        
+        if (hoursDiff > 24) {
+            console.warn('⏰ সেশন এক্সপায়ার হয়েছে!');
+            localStorage.removeItem('currentBranchAdmin');
+            SessionManager.clear();
             window.location.href = 'branch-login.html';
             return false;
         }
-        branchAdmin = {
-            id: admin.id,
-            full_name: admin.full_name,
-            username: admin.username,
-            branch_id: admin.branch_id,
-            branch_name: admin.branch_name || 'ব্রাঞ্চ',
-            branch_code: admin.branch_code || '',
-            role: admin.role || 'branch_officer',
-            permissions: admin.permissions || {},
-            status: admin.status || 'active'
-        };
-        branchId = branchAdmin.branch_id;
-        branchAdminPermissions = branchAdmin.permissions;
-        document.getElementById('branchNameDisplay').textContent = branchAdmin.branch_name || 'ব্রাঞ্চ';
-        document.getElementById('branchCodeDisplay').textContent = branchAdmin.branch_code || '';
-        document.getElementById('welcomeMessage').textContent = `স্বাগতম, ${branchAdmin.full_name || branchAdmin.username || 'অ্যাডমিন'}`;
+        
+        // ✅ ৬. Supabase থেকে তাজা ডেটা লোড করুন
+        if (supabaseClient) {
+            try {
+                const { data: admin, error } = await supabaseClient
+                    .from('branch_admins')
+                    .select('*')
+                    .eq('username', tempAdmin.username)
+                    .maybeSingle();
+                
+                if (error) {
+                    console.warn('⚠️ Supabase query error:', error);
+                } else if (admin) {
+                    // ✅ সুপাবেস থেকে তাজা ডেটা আপডেট করুন
+                    tempAdmin.permissions = admin.permissions || {};
+                    tempAdmin.role = admin.role || tempAdmin.role;
+                    tempAdmin.full_name = admin.full_name || tempAdmin.full_name;
+                    tempAdmin.branch_name = admin.branch_name || tempAdmin.branch_name;
+                    tempAdmin.branch_code = admin.branch_code || tempAdmin.branch_code;
+                    tempAdmin.status = admin.status || tempAdmin.status;
+                    
+                    // আপডেট করা ডেটা সংরক্ষণ
+                    localStorage.setItem('currentBranchAdmin', JSON.stringify(tempAdmin));
+                    SessionManager.set(tempAdmin);
+                    console.log('✅ Supabase থেকে তাজা ডেটা লোড করা হয়েছে');
+                }
+            } catch(e) {
+                console.warn('⚠️ Supabase fetch error:', e);
+            }
+        }
+        
+        // ✅ ৭. গ্লোবাল ভেরিয়েবল সেট করুন
+        branchAdmin = tempAdmin;
+        branchId = tempAdmin.branch_id;
+        branchAdminPermissions = tempAdmin.permissions || {};
+        
+        // ✅ ৮. স্ট্যাটাস চেক করুন
+        if (tempAdmin.status === 'inactive' || tempAdmin.status === 'rejected') {
+            showToast('⛔ আপনার একাউন্ট নিষ্ক্রিয়!', 'error');
+            localStorage.removeItem('currentBranchAdmin');
+            SessionManager.clear();
+            setTimeout(() => {
+                window.location.href = 'branch-login.html';
+            }, 1500);
+            return false;
+        }
+        
+        // ✅ ৯. UI আপডেট
+        document.getElementById('branchNameDisplay').textContent = tempAdmin.branch_name || 'ব্রাঞ্চ';
+        document.getElementById('branchCodeDisplay').textContent = tempAdmin.branch_code || '';
+        document.getElementById('welcomeMessage').textContent = `স্বাগতম, ${tempAdmin.full_name || tempAdmin.username || 'অ্যাডমিন'}`;
+        
         const roleNames = { 
             'branch_officer': '👤 ব্রাঞ্চ অফিসার', 
             'admin': '🛡️ এডমিন', 
@@ -1121,20 +1171,27 @@ async function checkAuth() {
             'custom': '⚙️ কাস্টম',
             'super_admin': '👑 সুপার অ্যাডমিন'
         };
-        document.getElementById('roleBadge').textContent = roleNames[branchAdmin.role] || '👤 ব্রাঞ্চ অফিসার';
+        document.getElementById('roleBadge').textContent = roleNames[tempAdmin.role] || '👤 ব্রাঞ্চ অফিসার';
+        
+        // ✅ ১০. পারমিশন কাউন্ট আপডেট
+        const permCount = Object.keys(branchAdminPermissions).filter(k => branchAdminPermissions[k]).length;
+        document.getElementById('permCountBadge').textContent = permCount + ' পারমিশন';
+        
+        // ✅ ১১. মেনু জেনারেট করুন
         generateBranchMenu();
-        updatePermCount();
         renderPermissions();
         await updateBadges();
         await loadDashboard();
-        localStorage.setItem('currentBranchAdmin', JSON.stringify(branchAdmin));
-        SessionManager.set(branchAdmin);
+        
+        console.log(`✅ অথেন্টিকেশন সফল! (${permCount} টি পারমিশন)`);
         return true;
-    } catch(e) { 
-        console.error('❌ Auth error:', e); 
-        showToast('❌ অথেন্টিকেশন ত্রুটি!', 'error');
-        window.location.href = 'branch-login.html'; 
-        return false; 
+        
+    } catch(e) {
+        console.error('❌ Auth error:', e);
+        localStorage.removeItem('currentBranchAdmin');
+        SessionManager.clear();
+        window.location.href = 'branch-login.html';
+        return false;
     }
 }
 
