@@ -6776,9 +6776,6 @@ function closePendingLoanDetailsModal() {
     }
 }
 
-// ============================================================
-// approveLoan() - লোন অনুমোদন
-// ============================================================
 async function approveLoan(loanId) {
     console.log('✅ approveLoan called for:', loanId);
     
@@ -6790,7 +6787,7 @@ async function approveLoan(loanId) {
         return; 
     }
     
-    // ✅ বাটন ডিজেবল
+    // বাটন ডিজেবল
     const btns = document.querySelectorAll(`[onclick*="approveLoan('${loanId}')"]`);
     btns.forEach(btn => {
         btn.disabled = true;
@@ -6798,7 +6795,7 @@ async function approveLoan(loanId) {
     });
     
     try {
-        // ✅ ১. লোন ডেটা লোড
+        // লোন ডেটা লোড
         const { data: loan, error: loanError } = await client
             .from('loan_applications')
             .select('*')
@@ -6811,7 +6808,7 @@ async function approveLoan(loanId) {
             return;
         }
         
-        // ✅ ২. স্ট্যাটাস আপডেট
+        // স্ট্যাটাস আপডেট
         const { error: updateError } = await client
             .from('loan_applications')
             .update({ 
@@ -6823,7 +6820,7 @@ async function approveLoan(loanId) {
         
         if (updateError) throw updateError;
         
-        // ✅ ৩. ব্রাঞ্চ ব্যালেন্স আপডেট
+        // ব্রাঞ্চ ব্যালেন্স আপডেট
         if (loan.branch_id) {
             try {
                 const { data: balance } = await client
@@ -6856,18 +6853,30 @@ async function approveLoan(loanId) {
             }
         }
         
-        // ✅ ৪. সব লিস্ট রিফ্রেশ
+        // ✅ ক্যাশ ক্লিয়ার করুন - সব ডেটা রিলোডের জন্য
         allLoansData = [];
-        await loadPendingLoans();
-        await loadAllLoans();
+        pendingWithdrawalsData = [];
+        
+        // ✅ ফোর্স রিলোড - সরাসরি নতুন ডেটা আনুন
+        const { data: freshLoans, error: reloadError } = await client
+            .from('loan_applications')
+            .select('*, branches(branch_name)')
+            .order('submitted_at', { ascending: false });
+        
+        if (!reloadError && freshLoans) {
+            allLoansData = freshLoans;
+        }
+        
+        // সব ট্যাব রিলোড
+        await loadPendingLoans();   // এটা আবার ডাটাবেস থেকে ডেটা আনবে
+        await loadAllLoans();       // সব লোন ট্যাব রিফ্রেশ
         await loadBranchReport();
         await updateAllBadges();
         await loadRealDashboard();
         
-        // ✅ ৫. মডাল বন্ধ
+        // মডাল বন্ধ (যদি খোলা থাকে)
         closePendingLoanDetailsModal();
         
-        // ✅ ৬. সাফল্যের মেসেজ
         showToast(`✅ "${loan.member_name || 'সদস্য'}" এর লোন অনুমোদিত হয়েছে!`, 'success');
         console.log('✅ Loan approval completed!');
         
@@ -8450,30 +8459,6 @@ async function viewEventParticipants(eventId) {
     }
 }
 
-       
-     
-        function showCustomModal(title, content) {
-            let modal = document.getElementById('customModal');
-            if (!modal) {
-                modal = document.createElement('div');
-                modal.id = 'customModal';
-                modal.className = 'modal-overlay';
-                modal.innerHTML = `
-                    <div class="modal-container max-w-2xl">
-                        <div class="flex justify-between items-center border-b pb-2 mb-4">
-                            <h3 class="text-xl font-bold" id="customModalTitle"></h3>
-                            <button onclick="closeCustomModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
-                        </div>
-                        <div id="customModalContent"></div>
-                    </div>
-                `;
-                document.body.appendChild(modal);
-            }
-            
-            document.getElementById('customModalTitle').textContent = title;
-            document.getElementById('customModalContent').innerHTML = content;
-            modal.classList.add('active');
-        }
 
         function closeCustomModal() {
             const modal = document.getElementById('customModal');
@@ -13817,9 +13802,6 @@ async function viewLoanPaymentHistory(loanId) {
     }
 }
 
-// ============================================================
-// ২. লোন বিস্তারিত দেখান (viewLoanDetails)
-// ============================================================
 async function viewLoanDetails(loanId) {
     const client = initSupabaseClient();
     if (!client) {
@@ -13828,6 +13810,7 @@ async function viewLoanDetails(loanId) {
     }
     
     try {
+        // লোন ডেটা লোড
         const { data: loan, error } = await client
             .from('loan_applications')
             .select('*, branches(branch_name)')
@@ -13840,10 +13823,16 @@ async function viewLoanDetails(loanId) {
             return;
         }
         
-        const { data: payments } = await client
+        // ✅ লোন পেমেন্ট লোড করুন (সঠিক ফিল্ড দিয়ে)
+        const { data: payments, error: payError } = await client
             .from('loan_payments')
-            .select('total_amount, emi_amount, status')
-            .eq('loan_id', loanId);
+            .select('*')
+            .eq('loan_id', loanId)  // ← এটা সঠিক
+            .order('installment_no', { ascending: true });
+        
+        if (payError) {
+            console.warn('Payment load warning:', payError);
+        }
         
         const paidAmount = (payments || [])
             .filter(p => p.status === 'approved')
@@ -13857,6 +13846,61 @@ async function viewLoanDetails(loanId) {
                           loan.status === 'pending' ? '⏳ বিচারাধীন' : '❌ বাতিল';
         
         const branchName = loan.branches?.branch_name || loan.branch_name || '-';
+        
+        // ✅ EMI টেবিল তৈরি করুন (যদি লোন অনুমোদিত হয়)
+        let emiTableHtml = '';
+        if (loan.status === 'approved' && loan.duration_months) {
+            const emiAmount = loan.emi_amount || (loan.amount / loan.duration_months);
+            const profitRate = loan.profit_rate || 12;
+            const monthlyRate = (profitRate / 100) / 12;
+            let balance = loan.amount;
+            
+            emiTableHtml = `
+                <div class="mt-3 border-t pt-3">
+                    <h5 class="font-bold text-gray-700 mb-2">📅 কিস্তি বিবরণী (${loan.duration_months} মাস)</h5>
+                    <div class="table-scroll max-h-60 overflow-y-auto">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>কিস্তি</th>
+                                    <th class="text-left">EMI</th>
+                                    <th class="text-left">মুনাফা</th>
+                                    <th class="text-left">মূলধন</th>
+                                    <th class="text-left">বাকি</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+            
+            for (let i = 1; i <= loan.duration_months; i++) {
+                const profit = balance * monthlyRate;
+                const principal = emiAmount - profit;
+                balance = Math.max(0, balance - principal);
+                
+                // পেমেন্ট স্ট্যাটাস চেক
+                const payment = (payments || []).find(p => p.installment_no === i);
+                const isPaid = payment && payment.status === 'approved';
+                const statusIcon = isPaid ? '✅' : '⏳';
+                const rowColor = isPaid ? 'bg-green-50' : '';
+                
+                emiTableHtml += `
+                    <tr class="${rowColor}">
+                        <td class="text-center font-bold">${i}</td>
+                        <td class="text-left font-bold text-emerald-600">${emiAmount.toFixed(2)} টাকা</td>
+                        <td class="text-left text-amber-600">${profit.toFixed(2)} টাকা</td>
+                        <td class="text-left text-blue-600">${principal.toFixed(2)} টাকা</td>
+                        <td class="text-left font-bold">${balance.toFixed(2)} টাকা ${statusIcon}</td>
+                    </tr>
+                `;
+            }
+            
+            emiTableHtml += `
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
         
         const html = `
             <div class="space-y-4">
@@ -13943,6 +13987,9 @@ async function viewLoanDetails(loanId) {
                     ` : ''}
                 </div>
                 
+                <!-- EMI টেবিল (শুধুমাত্র অনুমোদিত লোনের জন্য) -->
+                ${emiTableHtml}
+                
                 ${loan.special_note ? `
                     <div class="bg-amber-50 p-3 rounded-lg border border-amber-200">
                         <span class="text-amber-600 font-medium">📝 বিশেষ নোট</span>
@@ -13963,7 +14010,7 @@ async function viewLoanDetails(loanId) {
                         <i class="fas fa-list mr-1"></i> পেমেন্ট ইতিহাস
                     </button>
                     ${loan.status === 'approved' && remaining > 0 ? `
-                        <button onclick="loanEMICalculator.showRepaymentModal(${loan.id})" class="btn btn-success flex-1 min-w-[100px] py-2">
+                        <button onclick="if(typeof loanEMICalculator !== 'undefined') loanEMICalculator.showRepaymentModal(${loan.id})" class="btn btn-success flex-1 min-w-[100px] py-2">
                             <i class="fas fa-hand-holding-usd mr-1"></i> কিস্তি দাও
                         </button>
                     ` : ''}
@@ -13974,6 +14021,7 @@ async function viewLoanDetails(loanId) {
             </div>
         `;
         
+        // ✅ সঠিকভাবে মডাল দেখান
         showCustomModal('📋 লোন বিস্তারিত', html);
         
     } catch(e) {
@@ -15668,32 +15716,47 @@ async function showBookPaymentDetailsModal(paymentId) {
 }
 
 function showCustomModal(title, content) {
+    // পুরনো মডাল সরান
     let modal = document.getElementById('customModal');
-    if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'customModal';
-        modal.className = 'modal-overlay';
-        modal.innerHTML = `
-            <div class="modal-container max-w-2xl">
-                <div class="flex justify-between items-center border-b pb-2 mb-4">
-                    <h3 class="text-xl font-bold" id="customModalTitle"></h3>
-                    <button onclick="closeCustomModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
-                </div>
-                <div id="customModalContent"></div>
-            </div>
-        `;
-        document.body.appendChild(modal);
+    if (modal) {
+        modal.remove();
     }
     
-    document.getElementById('customModalTitle').textContent = title;
-    document.getElementById('customModalContent').innerHTML = content;
-    modal.classList.add('active');
+    // নতুন মডাল তৈরি
+    modal = document.createElement('div');
+    modal.id = 'customModal';
+    modal.className = 'modal-overlay active';
+    modal.style.display = 'flex';
+    modal.style.zIndex = '9999';
+    modal.innerHTML = `
+        <div class="modal-container max-w-4xl">
+            <div class="flex justify-between items-center border-b pb-2 mb-4">
+                <h3 class="text-xl font-bold text-emerald-700" id="customModalTitle">${title}</h3>
+                <button onclick="closeCustomModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
+            </div>
+            <div id="customModalContent">${content}</div>
+            <div class="mt-4 text-right text-xs text-gray-400 no-print">
+                <button onclick="closeCustomModal()" class="text-gray-500 hover:text-gray-700">বন্ধ</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    
+    // ক্লিক করলে বন্ধ
+    modal.addEventListener('click', function(e) {
+        if (e.target === this) {
+            closeCustomModal();
+        }
+    });
 }
 
 function closeCustomModal() {
     const modal = document.getElementById('customModal');
-    if (modal) modal.classList.remove('active');
+    if (modal) {
+        modal.remove();
+    }
 }
+
 
 
 // ================================================================
