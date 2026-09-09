@@ -498,7 +498,7 @@
     </div>
     
     <!-- ============================================================ -->
-    <!-- ===== JAVASCRIPT - সম্পূর্ণ (সব ফাংশন সহ) ===== -->
+    <!-- ===== JAVASCRIPT - সম্পূর্ণ ===== -->
     <!-- ============================================================ -->
     <script>
         // ============================================================
@@ -542,7 +542,7 @@
         }
 
         // ============================================================
-        // ✅ USER CHECK
+        // ✅ USER CHECK - সুপার অ্যাডমিন সাপোর্ট সহ
         // ============================================================
         async function checkUser() {
             console.log('🔐 ইউজার চেক করা হচ্ছে...');
@@ -556,38 +556,89 @@
                 const urlRole = urlParams.get('role');
                 const urlSessionId = urlParams.get('session_id');
                 
-                const username = urlUsername || urlParams.get('user') || urlParams.get('admin');
+                // ✅ ১. ইউজারনেম চেক (URL থেকে অথবা localStorage থেকে)
+                let username = urlUsername || urlParams.get('user') || urlParams.get('admin');
                 
+                // ✅ ২. URL এ ইউজারনেম না থাকলে localStorage চেক করুন
+                if (!username) {
+                    // সুপার অ্যাডমিন সেশন চেক
+                    const adminSession = localStorage.getItem('currentAdmin');
+                    if (adminSession) {
+                        try {
+                            const adminData = JSON.parse(adminSession);
+                            if (adminData.username) {
+                                username = adminData.username;
+                                console.log('✅ localStorage থেকে ইউজারনেম পাওয়া গেছে:', username);
+                            }
+                        } catch(e) {}
+                    }
+                    
+                    // ব্রাঞ্চ অ্যাডমিন সেশন চেক
+                    if (!username) {
+                        const branchSession = localStorage.getItem('tuknbd_branch_session');
+                        if (branchSession) {
+                            try {
+                                const branchData = JSON.parse(branchSession);
+                                if (branchData.username) {
+                                    username = branchData.username;
+                                    console.log('✅ branch session থেকে ইউজারনেম পাওয়া গেছে:', username);
+                                }
+                            } catch(e) {}
+                        }
+                    }
+                }
+                
+                // ✅ ৩. যদি এখনও ইউজারনেম না থাকে → লগইন পেজে রিডাইরেক্ট
                 if (!username) {
                     console.warn('❌ ইউজারনেম পাওয়া যায়নি!');
                     window.location.href = 'admin-login.html';
                     return false;
                 }
                 
+                // ✅ ৪. Supabase থেকে ইউজার লোড করুন
                 const { data: user, error } = await supabaseClient
                     .from('branch_admins')
                     .select('*')
                     .eq('username', username)
                     .maybeSingle();
                 
-                if (error) {
-                    console.error('❌ Supabase error:', error);
-                    window.location.href = 'admin-login.html';
-                    return false;
-                }
+                // ✅ ৫. সুপার অ্যাডমিন চেক (Supabase এ না থাকলেও চলবে)
+                const isSuperAdminUser = username === 'admin' || 
+                                         username === 'superadmin' || 
+                                         username === 'সুপার অ্যাডমিন' ||
+                                         urlRole === 'super_admin';
                 
-                if (!user) {
+                if (error || !user) {
+                    if (isSuperAdminUser) {
+                        console.log('👑 সুপার অ্যাডমিন হিসেবে চালানো হচ্ছে');
+                        currentUser = {
+                            id: 'super_admin',
+                            username: username,
+                            full_name: urlFullName || 'সুপার অ্যাডমিন',
+                            role: 'super_admin',
+                            permissions: {},
+                            branch_id: null,
+                            branch_name: 'সকল ব্রাঞ্চ',
+                            status: 'active'
+                        };
+                        isSuperAdmin = true;
+                        userBranchId = null;
+                        updateUIAfterLogin();
+                        return true;
+                    }
                     console.warn('❌ ইউজার পাওয়া যায়নি!');
                     window.location.href = 'admin-login.html';
                     return false;
                 }
                 
+                // ✅ ৬. স্ট্যাটাস চেক
                 if (user.status !== 'active') {
                     showToast('⛔ আপনার একাউন্ট সক্রিয় নয়!', 'error');
                     setTimeout(() => { window.location.href = 'admin-login.html'; }, 2000);
                     return false;
                 }
                 
+                // ✅ ৭. ইউজার ডেটা সেট করুন
                 currentUser = {
                     id: user.id,
                     username: user.username,
@@ -602,15 +653,17 @@
                     status: user.status
                 };
                 
+                // URL প্যারামিটার থেকে ওভাররাইড
                 if (urlFullName) currentUser.full_name = urlFullName;
                 if (urlRole) currentUser.role = urlRole;
                 if (urlSessionId) currentUser.session_id = urlSessionId;
                 
                 isSuperAdmin = currentUser.role === 'super_admin' || 
                                currentUser.role === 'সুপার অ্যাডমিন' ||
-                               user.is_super_admin === true;
+                               user.is_super_admin === true ||
+                               isSuperAdminUser;
                 
-                userBranchId = currentUser.branch_id;
+                userBranchId = isSuperAdmin ? null : (currentUser.branch_id || null);
                 isFromBranchDashboard = !!urlBranchId || document.referrer?.includes('branch-dashboard.html');
                 currentSessionId = urlSessionId || 'session_' + Date.now();
                 
@@ -619,6 +672,7 @@
                 console.log(`🏢 ব্রাঞ্চ আইডি: ${userBranchId}`);
                 console.log(`🆔 সেশন আইডি: ${currentSessionId}`);
                 
+                // ✅ ৮. UI আপডেট
                 updateUIAfterLogin();
                 
                 return true;
@@ -637,7 +691,7 @@
             const pageSubtitle = document.getElementById('pageSubtitle');
             if (pageSubtitle) {
                 if (isSuperAdmin) {
-                    pageSubtitle.textContent = '👑 সুপার অ্যাডমিন প্যানেল';
+                    pageSubtitle.textContent = '👑 সুপার অ্যাডমিন প্যানেল - সকল ব্রাঞ্চ';
                 } else {
                     const branchName = currentUser?.branch_name || 'ব্রাঞ্চ';
                     pageSubtitle.textContent = `🏢 ${branchName} - ব্রাঞ্চ অ্যাডমিন প্যানেল`;
@@ -684,6 +738,11 @@
             
             if (isSuperAdmin) {
                 populateBranchSelect();
+                // সুপার অ্যাডমিনের জন্য ব্রাঞ্চ ফিল্টার দেখান
+                const filterBranch = document.getElementById('filterBranch');
+                if (filterBranch) {
+                    filterBranch.classList.remove('hidden');
+                }
             }
             
             setupBackButton();
@@ -958,6 +1017,7 @@
                     .order('date', { ascending: false })
                     .order('created_at', { ascending: false });
 
+                // ✅ সুপার অ্যাডমিন সব ব্রাঞ্চ দেখতে পারবে
                 if (!isSuperAdmin && userBranchId) {
                     console.log(`🔒 ব্রাঞ্চ অ্যাডমিন: শুধু ব্রাঞ্চ ${userBranchId} এর ডেটা দেখানো হচ্ছে`);
                     query = query.eq('branch_id', userBranchId);
@@ -1255,7 +1315,7 @@
         function renderUI() {
             renderSummary();
             renderTable();
-            renderAnalysis(); // ✅ বিশ্লেষণ
+            renderAnalysis();
             renderCharts();
             populateFilters();
         }
@@ -1399,7 +1459,7 @@
         }
 
         // ============================================================
-        // ✅ RENDER ANALYSIS (মাসিক ও খাত বিশ্লেষণ)
+        // ✅ RENDER ANALYSIS
         // ============================================================
         function renderAnalysis() {
             const monthlyContainer = document.getElementById('monthlySummaryTable');
