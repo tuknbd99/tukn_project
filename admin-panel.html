@@ -6448,7 +6448,7 @@ async function loadPendingLoans() {
     }
     
     try {
-        // ✅ ১. ব্রাঞ্চের তথ্য সহ লোন লোড করুন
+        // ✅ ব্রাঞ্চের তথ্য সহ লোন লোড করুন
         const { data: loans, error } = await client
             .from('loan_applications')
             .select(`
@@ -6462,14 +6462,14 @@ async function loadPendingLoans() {
         
         if (error) throw error;
         
-        // ✅ ২. pending ফিল্টার
+        // ✅ pending ফিল্টার
         const allLoans = loans || [];
         const pendingLoans = allLoans.filter(loan => loan.status === 'pending');
         
-        // ✅ ৩. ক্যাশ ক্লিয়ার
+        // ✅ ক্যাশ ক্লিয়ার
         allLoansData = allLoans;
         
-        // ✅ ৪. ব্যাজ আপডেট
+        // ✅ ব্যাজ আপডেট
         const badge = document.getElementById('pendingLoanBadge');
         if (badge) {
             badge.innerText = pendingLoans.length;
@@ -6486,9 +6486,8 @@ async function loadPendingLoans() {
             return; 
         }
         
-        // ✅ ৫. লিস্ট রেন্ডার (ব্রাঞ্চের নাম সহ)
+        // ✅ লিস্ট রেন্ডার
         container.innerHTML = pendingLoans.map(loan => {
-            // 🔥 ব্রাঞ্চের নাম বের করুন
             const branchName = loan.branches?.branch_name || loan.branch_name || 'ব্রাঞ্চ নির্ধারিত হয়নি';
             const branchCode = loan.branches?.branch_code || '';
             const branchDisplay = branchCode ? `${branchName} (${branchCode})` : branchName;
@@ -6712,7 +6711,7 @@ function closePendingLoanDetailsModal() {
 }
 
 // ============================================================
-// approveLoan() - লোন অনুমোদন (EMI সহ)
+// approveLoan() - লোন অনুমোদন (ক্যাশ ক্লিয়ার সহ)
 // ============================================================
 async function approveLoan(loanId) {
     console.log('✅ approveLoan called for:', loanId);
@@ -6745,7 +6744,7 @@ async function approveLoan(loanId) {
             return;
         }
         
-        // ✅ EMI ক্যালকুলেশন (যদি না থাকে)
+        // ✅ EMI ক্যালকুলেশন
         let emiAmount = loan.emi_amount;
         let totalPayable = loan.total_payable;
         
@@ -6773,6 +6772,8 @@ async function approveLoan(loanId) {
         
         if (emiAmount) updateData.emi_amount = Math.round(emiAmount * 100) / 100;
         if (totalPayable) updateData.total_payable = Math.round(totalPayable * 100) / 100;
+        
+        console.log('📝 আপডেট ডেটা:', updateData);
         
         const { error: updateError } = await client
             .from('loan_applications')
@@ -6814,9 +6815,22 @@ async function approveLoan(loanId) {
             }
         }
         
-        // ✅ সব ট্যাব রিলোড
-        await loadPendingLoans();
-        await loadAllLoans();
+        // ✅ ক্যাশ ক্লিয়ার করুন - allLoansData রিসেট
+        allLoansData = [];
+        
+        // ✅ ফোর্স রিলোড - সরাসরি নতুন ডেটা আনুন
+        const { data: freshLoans, error: reloadError } = await client
+            .from('loan_applications')
+            .select('*, branches(branch_name)')
+            .order('submitted_at', { ascending: false });
+        
+        if (!reloadError && freshLoans) {
+            allLoansData = freshLoans;
+        }
+        
+        // ✅ সব ট্যাব রিলোড (ক্যাশ ক্লিয়ার সহ)
+        await loadPendingLoans();  // পেন্ডিং লিস্ট রিফ্রেশ
+        await loadAllLoans();     // সব লোন ট্যাব রিফ্রেশ
         await loadBranchReport();
         await updateAllBadges();
         await loadRealDashboard();
@@ -13750,7 +13764,7 @@ async function viewLoanPaymentHistory(loanId) {
 }
 
 // ============================================================
-// viewLoanDetails() - লোন বিস্তারিত ও EMI টেবিল (সঠিক)
+// viewLoanDetails() - লোন বিস্তারিত ও EMI টেবিল (Due Date সহ)
 // ============================================================
 async function viewLoanDetails(loanId) {
     console.log('🔍 viewLoanDetails called for:', loanId);
@@ -13798,14 +13812,17 @@ async function viewLoanDetails(loanId) {
         const paidPercent = loan.amount > 0 ? (paidAmount / loan.amount * 100).toFixed(1) : 0;
         
         const branchName = loan.branches?.branch_name || loan.branch_name || '-';
+        const approvedDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
         
-        // ✅ EMI টেবিল তৈরি করুন
+        // ✅ EMI টেবিল তৈরি করুন (Due Date সহ)
         let emiTableHtml = '';
         if (loan.status === 'approved' && loan.duration_months) {
             const emiAmount = loan.emi_amount || (loan.amount / loan.duration_months);
             const profitRate = loan.profit_rate || 12;
             const monthlyRate = (profitRate / 100) / 12;
             let balance = loan.amount;
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
             
             emiTableHtml = `
                 <div class="mt-4 border-t pt-3">
@@ -13819,6 +13836,7 @@ async function viewLoanDetails(loanId) {
                             <thead style="position:sticky; top:0; background:#f8fafc; z-index:10;">
                                 <tr>
                                     <th style="padding:8px 10px; text-align:center;">কিস্তি</th>
+                                    <th style="padding:8px 10px; text-align:center;">নির্ধারিত তারিখ</th>
                                     <th style="padding:8px 10px; text-align:left;">EMI</th>
                                     <th style="padding:8px 10px; text-align:left;">মুনাফা</th>
                                     <th style="padding:8px 10px; text-align:left;">মূলধন</th>
@@ -13834,16 +13852,47 @@ async function viewLoanDetails(loanId) {
                 const principal = emiAmount - profit;
                 balance = Math.max(0, balance - principal);
                 
+                // ✅ Due Date ক্যালকুলেট করুন
+                let dueDate = new Date(approvedDate);
+                dueDate.setMonth(approvedDate.getMonth() + i);
+                dueDate.setHours(0, 0, 0, 0);
+                const dueDateStr = dueDate.toLocaleDateString('bn-BD', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                });
+                
+                // ✅ পেমেন্ট স্ট্যাটাস চেক
                 const payment = (payments || []).find(p => p.installment_no === i);
                 const isPaid = payment && payment.status === 'approved';
                 const isPending = payment && payment.status === 'pending_verification';
-                const statusIcon = isPaid ? '✅ পরিশোধিত' : isPending ? '⏳ যাচাইকরণে' : '⏳ অপেক্ষমান';
-                const rowColor = isPaid ? 'bg-green-50' : isPending ? 'bg-yellow-50' : '';
-                const statusColor = isPaid ? 'text-green-600' : isPending ? 'text-yellow-600' : 'text-gray-400';
+                
+                // ✅ সময়সীমা পেরিয়েছে কিনা চেক
+                const isOverdue = !isPaid && today > dueDate;
+                const daysOverdue = isOverdue ? Math.floor((today - dueDate) / (1000 * 60 * 60 * 24)) : 0;
+                
+                let statusIcon = '⏳ অপেক্ষমান';
+                let statusColor = 'text-gray-400';
+                let rowColor = '';
+                
+                if (isPaid) {
+                    statusIcon = '✅ পরিশোধিত';
+                    statusColor = 'text-green-600';
+                    rowColor = 'bg-green-50';
+                } else if (isPending) {
+                    statusIcon = '⏳ যাচাইকরণে';
+                    statusColor = 'text-yellow-600';
+                    rowColor = 'bg-yellow-50';
+                } else if (isOverdue) {
+                    statusIcon = `⚠️ বিলম্বিত (${daysOverdue} দিন)`;
+                    statusColor = 'text-red-600 font-bold';
+                    rowColor = 'bg-red-50';
+                }
                 
                 emiTableHtml += `
                     <tr class="${rowColor}">
                         <td class="text-center font-bold" style="padding:6px 8px;">${i}</td>
+                        <td class="text-center" style="padding:6px 8px; font-size:12px; ${isOverdue ? 'color:#dc2626; font-weight:bold;' : ''}">${dueDateStr}</td>
                         <td style="padding:6px 8px; font-weight:600; color:#059669;">${emiAmount.toFixed(2)} টাকা</td>
                         <td style="padding:6px 8px; color:#d97706;">${profit.toFixed(2)} টাকা</td>
                         <td style="padding:6px 8px; color:#2563eb;">${principal.toFixed(2)} টাকা</td>
@@ -13860,12 +13909,13 @@ async function viewLoanDetails(loanId) {
                     <div class="mt-2 text-xs text-gray-400 flex justify-between">
                         <span>📊 মোট কিস্তি: ${loan.duration_months} টি</span>
                         <span>📈 মুনাফার হার: ${profitRate}%</span>
+                        <span>📅 অনুমোদনের তারিখ: ${approvedDate.toLocaleDateString('bn-BD')}</span>
                     </div>
                 </div>
             `;
         }
         
-        // ✅ মডাল HTML তৈরি
+        // ✅ মডাল HTML তৈরি (বাকি অংশ একই)
         const html = `
             <div class="space-y-4">
                 <!-- হেডার -->
@@ -13953,7 +14003,7 @@ async function viewLoanDetails(loanId) {
                     ` : ''}
                 </div>
                 
-                <!-- ✅ EMI টেবিল -->
+                <!-- ✅ EMI টেবিল (Due Date সহ) -->
                 ${emiTableHtml}
                 
                 ${loan.special_note ? `
