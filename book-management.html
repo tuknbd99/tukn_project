@@ -1033,7 +1033,10 @@ async function renderAuditLogs() {
 }
 
 // ============================================================
-// 🆕 BOOK REQUESTS (কিতাব যোগ করার অনুরোধ) - NEW SECTION
+// 🆕 BOOK REQUESTS (কিতাব যোগ করার অনুরোধ)
+// ✅ আপনার আসল টেবিল কলাম: 
+//    approved_by, approved_at, rejected_by, rejected_at, 
+//    rejection_reason, updated_at
 // ============================================================
 let bookRequestsList = [];
 let currentRequestFilter = 'pending';
@@ -1200,12 +1203,15 @@ function filterRequests(status) {
             `;
         }
         
+        // ✅ আপনার টেবিলের কলাম অনুযায়ী Admin Note + Approval/Rejection info
         let adminNoteHtml = '';
-        if (req.admin_note) {
+        if (req.admin_note || req.rejection_reason || req.approved_by || req.rejected_by) {
             adminNoteHtml = `
-                <div class="mt-2 text-xs bg-white p-2 rounded border border-gray-200">
-                    <strong>📝 এডমিন নোট:</strong> ${req.admin_note}
-                    ${req.reviewed_by ? `<br><span class="text-gray-400">পর্যালোচনা: ${req.reviewed_by}${req.reviewed_at ? ' - ' + new Date(req.reviewed_at).toLocaleString('bn-BD') : ''}</span>` : ''}
+                <div class="mt-2 text-xs bg-white p-2 rounded border border-gray-200 space-y-1">
+                    ${req.admin_note ? `<div><strong>📝 এডমিন নোট:</strong> ${req.admin_note}</div>` : ''}
+                    ${req.rejection_reason ? `<div><strong>❌ বাতিলের কারণ:</strong> ${req.rejection_reason}</div>` : ''}
+                    ${req.approved_by ? `<div class="text-gray-400">✅ অনুমোদন: ${req.approved_by}${req.approved_at ? ' - ' + new Date(req.approved_at).toLocaleString('bn-BD') : ''}</div>` : ''}
+                    ${req.rejected_by ? `<div class="text-gray-400">❌ বাতিল: ${req.rejected_by}${req.rejected_at ? ' - ' + new Date(req.rejected_at).toLocaleString('bn-BD') : ''}</div>` : ''}
                 </div>
             `;
         }
@@ -1236,6 +1242,7 @@ function filterRequests(status) {
     }).join('');
 }
 
+// ✅ অনুমোদন — আপনার টেবিলের কলাম: approved_by, approved_at, updated_at
 async function approveBookRequest(requestId) {
     const req = bookRequestsList.find(r => r.id === requestId);
     if (!req) return;
@@ -1253,8 +1260,9 @@ async function approveBookRequest(requestId) {
             .update({
                 status: 'approved',
                 admin_note: adminNote || '',
-                reviewed_by: 'admin',
-                reviewed_at: new Date().toISOString()
+                approved_by: 'admin',                     // ✅ আপনার টেবিলের কলাম
+                approved_at: new Date().toISOString(),    // ✅ আপনার টেবিলের কলাম
+                updated_at: new Date().toISOString()      // ✅ আপনার টেবিলের কলাম
             })
             .eq('id', requestId);
         
@@ -1265,10 +1273,11 @@ async function approveBookRequest(requestId) {
         
     } catch(e) {
         console.error('Approve error:', e);
-        showToast('❌ অনুমোদনে সমস্যা!', 'error');
+        showToast('❌ অনুমোদনে সমস্যা: ' + e.message, 'error');
     }
 }
 
+// ❌ বাতিল — আপনার টেবিলের কলাম: rejected_by, rejected_at, rejection_reason, updated_at
 async function rejectBookRequest(requestId) {
     const req = bookRequestsList.find(r => r.id === requestId);
     if (!req) return;
@@ -1285,8 +1294,10 @@ async function rejectBookRequest(requestId) {
             .update({
                 status: 'rejected',
                 admin_note: adminNote || 'কারণ উল্লেখ নেই',
-                reviewed_by: 'admin',
-                reviewed_at: new Date().toISOString()
+                rejection_reason: adminNote || 'কারণ উল্লেখ নেই', // ✅ আপনার টেবিলের কলাম
+                rejected_by: 'admin',                              // ✅ আপনার টেবিলের কলাম
+                rejected_at: new Date().toISOString(),             // ✅ আপনার টেবিলের কলাম
+                updated_at: new Date().toISOString()               // ✅ আপনার টেবিলের কলাম
             })
             .eq('id', requestId);
         
@@ -1297,7 +1308,7 @@ async function rejectBookRequest(requestId) {
         
     } catch(e) {
         console.error('Reject error:', e);
-        showToast('❌ বাতিলে সমস্যা!', 'error');
+        showToast('❌ বাতিলে সমস্যা: ' + e.message, 'error');
     }
 }
 
@@ -1589,9 +1600,7 @@ async function createBookCopy() {
         
         if (error) throw error;
         
-        if (data && data.length > 0) {
-            books.push(data[0]);
-        }
+        if (data && data.length > 0) books.push(data[0]);
         
         if (!sourceBook.master_book_id) {
             const { error: updateError } = await sb
@@ -1599,9 +1608,7 @@ async function createBookCopy() {
                 .update({ master_book_id: masterId })
                 .eq('id', sourceBook.id);
             
-            if (!updateError) {
-                sourceBook.master_book_id = masterId;
-            }
+            if (!updateError) sourceBook.master_book_id = masterId;
         }
         
         filteredBooks = [...books];
@@ -2436,7 +2443,7 @@ function showDuplicateWarning(existingBook) {
 }
 
 // ============================================================
-// 📤 IMAGE UPLOAD TO SUPABASE STORAGE
+// 📤 IMAGE UPLOAD
 // ============================================================
 async function uploadImage(file, bookId) {
     if (!file) return null;
@@ -3036,9 +3043,7 @@ async function updateLibraryNameFromModal() {
         
         libraries = libraries.map(l => l.name === oldName ? { ...l, name: newName } : l);
         books.forEach(book => {
-            if (book.library === oldName) {
-                book.library = newName;
-            }
+            if (book.library === oldName) book.library = newName;
         });
         
         updateLibraryDropdowns();
@@ -3105,9 +3110,7 @@ async function addNewCategory() {
         
         if (error) throw error;
         
-        if (data && data.length > 0) {
-            categories.push(data[0]);
-        }
+        if (data && data.length > 0) categories.push(data[0]);
         
         renderCategories();
         updateStats();
@@ -3290,7 +3293,7 @@ async function init() {
     await loadCategories();
     await loadBooksFromSupabase();
     await loadRecentApplications();
-    await loadBookRequests();      // 🆕 কিতাব অনুরোধ লোড
+    await loadBookRequests();      // 🆕 কিতাব অনুরোধ
     await renderAuditLogs();
     await renderCategories();
     
