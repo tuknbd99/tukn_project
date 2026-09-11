@@ -1630,46 +1630,49 @@
             }
         }
 
-        // ============================================================
-        // ✅ DUPLICATE CHECK
-        // ============================================================
         async function checkDuplicateEntry(date, voucher, amount, type, category) {
-            try {
-                const { data: voucherCheck } = await supabaseClient
-                    .from('ledger_transactions')
-                    .select('id, date, voucher')
-                    .eq('voucher', voucher)
-                    .maybeSingle();
-                
-                if (voucherCheck) {
-                    return { 
-                        isDuplicate: true, 
-                        reason: `📄 ভাউচার <strong>"${voucher}"</strong> ইতিমধ্যে ব্যবহার করা হয়েছে!<br><span style="font-size:13px; opacity:0.8;">📅 তারিখ: ${voucherCheck.date}</span>` 
-                    };
-                }
-                
-                const { data: duplicateCheck } = await supabaseClient
-                    .from('ledger_transactions')
-                    .select('id')
-                    .eq('date', date)
-                    .eq('amount', amount)
-                    .eq('type', type)
-                    .eq('category', category)
-                    .maybeSingle();
-                
-                if (duplicateCheck) {
-                    return { 
-                        isDuplicate: true, 
-                        reason: `📅 এই তারিখে <strong>${date}</strong> তারিখে <strong>${amount.toLocaleString()} টাকা</strong> এর <strong>"${category}"</strong> খাতে একই এন্ট্রি আছে!` 
-                    };
-                }
-                
-                return { isDuplicate: false, reason: null };
-            } catch(e) {
-                console.error('❌ Duplicate check error:', e);
-                return { isDuplicate: false, reason: null };
-            }
+    try {
+        // ✅ ১. ভাউচার নম্বর দিয়ে চেক
+        const { data: voucherCheck } = await supabaseClient
+            .from('ledger_transactions')
+            .select('id, date, voucher, amount, category, entered_by_name, entered_by_role, branch_name, time, type')
+            .eq('voucher', voucher)
+            .maybeSingle();
+        
+        if (voucherCheck) {
+            return { 
+                isDuplicate: true,
+                type: 'voucher',
+                existingData: voucherCheck,
+                reason: 'voucher_duplicate'
+            };
         }
+        
+        // ✅ ২. একই তারিখ, পরিমাণ, ধরন ও খাত দিয়ে চেক
+        const { data: duplicateCheck } = await supabaseClient
+            .from('ledger_transactions')
+            .select('id, date, voucher, amount, category, entered_by_name, entered_by_role, branch_name, time, type')
+            .eq('date', date)
+            .eq('amount', amount)
+            .eq('type', type)
+            .eq('category', category)
+            .maybeSingle();
+        
+        if (duplicateCheck) {
+            return { 
+                isDuplicate: true,
+                type: 'entry',
+                existingData: duplicateCheck,
+                reason: 'entry_duplicate'
+            };
+        }
+        
+        return { isDuplicate: false, reason: null };
+    } catch(e) {
+        console.error('❌ Duplicate check error:', e);
+        return { isDuplicate: false, reason: null };
+    }
+}
 
         // ============================================================
         // ✅ POPULATE FUNCTIONS
@@ -2468,6 +2471,264 @@
             }
         }
 
+        // ============================================================
+// ✅ ✅ ✅ নতুন: এন্ট্রি সফল হলে মাঝখানে নোটিফিকেশন
+// ============================================================
+function showEntrySuccessNotification(data) {
+    const oldNotification = document.getElementById('entrySuccessNotification');
+    if (oldNotification) oldNotification.remove();
+    
+    const notification = document.createElement('div');
+    notification.id = 'entrySuccessNotification';
+    notification.style.cssText = `
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.65);
+        backdrop-filter: blur(8px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 99999;
+        animation: fadeInOverlay 0.3s ease;
+        font-family: 'Noto Sans Bengali', sans-serif;
+    `;
+    
+    const isIncome = data.type === 'income';
+    const typeLabel = isIncome ? '📈 আয়' : '📉 ব্যয়';
+    const typeColor = isIncome ? '#059669' : '#dc2626';
+    const typeBg = isIncome ? '#d1fae5' : '#fee2e2';
+    
+    notification.innerHTML = `
+        <div style="background: white; border-radius: 24px; max-width: 520px; width: 92%; padding: 32px 28px 24px; box-shadow: 0 25px 70px rgba(0,0,0,0.35); animation: slideInNotification 0.4s ease; border-top: 6px solid #059669; position: relative; overflow: hidden;">
+            
+            <!-- ✅ হেডার আইকন -->
+            <div style="display: flex; align-items: center; justify-content: center; width: 80px; height: 80px; border-radius: 50%; background: linear-gradient(135deg, #d1fae5, #10b981); margin: 0 auto 18px; font-size: 40px; color: white; box-shadow: 0 8px 25px rgba(16, 185, 129, 0.35);">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            
+            <!-- ✅ শিরোনাম -->
+            <h3 style="font-size: 22px; font-weight: 800; text-align: center; color: #065f46; margin: 0 0 6px 0; line-height: 1.3;">
+                এন্ট্রি সংরক্ষণ সফল!
+            </h3>
+            <p style="font-size: 14px; text-align: center; color: #6b7280; margin: 0 0 20px 0;">
+                আপনার লেনদেন সফলভাবে সংরক্ষিত হয়েছে
+            </p>
+            
+            <!-- ✅ তথ্য কার্ড -->
+            <div style="background: linear-gradient(135deg, #f0fdf4, #ecfdf5); border: 2px solid #a7f3d0; border-radius: 14px; padding: 16px 18px; margin-bottom: 20px;">
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #d1fae5;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">📄 ভাউচার</span>
+                    <span style="font-size: 14px; font-weight: 700; color: #1e40af; font-family: monospace;">${data.voucher || '-'}</span>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #d1fae5;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">💰 পরিমাণ</span>
+                    <span style="font-size: 18px; font-weight: 800; color: ${typeColor};">${isIncome ? '+' : '-'} ${Number(data.amount || 0).toLocaleString()} টাকা</span>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #d1fae5;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">📂 খাত</span>
+                    <span style="font-size: 14px; font-weight: 700; color: #1f2937;">${data.category || '-'}</span>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #d1fae5;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">📋 ধরন</span>
+                    <span style="font-size: 13px; font-weight: 700; padding: 4px 12px; border-radius: 12px; background: ${typeBg}; color: ${typeColor};">${typeLabel}</span>
+                </div>
+                
+                ${data.branchName ? `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #d1fae5;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">🏢 ব্রাঞ্চ</span>
+                    <span style="font-size: 13px; font-weight: 600; color: #1e40af;">${data.branchName}</span>
+                </div>
+                ` : ''}
+                
+                ${data.bankName ? `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">🏦 ব্যাংক</span>
+                    <span style="font-size: 13px; font-weight: 600; color: #1f2937;">${data.bankName}</span>
+                </div>
+                ` : ''}
+                
+            </div>
+            
+            <!-- ✅ OK বাটন (এটি না চাপা পর্যন্ত নোটিফিকেশন যাবে না) -->
+            <button onclick="closeEntrySuccessNotification()" 
+                    style="display: block; width: 100%; padding: 16px; background: linear-gradient(135deg, #059669, #10b981); color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; transition: all 0.3s ease; font-family: 'Noto Sans Bengali', sans-serif; box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35);">
+                <i class="fas fa-check mr-2"></i> ঠিক আছে
+            </button>
+            
+            <p style="text-align: center; font-size: 11px; color: #9ca3af; margin: 12px 0 0 0;">
+                ⏱️ সংরক্ষণের সময়: ${new Date().toLocaleString('bn-BD')}
+            </p>
+        </div>
+    `;
+    
+    document.body.appendChild(notification);
+    setTimeout(() => document.getElementById('entrySuccessNotification')?.querySelector('button')?.focus(), 200);
+}
+
+function closeEntrySuccessNotification() {
+    const notification = document.getElementById('entrySuccessNotification');
+    if (notification) {
+        notification.style.opacity = '0';
+        notification.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => notification.remove(), 300);
+    }
+}
+
+// ============================================================
+// ✅ ✅ ✅ নতুন: ডুপ্লিকেট এন্ট্রি হলে মাঝখানে নোটিফিকেশন
+// ============================================================
+function showDuplicateEntryNotification(existingData) {
+    const oldNotification = document.getElementById('duplicateEntryNotification');
+    if (oldNotification) oldNotification.remove();
+    
+    const notification = document.createElement('div');
+    notification.id = 'duplicateEntryNotification';
+    notification.style.cssText = `
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.65);
+        backdrop-filter: blur(8px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 99999;
+        animation: fadeInOverlay 0.3s ease;
+        font-family: 'Noto Sans Bengali', sans-serif;
+    `;
+    
+    const isIncome = existingData.type === 'income';
+    const typeLabel = isIncome ? '📈 আয়' : '📉 ব্যয়';
+    const typeColor = isIncome ? '#059669' : '#dc2626';
+    const typeBg = isIncome ? '#d1fae5' : '#fee2e2';
+    
+    // ✅ তারিখ ফরম্যাট
+    let dateDisplay = '-';
+    if (existingData.date) {
+        try {
+            dateDisplay = new Date(existingData.date).toLocaleDateString('bn-BD', {
+                year: 'numeric', month: 'long', day: 'numeric'
+            });
+        } catch(e) { dateDisplay = existingData.date; }
+    }
+    
+    // ✅ রোল ব্যাজ
+    let roleDisplay = '🛡️ অ্যাডমিন';
+    let roleColor = '#1e40af';
+    let roleBg = '#dbeafe';
+    if (existingData.entered_by_role) {
+        if (existingData.entered_by_role.includes('super')) {
+            roleDisplay = '👑 সুপার অ্যাডমিন';
+            roleColor = '#92400e';
+            roleBg = '#fef3c7';
+        } else if (existingData.entered_by_role.includes('branch')) {
+            roleDisplay = '🏢 ব্রাঞ্চ অ্যাডমিন';
+            roleColor = '#065f46';
+            roleBg = '#d1fae5';
+        }
+    }
+    
+    notification.innerHTML = `
+        <div style="background: white; border-radius: 24px; max-width: 540px; width: 92%; padding: 32px 28px 24px; box-shadow: 0 25px 70px rgba(0,0,0,0.35); animation: slideInNotification 0.4s ease; border-top: 6px solid #d97706; position: relative; overflow: hidden;">
+            
+            <!-- ⚠️ হেডার আইকন -->
+            <div style="display: flex; align-items: center; justify-content: center; width: 80px; height: 80px; border-radius: 50%; background: linear-gradient(135deg, #fef3c7, #f59e0b); margin: 0 auto 18px; font-size: 40px; color: white; box-shadow: 0 8px 25px rgba(245, 158, 11, 0.35);">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            
+            <!-- ⚠️ শিরোনাম -->
+            <h3 style="font-size: 22px; font-weight: 800; text-align: center; color: #92400e; margin: 0 0 6px 0; line-height: 1.3;">
+                ⚠️ এই এন্ট্রি ইতিমধ্যে করা হয়েছে!
+            </h3>
+            <p style="font-size: 14px; text-align: center; color: #6b7280; margin: 0 0 20px 0;">
+                একই ভাউচার নম্বর দিয়ে ইতিমধ্যে একটি এন্ট্রি সংরক্ষিত আছে
+            </p>
+            
+            <!-- 📋 পূর্বের এন্ট্রির তথ্য -->
+            <div style="background: linear-gradient(135deg, #fffbeb, #fef3c7); border: 2px solid #fcd34d; border-radius: 14px; padding: 16px 18px; margin-bottom: 20px;">
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #fcd34d;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">📄 ভাউচার নম্বর</span>
+                    <span style="font-size: 14px; font-weight: 700; color: #1e40af; font-family: monospace;">${existingData.voucher || '-'}</span>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #fcd34d;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">📅 তারিখ</span>
+                    <span style="font-size: 14px; font-weight: 700; color: #1f2937;">${dateDisplay}</span>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #fcd34d;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">💰 পরিমাণ</span>
+                    <span style="font-size: 18px; font-weight: 800; color: ${typeColor};">${isIncome ? '+' : '-'} ${Number(existingData.amount || 0).toLocaleString()} টাকা</span>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #fcd34d;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">📂 খাত</span>
+                    <span style="font-size: 14px; font-weight: 700; color: #1f2937;">${existingData.category || '-'}</span>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #fcd34d;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">📋 ধরন</span>
+                    <span style="font-size: 13px; font-weight: 700; padding: 4px 12px; border-radius: 12px; background: ${typeBg}; color: ${typeColor};">${typeLabel}</span>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #fcd34d;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">👤 এন্ট্রি দিয়েছেন</span>
+                    <span style="font-size: 14px; font-weight: 700; color: #1f2937;">${existingData.entered_by_name || 'অজানা'}</span>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #fcd34d;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">🎭 রোল</span>
+                    <span style="font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 12px; background: ${roleBg}; color: ${roleColor};">${roleDisplay}</span>
+                </div>
+                
+                ${existingData.branch_name ? `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #fcd34d;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">🏢 ব্রাঞ্চ</span>
+                    <span style="font-size: 13px; font-weight: 600; color: #1e40af;">${existingData.branch_name}</span>
+                </div>
+                ` : ''}
+                
+                ${existingData.time ? `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0;">
+                    <span style="font-size: 13px; color: #6b7280; font-weight: 500;">🕐 এন্ট্রির সময়</span>
+                    <span style="font-size: 13px; font-weight: 600; color: #1f2937;">${existingData.time}</span>
+                </div>
+                ` : ''}
+                
+            </div>
+            
+            <!-- 💡 পরামর্শ -->
+            <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 12px 14px; margin-bottom: 18px;">
+                <p style="font-size: 12px; color: #991b1b; margin: 0; line-height: 1.6;">
+                    💡 <strong>পরামর্শ:</strong> যদি আপনি সত্যিই নতুন এন্ট্রি যোগ করতে চান, তাহলে <strong>নতুন একটি ভাউচার নম্বর</strong> লিখুন অথবা <strong>ভাউচার জেনারেট</strong> বাটনে ক্লিক করে নতুন ভাউচার তৈরি করুন।
+                </p>
+            </div>
+            
+            <!-- ✅ OK বাটন -->
+            <button onclick="closeDuplicateEntryNotification()" 
+                    style="display: block; width: 100%; padding: 16px; background: linear-gradient(135deg, #d97706, #f59e0b); color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; transition: all 0.3s ease; font-family: 'Noto Sans Bengali', sans-serif; box-shadow: 0 6px 20px rgba(245, 158, 11, 0.35);">
+                <i class="fas fa-check mr-2"></i> বুঝেছি
+            </button>
+        </div>
+    `;
+    
+    document.body.appendChild(notification);
+    setTimeout(() => document.getElementById('duplicateEntryNotification')?.querySelector('button')?.focus(), 200);
+}
+
+function closeDuplicateEntryNotification() {
+    const notification = document.getElementById('duplicateEntryNotification');
+    if (notification) {
+        notification.style.opacity = '0';
+        notification.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => notification.remove(), 300);
+    }
+}
+
         function clearMemberVerification() {
             document.getElementById('memberVerificationInput').value = '';
             document.getElementById('memberVerificationResult').classList.add('hidden');
@@ -2522,18 +2783,21 @@
             }
 
             if (!id) {
-                const result = await checkDuplicateEntry(date, voucher, amount, type, category);
-                if (result.isDuplicate) {
-                    showDuplicateNotification('⚠️ ডুপ্লিকেট এন্ট্রি!', result.reason, 'warning');
-                    document.getElementById('voucherNumber').style.borderColor = '#d97706';
-                    document.getElementById('voucherNumber').style.backgroundColor = '#fef3c7';
-                    setTimeout(() => { 
-                        document.getElementById('voucherNumber').style.borderColor = ''; 
-                        document.getElementById('voucherNumber').style.backgroundColor = ''; 
-                    }, 3000);
-                    return;
-                }
-            }
+    const result = await checkDuplicateEntry(date, voucher, amount, type, category);
+    if (result.isDuplicate) {
+        // ✅ ✅ ✅ নতুন: Duplicate Notification দেখান (বিস্তারিত তথ্য সহ)
+        showDuplicateEntryNotification(result.existingData);
+        
+        // ✅ ভাউচার ফিল্ড হাইলাইট করুন
+        document.getElementById('voucherNumber').style.borderColor = '#d97706';
+        document.getElementById('voucherNumber').style.backgroundColor = '#fef3c7';
+        setTimeout(() => { 
+            document.getElementById('voucherNumber').style.borderColor = ''; 
+            document.getElementById('voucherNumber').style.backgroundColor = ''; 
+        }, 3000);
+        return;
+    }
+}
 
             const submitBtn = document.getElementById('submitBtn');
             const originalText = submitBtn?.innerHTML || 'সংরক্ষণ';
@@ -2592,7 +2856,18 @@
                 }
 
                 console.log('✅ Insert Success');
-                showToast('✅ লেজার এন্ট্রি সংরক্ষিত হয়েছে!', 'success');
+               // ✅ ✅ ✅ নতুন: Success Notification মাঝখানে দেখান
+                showEntrySuccessNotification({
+                    voucher: voucher,
+                    amount: amount,
+                    category: category,
+                    type: type,
+                    date: date,
+                    branchName: branchName,
+                    bankName: bankId ? getBankNameById(bankId) : null
+                });
+                
+                // ✅ মডাল বন্ধ করুন
                 closeLedgerModal();
                 await loadData(true);
 
@@ -3246,6 +3521,10 @@
         window.clearVoucherSearch = clearVoucherSearch;
         window.highlightInTable = highlightInTable;
         window.quickVoucherSearch = quickVoucherSearch;
+        window.showEntrySuccessNotification = showEntrySuccessNotification;
+        window.closeEntrySuccessNotification = closeEntrySuccessNotification;
+        window.showDuplicateEntryNotification = showDuplicateEntryNotification;
+        window.closeDuplicateEntryNotification = closeDuplicateEntryNotification;
 
         console.log('✅ Ledger page load complete!');
     </script>
