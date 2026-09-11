@@ -631,92 +631,156 @@
             }
         }
 
-        // ============================================================
-        // ✅ USER CHECK
-        // ============================================================
-        async function checkUser() {
-            console.log('🔐 ইউজার চেক করা হচ্ছে...');
+async function checkUser() {
+    console.log('🔐 ইউজার চেক করা হচ্ছে...');
+    
+    try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlBranchId = urlParams.get('branch_id');
+        const urlBranchName = urlParams.get('branch_name');
+        const urlUsername = urlParams.get('username');
+        const urlFullName = urlParams.get('full_name');
+        const urlRole = urlParams.get('role');
+        const urlSessionId = urlParams.get('session_id');
+        
+        const username = urlUsername || urlParams.get('user') || urlParams.get('admin');
+        
+        if (!username) {
+            console.warn('❌ ইউজারনেম পাওয়া যায়নি! URL-এ username প্যারামিটার নেই।');
+            window.location.href = 'admin-login.html';
+            return false;
+        }
+        
+        console.log('🔍 ইউজারনেম খোঁজা হচ্ছে:', username);
+        
+        // ✅ ১. প্রথমে branch_admins টেবিলে খুঁজুন
+        let user = null;
+        let tableName = '';
+        
+        const { data: branchUser, error: branchError } = await supabaseClient
+            .from('branch_admins')
+            .select('*')
+            .eq('username', username)
+            .maybeSingle();
+        
+        if (branchError) {
+            console.warn('⚠️ branch_admins query error:', branchError.message);
+        }
+        
+        if (branchUser) {
+            user = branchUser;
+            tableName = 'branch_admins';
+            console.log('✅ branch_admins টেবিলে পাওয়া গেছে');
+        } else {
+            // ✅ ২. না পেলে admins টেবিলে খুঁজুন
+            console.log('🔍 branch_admins-এ নেই, admins টেবিলে খুঁজছি...');
             
-            try {
-                const urlParams = new URLSearchParams(window.location.search);
-                const urlBranchId = urlParams.get('branch_id');
-                const urlBranchName = urlParams.get('branch_name');
-                const urlUsername = urlParams.get('username');
-                const urlFullName = urlParams.get('full_name');
-                const urlRole = urlParams.get('role');
-                const urlSessionId = urlParams.get('session_id');
-                
-                const username = urlUsername || urlParams.get('user') || urlParams.get('admin');
-                
-                if (!username) {
-                    console.warn('❌ ইউজারনেম পাওয়া যায়নি!');
-                    window.location.href = 'admin-login.html';
-                    return false;
-                }
-                
-                const { data: user, error } = await supabaseClient
-                    .from('branch_admins')
-                    .select('*')
-                    .eq('username', username)
-                    .maybeSingle();
-                
-                if (error) {
-                    console.error('❌ Supabase error:', error);
-                    window.location.href = 'admin-login.html';
-                    return false;
-                }
-                
-                if (!user) {
-                    console.warn('❌ ইউজার পাওয়া যায়নি!');
-                    window.location.href = 'admin-login.html';
-                    return false;
-                }
-                
-                if (user.status !== 'active') {
-                    showToast('⛔ আপনার একাউন্ট সক্রিয় নয়!', 'error');
-                    setTimeout(() => { window.location.href = 'admin-login.html'; }, 2000);
-                    return false;
-                }
+            const { data: superAdmin, error: adminError } = await supabaseClient
+                .from('admins')
+                .select('*')
+                .eq('username', username)
+                .maybeSingle();
+            
+            if (adminError) {
+                console.warn('⚠️ admins query error:', adminError.message);
+            }
+            
+            if (superAdmin) {
+                user = superAdmin;
+                tableName = 'admins';
+                user.role = superAdmin.role || 'super_admin';
+                user.is_super_admin = true;
+                console.log('✅ admins টেবিলে সুপার অ্যাডমিন পাওয়া গেছে');
+            }
+        }
+        
+        // ✅ ৩. কোনো টেবিলেই না পেলে
+        if (!user) {
+            console.warn('❌ ইউজার কোনো টেবিলেই পাওয়া যায়নি!');
+            console.warn('📌 খোঁজা হয়েছে:', username);
+            
+            // ✅ বিকল্প: URL প্যারামিটার দিয়ে চেক করুন (fallback)
+            if (urlRole === 'super_admin' || urlRole === 'সুপার অ্যাডমিন') {
+                console.log('⚡ URL প্যারামিটার থেকে সুপার অ্যাডমিন হিসেবে লোড করা হচ্ছে...');
                 
                 currentUser = {
-                    id: user.id,
-                    username: user.username,
-                    full_name: user.full_name || user.username,
-                    email: user.email || '',
-                    phone: user.phone || '',
-                    role: user.role || 'branch_officer',
-                    permissions: user.permissions || {},
-                    branch_id: urlBranchId || user.branch_id || null,
-                    branch_name: urlBranchName || user.branch_name || 'ব্রাঞ্চ',
-                    branch_code: user.branch_code || '',
-                    status: user.status
+                    id: 'url_' + Date.now(),
+                    username: username,
+                    full_name: urlFullName || username,
+                    email: '',
+                    phone: '',
+                    role: 'super_admin',
+                    permissions: {},
+                    branch_id: urlBranchId || null,
+                    branch_name: urlBranchName || 'ব্রাঞ্চ',
+                    branch_code: '',
+                    status: 'active',
+                    is_super_admin: true
                 };
                 
-                if (urlFullName) currentUser.full_name = urlFullName;
-                if (urlRole) currentUser.role = urlRole;
-                if (urlSessionId) currentUser.session_id = urlSessionId;
-                
-                isSuperAdmin = currentUser.role === 'super_admin' || 
-                               currentUser.role === 'সুপার অ্যাডমিন' ||
-                               user.is_super_admin === true;
-                
+                isSuperAdmin = true;
                 userBranchId = currentUser.branch_id;
                 isFromBranchDashboard = !!urlBranchId || document.referrer?.includes('branch-dashboard.html');
                 currentSessionId = urlSessionId || 'session_' + Date.now();
                 
-                console.log(`✅ ইউজার লোড: ${currentUser.username}`);
-                console.log(`👑 সুপার অ্যাডমিন? ${isSuperAdmin}`);
-                console.log(`🏢 ব্রাঞ্চ আইডি: ${userBranchId}`);
-                
+                console.log('✅ URL প্যারামিটার থেকে ইউজার লোড সফল');
                 updateUIAfterLogin();
                 return true;
-                
-            } catch(e) {
-                console.error('❌ User check error:', e);
-                window.location.href = 'admin-login.html';
-                return false;
             }
+            
+            window.location.href = 'admin-login.html';
+            return false;
         }
+        
+        // ✅ ৪. ইউজার স্ট্যাটাস চেক
+        if (user.status && user.status !== 'active') {
+            showToast('⛔ আপনার একাউন্ট সক্রিয় নয়!', 'error');
+            setTimeout(() => { window.location.href = 'admin-login.html'; }, 2000);
+            return false;
+        }
+        
+        // ✅ ৫. currentUser সেট করুন
+        currentUser = {
+            id: user.id,
+            username: user.username,
+            full_name: user.full_name || user.username,
+            email: user.email || '',
+            phone: user.phone || '',
+            role: urlRole || user.role || 'branch_officer',
+            permissions: user.permissions || {},
+            branch_id: urlBranchId || user.branch_id || null,
+            branch_name: urlBranchName || user.branch_name || 'ব্রাঞ্চ',
+            branch_code: user.branch_code || '',
+            status: user.status,
+            is_super_admin: user.is_super_admin || false
+        };
+        
+        if (urlFullName) currentUser.full_name = urlFullName;
+        if (urlSessionId) currentUser.session_id = urlSessionId;
+        
+        // ✅ ৬. সুপার অ্যাডমিন চেক
+        isSuperAdmin = 
+            currentUser.role === 'super_admin' || 
+            currentUser.role === 'সুপার অ্যাডমিন' ||
+            currentUser.is_super_admin === true;
+        
+        userBranchId = currentUser.branch_id;
+        isFromBranchDashboard = !!urlBranchId || document.referrer?.includes('branch-dashboard.html');
+        currentSessionId = urlSessionId || 'session_' + Date.now();
+        
+        console.log(`✅ ইউজার লোড: ${currentUser.username} (টেবিল: ${tableName})`);
+        console.log(`👑 সুপার অ্যাডমিন? ${isSuperAdmin}`);
+        console.log(`🏢 ব্রাঞ্চ আইডি: ${userBranchId}`);
+        
+        updateUIAfterLogin();
+        return true;
+        
+    } catch(e) {
+        console.error('❌ User check error:', e);
+        window.location.href = 'admin-login.html';
+        return false;
+    }
+}
 
         // ============================================================
         // ✅ UI আপডেট
