@@ -722,7 +722,7 @@ async function loadBranches() {
                 option.textContent = `${branch.branch_name} (${branch.district || 'জেলা নেই'}) - ${branch.branch_code}`;
                 select.appendChild(option);
             });
-            console.log(`✅ ${data.length} টি ব্রাঞ্চ লোড হয়েছে`);
+            console.log(`✅ ${data.length} টি ব্রাঞ্চ লোড হয়েছে`);
         } else {
             select.innerHTML = '<option value="">কোনো ব্রাঞ্চ নেই</option>';
         }
@@ -732,11 +732,14 @@ async function loadBranches() {
 }
 
 // ============================================================
-// রেফারেল কোড চেক করুন
+// ✅ আপডেটেড: রেফারেল কোড চেক (status সহ)
 // ============================================================
 async function checkReferCode(referCode) {
-    if (!referCode || referCode.length < 8) {
-        document.getElementById('referByContainer').classList.add('hidden');
+    const referByContainer = document.getElementById('referByContainer');
+    const referByName = document.getElementById('referByName');
+    
+    if (!referCode || referCode.length < 6) {
+        referByContainer.classList.add('hidden');
         return;
     }
 
@@ -746,24 +749,30 @@ async function checkReferCode(referCode) {
     try {
         const { data, error } = await client
             .from('members')
-            .select('full_name, mobile, member_id')
+            .select('full_name, mobile, member_id, status')
             .eq('refer_code', referCode)
-            .single();
+            .maybeSingle();
 
-        if (error) {
-            document.getElementById('referByContainer').classList.add('hidden');
+        if (error || !data) {
+            referByContainer.classList.remove('hidden');
+            referByName.innerHTML = '<span class="text-red-600">❌ এই রেফারেল কোড পাওয়া যায়নি!</span>';
             return;
         }
 
-        if (data) {
-            document.getElementById('referByName').textContent = data.full_name + ' (' + data.mobile + ')';
-            document.getElementById('referByContainer').classList.remove('hidden');
-        } else {
-            document.getElementById('referByContainer').classList.add('hidden');
+        // ✅ Status চেক
+        if (data.status !== 'active' && data.status !== 'approved') {
+            referByContainer.classList.remove('hidden');
+            referByName.innerHTML = `<span class="text-amber-600">⚠️ ${data.full_name} এখনো অনুমোদিত নন!</span>`;
+            return;
         }
+
+        // ✅ সব ঠিক
+        referByContainer.classList.remove('hidden');
+        referByName.innerHTML = `<span class="text-emerald-700">✅ ${data.full_name} (${data.mobile})</span>`;
+        
     } catch(e) {
         console.error('Refer check error:', e);
-        document.getElementById('referByContainer').classList.add('hidden');
+        referByContainer.classList.add('hidden');
     }
 }
 
@@ -862,8 +871,8 @@ function showSuccessNotification(memberId, referCode, password, mobile, branchNa
     const notification = document.createElement('div');
     notification.className = 'center-notification';
 
-    const typeText = memberType === 'current' ? 'কারেন্ট সদস্য' : 'মেয়াদী সদস্য';
-    const savingsText = memberType === 'current' ? 'প্রথম জমা' : 'মাসিক সঞ্চয়';
+    const typeText = memberType === 'current' ? 'কারেন্ট সদস্য' : 'মেয়াদী সদস্য';
+    const savingsText = memberType === 'current' ? 'প্রথম জমা' : 'মাসিক সঞ্চয়';
     
     let referInfo = '';
     if (referByName) {
@@ -1002,23 +1011,26 @@ function showCenterNotification(message, type = 'success') {
 }
 
 // ============================================================
-// ফর্ম সাবমিট
+// ✅ সম্পূর্ণ আপডেটেড ফর্ম সাবমিট — সব ফিক্স সহ
 // ============================================================
 document.getElementById('signupForm').addEventListener('submit', async function(e) {
     e.preventDefault();
 
+    // ✅ Agreement চেক
     const agreementCheck = document.getElementById('agreementCheck');
     if(!agreementCheck?.checked) {
         showCenterNotification('অনুগ্রহ করে অঙ্গীকার বিবৃতি পড়ে চেকবক্সটি টিক দিন।', 'error');
         return;
     }
 
+    // ✅ Mobile চেক
     const mobile = document.getElementById('mobile').value;
     if(!/^01[3-9]\d{8}$/.test(mobile)) {
         showCenterNotification('সঠিক মোবাইল নম্বর দিন (01XXXXXXXXX)', 'error');
         return;
     }
 
+    // ✅ Branch চেক
     const branchId = document.getElementById('signupBranch').value;
     if(!branchId) {
         showCenterNotification('দয়া করে একটি ব্রাঞ্চ নির্বাচন করুন!', 'error');
@@ -1051,12 +1063,28 @@ document.getElementById('signupForm').addEventListener('submit', async function(
         const memberTerm = memberType === 'regular' ? parseInt(document.getElementById('memberTerm').value) || 0 : 0;
         const referCodeInput = document.getElementById('referCode').value.trim();
 
-        // ⭐ আবেদনকারীর নিজের রেফারেল কোড জেনারেট (অটোমেটিক)
+        // ⭐ Own refer_code এবং typed refer_code
         const ownReferCode = generateReferralCode(mobile);
         const password = generatePassword();
         const memberId = await generateMemberId(memberTerm, memberType);
 
-        // ⭐ ফর্ম ডাটা তৈরি (টেবিলের সব কলাম অনুযায়ী)
+        // ✅ Self-referral চেক (নিজের কোড নিষিদ্ধ)
+        if (referCodeInput && referCodeInput === ownReferCode) {
+            showCenterNotification('❌ আপনি নিজের রেফারেল কোড ব্যবহার করতে পারবেন না!', 'error');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>নিবন্ধন জমা দিন';
+            return;
+        }
+
+        // ✅ নিজের মোবাইলের শেষ ৬ সংখ্যা দিয়ে চেক
+        if (referCodeInput && referCodeInput.startsWith(mobile.slice(-6))) {
+            showCenterNotification('❌ আপনি নিজের মোবাইল নম্বরের রেফারেল কোড ব্যবহার করতে পারবেন না!', 'error');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>নিবন্ধন জমা দিন';
+            return;
+        }
+
+        // ⭐ ফর্ম ডাটা তৈরি
         const formData = {
             member_id: memberId,
             full_name: fullName,
@@ -1072,11 +1100,10 @@ document.getElementById('signupForm').addEventListener('submit', async function(
             member_type: memberType,
             member_term: memberTerm,
             monthly_savings: monthlySavings,
-            // ⭐ নিজের রেফারেল কোড (অটোমেটিক)
             refer_code: ownReferCode,
-            // রেফারারের তথ্য (ইনপুট থেকে খুঁজে)
             refer_by: null,
             refer_by_name: null,
+            referred_by: null,     // ✅ ডিফল্ট null
             member_position: document.getElementById('memberPosition').value,
             position_details: '',
             student_class: document.getElementById('studentClass')?.value?.trim() || '',
@@ -1134,29 +1161,59 @@ document.getElementById('signupForm').addEventListener('submit', async function(
             updated_at: new Date().toISOString()
         };
 
-        // ⭐ রেফারার চেক
+        // ⭐ রেফারার চেক (সম্পূর্ণ আপডেটেড)
         let referByName = null;
-     // লাইন ~530
-    if (referCodeInput) {
-        const { data: referrerData, error: referrerError } = await client
-            .from('members')
-            .select('full_name, mobile, member_id')
-            .eq('refer_code', referCodeInput)
-            .single();
-    
-        if (!referrerError && referrerData) {
-            formData.refer_by = referrerData.member_id;
-            formData.refer_by_name = referrerData.full_name;
-            formData.referred_by = referCodeInput;  // ← এই লাইন যোগ করুন
+
+        if (referCodeInput) {
+            const { data: referrerData, error: referrerError } = await client
+                .from('members')
+                .select('full_name, mobile, member_id, status')
+                .eq('refer_code', referCodeInput)
+                .maybeSingle();
+
+            if (referrerError || !referrerData) {
+                // ⚠️ ভুল refer_code — user কে জিজ্ঞাসা
+                const proceed = confirm(
+                    `⚠️ আপনি যে রেফারেল কোড দিয়েছেন (${referCodeInput}) তা খুঁজে পাওয়া যায়নি!\n\n` +
+                    `চাইলে খালি রেখে এগিয়ে যান অথবা সঠিক কোড দিন।\n\n` +
+                    `তবুও কি এগিয়ে যেতে চান?`
+                );
+                if (!proceed) {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>নিবন্ধন জমা দিন';
+                    return;
+                }
+                console.log('⚠️ refer_code ছাড়াই এগিয়ে যাচ্ছে');
+            } else {
+                // ✅ Referrer এর status চেক
+                if (referrerData.status !== 'active' && referrerData.status !== 'approved') {
+                    showCenterNotification(
+                        `❌ এই রেফারেল কোডের মালিক (${referrerData.full_name}) এখনো অনুমোদিত নন!\n` +
+                        `তিনি approve হওয়ার পর আপনি refer_code ব্যবহার করতে পারবেন।`,
+                        'error'
+                    );
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>নিবন্ধন জমা দিন';
+                    return;
+                }
+                
+                // ✅ সব ঠিক — সেভ করুন
+                formData.refer_by = referrerData.member_id;
+                formData.refer_by_name = referrerData.full_name;
+                formData.referred_by = referCodeInput;   // ← ✅ refer_code হিসেবে সেভ
+                referByName = referrerData.full_name;
+                
+                console.log('✅ Referrer পাওয়া গেছে:', referrerData.full_name);
+            }
         }
-    }
 
         console.log('📝 ফর্ম ডাটা:', formData);
         console.log('🔑 নিজের রেফারেল কোড:', ownReferCode);
         console.log('🔐 পাসওয়ার্ড:', password);
         console.log('📌 সদস্য ধরন:', memberType);
+        console.log('📌 referred_by:', formData.referred_by);
 
-        // ⭐ শুধু members টেবিলে ইনসার্ট (পেমেন্ট নয়)
+        // ⭐ members টেবিলে insert
         const { data: member, error: memberError } = await client
             .from('members')
             .insert([formData])
@@ -1178,13 +1235,9 @@ document.getElementById('signupForm').addEventListener('submit', async function(
                 status: 'active'
             }]);
 
-        // ❌❌❌ পেমেন্ট ইনসার্ট সরানো হয়েছে ❌❌❌
-        // সদস্য নিবন্ধনের সাথে পেমেন্ট জমা হবে না
-        // সদস্য অনুমোদনের পর লগইন করে নিজেই জমা দিতে পারবে
-
         const branchName = document.getElementById('signupBranch').selectedOptions[0]?.text || '-';
 
-        // ⭐ নোটিফিকেশন দেখান (পেমেন্ট ছাড়া)
+        // ⭐ নোটিফিকেশন
         showSuccessNotification(
             memberId, 
             ownReferCode, 
