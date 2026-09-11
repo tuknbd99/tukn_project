@@ -1496,10 +1496,11 @@
         <button onclick="showTab('bookPayments')" id="tabBookPayments" class="nav-item"><i class="fas fa-hand-holding-usd"></i> 💳 কিতাব পেমেন্ট<span id="pendingBookPaymentBadge" class="badge" style="background:#7c3aed; display:none;">0</span></button>
         <!-- ✅ ইনভয়েস জেনারেটর -->
         <button onclick="window.location.href='invoice.html'" class="nav-item"><i class="fas fa-file-invoice"></i> 📄 ইনভয়েস জেনারেটর</button>
-        
         <!-- ✅ কিতাব বিক্রয় রিপোর্ট -->
         <button onclick="showTab('bookSalesReport')" id="tabBookSalesReport" class="nav-item"><i class="fas fa-chart-line"></i> 📊 কিতাব বিক্রয় রিপোর্ট</button>
-        
+        <!-- 🆕 কিতাব অনুরোধ -->
+        <button onclick="showTab('bookRequests')" id="tabBookRequests" class="nav-item"> <i class="fas fa-book-medical"></i> 📬 কিতাব অনুরোধ
+        <span id="pendingBookRequestBadge" class="badge" style="background:#dc2626; display:none;">0</span> </button>
         <!-- 📚 কিতাব সেটিংস -->
         <div class="px-3 pt-4 pb-2 text-[10px] text-white/30 uppercase tracking-wider font-semibold">⚙️ কিতাব সেটিংস</div>
         
@@ -1654,6 +1655,31 @@
             <button onclick="closeBookOrderDetailModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
         </div>
         <div id="bookOrderDetailContent"></div>
+    </div>
+</div>
+
+    <!-- ========================================================== -->
+<!-- ===== TAB: BOOK REQUESTS (কিতাব যোগ করার অনুরোধ) ===== -->
+<!-- ========================================================== -->
+<div id="bookRequestsTab" class="tab-content">
+    <div class="content-card">
+        <div class="card-header no-print">
+            <h3><i class="fas fa-book-medical mr-2 text-red-600"></i>📬 কিতাব যোগ করার অনুরোধ</h3>
+            <div class="flex gap-2 flex-wrap">
+                <button onclick="loadBookRequests()" class="btn btn-info btn-sm">
+                    <i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ
+                </button>
+                <button onclick="window.location.href='book-management.html'" class="btn btn-purple btn-sm">
+                    <i class="fas fa-external-link-alt mr-1"></i> কিতাব ম্যানেজার
+                </button>
+            </div>
+        </div>
+        <div class="p-4" id="bookRequestsContainer">
+            <div class="text-center py-8">
+                <div class="loading-spinner mx-auto"></div>
+                <p class="text-gray-500 mt-2">অনুরোধ লোড হচ্ছে...</p>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -3760,6 +3786,9 @@ function showTab(tabName) {
                 break;
             case 'bookOrders':
                 if (typeof loadBookOrders === 'function') loadBookOrders();
+                break;
+            case 'bookRequests':
+                if (typeof loadBookRequests === 'function') loadBookRequests();
                 break;
             case 'bookManagement':
                 if (typeof loadBookCatalog === 'function') loadBookCatalog();
@@ -12967,12 +12996,7 @@ function loadDashboardWithPermissions() {
     window.loadPendingLoans = loadPendingLoans;
     window.loadAllLoans = loadAllLoans;
 
-    console.log('✅ TUKNBD Admin Panel Loaded Successfully!');
-    console.log('🔐 Permission System Active!');
-    console.log('📋 Total Permissions:', Object.keys(ALL_PERMISSIONS).length);
-    console.log('👤 Available Roles:', Object.keys(ROLE_PERMISSIONS).length);
-
-// ================================================================
+   // ================================================================
 // 📚 BOOK ORDERS FUNCTIONS (সম্পূর্ণ আপডেটেড)
 // ================================================================
 
@@ -16771,7 +16795,326 @@ window.openLedgerPage = function() {
 };
 
 console.log('✅ openLedgerPage ফাংশন লোড হয়েছে!');
+
+   // ============================================================
+// 🆕 BOOK REQUESTS FUNCTIONS (কিতাব অনুরোধ)
+// ✅ এই সেকশনটি admin-panel.html এ যোগ করা হলো
+// ============================================================
+let bookRequestsList = [];
+let currentRequestFilter = 'pending';
+
+async function loadBookRequests() {
+    const container = document.getElementById('bookRequestsContainer');
+    if (!container) {
+        console.warn('⚠️ bookRequestsContainer এলিমেন্ট নেই!');
+        return;
+    }
     
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-2">📬 অনুরোধ লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ Supabase সংযোগ নেই</p>
+            </div>
+        `;
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('book_requests')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(50);
+        
+        if (error) throw error;
+        
+        bookRequestsList = data || [];
+        console.log(`✅ ${bookRequestsList.length} টি অনুরোধ লোড হয়েছে`);
+        
+        renderBookRequests();
+        updateBookRequestBadge();
+        
+    } catch(e) {
+        console.error('❌ Book requests load error:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ অনুরোধ লোড করতে সমস্যা</p>
+                <p class="text-xs mt-1">${e.message}</p>
+                <p class="text-xs text-gray-400 mt-2">⚠️ book_requests টেবিল আছে কিনা চেক করুন</p>
+            </div>
+        `;
+    }
+}
+
+function updateBookRequestBadge() {
+    const badge = document.getElementById('pendingBookRequestBadge');
+    if (!badge) return;
+    
+    const pendingCount = bookRequestsList.filter(r => r.status === 'pending').length;
+    if (pendingCount > 0) {
+        badge.textContent = pendingCount;
+        badge.style.display = 'flex';
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+function renderBookRequests() {
+    const container = document.getElementById('bookRequestsContainer');
+    if (!container) return;
+    
+    if (bookRequestsList.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-gray-500 py-12">
+                <i class="fas fa-inbox text-5xl block mb-3 text-gray-300"></i>
+                <p class="text-lg font-medium">📭 কোনো অনুরোধ নেই</p>
+                <p class="text-sm text-gray-400 mt-2">ছাত্ররা কিতাব যোগ করার অনুরোধ পাঠালে এখানে দেখা যাবে</p>
+                <button onclick="loadBookRequests()" class="btn btn-info btn-sm mt-4">
+                    <i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ করুন
+                </button>
+            </div>
+        `;
+        return;
+    }
+    
+    const pendingCount = bookRequestsList.filter(r => r.status === 'pending').length;
+    const approvedCount = bookRequestsList.filter(r => r.status === 'approved').length;
+    const rejectedCount = bookRequestsList.filter(r => r.status === 'rejected').length;
+    
+    let html = `
+        <div class="flex flex-wrap gap-2 mb-4">
+            <button onclick="filterBookRequests('all')" class="btn btn-sm btn-outline" id="reqTab_all">
+                সব (${bookRequestsList.length})
+            </button>
+            <button onclick="filterBookRequests('pending')" class="btn btn-sm btn-warning" id="reqTab_pending">
+                ⏳ বিচারাধীন (${pendingCount})
+            </button>
+            <button onclick="filterBookRequests('approved')" class="btn btn-sm btn-success" id="reqTab_approved">
+                ✅ অনুমোদিত (${approvedCount})
+            </button>
+            <button onclick="filterBookRequests('rejected')" class="btn btn-sm btn-danger" id="reqTab_rejected">
+                ❌ বাতিল (${rejectedCount})
+            </button>
+        </div>
+        <div id="requestsList" class="space-y-3"></div>
+    `;
+    
+    container.innerHTML = html;
+    
+    if (currentRequestFilter === 'pending' && pendingCount === 0 && bookRequestsList.length > 0) {
+        currentRequestFilter = 'all';
+    }
+    
+    filterBookRequests(currentRequestFilter);
+}
+
+function filterBookRequests(status) {
+    currentRequestFilter = status;
+    
+    document.querySelectorAll('[id^="reqTab_"]').forEach(btn => {
+        btn.classList.remove('ring-2', 'ring-offset-1', 'ring-emerald-500');
+    });
+    const activeTab = document.getElementById(`reqTab_${status}`);
+    if (activeTab) activeTab.classList.add('ring-2', 'ring-offset-1', 'ring-emerald-500');
+    
+    let filtered = bookRequestsList;
+    if (status !== 'all') {
+        filtered = bookRequestsList.filter(r => r.status === status);
+    }
+    
+    const listEl = document.getElementById('requestsList');
+    if (!listEl) return;
+    
+    if (filtered.length === 0) {
+        listEl.innerHTML = `
+            <div class="text-center text-gray-400 py-8">
+                <i class="fas fa-inbox text-4xl block mb-2 text-gray-300"></i>
+                <p>এই ক্যাটাগরিতে কোনো অনুরোধ নেই</p>
+            </div>
+        `;
+        return;
+    }
+    
+    listEl.innerHTML = filtered.map(req => {
+        const statusClass = req.status === 'pending' ? 'status-pending' :
+                           req.status === 'approved' ? 'status-approved' :
+                           'status-rejected';
+        const statusText = req.status === 'pending' ? '⏳ বিচারাধীন' :
+                          req.status === 'approved' ? '✅ অনুমোদিত' :
+                          '❌ বাতিল';
+        
+        const statusBg = req.status === 'pending' ? 'border-yellow-300 bg-yellow-50' :
+                        req.status === 'approved' ? 'border-green-300 bg-green-50' :
+                        'border-red-300 bg-red-50';
+        
+        const timeStr = new Date(req.created_at).toLocaleString('bn-BD', {
+            year: 'numeric', month: 'long', day: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+        
+        let actionButtons = '';
+        if (req.status === 'pending') {
+            actionButtons = `
+                <div class="flex flex-wrap gap-2 mt-3">
+                    <button onclick="approveBookRequest(${req.id})" class="btn btn-success btn-sm">
+                        <i class="fas fa-check"></i> অনুমোদন করুন
+                    </button>
+                    <button onclick="rejectBookRequest(${req.id})" class="btn btn-danger btn-sm">
+                        <i class="fas fa-times"></i> বাতিল করুন
+                    </button>
+                    <button onclick="openAddBookFromRequest(${req.id})" class="btn btn-primary btn-sm">
+                        <i class="fas fa-plus-circle"></i> সরাসরি কিতাব যোগ করুন
+                    </button>
+                </div>
+            `;
+        }
+        
+        let adminNoteHtml = '';
+        if (req.admin_note || req.rejection_reason || req.approved_by || req.rejected_by) {
+            adminNoteHtml = `
+                <div class="mt-2 text-xs bg-white p-2 rounded border border-gray-200 space-y-1">
+                    ${req.admin_note ? `<div><strong>📝 এডমিন নোট:</strong> ${req.admin_note}</div>` : ''}
+                    ${req.rejection_reason ? `<div><strong>❌ বাতিলের কারণ:</strong> ${req.rejection_reason}</div>` : ''}
+                    ${req.approved_by ? `<div class="text-gray-400">✅ অনুমোদন: ${req.approved_by}${req.approved_at ? ' - ' + new Date(req.approved_at).toLocaleString('bn-BD') : ''}</div>` : ''}
+                    ${req.rejected_by ? `<div class="text-gray-400">❌ বাতিল: ${req.rejected_by}${req.rejected_at ? ' - ' + new Date(req.rejected_at).toLocaleString('bn-BD') : ''}</div>` : ''}
+                </div>
+            `;
+        }
+        
+        return `
+            <div class="border-2 ${statusBg} rounded-lg p-4">
+                <div class="flex justify-between items-start flex-wrap gap-2">
+                    <div>
+                        <h4 class="font-bold text-gray-800 text-lg">📚 ${req.book_name}</h4>
+                        <p class="text-xs text-gray-500 mt-1">
+                            <i class="fas fa-layer-group"></i> ${req.class_name || 'N/A'}
+                        </p>
+                    </div>
+                    <span class="status-badge ${statusClass}">${statusText}</span>
+                </div>
+                
+                <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                    <div><span class="text-gray-500">👤 সদস্য:</span> <span class="font-medium">${req.member_name || 'N/A'}</span></div>
+                    <div><span class="text-gray-500">🆔 আইডি:</span> <span class="font-medium">${req.member_id || 'N/A'}</span></div>
+                    <div><span class="text-gray-500">📱 মোবাইল:</span> <span class="font-medium">${req.mobile || 'N/A'}</span></div>
+                    <div><span class="text-gray-500">📅 তারিখ:</span> <span class="font-medium">${timeStr}</span></div>
+                </div>
+                
+                ${adminNoteHtml}
+                ${actionButtons}
+            </div>
+        `;
+    }).join('');
+}
+
+async function approveBookRequest(requestId) {
+    const req = bookRequestsList.find(r => r.id === requestId);
+    if (!req) return;
+    
+    if (!confirm(`"${req.book_name}" অনুরোধ অনুমোদন করবেন?`)) return;
+    
+    const adminNote = prompt('এডমিন নোট (ঐচ্ছিক):', '');
+    
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const adminName = currentAdmin?.full_name || currentAdmin?.username || 'সুপার অ্যাডমিন';
+        
+        const { error } = await client
+            .from('book_requests')
+            .update({
+                status: 'approved',
+                admin_note: adminNote || '',
+                approved_by: adminName,
+                approved_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', requestId);
+        
+        if (error) throw error;
+        
+        showToast('✅ অনুরোধ অনুমোদিত হয়েছে!', 'success');
+        await loadBookRequests();
+        
+    } catch(e) {
+        console.error('Approve error:', e);
+        showToast('❌ অনুমোদনে সমস্যা: ' + e.message, 'error');
+    }
+}
+
+async function rejectBookRequest(requestId) {
+    const req = bookRequestsList.find(r => r.id === requestId);
+    if (!req) return;
+    
+    const reason = prompt('বাতিলের কারণ লিখুন:');
+    if (!reason) return;
+    
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const adminName = currentAdmin?.full_name || currentAdmin?.username || 'সুপার অ্যাডমিন';
+        
+        const { error } = await client
+            .from('book_requests')
+            .update({
+                status: 'rejected',
+                admin_note: reason,
+                rejection_reason: reason,
+                rejected_by: adminName,
+                rejected_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', requestId);
+        
+        if (error) throw error;
+        
+        showToast('❌ অনুরোধ বাতিল করা হয়েছে!', 'info');
+        await loadBookRequests();
+        
+    } catch(e) {
+        console.error('Reject error:', e);
+        showToast('❌ বাতিলে সমস্যা: ' + e.message, 'error');
+    }
+}
+
+function openAddBookFromRequest(requestId) {
+    const req = bookRequestsList.find(r => r.id === requestId);
+    if (!req) return;
+    
+    if (typeof openAddBookModal === 'function') {
+        openAddBookModal();
+        
+        setTimeout(() => {
+            const nameField = document.getElementById('newBookName');
+            if (nameField) nameField.value = req.book_name || '';
+        }, 300);
+    } else {
+        showToast('📝 কিতাব ম্যানেজার পেজে গিয়ে যোগ করুন', 'info');
+        setTimeout(() => {
+            window.location.href = 'book-management.html';
+        }, 1000);
+    }
+}
+
+// গ্লোবাল এক্সপোজ
+window.loadBookRequests = loadBookRequests;
+window.filterBookRequests = filterBookRequests;
+window.approveBookRequest = approveBookRequest;
+window.rejectBookRequest = rejectBookRequest;
+window.openAddBookFromRequest = openAddBookFromRequest;
+ 
 console.log('✅ TUKNBD Admin Panel Loaded Successfully!');
 console.log('🔐 Permission System Active!');
 console.log('📋 Total Permissions:', Object.keys(ALL_PERMISSIONS).length);
