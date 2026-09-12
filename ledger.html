@@ -37,6 +37,14 @@
         body.dark-mode #customNotification p { color: #cbd5e1 !important; }
         body.dark-mode #customNotification button { background: #334155 !important; color: #e2e8f0 !important; border-color: #475569 !important; }
         
+        /* ✅ Read-Only Modal Dark Mode */
+        body.dark-mode #readOnlyEntryModal > div { background: #1e293b !important; }
+        body.dark-mode #readOnlyEntryModal h3 { color: #f1f5f9 !important; }
+        body.dark-mode #readOnlyEntryModal [style*="background: #f8fafc"] { background: #0f172a !important; border-color: #334155 !important; }
+        body.dark-mode #readOnlyEntryModal [style*="background: #f0fdf4"] { background: #064e3b !important; border-color: #065f46 !important; }
+        body.dark-mode #readOnlyEntryModal [style*="background: #fffbeb"] { background: #78350f !important; border-color: #92400e !important; }
+        body.dark-mode #readOnlyEntryModal [style*="color: #1f2937"] { color: #e2e8f0 !important; }
+        
         .btn {
             padding: 8px 18px;
             border: none;
@@ -1040,7 +1048,7 @@
         }
 
         // ============================================================
-        // ✅ NEW: Entry Success Notification (মাঝখানে)
+        // ✅ ENTRY SUCCESS NOTIFICATION
         // ============================================================
         function showEntrySuccessNotification(data) {
             const oldNotification = document.getElementById('entrySuccessNotification');
@@ -1143,7 +1151,7 @@
         }
 
         // ============================================================
-        // ✅ NEW: Duplicate Entry Notification
+        // ✅ DUPLICATE ENTRY NOTIFICATION
         // ============================================================
         function showDuplicateEntryNotification(existingData) {
             const oldNotification = document.getElementById('duplicateEntryNotification');
@@ -1290,54 +1298,205 @@
                 setTimeout(() => notification.remove(), 300);
             }
         }
+
         // ============================================================
-// ✅ ✅ ✅ নতুন: ডুপ্লিকেট এন্ট্রি দেখার ফাংশন
-// ============================================================
-function viewDuplicateEntry(entryId) {
-    console.log('🔍 ডুপ্লিকেট এন্ট্রি দেখানো হচ্ছে:', entryId);
-    
-    // ✅ প্রথমে notification বন্ধ করুন
-    if (typeof closeDuplicateEntryNotification === 'function') {
-        closeDuplicateEntryNotification();
-    }
-    
-    // ✅ Supabase থেকে এন্ট্রিটি লোড করুন
-    const client = initSupabaseClient();
-    if (!client) {
-        showToast('❌ সংযোগ সমস্যা!', 'error');
-        return;
-    }
-    
-    client
-        .from('ledger_transactions')
-        .select('*')
-        .eq('id', entryId)
-        .single()
-        .then(function(response) {
-            if (response.error || !response.data) {
-                console.error('❌ Load error:', response.error);
-                showToast('❌ এন্ট্রি লোড করতে সমস্যা!', 'error');
+        // ✅ NEW: Read-Only Entry Modal Functions
+        // ============================================================
+        function viewDuplicateEntry(entryId) {
+            console.log('👁️ ডুপ্লিকেট এন্ট্রি শুধু দেখানো হচ্ছে:', entryId);
+            
+            // ✅ প্রথমে notification বন্ধ করুন
+            closeDuplicateEntryNotification();
+            
+            // ✅ Supabase থেকে সরাসরি এন্ট্রি লোড করুন
+            if (!supabaseClient) {
+                showToast('❌ Supabase সংযোগ সমস্যা!', 'error');
                 return;
             }
             
-            var data = response.data;
-            console.log('✅ এন্ট্রি পাওয়া গেছে:', data);
+            supabaseClient
+                .from('ledger_transactions')
+                .select('*')
+                .eq('id', entryId)
+                .single()
+                .then(function(response) {
+                    if (response.error || !response.data) {
+                        console.error('❌ Load error:', response.error);
+                        showToast('❌ এন্ট্রি লোড করতে সমস্যা!', 'error');
+                        return;
+                    }
+                    
+                    console.log('✅ এন্ট্রি পাওয়া গেছে:', response.data);
+                    showReadOnlyEntryModal(response.data);
+                })
+                .catch(function(e) {
+                    console.error('❌ Error:', e);
+                    showToast('❌ এন্ট্রি লোড করতে সমস্যা!', 'error');
+                });
+        }
+
+        function showReadOnlyEntryModal(item) {
+            // পুরনো মডাল থাকলে সরান
+            const oldModal = document.getElementById('readOnlyEntryModal');
+            if (oldModal) oldModal.remove();
             
-            // ✅ ভাউচার সার্চ সেকশনে লিখুন এবং সার্চ করুন
-            var searchInput = document.getElementById('voucherSearchInput');
-            if (searchInput) {
-                searchInput.value = data.voucher || '';
-                searchInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                setTimeout(function() {
-                    searchByVoucher();
-                }, 500);
+            const isIncome = item.type === 'income';
+            const amount = Number(item.amount) || 0;
+            const typeLabel = isIncome ? '📈 আয় (Income)' : '📉 ব্যয় (Expense)';
+            const typeColor = isIncome ? '#059669' : '#dc2626';
+            const typeBg = isIncome ? '#d1fae5' : '#fee2e2';
+            
+            let bankDisplay = '-';
+            if (item.bank_id) bankDisplay = getBankNameById(item.bank_id);
+            else if (item.bank_name) bankDisplay = item.bank_name;
+            else if (item.bank) bankDisplay = item.bank;
+            
+            let branchDisplay = '-';
+            if (item.branch_id) branchDisplay = getBranchNameById(item.branch_id);
+            else if (item.branch_name) branchDisplay = item.branch_name;
+            
+            let roleDisplay = '-';
+            if (item.entered_by_role) {
+                if (item.entered_by_role.includes('super')) roleDisplay = '👑 সুপার অ্যাডমিন';
+                else if (item.entered_by_role.includes('branch')) roleDisplay = '🏢 ব্রাঞ্চ অ্যাডমিন';
+                else roleDisplay = '🛡️ অ্যাডমিন';
             }
-        })
-        .catch(function(e) {
-            console.error('❌ Error:', e);
-            showToast('❌ এন্ট্রি লোড করতে সমস্যা!', 'error');
-        });
-}
+            
+            const dateTimeStr = formatDateTime(item.date, item.time);
+            
+            const modal = document.createElement('div');
+            modal.id = 'readOnlyEntryModal';
+            modal.style.cssText = `
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0, 0, 0, 0.65);
+                backdrop-filter: blur(6px);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 99999;
+                animation: fadeInOverlay 0.3s ease;
+                font-family: 'Noto Sans Bengali', sans-serif;
+                padding: 16px;
+            `;
+            
+            modal.innerHTML = `
+                <div style="background: white; border-radius: 20px; max-width: 560px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 70px rgba(0,0,0,0.35); animation: slideInNotification 0.4s ease; border-top: 6px solid ${typeColor};">
+                    
+                    <!-- হেডার -->
+                    <div style="padding: 24px 24px 16px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <div style="width: 48px; height: 48px; border-radius: 50%; background: ${typeBg}; display: flex; align-items: center; justify-content: center; font-size: 22px; color: ${typeColor};">
+                                <i class="fas ${isIncome ? 'fa-arrow-up' : 'fa-arrow-down'}"></i>
+                            </div>
+                            <div>
+                                <h3 style="font-size: 18px; font-weight: 800; color: #1f2937; margin: 0;">🎫 ${item.voucher || '-'}</h3>
+                                <p style="font-size: 12px; color: #6b7280; margin: 2px 0 0 0;">${typeLabel}</p>
+                            </div>
+                        </div>
+                        <button onclick="closeReadOnlyEntryModal()" style="background: none; border: none; font-size: 28px; cursor: pointer; color: #6b7280; padding: 0; line-height: 1;">&times;</button>
+                    </div>
+                    
+                    <!-- মূল পরিমাণ -->
+                    <div style="padding: 20px 24px; text-align: center; background: linear-gradient(135deg, #f9fafb, #f3f4f6); border-bottom: 1px solid #e5e7eb;">
+                        <p style="font-size: 12px; color: #6b7280; margin: 0 0 4px 0;">💰 পরিমাণ</p>
+                        <p style="font-size: 32px; font-weight: 800; color: ${typeColor}; margin: 0;">
+                            ${isIncome ? '+' : '-'} ${amount.toLocaleString()} ৳
+                        </p>
+                    </div>
+                    
+                    <!-- বিস্তারিত তথ্য -->
+                    <div style="padding: 20px 24px;">
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+                            
+                            <div style="background: #f8fafc; padding: 12px 14px; border-radius: 10px; border: 1px solid #e5e7eb;">
+                                <div style="font-size: 11px; color: #6b7280; font-weight: 500;">📅 তারিখ ও সময়</div>
+                                <div style="font-size: 14px; font-weight: 700; color: #1f2937; margin-top: 4px;">${dateTimeStr}</div>
+                            </div>
+                            
+                            <div style="background: #f8fafc; padding: 12px 14px; border-radius: 10px; border: 1px solid #e5e7eb;">
+                                <div style="font-size: 11px; color: #6b7280; font-weight: 500;">📂 খাত</div>
+                                <div style="font-size: 14px; font-weight: 700; color: #1f2937; margin-top: 4px;">${item.category || '-'}</div>
+                            </div>
+                            
+                            <div style="background: #f8fafc; padding: 12px 14px; border-radius: 10px; border: 1px solid #e5e7eb;">
+                                <div style="font-size: 11px; color: #6b7280; font-weight: 500;">🏦 ব্যাংক</div>
+                                <div style="font-size: 13px; font-weight: 600; color: #1f2937; margin-top: 4px;">${bankDisplay}</div>
+                            </div>
+                            
+                            <div style="background: #f8fafc; padding: 12px 14px; border-radius: 10px; border: 1px solid #e5e7eb;">
+                                <div style="font-size: 11px; color: #6b7280; font-weight: 500;">🏢 ব্রাঞ্চ</div>
+                                <div style="font-size: 13px; font-weight: 600; color: #1f2937; margin-top: 4px;">${branchDisplay}</div>
+                            </div>
+                            
+                            <div style="background: #f8fafc; padding: 12px 14px; border-radius: 10px; border: 1px solid #e5e7eb;">
+                                <div style="font-size: 11px; color: #6b7280; font-weight: 500;">👤 এন্ট্রি করেছেন</div>
+                                <div style="font-size: 13px; font-weight: 600; color: #1f2937; margin-top: 4px;">${item.entered_by_name || '-'}</div>
+                            </div>
+                            
+                            <div style="background: #f8fafc; padding: 12px 14px; border-radius: 10px; border: 1px solid #e5e7eb;">
+                                <div style="font-size: 11px; color: #6b7280; font-weight: 500;">🎭 রোল</div>
+                                <div style="font-size: 13px; font-weight: 600; color: #1f2937; margin-top: 4px;">${roleDisplay}</div>
+                            </div>
+                            
+                            ${item.member_name ? `
+                            <div style="background: #f0fdf4; padding: 12px 14px; border-radius: 10px; border: 1px solid #bbf7d0; grid-column: span 2;">
+                                <div style="font-size: 11px; color: #059669; font-weight: 500;">👥 সদস্য</div>
+                                <div style="font-size: 13px; font-weight: 700; color: #065f46; margin-top: 4px;">${item.member_name} (${item.member_id || '-'})</div>
+                            </div>
+                            ` : ''}
+                            
+                            ${item.note ? `
+                            <div style="background: #fffbeb; padding: 12px 14px; border-radius: 10px; border: 1px solid #fde68a; grid-column: span 2;">
+                                <div style="font-size: 11px; color: #92400e; font-weight: 500;">📌 নোট</div>
+                                <div style="font-size: 13px; font-weight: 600; color: #78350f; margin-top: 4px; line-height: 1.5;">${item.note}</div>
+                            </div>
+                            ` : ''}
+                            
+                        </div>
+                    </div>
+                    
+                    <!-- ফুটার বাটন -->
+                    <div style="padding: 16px 24px 24px; display: flex; gap: 10px; border-top: 1px solid #e5e7eb;">
+                        <button onclick="closeReadOnlyEntryModal()" 
+                                style="flex: 1; padding: 14px; background: linear-gradient(135deg, #059669, #10b981); color: white; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; font-family: 'Noto Sans Bengali', sans-serif;">
+                            <i class="fas fa-check mr-2"></i> ঠিক আছে
+                        </button>
+                        <button onclick="closeReadOnlyEntryModal(); editLedgerEntry('${item.id}');" 
+                                style="flex: 1; padding: 14px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; font-family: 'Noto Sans Bengali', sans-serif;">
+                            <i class="fas fa-edit mr-2"></i> সম্পাদনা
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // ✅ ব্যাকগ্রাউন্ডে ক্লিক করলে বন্ধ হবে
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) closeReadOnlyEntryModal();
+            });
+            
+            // ✅ ESC কী চাপলে বন্ধ হবে
+            document.addEventListener('keydown', handleReadOnlyModalKey);
+        }
+
+        function closeReadOnlyEntryModal() {
+            const modal = document.getElementById('readOnlyEntryModal');
+            if (modal) {
+                modal.style.opacity = '0';
+                modal.style.transition = 'opacity 0.3s ease';
+                setTimeout(() => modal.remove(), 300);
+            }
+            document.removeEventListener('keydown', handleReadOnlyModalKey);
+        }
+
+        function handleReadOnlyModalKey(e) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeReadOnlyEntryModal();
+            }
+        }
 
         // ============================================================
         // ✅ THEME FUNCTIONS
@@ -3575,6 +3734,8 @@ function viewDuplicateEntry(entryId) {
         window.showDuplicateEntryNotification = showDuplicateEntryNotification;
         window.closeDuplicateEntryNotification = closeDuplicateEntryNotification;
         window.viewDuplicateEntry = viewDuplicateEntry;
+        window.showReadOnlyEntryModal = showReadOnlyEntryModal;
+        window.closeReadOnlyEntryModal = closeReadOnlyEntryModal;
 
         console.log('✅ Ledger page load complete!');
     </script>
