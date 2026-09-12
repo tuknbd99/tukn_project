@@ -1763,83 +1763,107 @@
             }
         }
         
-        // ============================================================
-        // ✅ VOUCHER SEARCH
-        // ============================================================
-        async function searchByVoucher() {
-            const input = document.getElementById('voucherSearchInput');
-            const resultDiv = document.getElementById('voucherSearchResult');
-            const voucherNumber = input?.value?.trim()?.toUpperCase() || '';
+// ============================================================
+// ✅ VOUCHER SEARCH (সম্পূর্ণ ঠিক করা)
+// ============================================================
+async function searchByVoucher() {
+    const input = document.getElementById('voucherSearchInput');
+    const resultDiv = document.getElementById('voucherSearchResult');
+    
+    // ✅ ট্রিম এবং ক্লিন
+    const rawSearch = input?.value?.trim()?.toUpperCase() || '';
+    
+    if (!rawSearch) {
+        showToast('⚠️ ভাউচার নম্বর লিখুন!', 'warning');
+        input?.focus();
+        return;
+    }
+    
+    currentVoucherSearch = rawSearch;
+    
+    resultDiv.innerHTML = `
+        <div class="text-center py-4">
+            <div class="loading-spinner" style="width:24px;height:24px;border-width:2px;"></div>
+            <p class="text-xs text-gray-500 mt-2">🔍 খুঁজছি: <strong>${rawSearch}</strong></p>
+        </div>
+    `;
+    
+    try {
+        // ✅ প্রথমে EXACT match চেষ্টা করুন
+        let query = supabaseClient
+            .from('ledger_transactions')
+            .select('*')
+            .ilike('voucher', rawSearch)  // ✅ % ছাড়া = exact match (case-insensitive)
+            .order('date', { ascending: false });
+        
+        if (!isSuperAdmin && userBranchId) {
+            query = query.eq('branch_id', userBranchId);
+        }
+        
+        let { data, error } = await query;
+        
+        if (error) throw error;
+        
+        // ✅ যদি exact match না পাওয়া যায়, তাহলে partial match চেষ্টা করুন
+        if (!data || data.length === 0) {
+            console.log('🔍 Exact match পাওয়া যায়নি, partial match চেষ্টা করা হচ্ছে...');
             
-            if (!voucherNumber) {
-                showToast('⚠️ ভাউচার নম্বর লিখুন!', 'warning');
-                input?.focus();
-                return;
+            let partialQuery = supabaseClient
+                .from('ledger_transactions')
+                .select('*')
+                .ilike('voucher', `%${rawSearch}%`)  // ✅ এখন partial match
+                .order('date', { ascending: false });
+            
+            if (!isSuperAdmin && userBranchId) {
+                partialQuery = partialQuery.eq('branch_id', userBranchId);
             }
             
-            currentVoucherSearch = voucherNumber;
+            const partialResult = await partialQuery;
+            data = partialResult.data;
+            error = partialResult.error;
             
+            if (error) throw error;
+        }
+        
+        if (!data || data.length === 0) {
             resultDiv.innerHTML = `
-                <div class="text-center py-4">
-                    <div class="loading-spinner" style="width:24px;height:24px;border-width:2px;"></div>
-                    <p class="text-xs text-gray-500 mt-2">🔍 খুঁজছি: ${voucherNumber}</p>
-                </div>
-            `;
-            
-            try {
-                let query = supabaseClient
-                    .from('ledger_transactions')
-                    .select('*')
-                    .ilike('voucher', `%${voucherNumber}%`)
-                    .order('date', { ascending: false });
-                
-                if (!isSuperAdmin && userBranchId) {
-                    query = query.eq('branch_id', userBranchId);
-                }
-                
-                const { data, error } = await query;
-                
-                if (error) throw error;
-                
-                if (!data || data.length === 0) {
-                    resultDiv.innerHTML = `
-                        <div class="voucher-result-card not-found">
-                            <div class="flex items-center gap-3">
-                                <i class="fas fa-exclamation-circle text-red-500 text-3xl"></i>
-                                <div>
-                                    <p class="font-bold text-red-700 text-lg">❌ কোনো লেনদেন পাওয়া যায়নি!</p>
-                                    <p class="text-sm text-red-600">ভাউচার নম্বর: <strong>${voucherNumber}</strong></p>
-                                    <p class="text-xs text-gray-500 mt-1">💡 সঠিক ভাউচার নম্বর লিখুন বা অন্য ভাউচার দিয়ে চেষ্টা করুন।</p>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                    return;
-                }
-                
-                if (data.length === 1) {
-                    renderSingleVoucherResult(data[0]);
-                } else {
-                    renderMultipleVoucherResults(data, voucherNumber);
-                }
-                
-                console.log(`✅ ভাউচার "${voucherNumber}" দিয়ে ${data.length} টি লেনদেন পাওয়া গেছে`);
-                
-            } catch(e) {
-                console.error('❌ Voucher search error:', e);
-                resultDiv.innerHTML = `
-                    <div class="voucher-result-card not-found">
-                        <div class="flex items-center gap-3">
-                            <i class="fas fa-exclamation-triangle text-red-500 text-3xl"></i>
-                            <div>
-                                <p class="font-bold text-red-700">❌ খুঁজতে সমস্যা হয়েছে!</p>
-                                <p class="text-sm text-red-600">${e.message || 'অজানা ত্রুটি'}</p>
-                            </div>
+                <div class="voucher-result-card not-found">
+                    <div class="flex items-center gap-3">
+                        <i class="fas fa-exclamation-circle text-red-500 text-3xl"></i>
+                        <div>
+                            <p class="font-bold text-red-700 text-lg">❌ কোনো লেনদেন পাওয়া যায়নি!</p>
+                            <p class="text-sm text-red-600">ভাউচার নম্বর: <strong>"${rawSearch}"</strong></p>
+                            <p class="text-xs text-gray-500 mt-1">💡 সঠিক ভাউচার নম্বর লিখুন বা অন্য ভাউচার দিয়ে চেষ্টা করুন।</p>
                         </div>
                     </div>
-                `;
-            }
+                </div>
+            `;
+            return;
         }
+        
+        console.log(`✅ ভাউচার "${rawSearch}" দিয়ে ${data.length} টি লেনদেন পাওয়া গেছে`);
+        
+        if (data.length === 1) {
+            renderSingleVoucherResult(data[0]);
+        } else {
+            renderMultipleVoucherResults(data, rawSearch);
+        }
+        
+    } catch(e) {
+        console.error('❌ Voucher search error:', e);
+        resultDiv.innerHTML = `
+            <div class="voucher-result-card not-found">
+                <div class="flex items-center gap-3">
+                    <i class="fas fa-exclamation-triangle text-red-500 text-3xl"></i>
+                    <div>
+                        <p class="font-bold text-red-700">❌ খুঁজতে সমস্যা হয়েছে!</p>
+                        <p class="text-sm text-red-600">${e.message || 'অজানা ত্রুটি'}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+}
 
         // ============================================================
         // ✅ SINGLE VOUCHER RESULT RENDER
@@ -2089,50 +2113,59 @@
             }
         }
 
-        // ============================================================
-        // ✅ DUPLICATE CHECK
-        // ============================================================
-        async function checkDuplicateEntry(date, voucher, amount, type, category) {
-            try {
-                const { data: voucherCheck } = await supabaseClient
-                    .from('ledger_transactions')
-                    .select('id, date, voucher, amount, category, entered_by_name, entered_by_role, branch_name, time, type')
-                    .eq('voucher', voucher)
-                    .maybeSingle();
-                
-                if (voucherCheck) {
-                    return { 
-                        isDuplicate: true,
-                        type: 'voucher',
-                        existingData: voucherCheck,
-                        reason: 'voucher_duplicate'
-                    };
-                }
-                
-                const { data: duplicateCheck } = await supabaseClient
-                    .from('ledger_transactions')
-                    .select('id, date, voucher, amount, category, entered_by_name, entered_by_role, branch_name, time, type')
-                    .eq('date', date)
-                    .eq('amount', amount)
-                    .eq('type', type)
-                    .eq('category', category)
-                    .maybeSingle();
-                
-                if (duplicateCheck) {
-                    return { 
-                        isDuplicate: true,
-                        type: 'entry',
-                        existingData: duplicateCheck,
-                        reason: 'entry_duplicate'
-                    };
-                }
-                
-                return { isDuplicate: false, reason: null };
-            } catch(e) {
-                console.error('❌ Duplicate check error:', e);
-                return { isDuplicate: false, reason: null };
-            }
+// ============================================================
+// ✅ DUPLICATE CHECK (সম্পূর্ণ ঠিক করা — শুধু ভাউচার চেক)
+// ============================================================
+async function checkDuplicateEntry(date, voucher, amount, type, category) {
+    try {
+        // ✅ ভাউচার ট্রিম এবং ক্লিন করুন
+        const cleanVoucher = String(voucher || '').trim();
+        
+        if (!cleanVoucher) {
+            return { isDuplicate: false, reason: null };
         }
+        
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('🔍 ডুপ্লিকেট চেক করা হচ্ছে:');
+        console.log('   📄 ভাউচার:', `"${cleanVoucher}"`);
+        console.log('   📅 তারিখ:', date);
+        console.log('   💰 পরিমাণ:', amount);
+        console.log('   📋 ধরন:', type);
+        console.log('   📂 খাত:', category);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        // ✅ শুধুমাত্র ভাউচার নম্বর exact match (case-insensitive)
+        const { data: voucherCheck, error: voucherError } = await supabaseClient
+            .from('ledger_transactions')
+            .select('id, date, voucher, amount, category, entered_by_name, entered_by_role, branch_name, time, type')
+            .ilike('voucher', cleanVoucher)  // ✅ ilike without % = case-insensitive exact match
+            .maybeSingle();
+        
+        if (voucherError) {
+            console.error('❌ Voucher check error:', voucherError);
+        }
+        
+        if (voucherCheck) {
+            console.log('⚠️ ডুপ্লিকেট ভাউচার পাওয়া গেছে:', voucherCheck.voucher);
+            return { 
+                isDuplicate: true,
+                type: 'voucher',
+                existingData: voucherCheck,
+                reason: 'voucher_duplicate'
+            };
+        }
+        
+        // ✅ চেক ২ বাদ দেওয়া হয়েছে (এটাই সমস্যা করছিল)
+        // কারণ: একই দিনে একই পরিমাণের একাধিক বৈধ এন্ট্রি থাকতে পারে
+        
+        console.log('✅ এই ভাউচার নম্বরটি নতুন — সংরক্ষণ করা যাবে');
+        return { isDuplicate: false, reason: null };
+        
+    } catch(e) {
+        console.error('❌ Duplicate check error:', e);
+        return { isDuplicate: false, reason: null };
+    }
+}
 
         // ============================================================
         // ✅ POPULATE FUNCTIONS
