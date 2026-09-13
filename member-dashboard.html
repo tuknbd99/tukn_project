@@ -5996,10 +5996,7 @@ async function loadNotices() {
 
 async function loadComplaintReplies() { document.getElementById('complaintRepliesContainer').innerHTML = '<p class="text-gray-500 text-center py-4">কোনো উত্তর পাওয়া যায়নি</p>'; }
 
-// ============================================================
-// রেফারেল ফাংশন
-// ============================================================
-async function insertReferralBonusLog(memberId, amount, level, note) {
+async function insertReferralBonusLog(memberId, amount, level, note, fromMemberId) {
     const client = await initSupabase();
     if (!client) return false;
     
@@ -6008,6 +6005,10 @@ async function insertReferralBonusLog(memberId, amount, level, note) {
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
         const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
         
+        // ✅ fromMemberId না থাকলে currentUser.id ব্যবহার করুন (fallback)
+        const finalFromMemberId = fromMemberId || currentUser?.id || memberId;
+        
+        // চেক করুন ইতিমধ্যে লগ আছে কিনা
         const { data: existing, error: checkError } = await client
             .from('referral_bonus_log')
             .select('id, amount')
@@ -6043,7 +6044,7 @@ async function insertReferralBonusLog(memberId, amount, level, note) {
             return true;
         }
         
-        // ✅ from_member_id যোগ করা হয়েছে
+        // ✅ নতুন লগ তৈরি করুন - from_member_id এ আসল ভ্যালু
         const { error: insertError } = await client
             .from('referral_bonus_log')
             .insert([{
@@ -6051,7 +6052,7 @@ async function insertReferralBonusLog(memberId, amount, level, note) {
                 amount: amount,
                 level: level,
                 note: note,
-                from_member_id: null,  // ← যোগ করুন
+                from_member_id: finalFromMemberId,   // ← আসল ভ্যালু
                 created_at: new Date().toISOString()
             }]);
         
@@ -6060,7 +6061,7 @@ async function insertReferralBonusLog(memberId, amount, level, note) {
             return false;
         }
         
-        console.log(`✅ ${memberId} এর নতুন বোনাস লগ ইনসার্ট: ${amount} টাকা (Level ${level})`);
+        console.log(`✅ ${memberId} এর নতুন বোনাস লগ ইনসার্ট: ${amount} টাকা (Level ${level}, from: ${finalFromMemberId})`);
         return true;
         
     } catch(e) {
@@ -6245,17 +6246,18 @@ async function loadReferralData() {
         const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         
         for(const [memberId, bonus] of Object.entries(referralBonusMap)) {
-            const level = referralLevelMap[memberId] || 0;
-            const roundedBonus = Math.round(bonus);
-            if (roundedBonus > 0) {
-                await insertReferralBonusLog(
-                    memberId, 
-                    roundedBonus, 
-                    level, 
-                    `Level ${level} রেফারেল বোনাস (${currentMonthKey})`
-                );
-            }
+        const level = referralLevelMap[memberId] || 0;
+        const roundedBonus = Math.round(bonus);
+        if (roundedBonus > 0) {
+            await insertReferralBonusLog(
+                memberId, 
+                roundedBonus, 
+                level, 
+                `Level ${level} রেফারেল বোনাস (${currentMonthKey})`,
+                memberId   // ← নতুন: from_member_id এর জন্য
+            );
         }
+    }
         
         const myTotalBonus = totalCommission;
         const roundedMyBonus = Math.round(myTotalBonus);
