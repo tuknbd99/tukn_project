@@ -7031,6 +7031,192 @@ function closePaymentDetailsModal() {
         showWithdrawalDetailModal(withdrawal);
     }
 
+    // ============================================================
+// ✅ searchMemberForDeposit() — সরাসরি জমার জন্য সদস্য খোঁজা
+// ============================================================
+function searchMemberForDeposit() {
+    const searchTerm = document.getElementById('memberSearchInput')?.value?.trim();
+    
+    if (!searchTerm) {
+        showToast('❌ সদস্য আইডি বা মোবাইল নম্বর দিন!', 'error');
+        return;
+    }
+    
+    const resultsDiv = document.getElementById('memberSearchResults');
+    if (!resultsDiv) return;
+    
+    // ✅ membersData থেকে সদস্য খুঁজুন
+    const member = membersData.find(m => 
+        m.member_id === searchTerm || m.mobile === searchTerm
+    );
+    
+    if (!member) {
+        resultsDiv.innerHTML = `
+            <div class="bg-red-50 border border-red-200 p-3 rounded-lg text-red-600 text-center">
+                <i class="fas fa-exclamation-circle mr-2"></i>
+                ❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!
+            </div>
+        `;
+        resultsDiv.classList.remove('hidden');
+        
+        // ✅ Form লুকান
+        const formSection = document.getElementById('depositFormSection');
+        if (formSection) formSection.classList.add('hidden');
+        return;
+    }
+    
+    // ✅ সদস্য পাওয়া গেলে result দেখান
+    resultsDiv.innerHTML = `
+        <div class="bg-green-50 border border-green-200 p-3 rounded-lg">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 font-bold">
+                    ${member.full_name?.charAt(0) || '?'}
+                </div>
+                <div>
+                    <p class="font-bold text-gray-800">${member.full_name}</p>
+                    <p class="text-sm text-gray-500">🆔 ${member.member_id} | 📱 ${member.mobile}</p>
+                    <p class="text-xs text-gray-400">📍 ${member.present_district || 'জেলা নেই'}</p>
+                </div>
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-2 text-sm border-t pt-2">
+                <div><span class="text-gray-500">ব্যালেন্স:</span> <span class="font-bold text-emerald-600">${formatAmountWithText(member.balance || 0)}</span></div>
+                <div><span class="text-gray-500">স্ট্যাটাস:</span> <span class="px-2 py-0.5 rounded-full text-xs ${member.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}</span></div>
+            </div>
+        </div>
+    `;
+    resultsDiv.classList.remove('hidden');
+    
+    // ✅ Form সেকশন দেখান এবং ফিল্ড পপুলেট করুন
+    const formSection = document.getElementById('depositFormSection');
+    if (formSection) {
+        formSection.classList.remove('hidden');
+        
+        // ✅ সদস্যের তথ্য সেট করুন
+        const depositMemberId = document.getElementById('depositMemberId');
+        const depositMemberName = document.getElementById('depositMemberName');
+        const depositCurrentBalance = document.getElementById('depositCurrentBalance');
+        
+        if (depositMemberId) depositMemberId.value = member.member_id;
+        if (depositMemberName) depositMemberName.value = member.full_name;
+        if (depositCurrentBalance) depositCurrentBalance.value = formatAmountWithText(member.balance || 0);
+    }
+    
+    showToast(`✅ ${member.full_name} পাওয়া গেছে!`, 'success');
+}
+
+    // ✅ global expose
+window.searchMemberForDeposit = searchMemberForDeposit;
+
+    // ============================================================
+// ✅ viewLoanPaymentDetails() — লোন পেমেন্ট বিস্তারিত দেখান
+// ============================================================
+async function viewLoanPaymentDetails(paymentId) {
+    const id = parseInt(paymentId);
+    if (isNaN(id) || id <= 0) {
+        showToast('❌ ভুল পেমেন্ট আইডি!', 'error');
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: payment, error } = await client
+            .from('loan_payments')
+            .select('*')
+            .eq('id', id)
+            .single();
+        
+        if (error) throw error;
+        if (!payment) {
+            showToast('❌ পেমেন্ট পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        // ✅ লোন তথ্য লোড
+        let loanInfo = {};
+        if (payment.loan_id) {
+            const { data: loan } = await client
+                .from('loan_applications')
+                .select('member_name, member_id, loan_type, amount')
+                .eq('id', payment.loan_id)
+                .single();
+            loanInfo = loan || {};
+        }
+        
+        const amount = payment.total_amount || payment.emi_amount || 0;
+        
+        const html = `
+            <div class="bg-gradient-to-r from-indigo-50 to-blue-50 p-4 rounded-lg border border-indigo-200 mb-4">
+                <h4 class="font-bold text-indigo-700 text-lg mb-3">
+                    <i class="fas fa-hand-holding-usd mr-2"></i>লোন পেমেন্ট বিস্তারিত
+                </h4>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">পেমেন্ট আইডি</span>
+                        <p class="font-semibold text-gray-800">#${payment.id}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">সদস্যের নাম</span>
+                        <p class="font-semibold text-gray-800">${loanInfo.member_name || '-'}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">সদস্য আইডি</span>
+                        <p class="font-semibold text-gray-800">${loanInfo.member_id || '-'}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">লোনের ধরন</span>
+                        <p class="font-semibold text-blue-600">${loanInfo.loan_type || '-'}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">কিস্তি #</span>
+                        <p class="font-bold text-emerald-600">#${payment.installment_no || '-'}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">পরিমাণ</span>
+                        <p class="font-bold text-emerald-600 text-lg">${formatAmountWithText(amount)}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">পেমেন্ট পদ্ধতি</span>
+                        <p class="font-semibold text-gray-800">${payment.payment_method || 'cash'}</p>
+                    </div>
+                    <div class="bg-white p-3 rounded-lg shadow-sm">
+                        <span class="text-gray-500">তারিখ</span>
+                        <p class="font-semibold text-gray-800">${payment.payment_date ? new Date(payment.payment_date).toLocaleString('bn-BD') : '-'}</p>
+                    </div>
+                    ${payment.transaction_id ? `
+                        <div class="bg-white p-3 rounded-lg shadow-sm col-span-1 md:col-span-2">
+                            <span class="text-gray-500">লেনদেন আইডি</span>
+                            <p class="font-mono text-sm break-all">${payment.transaction_id}</p>
+                        </div>
+                    ` : ''}
+                    ${payment.note ? `
+                        <div class="bg-white p-3 rounded-lg shadow-sm col-span-1 md:col-span-2">
+                            <span class="text-gray-500">নোট</span>
+                            <p>${payment.note}</p>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+            <div class="flex gap-2 justify-center no-print">
+                <button onclick="closeCustomModal()" class="btn btn-warning py-2">
+                    <i class="fas fa-times mr-1"></i> বন্ধ করুন
+                </button>
+            </div>
+        `;
+        
+        showCustomModal('📋 লোন পেমেন্ট বিস্তারিত', html);
+        
+    } catch(e) {
+        console.error('❌ View loan payment details error:', e);
+        showToast(`❌ লোড করতে সমস্যা: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+window.viewLoanPaymentDetails = viewLoanPaymentDetails;
 // ============================================================
 // loadPendingLoans() - সম্পূর্ণ রিফ্রেশ সহ (ক্যাশ ক্লিয়ার)
 // ============================================================
