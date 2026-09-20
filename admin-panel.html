@@ -19189,6 +19189,934 @@ async function applyWaiver(paymentId, currentLateFee) {
     }
 }
 
+    // ============================================================
+// ✅ BALANCE ADJUSTMENT SYSTEM v1.0
+// ============================================================
+let adjustmentMemberData = null;
+let currentVoucherData = null;
+
+// ============================================================
+// ✅ searchMemberForAdjustment() — সদস্য খুঁজুন
+// ============================================================
+async function searchMemberForAdjustment() {
+    const searchTerm = document.getElementById('adjMemberSearch')?.value?.trim();
+    
+    if (!searchTerm) {
+        showToast('❌ সদস্য আইডি বা মোবাইল দিন!', 'error');
+        return;
+    }
+    
+    const resultDiv = document.getElementById('adjMemberResult');
+    if (!resultDiv) return;
+    
+    resultDiv.innerHTML = `<div class="text-center py-3"><div class="loading-spinner mx-auto"></div><p class="text-gray-500 text-sm mt-2">খোঁজা হচ্ছে...</p></div>`;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        resultDiv.innerHTML = '<div class="text-red-500 p-3 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        const { data: member, error } = await client
+            .from('members')
+            .select('*')
+            .or(`member_id.eq.${searchTerm},mobile.eq.${searchTerm}`)
+            .maybeSingle();
+        
+        if (error) throw error;
+        
+        if (!member) {
+            resultDiv.innerHTML = `<div class="bg-red-50 border-2 border-red-200 p-4 rounded-lg text-center"><i class="fas fa-user-times text-red-500 text-3xl mb-2"></i><p class="text-red-600 font-semibold">❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!</p></div>`;
+            document.getElementById('adjustmentFormContainer').classList.add('hidden');
+            return;
+        }
+        
+        adjustmentMemberData = member;
+        
+        const totalProfit = (member.profit_balance_savings || 0) + (member.profit_balance_investment || 0) + (member.profit_balance_referral || 0);
+        
+        resultDiv.innerHTML = `
+            <div class="bg-green-50 border-2 border-green-300 p-4 rounded-lg">
+                <div class="flex items-center gap-3 mb-3">
+                    <div class="w-14 h-14 rounded-full bg-emerald-500 flex items-center justify-center text-white font-bold text-2xl">${member.full_name?.charAt(0) || '?'}</div>
+                    <div class="flex-1">
+                        <p class="font-bold text-gray-800 text-lg">${member.full_name || '-'}</p>
+                        <p class="text-sm text-gray-600">🆔 ${member.member_id} | 📱 ${member.mobile}</p>
+                        <p class="text-xs text-gray-500">📍 ${member.present_district || 'জেলা নেই'}</p>
+                    </div>
+                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${member.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'}">${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}</span>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm border-t pt-3">
+                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">💰 মূলধন</div><div class="font-bold text-emerald-600">${formatAmount(member.balance || 0)}</div></div>
+                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">🎁 রেফারেল</div><div class="font-bold text-blue-600">${formatAmount(member.referral_bonus || 0)}</div></div>
+                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">📈 সঞ্চয় লাভ</div><div class="font-bold text-purple-600">${formatAmount(member.profit_balance_savings || 0)}</div></div>
+                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">📈 বিনিয়োগ লাভ</div><div class="font-bold text-pink-600">${formatAmount(member.profit_balance_investment || 0)}</div></div>
+                    <div class="bg-white p-2 rounded-lg text-center border-2 border-amber-300"><div class="text-xs text-gray-500">📊 মোট ফান্ড</div><div class="font-bold text-amber-700">${formatAmount((member.balance || 0) + (member.referral_bonus || 0) + totalProfit)}</div></div>
+                </div>
+            </div>
+        `;
+        
+        // ✅ Form দেখান
+        document.getElementById('adjustmentFormContainer').classList.remove('hidden');
+        document.getElementById('adjMemberId').value = member.member_id;
+        document.getElementById('adjCurrentBalance').value = formatAmountWithText(member.balance || 0);
+        
+        // ✅ Reset
+        document.getElementById('adjFundType').value = '';
+        document.getElementById('adjAmount').value = '';
+        document.getElementById('adjReason').value = '';
+        document.getElementById('adjNote').value = '';
+        document.getElementById('adjConfirm').checked = false;
+        document.getElementById('adjFundCurrent').value = '';
+        document.getElementById('adjNewBalance').value = '';
+        
+        // ✅ Voucher reset
+        const manualCheckbox = document.getElementById('adjUseManualVoucher');
+        if (manualCheckbox) manualCheckbox.checked = false;
+        const manualContainer = document.getElementById('adjManualVoucherContainer');
+        if (manualContainer) manualContainer.classList.add('hidden');
+        const manualField = document.getElementById('adjManualVoucher');
+        if (manualField) { manualField.value = ''; manualField.dataset.valid = ''; manualField.style.borderColor = ''; }
+        const statusDiv = document.getElementById('adjManualVoucherStatus');
+        if (statusDiv) statusDiv.innerHTML = '';
+        
+        await refreshAutoVoucher();
+        
+        showToast(`✅ ${member.full_name} পাওয়া গেছে!`, 'success');
+        
+    } catch(e) {
+        console.error('❌ Search error:', e);
+        resultDiv.innerHTML = `<div class="text-red-500 p-3 text-center">❌ সমস্যা: ${e.message}</div>`;
+    }
+}
+
+// ============================================================
+// ✅ Fund/Direction/Amount পরিবর্তনে Preview আপডেট
+// ============================================================
+document.getElementById('adjFundType')?.addEventListener('change', function() {
+    if (!adjustmentMemberData) return;
+    const fundType = this.value;
+    const fundMap = {
+        'balance': adjustmentMemberData.balance || 0,
+        'referral_bonus': adjustmentMemberData.referral_bonus || 0,
+        'profit_balance_savings': adjustmentMemberData.profit_balance_savings || 0,
+        'profit_balance_investment': adjustmentMemberData.profit_balance_investment || 0,
+        'profit_balance_referral': adjustmentMemberData.profit_balance_referral || 0
+    };
+    const currentValue = fundMap[fundType] || 0;
+    document.getElementById('adjFundCurrent').value = formatAmountWithText(currentValue);
+    document.getElementById('adjCurrentBalance').value = formatAmountWithText(currentValue);
+    updateNewBalancePreview();
+});
+
+document.getElementById('adjAmount')?.addEventListener('input', updateNewBalancePreview);
+document.getElementById('adjDirection')?.addEventListener('change', updateNewBalancePreview);
+
+function updateNewBalancePreview() {
+    if (!adjustmentMemberData) return;
+    const fundType = document.getElementById('adjFundType')?.value;
+    const direction = document.getElementById('adjDirection')?.value || 'deduct';
+    const amount = parseFloat(document.getElementById('adjAmount')?.value) || 0;
+    
+    if (!fundType) {
+        document.getElementById('adjNewBalance').value = '';
+        return;
+    }
+    
+    const fundMap = {
+        'balance': adjustmentMemberData.balance || 0,
+        'referral_bonus': adjustmentMemberData.referral_bonus || 0,
+        'profit_balance_savings': adjustmentMemberData.profit_balance_savings || 0,
+        'profit_balance_investment': adjustmentMemberData.profit_balance_investment || 0,
+        'profit_balance_referral': adjustmentMemberData.profit_balance_referral || 0
+    };
+    
+    const currentValue = fundMap[fundType] || 0;
+    let newValue = direction === 'deduct' ? currentValue - amount : currentValue + amount;
+    
+    if (newValue < 0) {
+        document.getElementById('adjNewBalance').value = '⚠️ ' + formatAmountWithText(newValue) + ' (নেগেটিভ!)';
+        document.getElementById('adjNewBalance').style.color = '#dc2626';
+    } else {
+        document.getElementById('adjNewBalance').value = formatAmountWithText(newValue);
+        document.getElementById('adjNewBalance').style.color = '#7c3aed';
+    }
+}
+
+// ============================================================
+// ✅ generateVoucherNumber() — Auto Generate
+// ============================================================
+async function generateVoucherNumber() {
+    const client = initSupabaseClient();
+    if (!client) return 'ADJ-' + Date.now();
+    
+    const year = new Date().getFullYear();
+    
+    try {
+        const { data, error } = await client
+            .from('admin_balance_adjustments')
+            .select('voucher_no')
+            .ilike('voucher_no', `ADJ-${year}-%`)
+            .order('id', { ascending: false })
+            .limit(1);
+        
+        let nextNum = 1;
+        if (!error && data && data.length > 0) {
+            const lastVoucher = data[0].voucher_no;
+            const match = lastVoucher.match(/ADJ-\d{4}-(\d+)/);
+            if (match) nextNum = parseInt(match[1]) + 1;
+        }
+        
+        return `ADJ-${year}-${String(nextNum).padStart(4, '0')}`;
+    } catch(e) {
+        return `ADJ-${year}-${Date.now()}`;
+    }
+}
+
+// ============================================================
+// ✅ toggleManualVoucher() — ম্যানুয়াল টগল
+// ============================================================
+function toggleManualVoucher() {
+    const checkbox = document.getElementById('adjUseManualVoucher');
+    const container = document.getElementById('adjManualVoucherContainer');
+    const autoField = document.getElementById('adjAutoVoucher');
+    const manualField = document.getElementById('adjManualVoucher');
+    
+    if (!checkbox || !container) return;
+    
+    if (checkbox.checked) {
+        container.classList.remove('hidden');
+        if (manualField) manualField.focus();
+        if (autoField) autoField.style.opacity = '0.5';
+        showToast('✏️ ম্যানুয়াল ভাউচার নম্বর দিন', 'info');
+    } else {
+        container.classList.add('hidden');
+        if (manualField) manualField.value = '';
+        if (autoField) autoField.style.opacity = '1';
+        const statusDiv = document.getElementById('adjManualVoucherStatus');
+        if (statusDiv) statusDiv.innerHTML = '';
+    }
+}
+
+// ============================================================
+// ✅ refreshAutoVoucher() — নতুন নম্বর জেনারেট (Unique নিশ্চিত)
+// ============================================================
+async function refreshAutoVoucher() {
+    const field = document.getElementById('adjAutoVoucher');
+    if (!field) return;
+    
+    field.value = '⏳ লোড হচ্ছে...';
+    
+    try {
+        let attempts = 0;
+        let newVoucher = '';
+        let isUnique = false;
+        
+        while (!isUnique && attempts < 10) {
+            newVoucher = await generateVoucherNumber();
+            const result = await checkVoucherExists(newVoucher);
+            const exists = (typeof result === 'object' && result !== null) ? result.exists : !!result;
+            
+            if (!exists) {
+                isUnique = true;
+            } else {
+                attempts++;
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }
+        
+        field.value = newVoucher;
+    } catch(e) {
+        console.error('❌ Voucher refresh error:', e);
+        field.value = `ADJ-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+    }
+}
+
+// ============================================================
+// ✅ checkVoucherExists() — Case-Insensitive চেক
+// ============================================================
+async function checkVoucherExists(voucherNo) {
+    const client = initSupabaseClient();
+    if (!client) return false;
+    
+    const normalized = String(voucherNo || '').trim().toLowerCase();
+    if (!normalized) return false;
+    
+    try {
+        const { data, error } = await client
+            .from('admin_balance_adjustments')
+            .select('id, voucher_no, member_name, created_at')
+            .ilike('voucher_no', normalized)
+            .limit(1);
+        
+        if (error) return false;
+        
+        if (data && data.length > 0) {
+            return { exists: true, existing: data[0] };
+        }
+        return { exists: false };
+    } catch(e) {
+        return { exists: false };
+    }
+}
+
+// ============================================================
+// ✅ validateManualVoucher() — Live Validation
+// ============================================================
+async function validateManualVoucher() {
+    const field = document.getElementById('adjManualVoucher');
+    const statusDiv = document.getElementById('adjManualVoucherStatus');
+    
+    if (!field || !statusDiv) return;
+    
+    const value = field.value.trim();
+    
+    if (!value) {
+        statusDiv.innerHTML = '';
+        field.dataset.valid = 'false';
+        field.style.borderColor = '';
+        return;
+    }
+    
+    if (value.length < 3) {
+        statusDiv.innerHTML = `<div class="text-xs text-red-600 bg-red-50 p-2 rounded border-2 border-red-200">❌ কমপক্ষে ৩ অক্ষর হতে হবে! (বর্তমান: ${value.length})</div>`;
+        field.dataset.valid = 'false';
+        field.style.borderColor = '#dc2626';
+        return;
+    }
+    
+    if (value.length > 50) {
+        statusDiv.innerHTML = `<div class="text-xs text-red-600 bg-red-50 p-2 rounded border-2 border-red-200">❌ সর্বোচ্চ ৫০ অক্ষর!</div>`;
+        field.dataset.valid = 'false';
+        field.style.borderColor = '#dc2626';
+        return;
+    }
+    
+    const validPattern = /^[A-Za-z0-9_\-\/]+$/;
+    if (!validPattern.test(value)) {
+        statusDiv.innerHTML = `<div class="text-xs text-red-600 bg-red-50 p-2 rounded border-2 border-red-200">❌ শুধু A-Z, 0-9, -, _, / ব্যবহার করুন!</div>`;
+        field.dataset.valid = 'false';
+        field.style.borderColor = '#dc2626';
+        return;
+    }
+    
+    statusDiv.innerHTML = `<div class="text-xs text-blue-600 bg-blue-50 p-2 rounded border-2 border-blue-200"><i class="fas fa-spinner fa-spin mr-1"></i> ডুপ্লিকেট চেক করা হচ্ছে...</div>`;
+    
+    const result = await checkVoucherExists(value);
+    const isDuplicate = (typeof result === 'object' && result !== null) ? result.exists : !!result;
+    
+    if (isDuplicate) {
+        const existingInfo = (typeof result === 'object' && result.existing) ? result.existing : null;
+        statusDiv.innerHTML = `
+            <div class="text-xs text-red-600 bg-red-50 p-3 rounded border-2 border-red-400 font-semibold">
+                <div class="flex items-start gap-2">
+                    <i class="fas fa-ban text-red-600 text-lg"></i>
+                    <div>
+                        <p class="font-bold">❌ এই নম্বরটি ইতিমধ্যে ব্যবহৃত হয়েছে!</p>
+                        ${existingInfo ? `<p class="text-xs mt-1 font-normal text-gray-600"><strong>ব্যবহৃত:</strong> ${existingInfo.member_name || 'সদস্য'}<br><strong>তারিখ:</strong> ${new Date(existingInfo.created_at).toLocaleString('bn-BD')}</p>` : ''}
+                        <p class="mt-1 text-xs">🔒 অন্য নম্বর দিন।</p>
+                    </div>
+                </div>
+            </div>
+        `;
+        field.dataset.valid = 'false';
+        field.style.borderColor = '#dc2626';
+        field.style.backgroundColor = '#fef2f2';
+    } else {
+        statusDiv.innerHTML = `
+            <div class="text-xs text-emerald-700 bg-emerald-50 p-3 rounded border-2 border-emerald-400 font-semibold">
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-check-circle text-emerald-600 text-lg"></i>
+                    <div>
+                        <p class="font-bold">✅ এই নম্বরটি ব্যবহার করা যাবে!</p>
+                        <p class="text-xs font-normal text-emerald-600 mt-0.5">ভাউচার: <strong>${value}</strong></p>
+                    </div>
+                </div>
+            </div>
+        `;
+        field.dataset.valid = 'true';
+        field.style.borderColor = '#059669';
+        field.style.backgroundColor = '#f0fdf4';
+    }
+}
+
+// ============================================================
+// ✅ Form Submit — Final Save
+// ============================================================
+document.getElementById('balanceAdjustmentForm')?.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    if (!adjustmentMemberData) {
+        showToast('❌ প্রথমে সদস্য খুঁজুন!', 'error');
+        return;
+    }
+    
+    const memberId = document.getElementById('adjMemberId').value;
+    const fundType = document.getElementById('adjFundType').value;
+    const direction = document.getElementById('adjDirection').value;
+    const amount = parseFloat(document.getElementById('adjAmount').value);
+    const reason = document.getElementById('adjReason').value.trim();
+    const note = document.getElementById('adjNote').value.trim();
+    const confirm = document.getElementById('adjConfirm').checked;
+    
+    // ✅ Voucher নির্ধারণ
+    const useManualVoucher = document.getElementById('adjUseManualVoucher')?.checked || false;
+    let voucherNo = '';
+    
+    if (useManualVoucher) {
+        const manualField = document.getElementById('adjManualVoucher');
+        voucherNo = manualField?.value?.trim() || '';
+        
+        if (!voucherNo) { showToast('❌ ম্যানুয়াল ভাউচার নম্বর দিন!', 'error'); manualField?.focus(); return; }
+        if (voucherNo.length < 3 || voucherNo.length > 50) { showToast('❌ ৩-৫০ অক্ষরের মধ্যে হতে হবে!', 'error'); manualField?.focus(); return; }
+        
+        const validPattern = /^[A-Za-z0-9_\-\/]+$/;
+        if (!validPattern.test(voucherNo)) { showToast('❌ শুধু A-Z, 0-9, -, _, / ব্যবহার করুন!', 'error'); manualField?.focus(); return; }
+        
+        if (manualField.dataset.valid === 'false') { showToast('❌ ভাউচার নম্বর ইতিমধ্যে ব্যবহৃত!', 'error'); manualField?.focus(); return; }
+        
+        // Final check
+        const client = initSupabaseClient();
+        if (client) {
+            const { data: existing } = await client
+                .from('admin_balance_adjustments')
+                .select('id, voucher_no, member_name, created_at')
+                .ilike('voucher_no', voucherNo.toLowerCase())
+                .limit(1);
+            
+            if (existing && existing.length > 0) {
+                const dup = existing[0];
+                showToast(`❌ ভাউচার "${dup.voucher_no}" আগেই ব্যবহৃত!\n👤 ${dup.member_name}\n📅 ${new Date(dup.created_at).toLocaleString('bn-BD')}`, 'error');
+                manualField?.focus();
+                manualField.style.borderColor = '#dc2626';
+                return;
+            }
+        }
+    } else {
+        voucherNo = document.getElementById('adjAutoVoucher')?.value?.trim() || '';
+        if (!voucherNo || voucherNo.includes('লোড')) {
+            voucherNo = await generateVoucherNumber();
+        }
+    }
+    
+    // ✅ অন্যান্য Validation
+    if (!fundType) { showToast('❌ ফান্ড নির্বাচন করুন!', 'error'); return; }
+    if (!amount || amount <= 0) { showToast('❌ সঠিক পরিমাণ দিন!', 'error'); return; }
+    if (!reason) { showToast('❌ কারণ লিখুন!', 'error'); return; }
+    if (!confirm) { showToast('❌ নিশ্চিতকরণ চেকবক্স টিক দিন!', 'error'); return; }
+    
+    // ✅ Fund check
+    const fundMap = {
+        'balance': adjustmentMemberData.balance || 0,
+        'referral_bonus': adjustmentMemberData.referral_bonus || 0,
+        'profit_balance_savings': adjustmentMemberData.profit_balance_savings || 0,
+        'profit_balance_investment': adjustmentMemberData.profit_balance_investment || 0,
+        'profit_balance_referral': adjustmentMemberData.profit_balance_referral || 0
+    };
+    
+    const currentAmount = fundMap[fundType] || 0;
+    
+    if (direction === 'deduct' && currentAmount < amount) {
+        showToast(`❌ পর্যাপ্ত টাকা নেই!\nবর্তমান: ${formatAmountWithText(currentAmount)}\nপ্রয়োজন: ${formatAmountWithText(amount)}`, 'error');
+        return;
+    }
+    
+    const newAmount = direction === 'deduct' ? currentAmount - amount : currentAmount + amount;
+    
+    const fundLabels = {
+        'balance': 'মূলধন',
+        'referral_bonus': 'রেফারেল বোনাস',
+        'profit_balance_savings': 'সঞ্চয় লভ্যাংশ',
+        'profit_balance_investment': 'বিনিয়োগ লভ্যাংশ',
+        'profit_balance_referral': 'রেফারেল লভ্যাংশ'
+    };
+    
+    const confirmMsg = `🔐 আপনি কি নিশ্চিত?\n\n━━━━━━━━━━━━━━━━━━━━\n📝 ভাউচার: ${voucherNo}\n👤 সদস্য: ${adjustmentMemberData.full_name}\n🆔 আইডি: ${memberId}\n💼 ফান্ড: ${fundLabels[fundType]}\n⚙️ ${direction === 'deduct' ? '➖ কমান' : '➕ বাড়ান'}\n💰 পরিমাণ: ${formatAmountWithText(amount)}\n📊 বর্তমান: ${formatAmountWithText(currentAmount)}\n✨ নতুন: ${formatAmountWithText(newAmount)}\n📝 কারণ: ${reason}\n━━━━━━━━━━━━━━━━━━━━\n\n"OK" চাপুন।`;
+    
+    if (!confirm(confirmMsg)) return;
+    
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> প্রক্রিয়াকরণ...';
+    
+    const client = initSupabaseClient();
+    if (!client) { showToast('❌ সংযোগ সমস্যা!', 'error'); submitBtn.disabled = false; submitBtn.innerHTML = originalText; return; }
+    
+    try {
+        const adminName = currentAdmin?.full_name || currentAdmin?.name || currentAdmin?.username || 'Super Admin';
+        const adminId = currentAdmin?.id || currentAdmin?.username || 'admin';
+        const adminRole = currentAdmin?.role || 'সুপার অ্যাডমিন';
+        
+        // ✅ Members আপডেট
+        const updateField = { [fundType]: newAmount };
+        const { error: updateError } = await client.from('members').update(updateField).eq('member_id', memberId);
+        if (updateError) throw updateError;
+        
+        // ✅ Log insert
+        const { data: adjustmentData, error: logError } = await client
+            .from('admin_balance_adjustments')
+            .insert([{
+                voucher_no: voucherNo,
+                member_id: memberId,
+                member_name: adjustmentMemberData.full_name,
+                adjustment_type: fundType,
+                adjustment_direction: direction,
+                amount: amount,
+                previous_amount: currentAmount,
+                new_amount: newAmount,
+                reason: reason,
+                note: note || null,
+                admin_id: adminId,
+                admin_name: adminName,
+                admin_role: adminRole,
+                created_at: new Date().toISOString(),
+                status: 'completed'
+            }])
+            .select()
+            .single();
+        
+        if (logError) {
+            // Rollback
+            await client.from('members').update({ [fundType]: currentAmount }).eq('member_id', memberId);
+            
+            if (logError.code === '23505' || logError.message?.includes('duplicate') || logError.message?.includes('unique')) {
+                showToast(`🔒 ডুপ্লিকেট ভাউচার!\n"${voucherNo}" আগেই ব্যবহৃত।`, 'error');
+                if (useManualVoucher) {
+                    const mf = document.getElementById('adjManualVoucher');
+                    if (mf) { mf.style.borderColor = '#dc2626'; mf.focus(); mf.select(); }
+                    await validateManualVoucher();
+                }
+                return;
+            }
+            throw new Error('লগ সংরক্ষণ ব্যর্থ — রোলব্যাক করা হয়েছে');
+        }
+        
+        // ✅ Audit
+        try {
+            await client.from('audit_logs').insert([{
+                admin_name: adminName,
+                action: 'UPDATE',
+                table_name: 'members',
+                record_id: memberId,
+                changes: { fund: fundType, previous: currentAmount, new: newAmount, voucher: voucherNo },
+                created_at: new Date().toISOString()
+            }]);
+        } catch(e) {}
+        
+        adjustmentMemberData[fundType] = newAmount;
+        
+        // ✅ Voucher show
+        currentVoucherData = {
+            ...adjustmentData,
+            member_phone: adjustmentMemberData.mobile,
+            member_district: adjustmentMemberData.present_district,
+            fund_label: fundLabels[fundType]
+        };
+        
+        showAdjustmentVoucher(currentVoucherData);
+        
+        // ✅ Refresh
+        await searchMemberForAdjustment();
+        await loadRecentAdjustments();
+        await loadMembers();
+        await loadRealDashboard();
+        
+        // ✅ Reset
+        document.getElementById('adjAmount').value = '';
+        document.getElementById('adjReason').value = '';
+        document.getElementById('adjNote').value = '';
+        document.getElementById('adjConfirm').checked = false;
+        document.getElementById('adjDirection').value = 'deduct';
+        
+        const mcb = document.getElementById('adjUseManualVoucher');
+        if (mcb) mcb.checked = false;
+        const mc = document.getElementById('adjManualVoucherContainer');
+        if (mc) mc.classList.add('hidden');
+        const mf = document.getElementById('adjManualVoucher');
+        if (mf) { mf.value = ''; mf.dataset.valid = ''; mf.style.borderColor = ''; mf.style.backgroundColor = ''; }
+        const sd = document.getElementById('adjManualVoucherStatus');
+        if (sd) sd.innerHTML = '';
+        
+        await refreshAutoVoucher();
+        updateNewBalancePreview();
+        
+        showToast(`✅ সমন্বয় সফল!\n📝 ভাউচার: ${voucherNo}\n💰 ${formatAmountWithText(amount)} ${direction === 'deduct' ? 'কমানো' : 'বাড়ানো'} হয়েছে`, 'success');
+        
+    } catch(e) {
+        console.error('❌ Adjustment error:', e);
+        showToast(`❌ সমন্বয় ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalText;
+    }
+});
+
+// ============================================================
+// ✅ clearAdjustmentForm()
+// ============================================================
+function clearAdjustmentForm() {
+    document.getElementById('adjMemberSearch').value = '';
+    document.getElementById('adjMemberResult').innerHTML = '';
+    document.getElementById('adjustmentFormContainer').classList.add('hidden');
+    adjustmentMemberData = null;
+    showToast('✅ ফর্ম রিসেট হয়েছে', 'info');
+}
+
+// ============================================================
+// ✅ loadRecentAdjustments()
+// ============================================================
+async function loadRecentAdjustments() {
+    const container = document.getElementById('recentAdjustmentsList');
+    if (!container) return;
+    
+    container.innerHTML = `<div class="text-center py-8"><div class="loading-spinner mx-auto"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>`;
+    
+    const client = initSupabaseClient();
+    if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
+    
+    try {
+        const { data, error } = await client
+            .from('admin_balance_adjustments')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(20);
+        
+        if (error) throw error;
+        
+        if (!data || data.length === 0) {
+            container.innerHTML = `<div class="text-center text-gray-500 py-8"><i class="fas fa-inbox text-4xl block mb-2 text-gray-300"></i><p>এখনো কোনো সমন্বয় হয়নি</p></div>`;
+            return;
+        }
+        
+        const fundLabels = {
+            'balance': '💰 মূলধন',
+            'referral_bonus': '🎁 রেফারেল বোনাস',
+            'profit_balance_savings': '📈 সঞ্চয় লভ্যাংশ',
+            'profit_balance_investment': '📈 বিনিয়োগ লভ্যাংশ',
+            'profit_balance_referral': '📈 রেফারেল লভ্যাংশ'
+        };
+        
+        let html = `<table class="data-table"><thead><tr><th>ভাউচার</th><th>সদস্য</th><th>ফান্ড</th><th class="text-right">পরিমাণ</th><th>অ্যাডমিন</th><th>সময়</th><th>অ্যাকশন</th></tr></thead><tbody>`;
+        
+        data.forEach(adj => {
+            const isDeduct = adj.adjustment_direction === 'deduct';
+            const amountClass = isDeduct ? 'text-red-600' : 'text-emerald-600';
+            const sign = isDeduct ? '➖' : '➕';
+            
+            html += `
+                <tr>
+                    <td><span class="text-xs font-mono bg-emerald-50 text-emerald-700 px-2 py-1 rounded font-bold">${adj.voucher_no}</span></td>
+                    <td><span class="font-medium text-sm">${adj.member_name || '-'}</span><span class="text-xs text-gray-500 block">${adj.member_id || ''}</span></td>
+                    <td><span class="text-xs">${fundLabels[adj.adjustment_type] || adj.adjustment_type}</span></td>
+                    <td class="text-right font-bold ${amountClass}">${sign} ${formatAmountWithText(adj.amount)}</td>
+                    <td><span class="text-xs font-medium">${adj.admin_name || '-'}</span></td>
+                    <td class="text-xs text-gray-500">${adj.created_at ? new Date(adj.created_at).toLocaleString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                    <td>
+                        <button onclick="showAdjustmentVoucherById(${adj.id})" class="btn btn-purple btn-xs" title="ভাউচার"><i class="fas fa-receipt"></i></button>
+                        <button onclick="viewAdjustmentDetails(${adj.id})" class="btn btn-info btn-xs" title="বিস্তারিত"><i class="fas fa-eye"></i></button>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+        
+    } catch(e) {
+        console.error('❌ Load adjustments error:', e);
+        container.innerHTML = `<div class="text-center text-red-500 py-8"><i class="fas fa-exclamation-circle text-3xl block mb-2"></i><p>লোড করতে সমস্যা</p><p class="text-xs mt-1">${e.message}</p></div>`;
+    }
+}
+
+// ============================================================
+// ✅ showAdjustmentVoucher()
+// ============================================================
+function showAdjustmentVoucher(data) {
+    const modal = document.getElementById('adjustmentVoucherModal');
+    const content = document.getElementById('adjustmentVoucherContent');
+    if (!modal || !content) return;
+    
+    const isDeduct = data.adjustment_direction === 'deduct';
+    const currentDate = new Date(data.created_at || new Date());
+    
+    const fundLabels = {
+        'balance': 'মূলধন (মূল সঞ্চয়)',
+        'referral_bonus': 'রেফারেল বোনাস',
+        'profit_balance_savings': 'সঞ্চয় লভ্যাংশ',
+        'profit_balance_investment': 'বিনিয়োগ লভ্যাংশ',
+        'profit_balance_referral': 'রেফারেল লভ্যাংশ'
+    };
+    
+    content.innerHTML = `
+        <div id="voucherPrintArea" style="background: white; padding: 30px; border: 2px solid #059669; border-radius: 8px;">
+            <div style="text-align: center; border-bottom: 2px solid #059669; padding-bottom: 15px; margin-bottom: 20px;">
+                <h1 style="color: #059669; font-size: 24px; font-weight: 700; margin-bottom: 5px;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h1>
+                <p style="color: #666; font-size: 14px;">TUKNBD - ব্যালেন্স সমন্বয় ভাউচার</p>
+                <p style="color: #999; font-size: 12px; margin-top: 5px;">Balance Adjustment Voucher</p>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+                <div>
+                    <p style="color: #666; font-size: 12px;">ভাউচার নম্বর</p>
+                    <p style="font-size: 18px; font-weight: 700; color: #059669; font-family: monospace;">${data.voucher_no}</p>
+                </div>
+                <div style="text-align: right;">
+                    <p style="color: #666; font-size: 12px;">তারিখ ও সময়</p>
+                    <p style="font-size: 14px; font-weight: 600;">${currentDate.toLocaleString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                </div>
+            </div>
+            
+            <div style="background: #f0fdf4; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #86efac;">
+                <h3 style="color: #065f46; font-size: 14px; margin-bottom: 10px; font-weight: 700;">👤 সদস্যের তথ্য</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
+                    <div><strong>নাম:</strong> ${data.member_name || '-'}</div>
+                    <div><strong>সদস্য আইডি:</strong> ${data.member_id || '-'}</div>
+                    <div><strong>মোবাইল:</strong> ${data.member_phone || '-'}</div>
+                    <div><strong>জেলা:</strong> ${data.member_district || '-'}</div>
+                </div>
+            </div>
+            
+            <div style="background: ${isDeduct ? '#fef2f2' : '#f0fdf4'}; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 2px solid ${isDeduct ? '#fca5a5' : '#86efac'};">
+                <h3 style="color: ${isDeduct ? '#991b1b' : '#065f46'}; font-size: 14px; margin-bottom: 10px; font-weight: 700;">${isDeduct ? '➖ কর্তন (Deduction)' : '➕ সংযোজন (Addition)'}</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
+                    <div><strong>ফান্ড:</strong> ${fundLabels[data.adjustment_type] || data.adjustment_type}</div>
+                    <div><strong>অপারেশন:</strong> ${isDeduct ? 'কমানো' : 'বাড়ানো'}</div>
+                    <div><strong>পূর্বের:</strong> ${formatAmountWithText(data.previous_amount)}</div>
+                    <div><strong>নতুন:</strong> ${formatAmountWithText(data.new_amount)}</div>
+                </div>
+                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px dashed #999;">
+                    <p style="font-size: 12px; color: #666; margin-bottom: 5px; text-align: center;">সমন্বয়ের পরিমাণ</p>
+                    <p style="font-size: 32px; font-weight: 700; color: ${isDeduct ? '#dc2626' : '#059669'}; text-align: center; font-family: monospace;">${isDeduct ? '−' : '+'} ৳ ${formatAmount(data.amount)}</p>
+                </div>
+            </div>
+            
+            <div style="background: #fff7ed; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #fed7aa;">
+                <h3 style="color: #9a3412; font-size: 14px; margin-bottom: 8px; font-weight: 700;">📝 কারণ</h3>
+                <p style="font-size: 13px; color: #431407;">${data.reason || '-'}</p>
+                ${data.note ? `<p style="font-size: 12px; color: #78716c; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #fed7aa;"><strong>নোট:</strong> ${data.note}</p>` : ''}
+            </div>
+            
+            <div style="background: #eff6ff; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #93c5fd;">
+                <h3 style="color: #1e40af; font-size: 14px; margin-bottom: 8px; font-weight: 700;">🔐 অনুমোদনকারী</h3>
+                <div style="font-size: 13px;">
+                    <p><strong>অ্যাডমিন:</strong> ${data.admin_name || '-'}</p>
+                    <p><strong>পদবী:</strong> ${data.admin_role || '-'}</p>
+                </div>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; margin-top: 50px; padding-top: 20px; border-top: 1px solid #ddd;">
+                <div style="text-align: center; width: 45%;">
+                    <div style="border-top: 2px solid #333; padding-top: 5px; margin-top: 40px;">
+                        <p style="font-size: 12px; color: #666;">সদস্যের স্বাক্ষর</p>
+                    </div>
+                </div>
+                <div style="text-align: center; width: 45%;">
+                    <div style="border-top: 2px solid #333; padding-top: 5px; margin-top: 40px;">
+                        <p style="font-size: 12px; color: #666;">অনুমোদনকারী অ্যাডমিনের স্বাক্ষর</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px dashed #999;">
+                <p style="font-size: 11px; color: #999;">এই ডকুমেন্টটি সিস্টেম জেনারেটেড | TUKNBD Admin Panel</p>
+            </div>
+        </div>
+    `;
+    
+    modal.classList.add('active');
+    modal.style.display = 'flex';
+}
+
+// ============================================================
+// ✅ closeAdjustmentVoucherModal()
+// ============================================================
+function closeAdjustmentVoucherModal() {
+    const modal = document.getElementById('adjustmentVoucherModal');
+    if (modal) { modal.classList.remove('active'); modal.style.display = 'none'; }
+}
+
+// ============================================================
+// ✅ printAdjustmentVoucher()
+// ============================================================
+function printAdjustmentVoucher() {
+    const content = document.getElementById('voucherPrintArea');
+    if (!content) { showToast('❌ প্রিন্ট করার ডেটা নেই!', 'error'); return; }
+    
+    const printWindow = window.open('', '_blank', 'width=900,height=700');
+    if (!printWindow) { showToast('❌ পপ-আপ ব্লক!', 'error'); return; }
+    
+    printWindow.document.write(`<!DOCTYPE html><html lang="bn"><head><meta charset="UTF-8"><title>ব্যালেন্স সমন্বয় ভাউচার</title><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&display=swap" rel="stylesheet"><style>* { font-family: 'Noto Sans Bengali', sans-serif; } body { padding: 20px; background: white; } @media print { body { padding: 0; } @page { size: A4 portrait; margin: 10mm; } }</style></head><body>${content.outerHTML}<script>window.onload=function(){setTimeout(()=>window.print(),500);}<\/script></body></html>`);
+    printWindow.document.close();
+}
+
+// ============================================================
+// ✅ showAdjustmentVoucherById()
+// ============================================================
+async function showAdjustmentVoucherById(adjustmentId) {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const { data, error } = await client.from('admin_balance_adjustments').select('*').eq('id', adjustmentId).single();
+        if (error || !data) { showToast('❌ ভাউচার পাওয়া যায়নি!', 'error'); return; }
+        showAdjustmentVoucher(data);
+    } catch(e) { showToast('❌ লোড করতে সমস্যা!', 'error'); }
+}
+
+// ============================================================
+// ✅ viewAdjustmentDetails()
+// ============================================================
+async function viewAdjustmentDetails(adjustmentId) {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const { data, error } = await client.from('admin_balance_adjustments').select('*').eq('id', adjustmentId).single();
+        if (error || !data) { showToast('❌ তথ্য পাওয়া যায়নি!', 'error'); return; }
+        
+        const isDeduct = data.adjustment_direction === 'deduct';
+        const fundLabels = { 'balance': '💰 মূলধন', 'referral_bonus': '🎁 রেফারেল বোনাস', 'profit_balance_savings': '📈 সঞ্চয় লভ্যাংশ', 'profit_balance_investment': '📈 বিনিয়োগ লভ্যাংশ', 'profit_balance_referral': '📈 রেফারেল লভ্যাংশ' };
+        
+        const html = `
+            <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-3 text-sm">
+                    <div class="bg-emerald-50 p-3 rounded-lg"><span class="text-gray-500 text-xs">ভাউচার</span><p class="font-mono font-bold text-emerald-700">${data.voucher_no}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500 text-xs">সময়</span><p class="font-semibold">${new Date(data.created_at).toLocaleString('bn-BD')}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500 text-xs">সদস্য</span><p class="font-semibold">${data.member_name}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500 text-xs">আইডি</span><p class="font-semibold">${data.member_id}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500 text-xs">ফান্ড</span><p class="font-semibold">${fundLabels[data.adjustment_type] || data.adjustment_type}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500 text-xs">অপারেশন</span><p class="font-semibold ${isDeduct ? 'text-red-600' : 'text-emerald-600'}">${isDeduct ? '➖ কমান' : '➕ বাড়ান'}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500 text-xs">পূর্বের</span><p class="font-semibold">${formatAmountWithText(data.previous_amount)}</p></div>
+                    <div class="bg-gray-50 p-3 rounded-lg"><span class="text-gray-500 text-xs">নতুন</span><p class="font-semibold">${formatAmountWithText(data.new_amount)}</p></div>
+                    <div class="bg-red-50 p-3 rounded-lg col-span-2 text-center border-2 border-red-200"><span class="text-gray-500 text-xs">পরিমাণ</span><p class="font-bold text-2xl ${isDeduct ? 'text-red-600' : 'text-emerald-600'}">${isDeduct ? '−' : '+'} ${formatAmountWithText(data.amount)}</p></div>
+                    <div class="bg-amber-50 p-3 rounded-lg col-span-2"><span class="text-gray-500 text-xs">কারণ</span><p class="font-semibold">${data.reason || '-'}</p></div>
+                    ${data.note ? `<div class="bg-amber-50 p-3 rounded-lg col-span-2"><span class="text-gray-500 text-xs">নোট</span><p>${data.note}</p></div>` : ''}
+                    <div class="bg-blue-50 p-3 rounded-lg"><span class="text-gray-500 text-xs">অ্যাডমিন</span><p class="font-semibold">${data.admin_name}</p></div>
+                    <div class="bg-blue-50 p-3 rounded-lg"><span class="text-gray-500 text-xs">পদবী</span><p class="font-semibold">${data.admin_role}</p></div>
+                </div>
+                <div class="flex gap-2 justify-center pt-3 border-t no-print">
+                    <button onclick="closeCustomModal(); showAdjustmentVoucherById(${data.id})" class="btn btn-purple py-2"><i class="fas fa-receipt mr-1"></i> ভাউচার</button>
+                    <button onclick="closeCustomModal()" class="btn btn-warning py-2"><i class="fas fa-times mr-1"></i> বন্ধ</button>
+                </div>
+            </div>
+        `;
+        showCustomModal('📋 সমন্বয় বিস্তারিত', html);
+    } catch(e) { showToast('❌ লোড করতে সমস্যা!', 'error'); }
+}
+
+// ============================================================
+// ✅ loadAdjustmentHistory()
+// ============================================================
+async function loadAdjustmentHistory() {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const { data, error } = await client.from('admin_balance_adjustments').select('*').order('created_at', { ascending: false }).limit(500);
+        if (error) throw error;
+        if (!data || data.length === 0) { showToast('📭 কোনো হিস্টোরি নেই!', 'info'); return; }
+        
+        const fundLabels = { 'balance': '💰 মূলধন', 'referral_bonus': '🎁 রেফারেল বোনাস', 'profit_balance_savings': '📈 সঞ্চয় লভ্যাংশ', 'profit_balance_investment': '📈 বিনিয়োগ লভ্যাংশ', 'profit_balance_referral': '📈 রেফারেল লভ্যাংশ' };
+        
+        let totalDeduct = 0, totalAdd = 0;
+        data.forEach(d => { if (d.adjustment_direction === 'deduct') totalDeduct += d.amount; else totalAdd += d.amount; });
+        
+        let html = `
+            <div class="grid grid-cols-3 gap-3 mb-4">
+                <div class="bg-blue-50 p-3 rounded-lg border text-center"><p class="text-xs text-gray-500">মোট</p><p class="text-2xl font-bold text-blue-700">${data.length}</p></div>
+                <div class="bg-red-50 p-3 rounded-lg border text-center"><p class="text-xs text-gray-500">কমানো</p><p class="text-xl font-bold text-red-700">${formatAmountWithText(totalDeduct)}</p></div>
+                <div class="bg-emerald-50 p-3 rounded-lg border text-center"><p class="text-xs text-gray-500">বাড়ানো</p><p class="text-xl font-bold text-emerald-700">${formatAmountWithText(totalAdd)}</p></div>
+            </div>
+            <div class="table-scroll max-h-96"><table class="data-table"><thead><tr><th>ভাউচার</th><th>সময়</th><th>সদস্য</th><th>ফান্ড</th><th class="text-right">পরিমাণ</th><th>অ্যাডমিন</th><th>অ্যাকশন</th></tr></thead><tbody>
+        `;
+        
+        data.forEach(adj => {
+            const isDeduct = adj.adjustment_direction === 'deduct';
+            html += `<tr>
+                <td class="text-xs font-mono">${adj.voucher_no}</td>
+                <td class="text-xs">${new Date(adj.created_at).toLocaleString('bn-BD', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'})}</td>
+                <td><span class="text-sm font-medium">${adj.member_name}</span><span class="text-xs text-gray-500 block">${adj.member_id}</span></td>
+                <td class="text-xs">${fundLabels[adj.adjustment_type] || adj.adjustment_type}</td>
+                <td class="text-right font-bold ${isDeduct ? 'text-red-600' : 'text-emerald-600'}">${isDeduct ? '➖' : '➕'} ${formatAmountWithText(adj.amount)}</td>
+                <td class="text-xs">${adj.admin_name}</td>
+                <td><button onclick="showAdjustmentVoucherById(${adj.id})" class="btn btn-purple btn-xs"><i class="fas fa-receipt"></i></button></td>
+            </tr>`;
+        });
+        
+        html += `</tbody></table></div>`;
+        showCustomModal('📋 সম্পূর্ণ সমন্বয় হিস্টোরি', html);
+    } catch(e) { showToast('❌ লোড করতে সমস্যা!', 'error'); }
+}
+
+// ============================================================
+// ✅ exportAdjustmentReport()
+// ============================================================
+async function exportAdjustmentReport() {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const { data, error } = await client.from('admin_balance_adjustments').select('*').order('created_at', { ascending: false });
+        if (error) throw error;
+        if (!data || data.length === 0) { showToast('📭 ডেটা নেই!', 'error'); return; }
+        
+        const fundLabels = { 'balance': 'মূলধন', 'referral_bonus': 'রেফারেল বোনাস', 'profit_balance_savings': 'সঞ্চয় লভ্যাংশ', 'profit_balance_investment': 'বিনিয়োগ লভ্যাংশ', 'profit_balance_referral': 'রেফারেল লভ্যাংশ' };
+        
+        let csv = "ভাউচার,তারিখ,সদস্য নাম,সদস্য আইডি,ফান্ড,অপারেশন,পরিমাণ,পূর্বের,নতুন,কারণ,অ্যাডমিন,পদবী\n";
+        data.forEach(d => {
+            csv += `"${d.voucher_no}","${d.created_at}","${d.member_name}","${d.member_id}","${fundLabels[d.adjustment_type] || d.adjustment_type}","${d.adjustment_direction === 'deduct' ? 'কমান' : 'বাড়ান'}","${d.amount}","${d.previous_amount}","${d.new_amount}","${d.reason}","${d.admin_name}","${d.admin_role}"\n`;
+        });
+        
+        const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `balance_adjustments_${new Date().toISOString().slice(0,10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        showToast(`✅ ${data.length} টি রেকর্ড এক্সপোর্ট হয়েছে!`, 'success');
+    } catch(e) { showToast('❌ এক্সপোর্ট ব্যর্থ!', 'error'); }
+}
+
+// ============================================================
+// ✅ Manual Voucher Live Validation Listeners
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    const manualField = document.getElementById('adjManualVoucher');
+    if (manualField) {
+        let typingTimer;
+        manualField.addEventListener('input', function() {
+            clearTimeout(typingTimer);
+            typingTimer = setTimeout(() => validateManualVoucher(), 500);
+        });
+        manualField.addEventListener('blur', function() {
+            if (this.value.trim()) validateManualVoucher();
+        });
+    }
+});
+
+// ============================================================
+// ✅ Global Expose
+// ============================================================
+window.searchMemberForAdjustment = searchMemberForAdjustment;
+window.clearAdjustmentForm = clearAdjustmentForm;
+window.loadRecentAdjustments = loadRecentAdjustments;
+window.loadAdjustmentHistory = loadAdjustmentHistory;
+window.showAdjustmentVoucher = showAdjustmentVoucher;
+window.showAdjustmentVoucherById = showAdjustmentVoucherById;
+window.closeAdjustmentVoucherModal = closeAdjustmentVoucherModal;
+window.printAdjustmentVoucher = printAdjustmentVoucher;
+window.viewAdjustmentDetails = viewAdjustmentDetails;
+window.exportAdjustmentReport = exportAdjustmentReport;
+window.toggleManualVoucher = toggleManualVoucher;
+window.refreshAutoVoucher = refreshAutoVoucher;
+window.checkVoucherExists = checkVoucherExists;
+window.validateManualVoucher = validateManualVoucher;
+
+console.log('✅ Balance Adjustment System v1.0 Loaded!');
+
+
 // ============================================================
 // ✅ ৮. গ্লোবাল এক্সপোজ (HTML থেকে কল করার জন্য)
 // ============================================================
@@ -19218,6 +20146,7 @@ window.saveEditedNotice = saveEditedNotice;
 window.deleteNotice = deleteNotice;
 window.updateNoticePreview = updateNoticePreview;
 
+    
 console.log('✅ Notice Management System v2.0 loaded!');
 console.log('✅ TUKNBD Admin Panel Loaded Successfully!');
 console.log('🔐 Permission System Active!');
