@@ -1994,6 +1994,7 @@ body.dark-mode .all-clear-box p {
         <button onclick="showTab('allWithdrawals')" id="tabAllWithdrawals" class="nav-item"><i class="fas fa-money-bill-wave"></i> সকল উত্তোলন  </button>
         <button onclick="showTab('allLoansGiven')" id="tabAllLoansGiven" class="nav-item"><i class="fas fa-hand-holding-usd"></i> সকল লোন প্রদান </button>
         <div class="px-3 pt-4 pb-2 text-[10px] text-white/30 uppercase tracking-wider font-semibold">💰 আর্থিক লেনদেন</div>
+        <button onclick="showTab('balanceAdjustment')" id="tabBalanceAdjustment" class="nav-item"><i class="fas fa-balance-scale"></i> 💰 ব্যালেন্স সমন্বয় <span class="badge" style="background:#dc2626;">নতুন</span></button>
         <button onclick="openLedgerPage()" class="nav-item" id="ledgerNavBtn"><i class="fas fa-book"></i> 📒 আয়-ব্যয় লেজার<span class="badge" style="background:#7c3aed;">স্বতন্ত্র</span></button>
         <div class="px-3 pt-4 pb-2 text-[10px] text-white/30 uppercase tracking-wider font-semibold">👥 সদস্য ব্যবস্থাপনা</div>       
         <button onclick="showTab('members')" id="tabMembers" class="nav-item"><i class="fas fa-users"></i> সকল সদস্য</button>
@@ -3017,6 +3018,210 @@ body.dark-mode .all-clear-box p {
     </div>
 
     <!-- ========================================================== -->
+<!-- ===== TAB: BALANCE ADJUSTMENT ===== -->
+<!-- ========================================================== -->
+<div id="balanceAdjustmentTab" class="tab-content">
+    <div class="content-card">
+        <div class="card-header no-print">
+            <h3><i class="fas fa-balance-scale mr-2 text-red-600"></i>💰 সদস্যের ব্যালেন্স সমন্বয়</h3>
+            <div class="flex gap-2 flex-wrap">
+                <button onclick="loadRecentAdjustments()" class="btn btn-info btn-sm">
+                    <i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ
+                </button>
+                <button onclick="loadAdjustmentHistory()" class="btn btn-purple btn-sm">
+                    <i class="fas fa-history mr-1"></i> সম্পূর্ণ হিস্টোরি
+                </button>
+                <button onclick="exportAdjustmentReport()" class="btn btn-success btn-sm">
+                    <i class="fas fa-file-excel mr-1"></i> এক্সপোর্ট
+                </button>
+            </div>
+        </div>
+
+        <div class="p-6">
+            <!-- সতর্কতা -->
+            <div class="bg-red-50 border-l-4 border-red-500 p-4 rounded-lg mb-5">
+                <div class="flex items-start gap-3">
+                    <i class="fas fa-exclamation-triangle text-red-600 text-2xl"></i>
+                    <div>
+                        <h4 class="font-bold text-red-700">⚠️ অত্যন্ত সতর্কতা!</h4>
+                        <p class="text-sm text-red-600 mt-1">
+                            এই ফিচার দিয়ে সদস্যের ব্যালেন্স সরাসরি পরিবর্তন করা যায়। প্রতিটি পরিবর্তনের রেকর্ড সংরক্ষিত হবে এবং ইউনিক ভাউচার নম্বর থাকবে।
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STEP 1: Search -->
+            <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-5 rounded-xl border-2 border-emerald-200 mb-5">
+                <h4 class="font-bold text-gray-800 mb-3">
+                    <span class="bg-emerald-600 text-white rounded-full w-7 h-7 inline-flex items-center justify-center mr-2">1</span>
+                    সদস্য খুঁজুন
+                </h4>
+                <div class="flex flex-wrap gap-2">
+                    <input type="text" id="adjMemberSearch" 
+                           placeholder="🔍 সদস্য আইডি বা মোবাইল..." 
+                           class="flex-1 min-w-[250px] border-2 border-gray-300 focus:border-emerald-500 rounded-lg p-2.5"
+                           onkeypress="if(event.key==='Enter') searchMemberForAdjustment()">
+                    <button onclick="searchMemberForAdjustment()" class="btn btn-success px-6">
+                        <i class="fas fa-search mr-1"></i> খুঁজুন
+                    </button>
+                    <button onclick="clearAdjustmentForm()" class="btn btn-warning">
+                        <i class="fas fa-undo mr-1"></i> রিসেট
+                    </button>
+                </div>
+                <div id="adjMemberResult" class="mt-3"></div>
+            </div>
+
+            <!-- STEP 2: Form -->
+            <div id="adjustmentFormContainer" class="hidden">
+                <div class="bg-gradient-to-r from-purple-50 to-pink-50 p-5 rounded-xl border-2 border-purple-200 mb-5">
+                    <h4 class="font-bold text-gray-800 mb-3">
+                        <span class="bg-purple-600 text-white rounded-full w-7 h-7 inline-flex items-center justify-center mr-2">2</span>
+                        সমন্বয় তথ্য দিন
+                    </h4>
+
+                    <form id="balanceAdjustmentForm">
+                        <input type="hidden" id="adjMemberId">
+
+                        <div class="grid md:grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">🏦 বর্তমান ব্যালেন্স</label>
+                                <input type="text" id="adjCurrentBalance" 
+                                       class="w-full border-2 border-gray-300 rounded-lg p-2.5 bg-gray-100 font-bold text-emerald-700 text-lg" 
+                                       readonly>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">💼 কোন ফান্ড থেকে? <span class="text-red-500">*</span></label>
+                                <select id="adjFundType" class="w-full border-2 border-gray-300 rounded-lg p-2.5" required>
+                                    <option value="">-- ফান্ড নির্বাচন করুন --</option>
+                                    <option value="balance">💰 মূলধন (মূল সঞ্চয়)</option>
+                                    <option value="referral_bonus">🎁 রেফারেল বোনাস</option>
+                                    <option value="profit_balance_savings">📈 সঞ্চয় লভ্যাংশ</option>
+                                    <option value="profit_balance_investment">📈 বিনিয়োগ লভ্যাংশ</option>
+                                    <option value="profit_balance_referral">📈 রেফারেল লভ্যাংশ</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">📊 নির্বাচিত ফান্ডে আছে</label>
+                                <input type="text" id="adjFundCurrent" 
+                                       class="w-full border-2 border-gray-300 rounded-lg p-2.5 bg-blue-50 font-bold text-blue-700" 
+                                       readonly>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">⚙️ অপারেশন <span class="text-red-500">*</span></label>
+                                <select id="adjDirection" class="w-full border-2 border-gray-300 rounded-lg p-2.5" required>
+                                    <option value="deduct">➖ কমান (Deduct/উত্তোলন)</option>
+                                    <option value="add">➕ বাড়ান (Add/জমা)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">💵 পরিমাণ (৳) <span class="text-red-500">*</span></label>
+                                <input type="number" id="adjAmount" 
+                                       class="w-full border-2 border-gray-300 focus:border-purple-500 rounded-lg p-2.5 text-lg font-bold" 
+                                       placeholder="0.00" min="0.01" step="0.01" required>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">✨ নতুন মান হবে</label>
+                                <input type="text" id="adjNewBalance" 
+                                       class="w-full border-2 border-gray-300 rounded-lg p-2.5 bg-yellow-50 font-bold text-purple-700 text-lg" 
+                                       readonly>
+                            </div>
+                        </div>
+
+                        <!-- ✅ VOUCHER NUMBER SECTION -->
+                        <div class="mb-4 bg-gradient-to-r from-amber-50 to-orange-50 p-4 rounded-lg border-2 border-amber-200">
+                            <h5 class="font-bold text-amber-800 mb-3 flex items-center gap-2">
+                                <i class="fas fa-receipt text-amber-600"></i>
+                                📋 ভাউচার নম্বর
+                            </h5>
+                            
+                            <div class="mb-3">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">🤖 অটো-জেনারেটেড ভাউচার নম্বর</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="adjAutoVoucher" 
+                                           class="flex-1 border-2 border-gray-300 rounded-lg p-2.5 bg-gray-100 font-mono font-bold text-emerald-700" 
+                                           readonly placeholder="লোড হচ্ছে...">
+                                    <button type="button" onclick="refreshAutoVoucher()" 
+                                            class="btn btn-info btn-sm" title="রিফ্রেশ">
+                                        <i class="fas fa-sync-alt"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="border-t border-amber-300 pt-3">
+                                <label class="flex items-center gap-2 cursor-pointer mb-3">
+                                    <input type="checkbox" id="adjUseManualVoucher" 
+                                           class="w-5 h-5 rounded" onchange="toggleManualVoucher()">
+                                    <span class="text-sm font-medium text-amber-800">✏️ আমি নিজে ভাউচার নম্বর দিতে চাই (ম্যানুয়াল)</span>
+                                </label>
+                                
+                                <div id="adjManualVoucherContainer" class="hidden">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">📝 নিজের ভাউচার নম্বর <span class="text-red-500">*</span></label>
+                                    <input type="text" id="adjManualVoucher" 
+                                           class="w-full border-2 border-orange-300 focus:border-orange-500 rounded-lg p-2.5 font-mono font-bold text-orange-700" 
+                                           placeholder="যেমন: CASH-2026-001, TUK-001" maxlength="50">
+                                    <p class="text-xs text-gray-500 mt-1"><i class="fas fa-info-circle text-orange-500"></i> ইউনিক হতে হবে। ডুপ্লিকেট হলে সেভ হবে না।</p>
+                                    <div id="adjManualVoucherStatus" class="mt-2"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- কারণ -->
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">📝 সমন্বয়ের কারণ <span class="text-red-500">*</span></label>
+                            <textarea id="adjReason" rows="2" 
+                                      class="w-full border-2 border-gray-300 focus:border-purple-500 rounded-lg p-2.5" 
+                                      placeholder="যেমন: সদস্যের অনুরোধে উত্তোলন..." required></textarea>
+                        </div>
+
+                        <!-- নোট -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">📌 অতিরিক্ত নোট (ঐচ্ছিক)</label>
+                            <textarea id="adjNote" rows="2" 
+                                      class="w-full border-2 border-gray-300 rounded-lg p-2.5" 
+                                      placeholder="অতিরিক্ত তথ্য..."></textarea>
+                        </div>
+
+                        <!-- Confirm -->
+                        <div class="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-3 mb-4">
+                            <label class="flex items-start gap-2 cursor-pointer">
+                                <input type="checkbox" id="adjConfirm" class="mt-1 w-5 h-5" required>
+                                <span class="text-sm text-gray-800">
+                                    <strong>আমি নিশ্চিত করছি</strong> যে এই সমন্বয় সঠিক তথ্য অনুযায়ী করা হচ্ছে। ভুল তথ্যের জন্য আমি দায়ী থাকব।
+                                </span>
+                            </label>
+                        </div>
+
+                        <button type="submit" class="btn btn-danger w-full py-3 text-lg">
+                            <i class="fas fa-check-circle mr-2"></i> 🔐 সমন্বয় নিশ্চিত করুন
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- সাম্প্রতিক লিস্ট -->
+            <div class="bg-gray-50 p-5 rounded-xl border">
+                <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+                    <h4 class="font-bold text-gray-800">
+                        <i class="fas fa-history text-blue-600 mr-2"></i>
+                        📋 সাম্প্রতিক সমন্বয় (সর্বশেষ ২০টি)
+                    </h4>
+                    <button onclick="loadRecentAdjustments()" class="btn btn-info btn-sm">
+                        <i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ
+                    </button>
+                </div>
+                <div id="recentAdjustmentsList" class="table-scroll max-h-96">
+                    <div class="text-center py-8">
+                        <div class="loading-spinner mx-auto"></div>
+                        <p class="text-gray-500 mt-2">লোড হচ্ছে...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+    <!-- ========================================================== -->
     <!-- ===== TAB: BRANCH ADMINS ===== -->
     <!-- ========================================================== -->
     <div id="branchAdminsTab" class="tab-content">
@@ -3875,6 +4080,8 @@ body.dark-mode .all-clear-box p {
 
 </div><!-- main-content -->
 
+    
+
 <!-- ============================================================ -->
 <!-- ===== MODALS ===== -->
 <!-- ============================================================ -->
@@ -4220,6 +4427,27 @@ body.dark-mode .all-clear-box p {
         </div>
     </div>
 </div>
+
+
+    <!-- ===== ADJUSTMENT VOUCHER MODAL ===== -->
+<div id="adjustmentVoucherModal" class="modal-overlay" onclick="if(event.target===this) closeAdjustmentVoucherModal()">
+    <div class="modal-container max-w-3xl">
+        <div class="flex justify-between items-center border-b pb-3 mb-4 no-print">
+            <h3 class="text-xl font-bold text-emerald-700">
+                <i class="fas fa-receipt mr-2"></i>সমন্বয় ভাউচার
+            </h3>
+            <div class="flex gap-2">
+                <button onclick="printAdjustmentVoucher()" class="btn btn-purple btn-sm">
+                    <i class="fas fa-print mr-1"></i> প্রিন্ট
+                </button>
+                <button onclick="closeAdjustmentVoucherModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
+            </div>
+        </div>
+        <div id="adjustmentVoucherContent"></div>
+    </div>
+</div>
+
+    
       <!-- ============================================================
      ✅ লোন EMI বিস্তারিত Modal (প্রিন্ট-রেডি)
      ============================================================ -->
