@@ -3737,7 +3737,7 @@ body.dark-mode .all-clear-box p {
                         </div>
                     </div>
                     
-                    <div class="mb-4">
+                       <div class="mb-4">
                         <label class="block text-sm font-semibold text-gray-700 mb-1.5">
                             📝 বিস্তারিত বার্তা <span class="text-red-500">*</span>
                         </label>
@@ -3749,6 +3749,51 @@ body.dark-mode .all-clear-box p {
                             <i class="fas fa-info-circle mr-1"></i>
                             সদস্যদের ড্যাশবোর্ডে এই বার্তাটি দেখা যাবে
                         </p>
+                    </div>
+                    
+                    <!-- ✅ নতুন: ছবি আপলোড সেকশন -->
+                    <div class="mb-4 border-2 border-dashed border-emerald-300 rounded-xl p-4 bg-emerald-50/50">
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            📷 নোটিশের ছবি (ঐচ্ছিক)
+                        </label>
+                        
+                        <input type="file" 
+                               id="noticeImageFile" 
+                               accept="image/*" 
+                               class="block w-full text-sm text-gray-500
+                                      file:mr-4 file:py-2 file:px-4
+                                      file:rounded-full file:border-0
+                                      file:text-sm file:font-semibold
+                                      file:bg-emerald-50 file:text-emerald-700
+                                      hover:file:bg-emerald-100
+                                      cursor-pointer">
+                        
+                        <!-- প্রিভিউ -->
+                        <div id="noticeImagePreview" class="mt-3 hidden">
+                            <img id="noticeImagePreviewImg" 
+                                 src="" 
+                                 alt="Preview" 
+                                 class="max-w-full h-auto max-h-48 rounded-lg border-2 border-emerald-300 shadow-md">
+                            <button type="button" 
+                                    onclick="removeNoticeImage()" 
+                                    class="mt-2 text-sm text-red-600 hover:text-red-700 font-semibold">
+                                <i class="fas fa-trash mr-1"></i> ছবি মুছুন
+                            </button>
+                        </div>
+                        
+                        <div id="noticeImageStatus" class="mt-2 text-sm"></div>
+                    </div>
+                    
+                    <!-- ✅ অথবা ছবির URL -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            🔗 অথবা ছবির URL দিন (ঐচ্ছিক)
+                        </label>
+                        <input type="url" 
+                               id="noticeImageUrl" 
+                               placeholder="https://example.com/image.jpg"
+                               class="w-full border-2 border-gray-300 rounded-lg p-2"
+                               onchange="previewImageFromUrl(this.value)">
                     </div>
                     
                     <div class="flex flex-wrap gap-2">
@@ -17851,7 +17896,160 @@ window.approveBookRequest = approveBookRequest;
 window.rejectBookRequest = rejectBookRequest;
 window.openAddBookFromRequest = openAddBookFromRequest;
 
-    // ============================================================
+    
+// ============================================================
+// ✅ নোটিশ ছবি আপলোড সিস্টেম
+// ============================================================
+
+let uploadedNoticeImageUrl = null;
+
+// ছবি সিলেক্ট করলে প্রিভিউ দেখান + আপলোড করুন
+document.getElementById('noticeImageFile')?.addEventListener('change', async function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    console.log('📷 ছবি সিলেক্ট হয়েছে:', file.name, '(' + (file.size / 1024).toFixed(1) + ' KB)');
+    
+    // সাইজ চেক (৫MB)
+    if (file.size > 5 * 1024 * 1024) {
+        showToast('❌ ছবির সাইজ ৫MB এর কম হতে হবে!', 'error');
+        this.value = '';
+        return;
+    }
+    
+    // টাইপ চেক
+    if (!file.type.startsWith('image/')) {
+        showToast('❌ শুধু ছবি ফাইল আপলোড করুন!', 'error');
+        this.value = '';
+        return;
+    }
+    
+    // প্রিভিউ দেখান
+    const reader = new FileReader();
+    reader.onload = function(event) {
+        const previewDiv = document.getElementById('noticeImagePreview');
+        const previewImg = document.getElementById('noticeImagePreviewImg');
+        if (previewDiv && previewImg) {
+            previewImg.src = event.target.result;
+            previewDiv.classList.remove('hidden');
+        }
+    };
+    reader.readAsDataURL(file);
+    
+    // Supabase-এ আপলোড
+    await uploadNoticeImage(file);
+});
+
+// Supabase Storage-এ ছবি আপলোড
+async function uploadNoticeImage(file) {
+    const statusEl = document.getElementById('noticeImageStatus');
+    if (statusEl) {
+        statusEl.innerHTML = '<div class="text-emerald-600"><i class="fas fa-spinner fa-spin mr-2"></i>ছবি আপলোড হচ্ছে...</div>';
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return null;
+    }
+    
+    try {
+        const fileExt = file.name.split('.').pop();
+        const fileName = `notice_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+        const filePath = `notices/${fileName}`;
+        
+        console.log('📤 ছবি আপলোড শুরু:', filePath);
+        
+        const { data, error } = await client.storage
+            .from('notice-images')
+            .upload(filePath, file, {
+                cacheControl: '3600',
+                upsert: false
+            });
+        
+        if (error) {
+            console.error('❌ Upload error:', error);
+            throw error;
+        }
+        
+        const { data: urlData } = client.storage
+            .from('notice-images')
+            .getPublicUrl(filePath);
+        
+        uploadedNoticeImageUrl = urlData.publicUrl;
+        
+        if (statusEl) {
+            statusEl.innerHTML = `
+                <div class="text-emerald-600 font-semibold">
+                    <i class="fas fa-check-circle mr-2"></i>ছবি সফলভাবে আপলোড হয়েছে!
+                </div>
+            `;
+        }
+        
+        console.log('✅ ছবি আপলোড সম্পূর্ণ:', uploadedNoticeImageUrl);
+        showToast('✅ ছবি আপলোড সম্পূর্ণ!', 'success');
+        
+        return uploadedNoticeImageUrl;
+        
+    } catch (e) {
+        console.error('❌ ছবি আপলোড error:', e);
+        
+        if (statusEl) {
+            statusEl.innerHTML = `
+                <div class="text-red-600 font-semibold">
+                    <i class="fas fa-exclamation-circle mr-2"></i>ছবি আপলোড ব্যর্থ: ${e.message}
+                </div>
+            `;
+        }
+        
+        showToast('❌ ছবি আপলোড ব্যর্থ! ' + e.message, 'error');
+        return null;
+    }
+}
+
+// ছবি মুছুন
+function removeNoticeImage() {
+    const fileInput = document.getElementById('noticeImageFile');
+    const urlInput = document.getElementById('noticeImageUrl');
+    const previewDiv = document.getElementById('noticeImagePreview');
+    const statusEl = document.getElementById('noticeImageStatus');
+    
+    if (fileInput) fileInput.value = '';
+    if (urlInput) urlInput.value = '';
+    if (previewDiv) previewDiv.classList.add('hidden');
+    if (statusEl) statusEl.innerHTML = '';
+    
+    uploadedNoticeImageUrl = null;
+    console.log('🗑️ ছবি মুছে ফেলা হয়েছে');
+}
+
+// URL থেকে ছবি প্রিভিউ
+function previewImageFromUrl(url) {
+    if (!url) return;
+    
+    const previewDiv = document.getElementById('noticeImagePreview');
+    const previewImg = document.getElementById('noticeImagePreviewImg');
+    
+    if (previewDiv && previewImg) {
+        previewImg.src = url;
+        previewDiv.classList.remove('hidden');
+        
+        previewImg.onerror = function() {
+            previewDiv.classList.add('hidden');
+            showToast('❌ ছবির URL কাজ করছে না!', 'error');
+        };
+        
+        uploadedNoticeImageUrl = url;
+    }
+}
+
+// ✅ গ্লোবাল এক্সপোজ
+window.uploadNoticeImage = uploadNoticeImage;
+window.removeNoticeImage = removeNoticeImage;
+window.previewImageFromUrl = previewImageFromUrl;
+
+console.log('✅ নোটিশ ছবি আপলোড সিস্টেম লোড হয়েছে!');
+// ============================================================
 // 🔔 NOTICE MANAGEMENT SYSTEM v2.0 (COMPLETE)
 // ============================================================
 
@@ -17909,7 +18107,7 @@ function updateNoticePreview() {
     `;
 }
 
-// ✅ নোটিশ ফর্ম সাবমিট
+// ✅ নোটিশ ফর্ম সাবমিট (ছবি সাপোর্ট সহ)
 document.addEventListener('DOMContentLoaded', () => {
     const noticeForm = document.getElementById('noticeForm');
     if (noticeForm) {
@@ -17939,6 +18137,12 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>পাঠানো হচ্ছে...';
             
             try {
+                // ✅✅✅ নতুন: ছবির URL নির্ধারণ ✅✅✅
+                const urlInput = document.getElementById('noticeImageUrl')?.value?.trim();
+                const imageUrl = urlInput || uploadedNoticeImageUrl || null;
+                
+                console.log('🖼️ নোটিশের ছবি:', imageUrl);
+                
                 const noticeData = {
                     title: title,
                     message: message,
@@ -17946,10 +18150,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     target_audience: audience,
                     status: 'active',
                     expires_at: expiresAt || null,
+                    image_url: imageUrl,   // ✅✅✅ নতুন লাইন ✅✅✅
                     priority: type === 'danger' ? 4 : type === 'warning' ? 3 : type === 'success' ? 2 : 1,
                     created_at: new Date().toISOString(),
                     created_by: currentAdmin?.username || currentAdmin?.full_name || 'admin'
                 };
+                
+                console.log('📤 নোটিশ ডাটা:', noticeData);
                 
                 const { data, error } = await client
                     .from('notices')
@@ -17961,6 +18168,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast('✅ নোটিশ সফলভাবে পাঠানো হয়েছে!', 'success');
                 
                 this.reset();
+                
+                // ✅✅✅ নতুন: ছবিও ক্লিয়ার করুন ✅✅✅
+                removeNoticeImage();
+                
                 document.getElementById('noticePreview').innerHTML = `
                     <p class="text-gray-400 text-sm text-center py-4">
                         <i class="fas fa-edit text-2xl block mb-2"></i>
@@ -17998,6 +18209,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     const typeEl = document.getElementById('noticeType');
     if (typeEl) typeEl.addEventListener('change', updateNoticePreview);
+    
+    // ✅✅✅ নতুন: ছবির URL ইনপুটেও প্রিভিউ আপডেট ✅✅✅
+    const imageUrlEl = document.getElementById('noticeImageUrl');
+    if (imageUrlEl) {
+        imageUrlEl.addEventListener('input', updateNoticePreview);
+    }
 });
 
 // ✅ সব নোটিশ লোড
