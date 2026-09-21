@@ -19969,7 +19969,7 @@ async function saveLoanAdjustment(loanId) {
 }
 
 // ============================================================
-// ✅ ৬. মওকুফ মডাল — সম্পূর্ণ নতুন (মূলধন + লভ্যাংশ + সার্ভিস চার্জ + জরিমানা)
+// ✅ ৬. মওকুফ মডাল — অ্যাডভান্সড (খাত ভিত্তিক + কিস্তি ভিত্তিক)
 // ============================================================
 async function openWaiverModal(loanId) {
     console.log('🎁 openWaiverModal called for:', loanId);
@@ -19981,50 +19981,59 @@ async function openWaiverModal(loanId) {
     }
     
     try {
-        // ✅ লোন তথ্য
-        const { data: loan } = await client
+        // ✅ ১. লোন তথ্য লোড
+        const { data: loan, error: loanError } = await client
             .from('loan_applications')
             .select('*')
             .eq('id', loanId)
             .single();
         
-        if (!loan) {
+        if (loanError || !loan) {
             showToast('❌ লোন পাওয়া যায়নি!', 'error');
             return;
         }
         
-        // ✅ পেমেন্ট লোড
-        const { data: payments, error } = await client
+        // ✅ ২. পেমেন্ট লোড
+        const { data: payments, error: payError } = await client
             .from('loan_payments')
             .select('*')
             .eq('loan_id', loanId)
             .order('installment_no');
         
-        if (error) throw error;
+        if (payError) throw payError;
         
-        if (!payments || payments.length === 0) {
-            showToast('⚠️ এই লোনে এখনো কোনো কিস্তি তৈরি হয়নি!', 'warning');
-            return;
-        }
-        
-        // ✅ শুধু pending কিস্তি ফিল্টার
-        const pendingPayments = payments.filter(p => 
+        const allPayments = payments || [];
+        const pendingPayments = allPayments.filter(p => 
             p.status === 'pending' || p.status === 'pending_verification'
         );
         
-        if (pendingPayments.length === 0) {
-            showToast('✅ সব কিস্তি পরিশোধিত! মওকুফ করার কিছু নেই।', 'success');
+        if (pendingPayments.length === 0 && (loan.status !== 'approved')) {
+            showToast('⚠️ এই লোনে মওকুফ করার মতো কিছু নেই!', 'warning');
             return;
         }
         
-        // ✅ মোট বাকি ক্যালকুলেশন
+        // ✅ ৩. খাত ভিত্তিক ব্যালেন্স ক্যালকুলেশন
+        const loanAmount = Number(loan.amount) || 0;
+        const loanProfit = Number(loan.profit_amount) || 0;
+        const loanService = Number(loan.service_charge) || 0;
+        const loanTotal = Number(loan.total_amount) || (loanAmount + loanProfit + loanService);
+        
+        // ✅ মোট বাকি (পেন্ডিং কিস্তি)
         const totalPendingAmount = pendingPayments.reduce((sum, p) => {
             return sum + Number(p.total_amount || p.emi_amount || 0);
         }, 0);
         
+        // ✅ মোট জরিমানা (লেট ফি)
+        const totalLateFee = pendingPayments.reduce((sum, p) => {
+            const lateFee = Number(p.late_fee || 0);
+            const waived = Number(p.late_fee_waived || 0);
+            return sum + Math.max(0, lateFee - waived);
+        }, 0);
+        
+        // ✅ ৪. HTML তৈরি
         let html = `
             <div class="space-y-4">
-                <!-- হেডার -->
+                <!-- ======================== হেডার ======================== -->
                 <div class="bg-gradient-to-r from-pink-50 to-purple-50 p-4 rounded-lg border-2 border-pink-300">
                     <div class="flex items-start gap-3">
                         <i class="fas fa-gift text-pink-600 text-3xl"></i>
@@ -20034,41 +20043,112 @@ async function openWaiverModal(loanId) {
                                 সদস্য: <strong>${loan.member_name}</strong> 
                                 (${loan.member_id})
                             </p>
-                            <div class="mt-2 grid grid-cols-2 gap-2 text-xs">
-                                <div class="bg-white p-2 rounded">
-                                    <span class="text-gray-500">মোট লোন:</span>
-                                    <span class="font-bold text-blue-700">${formatAmountWithText(loan.amount)}</span>
-                                </div>
-                                <div class="bg-white p-2 rounded">
-                                    <span class="text-gray-500">মোট বাকি:</span>
-                                    <span class="font-bold text-red-700">${formatAmountWithText(totalPendingAmount)}</span>
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
                 
-                <!-- অপশন ১: সম্পূর্ণ লোন মওকুফ -->
-                <div class="bg-red-50 p-4 rounded-lg border-2 border-red-300">
-                    <div class="flex items-start gap-3">
-                        <i class="fas fa-hand-holding-heart text-red-600 text-2xl mt-1"></i>
-                        <div class="flex-1">
-                            <h6 class="font-bold text-red-700 mb-2">⚡ দ্রুত মওকুফ অপশন</h6>
-                            <button onclick="quickWaiveAll(${loanId}, ${totalPendingAmount})" 
-                                    class="btn btn-danger w-full py-2.5">
-                                <i class="fas fa-gift mr-2"></i> 
-                                সম্পূর্ণ বাকি (${formatAmount(totalPendingAmount)} টাকা) মওকুফ করুন
-                            </button>
+                <!-- ======================== লোন সারাংশ ======================== -->
+                <div class="bg-white p-3 rounded-lg border-2 border-blue-200">
+                    <h6 class="font-bold text-blue-700 mb-2 text-sm">📊 লোন সারাংশ</h6>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                        <div class="bg-blue-50 p-2 rounded text-center">
+                            <div class="text-gray-500">💰 মূলধন</div>
+                            <div class="font-bold text-blue-700">${formatAmountWithText(loanAmount)}</div>
+                        </div>
+                        <div class="bg-purple-50 p-2 rounded text-center">
+                            <div class="text-gray-500">📈 লভ্যাংশ</div>
+                            <div class="font-bold text-purple-700">${formatAmountWithText(loanProfit)}</div>
+                        </div>
+                        <div class="bg-indigo-50 p-2 rounded text-center">
+                            <div class="text-gray-500">🛠️ সার্ভিস</div>
+                            <div class="font-bold text-indigo-700">${formatAmountWithText(loanService)}</div>
+                        </div>
+                        <div class="bg-red-50 p-2 rounded text-center border-2 border-red-300">
+                            <div class="text-gray-500">📊 মোট বাকি</div>
+                            <div class="font-bold text-red-700">${formatAmountWithText(totalPendingAmount)}</div>
                         </div>
                     </div>
                 </div>
                 
-                <!-- অপশন ২: নির্দিষ্ট পরিমাণ মওকুফ -->
+                <!-- ======================== মওকুফের ধরন নির্বাচন ======================== -->
                 <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg border-2 border-emerald-300">
                     <h6 class="font-bold text-emerald-700 mb-3">
-                        <i class="fas fa-sliders-h mr-2"></i>নির্দিষ্ট পরিমাণ মওকুফ করুন
+                        <i class="fas fa-sliders-h mr-2"></i>📋 মওকুফের ধরন নির্বাচন করুন
                     </h6>
                     
+                    <!-- Radio Buttons — ধরন -->
+                    <div class="grid grid-cols-2 md:grid-cols-3 gap-2 mb-4">
+                        <label class="flex items-center gap-2 p-3 bg-white border-2 border-gray-200 rounded-lg cursor-pointer hover:border-blue-400 transition" 
+                               onclick="selectWaiveType('principal')">
+                            <input type="radio" name="waiveCategory" value="principal" 
+                                   id="waiveCatPrincipal" class="waive-category-radio" checked
+                                   onchange="onWaiveCategoryChange(${loanAmount}, ${loanProfit}, ${loanService}, ${totalLateFee}, ${totalPendingAmount})">
+                            <div>
+                                <div class="font-bold text-sm text-blue-700">💰 মূলধন</div>
+                                <div class="text-xs text-gray-500" id="catPrincipalAmount">${formatAmountWithText(loanAmount)}</div>
+                            </div>
+                        </label>
+                        
+                        <label class="flex items-center gap-2 p-3 bg-white border-2 border-gray-200 rounded-lg cursor-pointer hover:border-purple-400 transition"
+                               onclick="selectWaiveType('profit')">
+                            <input type="radio" name="waiveCategory" value="profit" 
+                                   id="waiveCatProfit" class="waive-category-radio"
+                                   onchange="onWaiveCategoryChange(${loanAmount}, ${loanProfit}, ${loanService}, ${totalLateFee}, ${totalPendingAmount})">
+                            <div>
+                                <div class="font-bold text-sm text-purple-700">📈 লভ্যাংশ</div>
+                                <div class="text-xs text-gray-500">${formatAmountWithText(loanProfit)}</div>
+                            </div>
+                        </label>
+                        
+                        <label class="flex items-center gap-2 p-3 bg-white border-2 border-gray-200 rounded-lg cursor-pointer hover:border-indigo-400 transition"
+                               onclick="selectWaiveType('service_charge')">
+                            <input type="radio" name="waiveCategory" value="service_charge" 
+                                   id="waiveCatService" class="waive-category-radio"
+                                   onchange="onWaiveCategoryChange(${loanAmount}, ${loanProfit}, ${loanService}, ${totalLateFee}, ${totalPendingAmount})">
+                            <div>
+                                <div class="font-bold text-sm text-indigo-700">🛠️ সার্ভিস চার্জ</div>
+                                <div class="text-xs text-gray-500">${formatAmountWithText(loanService)}</div>
+                            </div>
+                        </label>
+                        
+                        <label class="flex items-center gap-2 p-3 bg-white border-2 border-gray-200 rounded-lg cursor-pointer hover:border-amber-400 transition"
+                               onclick="selectWaiveType('late_fee')">
+                            <input type="radio" name="waiveCategory" value="late_fee" 
+                                   id="waiveCatLateFee" class="waive-category-radio"
+                                   onchange="onWaiveCategoryChange(${loanAmount}, ${loanProfit}, ${loanService}, ${totalLateFee}, ${totalPendingAmount})">
+                            <div>
+                                <div class="font-bold text-sm text-amber-700">⏰ জরিমানা</div>
+                                <div class="text-xs text-gray-500">${formatAmountWithText(totalLateFee)}</div>
+                            </div>
+                        </label>
+                        
+                        <label class="flex items-center gap-2 p-3 bg-white border-2 border-gray-200 rounded-lg cursor-pointer hover:border-pink-400 transition col-span-2"
+                               onclick="selectWaiveType('full')">
+                            <input type="radio" name="waiveCategory" value="full" 
+                                   id="waiveCatFull" class="waive-category-radio"
+                                   onchange="onWaiveCategoryChange(${loanAmount}, ${loanProfit}, ${loanService}, ${totalLateFee}, ${totalPendingAmount})">
+                            <div>
+                                <div class="font-bold text-sm text-pink-700">🎁 সম্পূর্ণ মওকুফ (সব খাত)</div>
+                                <div class="text-xs text-gray-500">${formatAmountWithText(totalPendingAmount)}</div>
+                            </div>
+                        </label>
+                    </div>
+                    
+                    <!-- ✅ নির্বাচিত খাতে কত টাকা আছে — Big Display -->
+                    <div class="bg-white p-3 rounded-lg border-2 border-emerald-400 text-center mb-3">
+                        <div class="text-xs text-gray-500 mb-1">
+                            <i class="fas fa-info-circle text-emerald-500"></i> 
+                            <span id="selectedCategoryLabel">মূলধন</span> খাতে মোট আছে
+                        </div>
+                        <div class="text-2xl font-bold text-emerald-700" id="selectedCategoryAmount">
+                            ${formatAmountWithText(loanAmount)}
+                        </div>
+                        <div class="text-xs text-gray-400 mt-1" id="selectedCategoryHint">
+                            এই খাতে মওকুফ করা যাবে সর্বোচ্চ এই পরিমাণ
+                        </div>
+                    </div>
+                    
+                    <!-- ✅ পেমেন্ট পদ্ধতি -->
                     <div class="space-y-3">
                         <!-- মওকুফের পরিমাণ -->
                         <div>
@@ -20076,28 +20156,14 @@ async function openWaiverModal(loanId) {
                                 💰 মওকুফের পরিমাণ (টাকা) <span class="text-red-500">*</span>
                             </label>
                             <input type="number" id="waiveAmountInput" 
-                                   value="0" min="0" max="${totalPendingAmount}"
+                                   value="0" min="0" max="${loanAmount}"
                                    step="0.01"
                                    class="w-full border-2 border-emerald-300 focus:border-emerald-500 rounded-lg p-3 text-lg font-bold"
                                    placeholder="0.00"
-                                   oninput="updateWaivePreview(${totalPendingAmount})">
+                                   oninput="updateWaivePreview()">
                             <p class="text-xs text-gray-500 mt-1">
-                                সর্বোচ্চ: ${formatAmountWithText(totalPendingAmount)}
+                                সর্বোচ্চ: <span id="maxWaiveAmount">${formatAmountWithText(loanAmount)}</span>
                             </p>
-                        </div>
-                        
-                        <!-- মওকুফের ধরন -->
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">
-                                📋 মওকুফের ধরন
-                            </label>
-                            <select id="waiveTypeInput" class="w-full border-2 border-emerald-300 rounded-lg p-2.5">
-                                <option value="principal">💰 মূলধন মওকুফ</option>
-                                <option value="profit">📈 লভ্যাংশ মওকুফ</option>
-                                <option value="service_charge">🛠️ সার্ভিস চার্জ মওকুফ</option>
-                                <option value="late_fee">⏰ জরিমানা মওকুফ</option>
-                                <option value="full">🎁 সম্পূর্ণ মওকুফ</option>
-                            </select>
                         </div>
                         
                         <!-- কারণ -->
@@ -20113,17 +20179,17 @@ async function openWaiverModal(loanId) {
                         <!-- প্রিভিউ -->
                         <div id="waivePreviewBox" class="bg-white p-3 rounded-lg border-2 border-gray-200">
                             <div class="grid grid-cols-2 gap-2 text-sm">
-                                <div>
-                                    <span class="text-gray-500">বর্তমান বাকি:</span>
-                                    <span class="font-bold text-red-600" id="previewCurrentDue">
+                                <div class="text-center p-2 bg-red-50 rounded">
+                                    <div class="text-xs text-gray-500">বর্তমান বাকি</div>
+                                    <div class="font-bold text-red-600" id="previewCurrentDue">
                                         ${formatAmountWithText(totalPendingAmount)}
-                                    </span>
+                                    </div>
                                 </div>
-                                <div>
-                                    <span class="text-gray-500">মওকুফের পর:</span>
-                                    <span class="font-bold text-emerald-600" id="previewAfterWaive">
+                                <div class="text-center p-2 bg-emerald-50 rounded">
+                                    <div class="text-xs text-gray-500">মওকুফের পর বাকি</div>
+                                    <div class="font-bold text-emerald-600" id="previewAfterWaive">
                                         ${formatAmountWithText(totalPendingAmount)}
-                                    </span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -20136,58 +20202,91 @@ async function openWaiverModal(loanId) {
                     </div>
                 </div>
                 
-                <!-- কিস্তি তালিকা (তথ্যের জন্য) -->
-                <div class="border-t pt-3">
-                    <h6 class="font-bold text-gray-700 mb-2 text-sm">
-                        <i class="fas fa-list mr-2"></i>পেন্ডিং কিস্তি তালিকা
+                <!-- ======================== 🆕 নির্দিষ্ট কিস্তির জরিমানা মওকুফ ======================== -->
+                <div class="bg-gradient-to-r from-amber-50 to-orange-50 p-4 rounded-lg border-2 border-amber-300">
+                    <h6 class="font-bold text-amber-700 mb-3 flex items-center justify-between">
+                        <span><i class="fas fa-list-ol mr-2"></i>🎯 নির্দিষ্ট কিস্তির জরিমানা মওকুফ করুন</span>
+                        <span class="text-xs font-normal bg-amber-200 px-2 py-1 rounded-full">${pendingPayments.length} টি পেন্ডিং কিস্তি</span>
                     </h6>
-                    <div class="table-scroll max-h-60 overflow-y-auto border rounded-lg">
-                        <table class="data-table" style="font-size: 12px;">
-                            <thead style="position: sticky; top: 0; background: #f8fafc; z-index: 10;">
-                                <tr>
-                                    <th style="padding: 6px;">কিস্তি</th>
-                                    <th style="padding: 6px;">তারিখ</th>
-                                    <th style="padding: 6px; text-align: right;">পরিমাণ</th>
-                                    <th style="padding: 6px; text-align: center;">স্ট্যাটাস</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-        `;
-        
-        pendingPayments.forEach(p => {
-            const amount = Number(p.total_amount || p.emi_amount || 0);
-            const dueDate = p.due_date ? new Date(p.due_date) : null;
-            const dueDateStr = dueDate 
-                ? dueDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric' })
-                : '—';
-            
-            const statusText = p.status === 'pending_verification' ? '⏳ যাচাইকরণে' : '⏳ অপেক্ষমান';
-            
-            html += `
-                <tr>
-                    <td style="text-align: center; font-weight: 700; padding: 6px;">
-                        #${p.installment_no}
-                    </td>
-                    <td style="text-align: center; padding: 6px;">${dueDateStr}</td>
-                    <td style="text-align: right; font-weight: 700; color: #dc2626; padding: 6px;">
-                        ${formatAmountWithText(amount)}
-                    </td>
-                    <td style="text-align: center; padding: 6px; font-size: 10px;">
-                        ${statusText}
-                    </td>
-                </tr>
-            `;
-        });
-        
-        html += `
-                            </tbody>
-                        </table>
-                    </div>
+                    
+                    ${pendingPayments.length === 0 ? `
+                        <div class="text-center text-gray-500 py-4">
+                            <i class="fas fa-check-circle text-green-500 text-2xl mb-2"></i>
+                            <p>✅ কোনো পেন্ডিং কিস্তি নেই</p>
+                        </div>
+                    ` : `
+                        <div class="table-scroll max-h-72 overflow-y-auto border-2 border-amber-200 rounded-lg">
+                            <table class="data-table" style="font-size: 12px;">
+                                <thead style="position: sticky; top: 0; background: #fef3c7; z-index: 10;">
+                                    <tr>
+                                        <th style="padding: 8px;">কিস্তি</th>
+                                        <th style="padding: 8px;">তারিখ</th>
+                                        <th style="padding: 8px; text-align: right;">EMI</th>
+                                        <th style="padding: 8px; text-align: right;">বিলম্ব ফি</th>
+                                        <th style="padding: 8px; text-align: right;">মওকুফ</th>
+                                        <th style="padding: 8px; text-align: center;">অ্যাকশন</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${pendingPayments.map(p => {
+                                        const emiAmount = Number(p.emi_amount || p.total_amount || 0);
+                                        const rawLateFee = Number(p.late_fee || 0);
+                                        const waivedLateFee = Number(p.late_fee_waived || 0);
+                                        const effectiveLateFee = Math.max(0, rawLateFee - waivedLateFee);
+                                        const dueDate = p.due_date ? new Date(p.due_date) : null;
+                                        const dueDateStr = dueDate 
+                                            ? dueDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric' })
+                                            : '—';
+                                        
+                                        return `
+                                            <tr style="background: ${effectiveLateFee > 0 ? '#fef2f2' : '#ffffff'};">
+                                                <td style="text-align: center; font-weight: 700; padding: 6px;">
+                                                    #${p.installment_no}
+                                                </td>
+                                                <td style="text-align: center; padding: 6px; font-size: 11px;">${dueDateStr}</td>
+                                                <td style="text-align: right; padding: 6px; font-weight: 600; color: #059669;">
+                                                    ${formatAmount(emiAmount)}
+                                                </td>
+                                                <td style="text-align: right; padding: 6px; font-weight: 700; color: ${effectiveLateFee > 0 ? '#dc2626' : '#9ca3af'};">
+                                                    ${formatAmount(effectiveLateFee)}
+                                                    ${waivedLateFee > 0 ? `<br><small style="color:#16a34a;font-size:9px;">মওকুফ: ${formatAmount(waivedLateFee)}</small>` : ''}
+                                                </td>
+                                                <td style="text-align: right; padding: 6px; font-weight: 700; color: #16a34a;">
+                                                    ${formatAmount(waivedLateFee)}
+                                                </td>
+                                                <td style="text-align: center; padding: 6px;">
+                                                    ${effectiveLateFee > 0 ? `
+                                                        <button onclick="waiveSingleLateFee(${p.id}, ${effectiveLateFee}, ${p.installment_no})" 
+                                                                class="btn btn-warning btn-xs"
+                                                                style="padding: 3px 8px; font-size: 10px;">
+                                                            <i class="fas fa-gift"></i> মওকুফ
+                                                        </button>
+                                                    ` : `
+                                                        <span class="text-xs text-gray-400">—</span>
+                                                    `}
+                                                </td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <div class="mt-2 text-xs text-gray-500 flex items-center gap-2">
+                            <i class="fas fa-info-circle text-amber-500"></i>
+                            <span>যে কিস্তিতে বিলম্ব ফি (লাল রঙে) আছে, তার "মওকুফ" বাটনে ক্লিক করুন।</span>
+                        </div>
+                    `}
                 </div>
                 
-                <!-- বন্ধ বাটন -->
-                <div class="text-right pt-2 border-t">
-                    <button onclick="closeCustomModal()" class="btn btn-danger py-2">
+                <!-- ======================== নিচের বাটন ======================== -->
+                <div class="flex flex-wrap gap-2 pt-3 border-t">
+                    <button onclick="quickWaiveAll(${loanId}, ${totalPendingAmount})" 
+                            class="btn btn-danger flex-1 py-2 min-w-[150px]">
+                        <i class="fas fa-bolt mr-1"></i> সম্পূর্ণ মওকুফ
+                    </button>
+                    <button onclick="closeCustomModal()" 
+                            class="btn btn-warning flex-1 py-2 min-w-[100px]">
                         <i class="fas fa-times mr-1"></i> বন্ধ করুন
                     </button>
                 </div>
@@ -20196,42 +20295,271 @@ async function openWaiverModal(loanId) {
         
         showCustomModal('🎁 মওকুফ / ছাড় প্রদান', html);
         
+        // ✅ Initial state সেট করুন
+        setTimeout(() => {
+            onWaiveCategoryChange(loanAmount, loanProfit, loanService, totalLateFee, totalPendingAmount);
+        }, 100);
+        
     } catch(e) {
         console.error('❌ Open waiver error:', e);
-        showToast('লোড করতে সমস্যা!', 'error');
+        showToast('লোড করতে সমস্যা: ' + e.message, 'error');
     }
 }
 
 // ============================================================
-// ✅ Waive Preview আপডেট
+// ✅ Radio label ক্লিক হ্যান্ডল
 // ============================================================
-function updateWaivePreview(totalDue) {
+function selectWaiveType(type) {
+    const radio = document.getElementById('waiveCat' + type.charAt(0).toUpperCase() + type.slice(1).replace('_', ''));
+    if (radio) {
+        radio.checked = true;
+    }
+}
+
+// ============================================================
+// ✅ মওকুফের খাত পরিবর্তন হলে — খাতের পরিমাণ দেখান
+// ============================================================
+function onWaiveCategoryChange(loanAmount, loanProfit, loanService, totalLateFee, totalPendingAmount) {
+    // ✅ Selected category বের করুন
+    const selectedRadio = document.querySelector('input[name="waiveCategory"]:checked');
+    if (!selectedRadio) return;
+    
+    const category = selectedRadio.value;
+    
+    // ✅ খাত অনুযায়ী পরিমাণ ম্যাপ
+    const categoryMap = {
+        'principal': {
+            label: '💰 মূলধন',
+            amount: loanAmount,
+            hint: 'এই খাতে মওকুফ করা যাবে সর্বোচ্চ এই পরিমাণ'
+        },
+        'profit': {
+            label: '📈 লভ্যাংশ',
+            amount: loanProfit,
+            hint: 'এই খাতে মওকুফ করা যাবে সর্বোচ্চ এই পরিমাণ'
+        },
+        'service_charge': {
+            label: '🛠️ সার্ভিস চার্জ',
+            amount: loanService,
+            hint: 'এই খাতে মওকুফ করা যাবে সর্বোচ্চ এই পরিমাণ'
+        },
+        'late_fee': {
+            label: '⏰ জরিমানা',
+            amount: totalLateFee,
+            hint: 'সব পেন্ডিং কিস্তির মোট জরিমানা'
+        },
+        'full': {
+            label: '🎁 সম্পূর্ণ',
+            amount: totalPendingAmount,
+            hint: 'সব খাত থেকে অনুপাতিক হারে মওকুফ হবে'
+        }
+    };
+    
+    const config = categoryMap[category] || categoryMap['principal'];
+    
+    // ✅ UI আপডেট
+    const labelEl = document.getElementById('selectedCategoryLabel');
+    const amountEl = document.getElementById('selectedCategoryAmount');
+    const hintEl = document.getElementById('selectedCategoryHint');
+    const maxEl = document.getElementById('maxWaiveAmount');
+    const inputEl = document.getElementById('waiveAmountInput');
+    
+    if (labelEl) labelEl.textContent = config.label;
+    if (amountEl) amountEl.textContent = formatAmountWithText(config.amount);
+    if (hintEl) hintEl.textContent = config.hint;
+    if (maxEl) maxEl.textContent = formatAmountWithText(config.amount);
+    
+    // ✅ Input এর max আপডেট
+    if (inputEl) {
+        inputEl.max = config.amount;
+        
+        // ✅ যদি আগের মান নতুন max এর চেয়ে বড় হয়, তাহলে কমিয়ে দিন
+        const currentValue = parseFloat(inputEl.value) || 0;
+        if (currentValue > config.amount) {
+            inputEl.value = config.amount;
+        }
+    }
+    
+    // ✅ প্রিভিউ আপডেট
+    updateWaivePreview();
+}
+
+// ============================================================
+// ✅ প্রিভিউ আপডেট (নতুন ভার্সন)
+// ============================================================
+function updateWaivePreview() {
     const input = document.getElementById('waiveAmountInput');
     const previewAfter = document.getElementById('previewAfterWaive');
     const previewCurrent = document.getElementById('previewCurrentDue');
     
-    if (!input || !previewAfter) return;
+    if (!input) return;
+    
+    // ✅ বর্তমান মোট বাকি বের করুন (প্রিভিউ থেকে)
+    const currentDueText = previewCurrent?.textContent?.replace(/[^\d.]/g, '') || '0';
+    const totalDue = parseFloat(currentDueText) || 0;
     
     const waiveAmount = parseFloat(input.value) || 0;
     
-    if (waiveAmount > totalDue) {
-        input.value = totalDue;
-        showToast('⚠️ সর্বোচ্চ ' + formatAmountWithText(totalDue) + ' মওকুফ করা যাবে!', 'warning');
+    // ✅ Max চেক
+    const maxAmount = parseFloat(input.max) || 0;
+    if (waiveAmount > maxAmount) {
+        input.value = maxAmount;
+        showToast(`⚠️ সর্বোচ্চ ${formatAmountWithText(maxAmount)} মওকুফ করা যাবে!`, 'warning');
         return;
     }
     
     const afterWaive = Math.max(0, totalDue - waiveAmount);
     
-    previewCurrent.textContent = formatAmountWithText(totalDue);
-    previewAfter.textContent = formatAmountWithText(afterWaive);
-    
-    // রঙ পরিবর্তন
-    if (afterWaive === 0) {
-        previewAfter.className = 'font-bold text-emerald-600';
-    } else {
-        previewAfter.className = 'font-bold text-amber-600';
+    if (previewAfter) {
+        previewAfter.textContent = formatAmountWithText(afterWaive);
+        
+        // ✅ রঙ পরিবর্তন
+        if (afterWaive === 0) {
+            previewAfter.className = 'font-bold text-emerald-600';
+        } else {
+            previewAfter.className = 'font-bold text-amber-600';
+        }
     }
 }
+
+// ============================================================
+// ✅ 🆕 নির্দিষ্ট কিস্তির জরিমানা মওকুফ
+// ============================================================
+async function waiveSingleLateFee(paymentId, currentLateFee, installmentNo) {
+    console.log('🎁 waiveSingleLateFee called:', { paymentId, currentLateFee, installmentNo });
+    
+    if (currentLateFee <= 0) {
+        showToast('⚠️ এই কিস্তিতে মওকুফ করার মতো জরিমানা নেই!', 'warning');
+        return;
+    }
+    
+    // ✅ Prompt দিয়ে পরিমাণ নিন
+    const amountInput = prompt(
+        `🎁 কিস্তি #${installmentNo} এর জরিমানা মওকুফ\n\n` +
+        `মোট জরিমানা: ${formatAmount(currentLateFee)} টাকা\n\n` +
+        `মওকুফের পরিমাণ লিখুন (সর্বোচ্চ ${formatAmount(currentLateFee)}):`,
+        currentLateFee.toString()
+    );
+    
+    if (amountInput === null) return; // Cancel
+    
+    const waiveAmount = parseFloat(amountInput);
+    
+    if (isNaN(waiveAmount) || waiveAmount <= 0) {
+        showToast('❌ সঠিক পরিমাণ দিন!', 'error');
+        return;
+    }
+    
+    if (waiveAmount > currentLateFee) {
+        showToast(`❌ সর্বোচ্চ ${formatAmountWithText(currentLateFee)} মওকুফ করা যাবে!`, 'error');
+        return;
+    }
+    
+    // ✅ কারণ নিন
+    const reason = prompt('📝 মওকুফের কারণ লিখুন:', 'বিশেষ ছাড়');
+    if (!reason || reason.trim() === '') {
+        showToast('❌ কারণ লিখুন!', 'error');
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const adminName = currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন';
+        
+        // ✅ বর্তমান waived বের করুন
+        const { data: currentPayment, error: fetchError } = await client
+            .from('loan_payments')
+            .select('late_fee_waived, loan_id, installment_no')
+            .eq('id', paymentId)
+            .single();
+        
+        if (fetchError || !currentPayment) {
+            showToast('❌ পেমেন্ট পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        const existingWaived = Number(currentPayment.late_fee_waived || 0);
+        const totalWaived = existingWaived + waiveAmount;
+        
+        // ✅ পেমেন্ট আপডেট
+        const { error: updateError } = await client
+            .from('loan_payments')
+            .update({
+                late_fee_waived: totalWaived,
+                late_fee_waiver_reason: reason.trim(),
+                late_fee_waived_by: adminName,
+                late_fee_waived_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', paymentId);
+        
+        if (updateError) {
+            console.error('❌ Update error:', updateError);
+            throw updateError;
+        }
+        
+        // ✅ Waiver লগ তৈরি
+        try {
+            await client.from('loan_waivers').insert([{
+                loan_id: currentPayment.loan_id,
+                installment_no: currentPayment.installment_no,
+                waiver_type: 'late_fee',
+                waived_amount: waiveAmount,
+                original_amount: currentLateFee,
+                reason: reason.trim(),
+                waived_by: adminName,
+                waived_at: new Date().toISOString()
+            }]);
+        } catch(e) {
+            console.warn('⚠️ Waiver log warning:', e);
+        }
+        
+        // ✅ Audit log
+        try {
+            await client.from('audit_logs').insert([{
+                admin_name: adminName,
+                action: 'WAIVER_LATE_FEE',
+                table_name: 'loan_payments',
+                record_id: String(paymentId),
+                changes: {
+                    installment_no: installmentNo,
+                    waive_amount: waiveAmount,
+                    reason: reason.trim(),
+                    total_waived: totalWaived
+                },
+                created_at: new Date().toISOString()
+            }]);
+        } catch(e) {
+            console.warn('⚠️ Audit log warning:', e);
+        }
+        
+        showToast(
+            `✅ কিস্তি #${installmentNo} এর ${formatAmountWithText(waiveAmount)} জরিমানা মওকুফ সফল!`,
+            'success'
+        );
+        
+        // ✅ মডাল বন্ধ করে আবার খুলুন (রিফ্রেশ)
+        closeCustomModal();
+        
+        // ✅ ২০০ms পর আবার খুলুন (তাজা ডেটার জন্য)
+        setTimeout(() => {
+            openWaiverModal(currentPayment.loan_id);
+        }, 300);
+        
+        // ✅ ব্যাকগ্রাউন্ডে ডেটা রিফ্রেশ
+        await loadAllLoans();
+        
+    } catch(e) {
+        console.error('❌ Waive single late fee error:', e);
+        showToast(`❌ মওকুফ ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
 
 // ============================================================
 // ✅ BALANCE ADJUSTMENT SYSTEM v1.0
@@ -21245,6 +21573,12 @@ window.openLoanAdjustmentModal = openLoanAdjustmentModal;
 window.saveLoanAdjustment = saveLoanAdjustment;
 window.openWaiverModal = openWaiverModal;
 window.loadBranchesForAdminSelect = loadBranchesForAdminSelect;
+window.updateWaivePreview = updateWaivePreview;
+window.applyCustomWaiver = applyCustomWaiver;
+window.quickWaiveAll = quickWaiveAll;
+window.selectWaiveType = selectWaiveType;
+window.onWaiveCategoryChange = onWaiveCategoryChange;
+window.waiveSingleLateFee = waiveSingleLateFee;    
 
 console.log('✅ লোন ম্যানেজমেন্ট ফাংশনসমূহ লোড সম্পূর্ণ!');
 console.log('✅ showLoanEMIDetails:', typeof window.showLoanEMIDetails);
