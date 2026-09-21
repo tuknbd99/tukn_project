@@ -20228,46 +20228,72 @@ async function openWaiverModal(loanId) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    ${pendingPayments.map(p => {
-                                        const emiAmount = Number(p.emi_amount || p.total_amount || 0);
-                                        const rawLateFee = Number(p.late_fee || 0);
-                                        const waivedLateFee = Number(p.late_fee_waived || 0);
-                                        const effectiveLateFee = Math.max(0, rawLateFee - waivedLateFee);
-                                        const dueDate = p.due_date ? new Date(p.due_date) : null;
-                                        const dueDateStr = dueDate 
-                                            ? dueDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric' })
-                                            : '—';
-                                        
-                                        return `
-                                            <tr style="background: ${effectiveLateFee > 0 ? '#fef2f2' : '#ffffff'};">
-                                                <td style="text-align: center; font-weight: 700; padding: 6px;">
-                                                    #${p.installment_no}
-                                                </td>
-                                                <td style="text-align: center; padding: 6px; font-size: 11px;">${dueDateStr}</td>
-                                                <td style="text-align: right; padding: 6px; font-weight: 600; color: #059669;">
-                                                    ${formatAmount(emiAmount)}
-                                                </td>
-                                                <td style="text-align: right; padding: 6px; font-weight: 700; color: ${effectiveLateFee > 0 ? '#dc2626' : '#9ca3af'};">
-                                                    ${formatAmount(effectiveLateFee)}
-                                                    ${waivedLateFee > 0 ? `<br><small style="color:#16a34a;font-size:9px;">মওকুফ: ${formatAmount(waivedLateFee)}</small>` : ''}
-                                                </td>
-                                                <td style="text-align: right; padding: 6px; font-weight: 700; color: #16a34a;">
-                                                    ${formatAmount(waivedLateFee)}
-                                                </td>
-                                                <td style="text-align: center; padding: 6px;">
-                                                    ${effectiveLateFee > 0 ? `
-                                                        <button onclick="waiveSingleLateFee(${p.id}, ${effectiveLateFee}, ${p.installment_no})" 
-                                                                class="btn btn-warning btn-xs"
-                                                                style="padding: 3px 8px; font-size: 10px;">
-                                                            <i class="fas fa-gift"></i> মওকুফ
-                                                        </button>
-                                                    ` : `
-                                                        <span class="text-xs text-gray-400">—</span>
-                                                    `}
-                                                </td>
-                                            </tr>
-                                        `;
-                                    }).join('')}
+                    ${pendingPayments.map(p => {
+                    const emiAmount = Number(p.emi_amount || p.total_amount || 0);
+                    const rawLateFee = Number(p.late_fee || 0);
+                    const waivedLateFee = Number(p.late_fee_waived || 0);
+                    const effectiveLateFee = Math.max(0, rawLateFee - waivedLateFee);
+                    
+                    // ✅ Due Date বের করুন
+                    const dueDate = p.due_date ? new Date(p.due_date) : null;
+                    const dueDateStr = dueDate 
+                        ? dueDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric' })
+                        : '—';
+                    const dueDateISO = dueDate ? dueDate.toISOString().split('T')[0] : '';
+                    
+                    // ✅ 🔥 লাইভ জরিমানা হিসাব (যদি স্টোরে না থাকে)
+                    let displayLateFee = effectiveLateFee;
+                    if (displayLateFee <= 0 && dueDate && emiAmount > 0) {
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        
+                        if (today > dueDate) {
+                            const daysLate = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+                            if (daysLate > 5) {
+                                const monthsLate = Math.max(1, Math.ceil(daysLate / 30));
+                                displayLateFee = emiAmount * 0.02 * monthsLate;
+                            }
+                        }
+                    }
+                    
+                    return `
+                        <tr class="waive-payment-row" 
+                            data-payment-id="${p.id}"
+                            data-due-date="${dueDateISO}"
+                            data-emi-amount="${emiAmount}"
+                            data-status="${p.status}"
+                            data-late-fee="${rawLateFee}"
+                            data-waived-late-fee="${waivedLateFee}"
+                            data-effective-late-fee="${displayLateFee}"
+                            style="background: ${displayLateFee > 0 ? '#fef2f2' : '#ffffff'};">
+                            <td style="text-align: center; font-weight: 700; padding: 6px;">
+                                #${p.installment_no}
+                            </td>
+                            <td style="text-align: center; padding: 6px; font-size: 11px;">${dueDateStr}</td>
+                            <td style="text-align: right; padding: 6px; font-weight: 600; color: #059669;">
+                                ${formatAmount(emiAmount)}
+                            </td>
+                            <td style="text-align: right; padding: 6px; font-weight: 700; color: ${displayLateFee > 0 ? '#dc2626' : '#9ca3af'};">
+                                ${formatAmount(displayLateFee)}
+                                ${waivedLateFee > 0 ? `<br><small style="color:#16a34a;font-size:9px;">মওকুফ: ${formatAmount(waivedLateFee)}</small>` : ''}
+                            </td>
+                            <td style="text-align: right; padding: 6px; font-weight: 700; color: #16a34a;">
+                                ${formatAmount(waivedLateFee)}
+                            </td>
+                            <td style="text-align: center; padding: 6px;">
+                                ${displayLateFee > 0 ? `
+                                    <button onclick="waiveSingleLateFee(${p.id}, ${displayLateFee}, ${p.installment_no})" 
+                                            class="btn btn-warning btn-xs"
+                                            style="padding: 3px 8px; font-size: 10px;">
+                                        <i class="fas fa-gift"></i> মওকুফ
+                                    </button>
+                                ` : `
+                                    <span class="text-xs text-gray-400">—</span>
+                                `}
+                            </td>
+                        </tr>
+                    `;
+                }).join('')}
                                 </tbody>
                             </table>
                         </div>
@@ -20317,14 +20343,25 @@ function selectWaiveType(type) {
 }
 
 // ============================================================
-// ✅ মওকুফের খাত পরিবর্তন হলে — খাতের পরিমাণ দেখান
+// ✅ মওকুফের খাত পরিবর্তন হলে — লাইভ ক্যালকুলেশন সহ
 // ============================================================
-function onWaiveCategoryChange(loanAmount, loanProfit, loanService, totalLateFee, totalPendingAmount) {
+function onWaiveCategoryChange(loanAmount, loanProfit, loanService, storedLateFee, totalPendingAmount) {
+    console.log('🔄 onWaiveCategoryChange called:', { loanAmount, loanProfit, loanService, storedLateFee, totalPendingAmount });
+    
     // ✅ Selected category বের করুন
     const selectedRadio = document.querySelector('input[name="waiveCategory"]:checked');
     if (!selectedRadio) return;
     
     const category = selectedRadio.value;
+    
+    // ✅ 🔥 জরিমানার জন্য লাইভ ক্যালকুলেশন
+    let calculatedLateFee = storedLateFee;
+    
+    if (category === 'late_fee' && calculatedLateFee <= 0) {
+        // ✅ স্টোরে না থাকলে বা 0 হলে — লাইভ হিসাব করুন
+        calculatedLateFee = calculateLiveLateFee();
+        console.log('🔥 লাইভ জরিমানা ক্যালকুলেট:', calculatedLateFee);
+    }
     
     // ✅ খাত অনুযায়ী পরিমাণ ম্যাপ
     const categoryMap = {
@@ -20345,12 +20382,12 @@ function onWaiveCategoryChange(loanAmount, loanProfit, loanService, totalLateFee
         },
         'late_fee': {
             label: '⏰ জরিমানা',
-            amount: totalLateFee,
-            hint: 'সব পেন্ডিং কিস্তির মোট জরিমানা'
+            amount: calculatedLateFee,
+            hint: 'বিলম্বিত কিস্তির জন্য হিসাবকৃত জরিমানা (২%/মাস)'
         },
         'full': {
             label: '🎁 সম্পূর্ণ',
-            amount: totalPendingAmount,
+            amount: totalPendingAmount + calculatedLateFee,
             hint: 'সব খাত থেকে অনুপাতিক হারে মওকুফ হবে'
         }
     };
@@ -20373,7 +20410,6 @@ function onWaiveCategoryChange(loanAmount, loanProfit, loanService, totalLateFee
     if (inputEl) {
         inputEl.max = config.amount;
         
-        // ✅ যদি আগের মান নতুন max এর চেয়ে বড় হয়, তাহলে কমিয়ে দিন
         const currentValue = parseFloat(inputEl.value) || 0;
         if (currentValue > config.amount) {
             inputEl.value = config.amount;
@@ -20382,6 +20418,63 @@ function onWaiveCategoryChange(loanAmount, loanProfit, loanService, totalLateFee
     
     // ✅ প্রিভিউ আপডেট
     updateWaivePreview();
+}
+
+// ============================================================
+// ✅ 🔥 লাইভ জরিমানা ক্যালকুলেটর (Late Fee)
+// ============================================================
+function calculateLiveLateFee() {
+    let totalLateFee = 0;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // ✅ সব পেন্ডিং পেমেন্ট নিন (HTML থেকে)
+    const rows = document.querySelectorAll('#waiveListTable tbody tr, .waive-payment-row');
+    
+    console.log(`🔍 ${rows.length} টি পেমেন্ট row পাওয়া গেছে`);
+    
+    rows.forEach((row, index) => {
+        // ✅ data attributes থেকে মান নিন
+        const dueDateStr = row.dataset.dueDate;
+        const emiAmount = parseFloat(row.dataset.emiAmount) || 0;
+        const status = row.dataset.status || 'pending';
+        const storedLateFee = parseFloat(row.dataset.lateFee) || 0;
+        const waivedLateFee = parseFloat(row.dataset.waivedLateFee) || 0;
+        
+        // ✅ যদি already paid হয় — skip
+        if (status === 'approved' || status === 'paid') return;
+        
+        // ✅ যদি স্টোরে জরিমানা থাকে — সেটাই নিন
+        if (storedLateFee > 0) {
+            totalLateFee += Math.max(0, storedLateFee - waivedLateFee);
+            console.log(`   Row #${index + 1}: স্টোরড জরিমানা ${storedLateFee} (মওকুফ: ${waivedLateFee})`);
+            return;
+        }
+        
+        // ✅ না থাকলে লাইভ হিসাব করুন
+        if (dueDateStr && emiAmount > 0) {
+            const dueDate = new Date(dueDateStr);
+            dueDate.setHours(0, 0, 0, 0);
+            
+            // ✅ সময়সীমা পেরিয়ে গেছে?
+            if (today > dueDate) {
+                const daysLate = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+                
+                // ✅ গ্রেস পিরিয়ড (৫ দিন)
+                if (daysLate > 5) {
+                    // ✅ বিলম্ব ফি = EMI × ২% (প্রতি মাসে)
+                    const monthsLate = Math.max(1, Math.ceil(daysLate / 30));
+                    const lateFee = emiAmount * 0.02 * monthsLate;
+                    
+                    totalLateFee += Math.max(0, lateFee - waivedLateFee);
+                    console.log(`   Row #${index + 1}: ${daysLate} দিন দেরি → ${monthsLate} মাস → জরিমানা ${lateFee.toFixed(2)}`);
+                }
+            }
+        }
+    });
+    
+    console.log(`💰 মোট লাইভ জরিমানা: ${totalLateFee.toFixed(2)} টাকা`);
+    return totalLateFee;
 }
 
 // ============================================================
