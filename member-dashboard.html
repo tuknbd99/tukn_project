@@ -7555,12 +7555,16 @@ document.addEventListener('DOMContentLoaded', async function() {
     // ✅ ব্রডকাস্ট চ্যানেল সেটআপ
     setupBroadcastChannel();
     
-    // ✅ ট্যাব ফোকাসে ব্যালেন্স রিফ্রেশ
     document.addEventListener('visibilitychange', function() {
         if (!document.hidden && currentUser) {
             console.log('👁️ ট্যাব পুনরায় খোলা হয়েছে, ব্যালেন্স চেক করা হচ্ছে');
             refreshMemberDataFromSupabase();
             loadUserFunds();
+            
+            // ✅ ট্যাব ফোকাসে নোটিশও চেক করুন
+            if (typeof loadUnreadNotices === 'function') {
+                loadUnreadNotices();
+            }
         }
     });
     
@@ -7582,11 +7586,51 @@ document.addEventListener('DOMContentLoaded', async function() {
         await checkAndFixBalanceMismatch();
     }, 5000);
     
+    // ✅✅✅ নতুন যোগ: নোটিশ পপআপ চেক (২.৫ সেকেন্ড পর) ✅✅✅
+    setTimeout(async function() {
+        try {
+            console.log('📢 নোটিশ চেক করা হচ্ছে...');
+            if (typeof loadUnreadNotices === 'function') {
+                await loadUnreadNotices();
+            } else {
+                console.warn('⚠️ loadUnreadNotices ফাংশন পাওয়া যায়নি!');
+            }
+        } catch (e) {
+            console.error('❌ নোটিশ চেক error:', e);
+        }
+    }, 2500);
+    
+    // ✅✅✅ নতুন যোগ: প্রতি ২ মিনিট পর নতুন নোটিশ চেক ✅✅✅
+    setInterval(async function() {
+        if (document.visibilityState === 'visible') {
+            try {
+                if (typeof loadUnreadNotices === 'function') {
+                    await loadUnreadNotices();
+                }
+            } catch (e) {
+                console.error('❌ অটো নোটিশ চেক error:', e);
+            }
+        }
+    }, 120000); // ২ মিনিট
+    
+    // ✅✅✅ নতুন যোগ: রেফারেল কোড ফিক্স (২ সেকেন্ড পর) ✅✅✅
+    setTimeout(async function() {
+        try {
+            if (typeof fixReferralCode === 'function') {
+                await fixReferralCode();
+            }
+        } catch (e) {
+            console.error('❌ রেফারেল কোড error:', e);
+        }
+    }, 2000);
+    
     console.log('💡 কনসোলে টাইপ করুন:');
     console.log('  refreshMemberDataFromSupabase() - ব্যালেন্স রিফ্রেশ');
     console.log('  forceBalanceUpdate() - ফোর্স আপডেট');
     console.log('  forceReloadAllData() - সব ডেটা রিফ্রেশ');
     console.log('  checkAndFixBalanceMismatch() - ব্যালেন্স মিসম্যাচ চেক');
+    console.log('  loadUnreadNotices() - নোটিশ চেক');
+    console.log('  showNoticePopup() - নোটিশ পপআপ টেস্ট');
 });
 
     // ============================================================
@@ -9484,20 +9528,310 @@ async function emergencyStopAndFix() {
     }
 }
 
-// কনসোলে এক্সপোজ করুন
-console.log('🛡️ পার্মানেন্ট ফিক্স লোড হয়েছে!');
-console.log('💡 কমান্ড:');
-console.log('  permanentAutoFix() - সব উত্তোলন পার্মানেন্টলি ফিক্স');
-console.log('  emergencyStopAndFix() - জরুরি রি-প্রসেস');
-console.log('  checkAndFixDuplicateWithdrawals() - ডুপ্লিকেট চেক');
+        // কনসোলে এক্সপোজ করুন
+        console.log('🛡️ পার্মানেন্ট ফিক্স লোড হয়েছে!');
+        console.log('💡 কমান্ড:');
+        console.log('  permanentAutoFix() - সব উত্তোলন পার্মানেন্টলি ফিক্স');
+        console.log('  emergencyStopAndFix() - জরুরি রি-প্রসেস');
+        console.log('  checkAndFixDuplicateWithdrawals() - ডুপ্লিকেট চেক');
+        
+        
+    // ============================================================
+    // ✅ নোটিশ পপআপ নোটিফিকেশন সিস্টেম
+    // ============================================================
 
-// ✅ নতুন: নোটিশ পপআপ অটো-শো
-setTimeout(function() {
-    if (typeof showNoticePopup === 'function') {
-        showNoticePopup();
+let unreadNotices = [];
+let currentNoticeIndex = 0;
+
+// ✅ অবাঞ্ছিত নোটিশ লোড করুন
+async function loadUnreadNotices() {
+    if (!currentUser || !currentUser.id) {
+        console.log('❌ currentUser নেই, নোটিশ লোড বাতিল');
+        return;
     }
-}, 2000);
     
-</script>
-</body>
+    const client = await initSupabase();
+    if (!client) return;
+    
+    try {
+        console.log('📢 অবাঞ্ছিত নোটিশ লোড করা হচ্ছে...');
+        
+        const now = new Date().toISOString();
+        
+        // ১. সব সক্রিয় নোটিশ আনুন
+        const { data: notices, error: noticeError } = await client
+            .from('notices')
+            .select('*')
+            .eq('status', 'active')
+            .or(`expires_at.is.null,expires_at.gt.${now}`)
+            .order('priority', { ascending: false })
+            .order('created_at', { ascending: false });
+        
+        if (noticeError) {
+            console.error('❌ নোটিশ লোড error:', noticeError);
+            return;
+        }
+        
+        if (!notices || notices.length === 0) {
+            console.log('📭 কোনো সক্রিয় নোটিশ নেই');
+            return;
+        }
+        
+        // ২. ব্যবহারকারীর পড়া নোটিশগুলো আনুন
+        const { data: readNotices, error: readError } = await client
+            .from('notice_reads')
+            .select('notice_id')
+            .eq('member_id', currentUser.id);
+        
+        if (readError) {
+            console.warn('⚠️ notice_reads লোড error (টেবিল না থাকলে সমস্যা নেই):', readError);
+        }
+        
+        const readNoticeIds = new Set((readNotices || []).map(r => r.notice_id));
+        
+        // ৩. ফিল্টার করুন - যেগুলো পড়া হয়নি + target_audience ম্যাচ করে
+        const memberStatus = currentUser.status || 'active';
+        
+        unreadNotices = notices.filter(n => {
+            // পড়া হয়নি
+            if (readNoticeIds.has(n.id)) return false;
+            
+            // target_audience চেক
+            if (!n.target_audience || n.target_audience === 'all') return true;
+            if (n.target_audience === 'active' && (memberStatus === 'active' || memberStatus === 'approved')) return true;
+            if (n.target_audience === 'pending' && memberStatus === 'pending') return true;
+            
+            return false;
+        });
+        
+        console.log(`✅ ${unreadNotices.length} টি অবাঞ্ছিত নোটিশ পাওয়া গেছে`);
+        
+        // ৪. পপআপ দেখান
+        if (unreadNotices.length > 0) {
+            currentNoticeIndex = 0;
+            showNoticePopup();
+        }
+        
+    } catch (e) {
+        console.error('❌ loadUnreadNotices error:', e);
+    }
+}
+
+    // ✅ পপআপ দেখান
+    function showNoticePopup() {
+        if (!unreadNotices || unreadNotices.length === 0) {
+            return;
+        }
+        
+        const notice = unreadNotices[currentNoticeIndex];
+        if (!notice) return;
+        
+        const modal = document.getElementById('noticePopupModal');
+        const header = document.getElementById('noticePopupHeader');
+        const icon = document.getElementById('noticePopupIcon');
+        const title = document.getElementById('noticePopupTitle');
+        const message = document.getElementById('noticePopupMessage');
+        const dateEl = document.getElementById('noticePopupDate');
+        const senderEl = document.getElementById('noticePopupSender');
+        const progress = document.getElementById('noticePopupProgress');
+        
+        // type অনুযায়ী রঙ ও আইকন
+        const typeConfig = {
+            info:    { bg: 'linear-gradient(135deg, #3b82f6, #2563eb)', icon: 'fa-info-circle' },
+            success: { bg: 'linear-gradient(135deg, #10b981, #059669)', icon: 'fa-check-circle' },
+            warning: { bg: 'linear-gradient(135deg, #f59e0b, #d97706)', icon: 'fa-exclamation-triangle' },
+            danger:  { bg: 'linear-gradient(135deg, #dc2626, #b91c1c)', icon: 'fa-exclamation-circle' }
+        };
+        
+        const cfg = typeConfig[notice.type] || typeConfig.info;
+        if (header) header.style.background = cfg.bg;
+        if (icon) icon.className = `fas ${cfg.icon}`;
+        
+        // কনটেন্ট সেট করুন
+        if (title) title.textContent = notice.title || 'নোটিশ';
+        if (message) message.textContent = notice.message || '';
+        
+        if (dateEl && notice.created_at) {
+            dateEl.innerHTML = `<i class="fas fa-clock mr-1"></i>${formatDateTimeBD(notice.created_at)}`;
+        }
+        
+        if (senderEl) {
+            senderEl.innerHTML = `<i class="fas fa-user-shield mr-1"></i>${notice.created_by || 'অ্যাডমিন'}`;
+        }
+        
+        // প্রগ্রেস বার
+        if (unreadNotices.length > 1 && progress) {
+            progress.classList.remove('hidden');
+            document.getElementById('noticeCurrentIndex').textContent = currentNoticeIndex + 1;
+            document.getElementById('noticeTotalCount').textContent = unreadNotices.length;
+            const progressPercent = ((currentNoticeIndex + 1) / unreadNotices.length) * 100;
+            document.getElementById('noticeProgressBar').style.width = progressPercent + '%';
+        } else if (progress) {
+            progress.classList.add('hidden');
+        }
+        
+        // মডাল দেখান
+        if (modal) {
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            document.body.style.overflow = 'hidden';
+            
+            // শেক অ্যানিমেশন
+            modal.querySelector('.bg-white')?.classList.add('notice-popup-shake');
+            setTimeout(() => {
+                modal.querySelector('.bg-white')?.classList.remove('notice-popup-shake');
+            }, 500);
+        }
+    }
+    
+    // ✅ নোটিশ পড়া হিসেবে মার্ক করুন
+    async function markCurrentNoticeAsRead() {
+        if (!unreadNotices || unreadNotices.length === 0) return;
+        
+        const notice = unreadNotices[currentNoticeIndex];
+        if (!notice) return;
+        
+        const client = await initSupabase();
+        if (!client) return;
+        
+        try {
+            // notice_reads টেবিলে ইনসার্ট করুন (ডুপ্লিকেট হলে ইগনোর)
+            const { error } = await client
+                .from('notice_reads')
+                .upsert({
+                    notice_id: notice.id,
+                    member_id: currentUser.id,
+                    read_at: new Date().toISOString()
+                }, {
+                    onConflict: 'notice_id,member_id'
+                });
+            
+            if (error) {
+                console.warn('⚠️ নোটিশ read মার্ক error:', error);
+            } else {
+                console.log(`✅ নোটিশ #${notice.id} পড়া হিসেবে মার্ক করা হয়েছে`);
+            }
+        } catch (e) {
+            console.warn('নোটিশ read মার্ক ব্যর্থ:', e);
+        }
+    }
+    
+    // ✅ "বুঝেছি" বাটনে ক্লিক
+    async function markNoticeAsReadAndClose() {
+        await markCurrentNoticeAsRead();
+        
+        // পরের নোটিশে যান
+        currentNoticeIndex++;
+        
+        if (currentNoticeIndex < unreadNotices.length) {
+            // পরের নোটিশ দেখান
+            showNoticePopup();
+        } else {
+            // সব নোটিশ দেখা হয়ে গেছে
+            closeNoticePopup();
+            showToast('✅ সব নোটিশ পড়া হয়েছে!', 'success');
+        }
+    }
+    
+    // ✅ পপআপ বন্ধ করুন
+    function closeNoticePopup() {
+        const modal = document.getElementById('noticePopupModal');
+        if (modal) {
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+            document.body.style.overflow = '';
+        }
+    }
+    
+    // ✅ এক্সপোজ
+    window.loadUnreadNotices = loadUnreadNotices;
+    window.showNoticePopup = showNoticePopup;
+    window.markNoticeAsReadAndClose = markNoticeAsReadAndClose;
+    window.closeNoticePopup = closeNoticePopup;
+    
+            
+        </script>
+
+        <!-- ✅ নোটিশ পপআপ মডাল -->
+        <div id="noticePopupModal" class="fixed inset-0 z-[999999] hidden items-center justify-center p-4" 
+             style="background: rgba(0,0,0,0.75); backdrop-filter: blur(6px);">
+            <div class="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] overflow-hidden shadow-2xl"
+                 style="animation: noticePopupIn 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);">
+                
+                <!-- হেডার -->
+                <div id="noticePopupHeader" class="p-4 text-white relative overflow-hidden"
+                     style="background: linear-gradient(135deg, #059669, #047857);">
+                    <div class="flex items-center gap-3">
+                        <div class="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center text-2xl">
+                            <i id="noticePopupIcon" class="fas fa-bullhorn"></i>
+                        </div>
+                        <div class="flex-1">
+                            <p class="text-xs opacity-90">📢 নতুন নোটিশ</p>
+                            <h3 id="noticePopupTitle" class="text-lg font-bold">নোটিশ শিরোনাম</h3>
+                        </div>
+                    </div>
+                    <div class="absolute top-0 right-0 w-32 h-32 rounded-full opacity-10"
+                         style="background: white; transform: translate(30%, -30%);"></div>
+                </div>
+                
+                <!-- বডি -->
+                <div class="p-5 max-h-[50vh] overflow-y-auto">
+                    <div id="noticePopupMessage" class="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">
+                        নোটিশ বার্তা এখানে দেখা যাবে...
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+                        <span id="noticePopupDate"><i class="fas fa-clock mr-1"></i>-</span>
+                        <span id="noticePopupSender"><i class="fas fa-user-shield mr-1"></i>-</span>
+                    </div>
+                </div>
+                
+                <!-- ফুটার / অ্যাকশন বাটন -->
+                <div class="p-4 bg-gray-50 border-t flex gap-2">
+                    <button onclick="markNoticeAsReadAndClose()" 
+                            class="flex-1 bg-emerald-600 text-white py-3 rounded-lg hover:bg-emerald-700 transition font-semibold">
+                        <i class="fas fa-check-circle mr-2"></i> বুঝেছি / পড়েছি
+                    </button>
+                    <button onclick="closeNoticePopup()" 
+                            class="px-5 bg-gray-200 text-gray-700 py-3 rounded-lg hover:bg-gray-300 transition">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <!-- প্রগ্রেস (যদি একাধিক নোটিশ থাকে) -->
+                <div id="noticePopupProgress" class="hidden px-4 pb-3">
+                    <div class="flex justify-between text-xs text-gray-500 mb-1">
+                        <span>নোটিশ <span id="noticeCurrentIndex">1</span> / <span id="noticeTotalCount">1</span></span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-1.5">
+                        <div id="noticeProgressBar" class="bg-emerald-500 h-1.5 rounded-full transition-all duration-300" 
+                             style="width: 0%;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- ✅ পপআপ অ্যানিমেশন CSS -->
+        <style>
+        @keyframes noticePopupIn {
+            0% {
+                opacity: 0;
+                transform: scale(0.7) translateY(-40px);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+        
+        .notice-popup-shake {
+            animation: noticeShake 0.5s ease-in-out;
+        }
+        
+        @keyframes noticeShake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-8px); }
+            75% { transform: translateX(8px); }
+        }
+        </style>
+    </body>
 </html>
