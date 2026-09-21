@@ -5070,20 +5070,24 @@ function showTab(tabName) {
         }
     }
 // ============================================================
-// ✅ কাস্টম মওকুফ প্রয়োগ
+// ✅ কাস্টম মওকুফ প্রয়োগ (Lock সিস্টেম সহ — সম্পূর্ণ ভার্সন)
 // ============================================================
 async function applyCustomWaiver(loanId, totalDue) {
+    console.log('🎁 applyCustomWaiver called:', { loanId, totalDue });
+    
     const waiveAmountInput = document.getElementById('waiveAmountInput');
-    const waiveTypeInput = document.getElementById('waiveTypeInput');
     const waiveReasonInput = document.getElementById('waiveReasonInput');
     
-    if (!waiveAmountInput || !waiveTypeInput || !waiveReasonInput) {
+    if (!waiveAmountInput || !waiveReasonInput) {
         showToast('❌ ফর্ম এলিমেন্ট পাওয়া যায়নি!', 'error');
         return;
     }
     
+    // ✅ নির্বাচিত খাত বের করুন
+    const selectedCategory = document.querySelector('input[name="waiveCategory"]:checked');
+    const waiveType = selectedCategory ? selectedCategory.value : 'principal';
+    
     const waiveAmount = parseFloat(waiveAmountInput.value) || 0;
-    const waiveType = waiveTypeInput.value;
     const reason = waiveReasonInput.value.trim();
     
     // ✅ ভ্যালিডেশন
@@ -5093,18 +5097,13 @@ async function applyCustomWaiver(loanId, totalDue) {
         return;
     }
     
-    if (waiveAmount > totalDue) {
-        showToast(`❌ সর্বোচ্চ ${formatAmountWithText(totalDue)} মওকুফ করা যাবে!`, 'error');
-        return;
-    }
-    
     if (!reason) {
         showToast('❌ মওকুফের কারণ লিখুন!', 'error');
         waiveReasonInput.focus();
         return;
     }
     
-    // ✅ নিশ্চিতকরণ
+    // ✅ খাতের লেবেল
     const waiveTypeLabels = {
         'principal': 'মূলধন',
         'profit': 'লভ্যাংশ',
@@ -5113,6 +5112,7 @@ async function applyCustomWaiver(loanId, totalDue) {
         'full': 'সম্পূর্ণ'
     };
     
+    // ✅ কনফার্মেশন মেসেজ
     const confirmMsg = `🎁 মওকুফ নিশ্চিতকরণ\n\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `💰 মওকুফের পরিমাণ: ${formatAmountWithText(waiveAmount)}\n` +
@@ -5121,6 +5121,7 @@ async function applyCustomWaiver(loanId, totalDue) {
         `📊 বর্তমান বাকি: ${formatAmountWithText(totalDue)}\n` +
         `✨ মওকুফের পর বাকি: ${formatAmountWithText(Math.max(0, totalDue - waiveAmount))}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `${waiveType === 'late_fee' ? '⚠️ জরিমানা মওকুফ করলে কিস্তি লক হবে!\n\n' : ''}` +
         `"OK" চাপুন নিশ্চিত করতে।`;
     
     if (!window.confirm(confirmMsg)) return;
@@ -5136,7 +5137,9 @@ async function applyCustomWaiver(loanId, totalDue) {
     try {
         showToast('⏳ মওকুফ প্রক্রিয়া চলছে...', 'info');
         
+        // ============================================================
         // ✅ ১. লোনের বর্তমান ডেটা লোড
+        // ============================================================
         const { data: loan, error: loanError } = await client
             .from('loan_applications')
             .select('*')
@@ -5165,8 +5168,11 @@ async function applyCustomWaiver(loanId, totalDue) {
             newProfit = Math.max(0, oldProfit - waiveAmount);
         } else if (waiveType === 'service_charge') {
             newService = Math.max(0, oldService - waiveAmount);
+        } else if (waiveType === 'late_fee') {
+            // ✅ জরিমানা মওকুফ — লোনের মূল হিসাব পরিবর্তন হবে না
+            // শুধু loan_payments টেবিলে late_fee_waived আপডেট হবে
+            console.log('🔥 জরিমানা মওকুফ প্রক্রিয়া শুরু');
         } else if (waiveType === 'full') {
-            // অনুপাতিক হারে কমানো
             const ratio = waiveAmount / oldTotal;
             newAmount = Math.max(0, oldAmount - (oldAmount * ratio));
             newProfit = Math.max(0, oldProfit - (oldProfit * ratio));
@@ -5182,79 +5188,209 @@ async function applyCustomWaiver(loanId, totalDue) {
         console.log('   পরিমাণ:', waiveAmount);
         console.log('   পূর্বের মোট:', oldTotal);
         console.log('   নতুন মোট:', newTotal);
-        console.log('   নতুন EMI:', newEmi);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
-        // ✅ ৩. লোন আপডেট
-        const { error: updateError } = await client
-            .from('loan_applications')
-            .update({
-                original_amount: oldAmount,
-                original_total: oldTotal,
-                amount: newAmount,
-                profit_amount: newProfit,
-                service_charge: newService,
-                total_amount: newTotal,
-                emi_amount: newEmi,
-                waived_amount: (Number(loan.waived_amount) || 0) + waiveAmount,
-                waived_type: waiveType,
-                waiver_reason: reason,
-                waived_by: adminName,
-                waived_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-            })
-            .eq('id', loanId);
-        
-        if (updateError) {
-            console.error('❌ Update error:', updateError);
-            throw updateError;
-        }
-        
-        // ✅ ৪. পেন্ডিং কিস্তিগুলো আপডেট
-        const { data: payments } = await client
-            .from('loan_payments')
-            .select('*')
-            .eq('loan_id', loanId)
-            .in('status', ['pending', 'pending_verification']);
-        
-        if (payments && payments.length > 0) {
-            // নতুন EMI অনুযায়ী পেন্ডিং কিস্তি আপডেট
-            for (const p of payments) {
-                await client
-                    .from('loan_payments')
-                    .update({
-                        emi_amount: newEmi,
-                        total_amount: newEmi,
-                        waiver_applied: true,
-                        waiver_amount: waiveAmount / payments.length,
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('id', p.id);
+        // ============================================================
+        // ✅ ৩. লোন আপডেট (শুধু জরিমানা ছাড়া)
+        // ============================================================
+        if (waiveType !== 'late_fee') {
+            const { error: updateError } = await client
+                .from('loan_applications')
+                .update({
+                    original_amount: oldAmount,
+                    original_total: oldTotal,
+                    amount: newAmount,
+                    profit_amount: newProfit,
+                    service_charge: newService,
+                    total_amount: newTotal,
+                    emi_amount: newEmi,
+                    waived_amount: (Number(loan.waived_amount) || 0) + waiveAmount,
+                    waived_type: waiveType,
+                    waiver_reason: reason,
+                    waived_by: adminName,
+                    waived_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', loanId);
+            
+            if (updateError) {
+                console.error('❌ Update error:', updateError);
+                throw updateError;
             }
         }
         
-        // ✅ ৫. Waiver লগ তৈরি
-        try {
-            await client.from('loan_waivers').insert([{
-                loan_id: loanId,
-                waiver_type: waiveType,
-                waived_amount: waiveAmount,
-                original_amount: oldTotal,
-                new_amount: newTotal,
-                reason: reason,
-                waived_by: adminName,
-                waived_at: new Date().toISOString()
-            }]);
-            console.log('✅ Waiver log তৈরি হয়েছে');
-        } catch(e) {
-            console.warn('⚠️ Waiver log warning:', e);
+        // ============================================================
+        // ✅ ৪. 🔥 জরিমানা মওকুফ — পেন্ডিং কিস্তিগুলোতে Lock সহ
+        // ============================================================
+        if (waiveType === 'late_fee') {
+            console.log('🔥 জরিমানা মওকুফ শুরু — পেন্ডিং কিস্তি লোড করছি...');
+            
+            // ✅ পেন্ডিং কিস্তি লোড
+            const { data: payments, error: payError } = await client
+                .from('loan_payments')
+                .select('*')
+                .eq('loan_id', loanId)
+                .in('status', ['pending', 'pending_verification'])
+                .order('installment_no');
+            
+            if (payError) {
+                console.error('❌ পেমেন্ট লোড error:', payError);
+                throw payError;
+            }
+            
+            console.log(`📋 মোট ${payments?.length || 0} টি পেন্ডিং কিস্তি পাওয়া গেছে`);
+            
+            if (!payments || payments.length === 0) {
+                showToast('⚠️ কোনো পেন্ডিং কিস্তি নেই!', 'warning');
+                return;
+            }
+            
+            // ✅ শুধু যেগুলোতে জরিমানা আছে এবং লক নেই
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const GRACE_DAYS = 5;
+            const LATE_FEE_PERCENT = 2;
+            
+            const waivablePayments = payments.filter(p => {
+                const rawLateFee = Number(p.late_fee || 0);
+                const waivedLateFee = Number(p.late_fee_waived || 0);
+                let effectiveLateFee = Math.max(0, rawLateFee - waivedLateFee);
+                
+                // ✅ লাইভ হিসাব (যদি স্টোরে না থাকে)
+                if (effectiveLateFee <= 0 && p.due_date) {
+                    const dueDate = new Date(p.due_date);
+                    dueDate.setHours(0, 0, 0, 0);
+                    const emiAmount = Number(p.emi_amount || p.total_amount || 0);
+                    
+                    if (today > dueDate && emiAmount > 0) {
+                        const daysLate = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+                        if (daysLate > GRACE_DAYS) {
+                            const monthsLate = Math.max(1, Math.ceil(daysLate / 30));
+                            effectiveLateFee = emiAmount * (LATE_FEE_PERCENT / 100) * monthsLate;
+                        }
+                    }
+                }
+                
+                return effectiveLateFee > 0 && p.is_locked !== true;
+            });
+            
+            console.log(`✅ ${waivablePayments.length} টি কিস্তিতে জরিমানা আছে (লক নেই)`);
+            
+            if (waivablePayments.length === 0) {
+                showToast('⚠️ কোনো কিস্তিতে মওকুফ করার মতো জরিমানা নেই (সব লকড)!', 'warning');
+                return;
+            }
+            
+            // ✅ প্রতিটি কিস্তিতে জরিমানা মওকুফ + Lock
+            let totalWaivedInPayments = 0;
+            let successCount = 0;
+            let errorCount = 0;
+            
+            for (const p of waivablePayments) {
+                try {
+                    const rawLateFee = Number(p.late_fee || 0);
+                    const waivedLateFee = Number(p.late_fee_waived || 0);
+                    let effectiveLateFee = Math.max(0, rawLateFee - waivedLateFee);
+                    
+                    // ✅ লাইভ হিসাব
+                    if (effectiveLateFee <= 0 && p.due_date) {
+                        const dueDate = new Date(p.due_date);
+                        dueDate.setHours(0, 0, 0, 0);
+                        const emiAmount = Number(p.emi_amount || p.total_amount || 0);
+                        
+                        if (today > dueDate && emiAmount > 0) {
+                            const daysLate = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+                            if (daysLate > GRACE_DAYS) {
+                                const monthsLate = Math.max(1, Math.ceil(daysLate / 30));
+                                effectiveLateFee = emiAmount * (LATE_FEE_PERCENT / 100) * monthsLate;
+                            }
+                        }
+                    }
+                    
+                    if (effectiveLateFee <= 0) continue;
+                    
+                    // ✅ পেমেন্ট আপডেট + 🔒 Lock
+                    const { error: updatePayError } = await client
+                        .from('loan_payments')
+                        .update({
+                            late_fee_waived: waivedLateFee + effectiveLateFee,
+                            late_fee_waiver_reason: reason,
+                            late_fee_waived_by: adminName,
+                            late_fee_waived_at: new Date().toISOString(),
+                            // 🔒 Lock info
+                            is_locked: true,
+                            locked_at: new Date().toISOString(),
+                            locked_by: adminName,
+                            lock_reason: `${formatAmount(effectiveLateFee)} টাকা জরিমানা মওকুফ - ${reason}`,
+                            updated_at: new Date().toISOString()
+                        })
+                        .eq('id', p.id);
+                    
+                    if (updatePayError) {
+                        console.error(`❌ কিস্তি #${p.installment_no} update error:`, updatePayError);
+                        errorCount++;
+                        continue;
+                    }
+                    
+                    // ✅ loan_waivers টেবিলে লগ
+                    try {
+                        await client.from('loan_waivers').insert([{
+                            loan_id: loanId,
+                            installment_no: p.installment_no,
+                            waiver_type: 'late_fee',
+                            waived_amount: effectiveLateFee,
+                            original_amount: effectiveLateFee,
+                            reason: reason,
+                            waived_by: adminName,
+                            waived_at: new Date().toISOString()
+                        }]);
+                    } catch(e) {
+                        console.warn(`⚠️ Waiver log warning (কিস্তি #${p.installment_no}):`, e);
+                    }
+                    
+                    totalWaivedInPayments += effectiveLateFee;
+                    successCount++;
+                    
+                    console.log(`✅ কিস্তি #${p.installment_no}: ${effectiveLateFee.toFixed(2)} টাকা মওকুফ + Lock`);
+                    
+                } catch(e) {
+                    console.error(`❌ কিস্তি #${p.installment_no} প্রসেস error:`, e);
+                    errorCount++;
+                }
+            }
+            
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log(`📊 জরিমানা মওকুফ রিপোর্ট:`);
+            console.log(`   ✅ সফল: ${successCount} টি কিস্তি`);
+            console.log(`   ❌ ব্যর্থ: ${errorCount} টি কিস্তি`);
+            console.log(`   💰 মোট মওকুফ: ${totalWaivedInPayments.toFixed(2)} টাকা`);
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            
+            // ✅ লোনে মোট মওকুফ আপডেট
+            const { error: loanUpdateError } = await client
+                .from('loan_applications')
+                .update({
+                    waived_amount: (Number(loan.waived_amount) || 0) + totalWaivedInPayments,
+                    waived_type: 'late_fee',
+                    waiver_reason: reason,
+                    waived_by: adminName,
+                    waived_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', loanId);
+            
+            if (loanUpdateError) {
+                console.warn('⚠️ লোন আপডেট warning:', loanUpdateError);
+            }
         }
         
-        // ✅ ৬. Audit লগ
+        // ============================================================
+        // ✅ ৫. Audit লগ
+        // ============================================================
         try {
             await client.from('audit_logs').insert([{
                 admin_name: adminName,
-                action: 'WAIVER',
+                action: waiveType === 'late_fee' ? 'WAIVER_LATE_FEE_ALL' : 'WAIVER',
                 table_name: 'loan_applications',
                 record_id: String(loanId),
                 changes: {
@@ -5270,20 +5406,34 @@ async function applyCustomWaiver(loanId, totalDue) {
             console.warn('⚠️ Audit log warning:', e);
         }
         
-        // ✅ সাফল্যের মেসেজ
+        // ============================================================
+        // ✅ ৬. সাফল্যের মেসেজ
+        // ============================================================
         showToast(
             `✅ মওকুফ সফল!\n` +
             `💰 পরিমাণ: ${formatAmountWithText(waiveAmount)}\n` +
             `📋 ধরন: ${waiveTypeLabels[waiveType]}\n` +
+            `${waiveType === 'late_fee' ? '🔒 সংশ্লিষ্ট কিস্তিগুলো লক করা হয়েছে\n' : ''}` +
             `📊 নতুন বাকি: ${formatAmountWithText(newTotal)}`,
             'success'
         );
         
         closeCustomModal();
         
-        // ✅ রিফ্রেশ
+        // ============================================================
+        // ✅ ৭. রিফ্রেশ
+        // ============================================================
         await loadAllLoans();
         await loadRealDashboard();
+        
+        // ✅ মডাল আবার খুলুন (যদি জরিমানা হয়)
+        if (waiveType === 'late_fee') {
+            setTimeout(() => {
+                if (typeof openWaiverModal === 'function') {
+                    openWaiverModal(loanId);
+                }
+            }, 500);
+        }
         
     } catch(e) {
         console.error('❌ Apply waiver error:', e);
@@ -20228,72 +20378,106 @@ async function openWaiverModal(loanId) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                    ${pendingPayments.map(p => {
-                    const emiAmount = Number(p.emi_amount || p.total_amount || 0);
-                    const rawLateFee = Number(p.late_fee || 0);
-                    const waivedLateFee = Number(p.late_fee_waived || 0);
-                    const effectiveLateFee = Math.max(0, rawLateFee - waivedLateFee);
-                    
-                    // ✅ Due Date বের করুন
-                    const dueDate = p.due_date ? new Date(p.due_date) : null;
-                    const dueDateStr = dueDate 
-                        ? dueDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric' })
-                        : '—';
-                    const dueDateISO = dueDate ? dueDate.toISOString().split('T')[0] : '';
-                    
-                    // ✅ 🔥 লাইভ জরিমানা হিসাব (যদি স্টোরে না থাকে)
-                    let displayLateFee = effectiveLateFee;
-                    if (displayLateFee <= 0 && dueDate && emiAmount > 0) {
-                        const today = new Date();
-                        today.setHours(0, 0, 0, 0);
-                        
-                        if (today > dueDate) {
-                            const daysLate = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
-                            if (daysLate > 5) {
-                                const monthsLate = Math.max(1, Math.ceil(daysLate / 30));
-                                displayLateFee = emiAmount * 0.02 * monthsLate;
-                            }
-                        }
-                    }
-                    
-                    return `
-                        <tr class="waive-payment-row" 
-                            data-payment-id="${p.id}"
-                            data-due-date="${dueDateISO}"
-                            data-emi-amount="${emiAmount}"
-                            data-status="${p.status}"
-                            data-late-fee="${rawLateFee}"
-                            data-waived-late-fee="${waivedLateFee}"
-                            data-effective-late-fee="${displayLateFee}"
-                            style="background: ${displayLateFee > 0 ? '#fef2f2' : '#ffffff'};">
-                            <td style="text-align: center; font-weight: 700; padding: 6px;">
-                                #${p.installment_no}
-                            </td>
-                            <td style="text-align: center; padding: 6px; font-size: 11px;">${dueDateStr}</td>
-                            <td style="text-align: right; padding: 6px; font-weight: 600; color: #059669;">
-                                ${formatAmount(emiAmount)}
-                            </td>
-                            <td style="text-align: right; padding: 6px; font-weight: 700; color: ${displayLateFee > 0 ? '#dc2626' : '#9ca3af'};">
-                                ${formatAmount(displayLateFee)}
-                                ${waivedLateFee > 0 ? `<br><small style="color:#16a34a;font-size:9px;">মওকুফ: ${formatAmount(waivedLateFee)}</small>` : ''}
-                            </td>
-                            <td style="text-align: right; padding: 6px; font-weight: 700; color: #16a34a;">
-                                ${formatAmount(waivedLateFee)}
-                            </td>
-                            <td style="text-align: center; padding: 6px;">
-                                ${displayLateFee > 0 ? `
-                                    <button onclick="waiveSingleLateFee(${p.id}, ${displayLateFee}, ${p.installment_no})" 
-                                            class="btn btn-warning btn-xs"
-                                            style="padding: 3px 8px; font-size: 10px;">
-                                        <i class="fas fa-gift"></i> মওকুফ
-                                    </button>
-                                ` : `
-                                    <span class="text-xs text-gray-400">—</span>
-                                `}
-                            </td>
-                        </tr>
-                    `;
-                }).join('')}
+                                
+    ${pendingPayments.map(p => {
+    const emiAmount = Number(p.emi_amount || p.total_amount || 0);
+    const rawLateFee = Number(p.late_fee || 0);
+    const waivedLateFee = Number(p.late_fee_waived || 0);
+    const effectiveLateFee = Math.max(0, rawLateFee - waivedLateFee);
+    const isLocked = p.is_locked === true;
+    
+    // ✅ Due Date বের করুন
+    const dueDate = p.due_date ? new Date(p.due_date) : null;
+    const dueDateStr = dueDate 
+        ? dueDate.toLocaleDateString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric' })
+        : '—';
+    const dueDateISO = dueDate ? dueDate.toISOString().split('T')[0] : '';
+    
+    // ✅ লাইভ জরিমানা হিসাব
+    let displayLateFee = effectiveLateFee;
+    if (displayLateFee <= 0 && dueDate && emiAmount > 0 && !isLocked) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        if (today > dueDate) {
+            const daysLate = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+            if (daysLate > 5) {
+                const monthsLate = Math.max(1, Math.ceil(daysLate / 30));
+                displayLateFee = emiAmount * 0.02 * monthsLate;
+            }
+        }
+    }
+    
+    // ✅ Row background — Lock হলে আলাদা রঙ
+    let rowBg = '#ffffff';
+    let rowStyle = '';
+    if (isLocked) {
+        rowBg = '#f0f9ff'; // হালকা নীল
+        rowStyle = 'border-left: 4px solid #3b82f6;';
+    } else if (displayLateFee > 0) {
+        rowBg = '#fef2f2'; // হালকা লাল
+    }
+    
+    // ✅ অ্যাকশন বাটন
+    let actionButton = '';
+    if (isLocked) {
+        actionButton = `
+            <div class="flex flex-col items-center gap-1">
+                <span class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-bold">
+                    🔒 লকড
+                </span>
+                <button onclick="unlockWaiverLock(${p.id}, ${p.installment_no})" 
+                        class="btn btn-info btn-xs"
+                        style="padding: 2px 6px; font-size: 9px;"
+                        title="আনলক করুন (শুধু অ্যাডমিন)">
+                    <i class="fas fa-unlock"></i> আনলক
+                </button>
+            </div>
+        `;
+    } else if (displayLateFee > 0) {
+        actionButton = `
+            <button onclick="waiveSingleLateFee(${p.id}, ${displayLateFee}, ${p.installment_no})" 
+                    class="btn btn-warning btn-xs"
+                    style="padding: 3px 8px; font-size: 10px;">
+                <i class="fas fa-gift"></i> মওকুফ
+            </button>
+        `;
+    } else {
+        actionButton = `<span class="text-xs text-gray-400">—</span>`;
+    }
+    
+    return `
+        <tr class="waive-payment-row" 
+            data-payment-id="${p.id}"
+            data-due-date="${dueDateISO}"
+            data-emi-amount="${emiAmount}"
+            data-status="${p.status}"
+            data-late-fee="${rawLateFee}"
+            data-waived-late-fee="${waivedLateFee}"
+            data-effective-late-fee="${displayLateFee}"
+            data-is-locked="${isLocked}"
+            style="background: ${rowBg}; ${rowStyle}">
+            <td style="text-align: center; font-weight: 700; padding: 6px;">
+                #${p.installment_no}
+                ${isLocked ? '<i class="fas fa-lock text-blue-500 text-xs ml-1"></i>' : ''}
+            </td>
+            <td style="text-align: center; padding: 6px; font-size: 11px;">${dueDateStr}</td>
+            <td style="text-align: right; padding: 6px; font-weight: 600; color: #059669;">
+                ${formatAmount(emiAmount)}
+            </td>
+            <td style="text-align: right; padding: 6px; font-weight: 700; color: ${displayLateFee > 0 ? '#dc2626' : '#9ca3af'};">
+                ${formatAmount(displayLateFee)}
+                ${waivedLateFee > 0 ? `<br><small style="color:#16a34a;font-size:9px;">মওকুফ: ${formatAmount(waivedLateFee)}</small>` : ''}
+            </td>
+            <td style="text-align: right; padding: 6px; font-weight: 700; color: #16a34a;">
+                ${formatAmount(waivedLateFee)}
+            </td>
+            <td style="text-align: center; padding: 6px;">
+                ${actionButton}
+            </td>
+        </tr>
+    `;
+}).join('')}
                                 </tbody>
                             </table>
                         </div>
@@ -20516,7 +20700,7 @@ function updateWaivePreview() {
 }
 
 // ============================================================
-// ✅ 🆕 নির্দিষ্ট কিস্তির জরিমানা মওকুফ
+// ✅ 🆕 নির্দিষ্ট কিস্তির জরিমানা মওকুফ (Lock সিস্টেম সহ)
 // ============================================================
 async function waiveSingleLateFee(paymentId, currentLateFee, installmentNo) {
     console.log('🎁 waiveSingleLateFee called:', { paymentId, currentLateFee, installmentNo });
@@ -20526,15 +20710,45 @@ async function waiveSingleLateFee(paymentId, currentLateFee, installmentNo) {
         return;
     }
     
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    // ✅ 🔒 কিস্তি লক কিনা চেক করুন
+    const { data: existingPayment, error: checkError } = await client
+        .from('loan_payments')
+        .select('is_locked, locked_at, locked_by, lock_reason, installment_no')
+        .eq('id', paymentId)
+        .single();
+    
+    if (checkError) {
+        showToast('❌ পেমেন্ট তথ্য লোড করতে সমস্যা!', 'error');
+        return;
+    }
+    
+    if (existingPayment?.is_locked === true) {
+        showToast(
+            `🔒 এই কিস্তি ইতিমধ্যে লক করা হয়েছে!\n` +
+            `📅 লক: ${new Date(existingPayment.locked_at).toLocaleString('bn-BD')}\n` +
+            `👤 কে: ${existingPayment.locked_by || 'অজানা'}\n` +
+            `📝 কারণ: ${existingPayment.lock_reason || 'নেই'}`,
+            'error'
+        );
+        return;
+    }
+    
     // ✅ Prompt দিয়ে পরিমাণ নিন
     const amountInput = prompt(
         `🎁 কিস্তি #${installmentNo} এর জরিমানা মওকুফ\n\n` +
         `মোট জরিমানা: ${formatAmount(currentLateFee)} টাকা\n\n` +
-        `মওকুফের পরিমাণ লিখুন (সর্বোচ্চ ${formatAmount(currentLateFee)}):`,
+        `মওকুফের পরিমাণ লিখুন (সর্বোচ্চ ${formatAmount(currentLateFee)}):\n\n` +
+        `⚠️ সতর্কতা: একবার মওকুফ হলে কিস্তি লক হয়ে যাবে!`,
         currentLateFee.toString()
     );
     
-    if (amountInput === null) return; // Cancel
+    if (amountInput === null) return;
     
     const waiveAmount = parseFloat(amountInput);
     
@@ -20555,11 +20769,16 @@ async function waiveSingleLateFee(paymentId, currentLateFee, installmentNo) {
         return;
     }
     
-    const client = initSupabaseClient();
-    if (!client) {
-        showToast('❌ সংযোগ সমস্যা!', 'error');
-        return;
-    }
+    // ✅ 🔒 লক নিশ্চিতকরণ
+    if (!confirm(
+        `🔒 লক নিশ্চিতকরণ\n\n` +
+        `কিস্তি #${installmentNo} এ ${formatAmount(waiveAmount)} টাকা মওকুফ হবে।\n\n` +
+        `⚠️ একবার মওকুফ করলে:\n` +
+        `• এই কিস্তি লক হয়ে যাবে\n` +
+        `• আবার মওকুফ করা যাবে না\n` +
+        `• শুধু অ্যাডমিন Unlock করতে পারবে\n\n` +
+        `"OK" চাপুন নিশ্চিত করতে।`
+    )) return;
     
     try {
         const adminName = currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন';
@@ -20579,7 +20798,7 @@ async function waiveSingleLateFee(paymentId, currentLateFee, installmentNo) {
         const existingWaived = Number(currentPayment.late_fee_waived || 0);
         const totalWaived = existingWaived + waiveAmount;
         
-        // ✅ পেমেন্ট আপডেট
+        // ✅ পেমেন্ট আপডেট + 🔒 লক
         const { error: updateError } = await client
             .from('loan_payments')
             .update({
@@ -20587,6 +20806,11 @@ async function waiveSingleLateFee(paymentId, currentLateFee, installmentNo) {
                 late_fee_waiver_reason: reason.trim(),
                 late_fee_waived_by: adminName,
                 late_fee_waived_at: new Date().toISOString(),
+                // 🔒 Lock info
+                is_locked: true,
+                locked_at: new Date().toISOString(),
+                locked_by: adminName,
+                lock_reason: `${formatAmount(waiveAmount)} টাকা জরিমানা মওকুফ - ${reason.trim()}`,
                 updated_at: new Date().toISOString()
             })
             .eq('id', paymentId);
@@ -20616,14 +20840,15 @@ async function waiveSingleLateFee(paymentId, currentLateFee, installmentNo) {
         try {
             await client.from('audit_logs').insert([{
                 admin_name: adminName,
-                action: 'WAIVER_LATE_FEE',
+                action: 'WAIVER_LATE_FEE_LOCKED',
                 table_name: 'loan_payments',
                 record_id: String(paymentId),
                 changes: {
                     installment_no: installmentNo,
                     waive_amount: waiveAmount,
                     reason: reason.trim(),
-                    total_waived: totalWaived
+                    total_waived: totalWaived,
+                    is_locked: true
                 },
                 created_at: new Date().toISOString()
             }]);
@@ -20632,24 +20857,107 @@ async function waiveSingleLateFee(paymentId, currentLateFee, installmentNo) {
         }
         
         showToast(
-            `✅ কিস্তি #${installmentNo} এর ${formatAmountWithText(waiveAmount)} জরিমানা মওকুফ সফল!`,
+            `✅ কিস্তি #${installmentNo} এর ${formatAmountWithText(waiveAmount)} জরিমানা মওকুফ সফল!\n` +
+            `🔒 কিস্তি এখন লক করা হয়েছে`,
             'success'
         );
         
         // ✅ মডাল বন্ধ করে আবার খুলুন (রিফ্রেশ)
         closeCustomModal();
         
-        // ✅ ২০০ms পর আবার খুলুন (তাজা ডেটার জন্য)
         setTimeout(() => {
             openWaiverModal(currentPayment.loan_id);
         }, 300);
         
-        // ✅ ব্যাকগ্রাউন্ডে ডেটা রিফ্রেশ
         await loadAllLoans();
         
     } catch(e) {
         console.error('❌ Waive single late fee error:', e);
         showToast(`❌ মওকুফ ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    }
+}
+
+    // ============================================================
+// ✅ 🔓 কিস্তির Lock খুলুন (শুধু সুপার অ্যাডমিন)
+// ============================================================
+async function unlockWaiverLock(paymentId, installmentNo) {
+    console.log('🔓 unlockWaiverLock called:', { paymentId, installmentNo });
+    
+    // ✅ পারমিশন চেক — শুধু সুপার অ্যাডমিন
+    const isSuperAdmin = currentAdmin?.role === 'সুপার অ্যাডমিন' || 
+                         currentAdmin?.role === 'super_admin';
+    
+    if (!isSuperAdmin) {
+        showToast('⛔ শুধুমাত্র সুপার অ্যাডমিন আনলক করতে পারবে!', 'error');
+        return;
+    }
+    
+    if (!confirm(
+        `🔓 আনলক নিশ্চিতকরণ\n\n` +
+        `আপনি কি কিস্তি #${installmentNo} এর Lock খুলতে চান?\n\n` +
+        `⚠️ সতর্কতা:\n` +
+        `• মওকুফের রেকর্ড থাকবে\n` +
+        `• কিন্তু আবার মওকুফ করা যাবে\n` +
+        `• শুধু জরুরি অবস্থায় আনলক করুন`
+    )) return;
+    
+    const reason = prompt('🔓 আনলকের কারণ লিখুন:', 'ভুলবশত মওকুফ হয়েছে');
+    if (!reason || reason.trim() === '') {
+        showToast('❌ কারণ লিখুন!', 'error');
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const adminName = currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন';
+        
+        const { error } = await client
+            .from('loan_payments')
+            .update({
+                is_locked: false,
+                locked_at: null,
+                locked_by: null,
+                lock_reason: `${reason.trim()} (আনলক করেছেন: ${adminName})`,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', paymentId);
+        
+        if (error) throw error;
+        
+        // ✅ Audit log
+        try {
+            await client.from('audit_logs').insert([{
+                admin_name: adminName,
+                action: 'UNLOCK_WAIVER',
+                table_name: 'loan_payments',
+                record_id: String(paymentId),
+                changes: {
+                    installment_no: installmentNo,
+                    unlock_reason: reason.trim(),
+                    is_locked: false
+                },
+                created_at: new Date().toISOString()
+            }]);
+        } catch(e) {
+            console.warn('Audit log warning:', e);
+        }
+        
+        showToast(`🔓 কিস্তি #${installmentNo} আনলক করা হয়েছে!`, 'success');
+        
+        // ✅ মডাল রিফ্রেশ
+        closeCustomModal();
+        setTimeout(() => {
+            openWaiverModal(5); // আপনার loan_id দিন
+        }, 300);
+        
+    } catch(e) {
+        console.error('❌ Unlock error:', e);
+        showToast(`❌ আনলক ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
     }
 }
 
