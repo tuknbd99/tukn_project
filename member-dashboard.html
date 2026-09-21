@@ -583,9 +583,6 @@
     </div>
 </div>
 
-<!-- বকেয়া/আসন্ন পরিশোধ নোটিফিকেশন -->
-<div id="dueNotificationsContainer" class="mb-4"></div>
-    
     <!-- বকেয়া/আসন্ন পরিশোধ নোটিফিকেশন -->
     <div id="dueNotificationsContainer" class="mb-4"></div>
 
@@ -6045,29 +6042,45 @@ async function loadNotices() {
             danger:  { bg: 'bg-red-50',    border: 'border-red-300',    color: 'text-red-700',    icon: 'fa-exclamation-circle',   label: 'জরুরি' }
         };
         
-        // ✅ রেন্ডার
         container.innerHTML = filtered.map(n => {
-            const cfg = typeConfig[n.type] || typeConfig.info;
-            const dateStr = n.created_at 
-                ? new Date(n.created_at).toLocaleDateString('bn-BD', { day: 'numeric', month: 'short', year: 'numeric' })
-                : '';
-            
-            return `
-                <div class="${cfg.bg} border ${cfg.border} rounded-lg p-2.5 mb-1.5 hover:shadow-md transition-shadow">
-                    <div class="flex items-start gap-2">
-                        <i class="fas ${cfg.icon} ${cfg.color} text-base mt-0.5 flex-shrink-0"></i>
-                        <div class="flex-1 min-w-0">
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <p class="font-semibold ${cfg.color} text-sm">${n.title || 'নোটিশ'}</p>
-                                <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/70 ${cfg.color} font-medium">${cfg.label}</span>
-                            </div>
-                            ${n.message ? `<p class="text-xs text-gray-700 mt-1 whitespace-pre-wrap">${n.message}</p>` : ''}
-                            ${dateStr ? `<p class="text-[10px] text-gray-400 mt-1"><i class="fas fa-clock mr-1"></i>${dateStr}</p>` : ''}
-                        </div>
-                    </div>
+    const cfg = typeConfig[n.type] || typeConfig.info;
+    const dateStr = n.created_at 
+        ? new Date(n.created_at).toLocaleDateString('bn-BD', { day: 'numeric', month: 'short', year: 'numeric' })
+        : '';
+    
+    // ✅ শুধু ভ্যালিড ছবি হলেই ছবি দেখাবে
+    const hasImage = n.image_url && 
+                     typeof n.image_url === 'string' && 
+                     n.image_url.trim() !== '' && 
+                     n.image_url !== 'null' && 
+                     n.image_url !== 'undefined' &&
+                     (n.image_url.startsWith('http') || n.image_url.startsWith('/'));
+    
+    return `
+        <div class="${cfg.bg} border ${cfg.border} rounded-lg overflow-hidden mb-1.5 hover:shadow-md transition-shadow">
+            ${hasImage ? `
+                <div class="w-full h-40 bg-gray-100 overflow-hidden">
+                    <img src="${n.image_url}" 
+                         alt="${n.title || 'নোটিশ'}" 
+                         class="w-full h-full object-cover"
+                         loading="lazy"
+                         onerror="this.parentElement.style.display='none'">
                 </div>
-            `;
-        }).join('');
+            ` : ''}
+            <div class="p-2.5 flex items-start gap-2">
+                <i class="fas ${cfg.icon} ${cfg.color} text-base mt-0.5 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <p class="font-semibold ${cfg.color} text-sm">${n.title || 'নোটিশ'}</p>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-white/70 ${cfg.color} font-medium">${cfg.label}</span>
+                    </div>
+                    ${n.message ? `<p class="text-xs text-gray-700 mt-1 whitespace-pre-wrap">${n.message}</p>` : ''}
+                    ${dateStr ? `<p class="text-[10px] text-gray-400 mt-1"><i class="fas fa-clock mr-1"></i>${dateStr}</p>` : ''}
+                </div>
+            </div>
+        </div>
+    `;
+}).join('');
         
         console.log(`✅ ${filtered.length} টি নোটিশ লোড হয়েছে`);
         
@@ -9643,6 +9656,9 @@ async function loadUnreadNotices() {
         const dateEl = document.getElementById('noticePopupDate');
         const senderEl = document.getElementById('noticePopupSender');
         const progress = document.getElementById('noticePopupProgress');
+        // ✅ ছবি এলিমেন্ট
+        const imageContainer = document.getElementById('noticePopupImageContainer');
+        const imageEl = document.getElementById('noticePopupImage');
         
         // type অনুযায়ী রঙ ও আইকন
         const typeConfig = {
@@ -9659,6 +9675,15 @@ async function loadUnreadNotices() {
         // কনটেন্ট সেট করুন
         if (title) title.textContent = notice.title || 'নোটিশ';
         if (message) message.textContent = notice.message || '';
+        // ✅ ছবি হ্যান্ডেল করুন
+        if (notice.image_url && imageEl && imageContainer) {
+            imageEl.src = notice.image_url;
+            imageContainer.classList.remove('hidden');
+            console.log('🖼️ নোটিশে ছবি দেখানো হচ্ছে:', notice.image_url);
+        } else if (imageContainer) {
+            imageContainer.classList.add('hidden');
+            if (imageEl) imageEl.src = '';
+        }
         
         if (dateEl && notice.created_at) {
             dateEl.innerHTML = `<i class="fas fa-clock mr-1"></i>${formatDateTimeBD(notice.created_at)}`;
@@ -9782,17 +9807,28 @@ async function loadUnreadNotices() {
                     <div class="absolute top-0 right-0 w-32 h-32 rounded-full opacity-10"
                          style="background: white; transform: translate(30%, -30%);"></div>
                 </div>
-                
-                <!-- বডি -->
-                <div class="p-5 max-h-[50vh] overflow-y-auto">
-                    <div id="noticePopupMessage" class="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">
-                        নোটিশ বার্তা এখানে দেখা যাবে...
-                    </div>
-                    <div class="mt-4 pt-3 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
-                        <span id="noticePopupDate"><i class="fas fa-clock mr-1"></i>-</span>
-                        <span id="noticePopupSender"><i class="fas fa-user-shield mr-1"></i>-</span>
-                    </div>
+
+             <!-- বডি -->
+            <div class="p-5 max-h-[50vh] overflow-y-auto">
+                <!-- ✅ ছবি সেকশন -->
+                <div id="noticePopupImageContainer" class="hidden mb-4">
+                    <img id="noticePopupImage" 
+                         src="" 
+                         alt="নোটিশের ছবি" 
+                         class="w-full h-auto max-h-64 object-contain rounded-lg border border-gray-200 shadow-sm"
+                         onerror="this.parentElement.classList.add('hidden')">
                 </div>
+                
+                <!-- নোটিশ বার্তা -->
+                <div id="noticePopupMessage" class="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">
+                    নোটিশ বার্তা এখানে দেখা যাবে...
+                </div>
+                
+                <div class="mt-4 pt-3 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+                    <span id="noticePopupDate"><i class="fas fa-clock mr-1"></i>-</span>
+                    <span id="noticePopupSender"><i class="fas fa-user-shield mr-1"></i>-</span>
+                </div>
+            </div>
                 
                 <!-- ফুটার / অ্যাকশন বাটন -->
                 <div class="p-4 bg-gray-50 border-t flex gap-2">
