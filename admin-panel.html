@@ -5069,6 +5069,7 @@ function showTab(tabName) {
             showToast('নোট যোগ করা হয়েছে! আপনি চাইলে সম্পাদনা করতে পারেন।', 'success');
         }
     }
+    
 // ============================================================
 // ✅ কাস্টম মওকুফ প্রয়োগ (Lock সিস্টেম সহ — সম্পূর্ণ ভার্সন)
 // ============================================================
@@ -5475,7 +5476,37 @@ async function quickWaiveAll(loanId, totalDue) {
     // ✅ applyCustomWaiver কল করুন
     await applyCustomWaiver(loanId, totalDue);
 }
+
+// ============================================================
+// ✅ নতুন পরিমাণ প্রিভিউ আপডেট
+// ============================================================
+function updateApprovalPreview(originalAmount) {
+    const action = document.querySelector('input[name="approvalAmountAction"]:checked')?.value || 'keep';
+    const changeAmount = parseFloat(document.getElementById('approvalChangeAmount')?.value) || 0;
     
+    let newAmount = originalAmount;
+    
+    if (action === 'increase') {
+        newAmount = originalAmount + changeAmount;
+    } else if (action === 'decrease') {
+        if (changeAmount > originalAmount) {
+            document.getElementById('approvalChangeAmount').value = originalAmount;
+            showToast(`⚠️ সর্বোচ্চ ${formatAmountWithText(originalAmount)} কমানো যাবে!`, 'warning');
+            newAmount = 0;
+        } else {
+            newAmount = Math.max(0, originalAmount - changeAmount);
+        }
+    }
+    
+    const previewEl = document.getElementById('previewNewAmount');
+    if (previewEl) {
+        previewEl.textContent = formatAmountWithText(newAmount);
+        previewEl.style.color = newAmount > originalAmount ? '#059669' :
+                                newAmount < originalAmount ? '#dc2626' : '#1f2937';
+    }
+}
+
+   
 // ============================================================
 // ✅ FIXED: approveWithdrawalWithNote() - রেফারেল ফান্ড সঠিকভাবে চেক
 // ============================================================
@@ -8194,69 +8225,343 @@ function closePendingLoanDetailsModal() {
 }
 
 // ============================================================
-// approveLoan() - লোন অনুমোদন (ক্যাশ ক্লিয়ার সহ)
+// ✅ approveLoan() — লোন অনুমোদন (পরিমাণ পরিবর্তন + নোট সহ)
 // ============================================================
 async function approveLoan(loanId) {
     console.log('✅ approveLoan called for:', loanId);
     
-    if (!confirm('আপনি কি এই লোনটি অনুমোদন দিতে চান?')) return;
-    
-    const client = initSupabaseClient();
-    if (!client) { 
-        showToast('সংযোগ সমস্যা!', 'error'); 
-        return; 
+    if (!loanId) {
+        showToast('❌ লোন আইডি পাওয়া যায়নি!', 'error');
+        return;
     }
     
-    const btns = document.querySelectorAll(`[onclick*="approveLoan('${loanId}')"]`);
-    btns.forEach(btn => {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-    });
+    // ✅ এখন সরাসরি অনুমোদন না করে মডাল খুলবে
+    await openLoanApprovalModal(loanId);
+}
+
+// ============================================================
+// ✅ openLoanApprovalModal() — লোন অনুমোদন মডাল
+// ============================================================
+async function openLoanApprovalModal(loanId) {
+    console.log('📝 openLoanApprovalModal:', loanId);
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
     
     try {
-        // ✅ লোন ডেটা লোড
-        const { data: loan, error: loanError } = await client
+        const { data: loan, error } = await client
             .from('loan_applications')
             .select('*')
             .eq('id', loanId)
             .single();
         
-        if (loanError) throw loanError;
-        if (!loan) {
-            showToast('❌ লোন পাওয়া যায়নি!', 'error');
+        if (error || !loan) {
+            showToast('❌ লোন পাওয়া যায়নি!', 'error');
             return;
         }
         
-        // ✅ EMI ক্যালকুলেশন
-        let emiAmount = loan.emi_amount;
-        let totalPayable = loan.total_payable;
-        
-        if (!emiAmount && loan.duration_months && loan.amount) {
-            const profitRate = loan.profit_rate || 12;
-            const monthlyRate = (profitRate / 100) / 12;
-            const tenure = loan.duration_months;
-            
-            if (monthlyRate > 0) {
-                emiAmount = (loan.amount * monthlyRate * Math.pow(1 + monthlyRate, tenure)) / 
-                            (Math.pow(1 + monthlyRate, tenure) - 1);
-            } else {
-                emiAmount = loan.amount / tenure;
-            }
-            
-            totalPayable = emiAmount * tenure;
+        if (loan.status !== 'pending') {
+            showToast(`⚠️ এই লোন ইতিমধ্যে "${loan.status}" অবস্থায় আছে!`, 'warning');
+            return;
         }
         
-        // ✅ লোন আপডেট
-        const updateData = { 
-            status: 'approved', 
-            approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন', 
-            approved_at: new Date().toISOString()
+        const originalAmount = Number(loan.amount) || 0;
+        const durationMonths = loan.duration_months || 12;
+        const profitRate = loan.profit_rate || 12;
+        
+        const html = `
+            <div class="space-y-4">
+                <!-- হেডার -->
+                <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg border-2 border-emerald-300">
+                    <div class="flex items-start gap-3">
+                        <i class="fas fa-check-circle text-emerald-600 text-3xl"></i>
+                        <div class="flex-1">
+                            <h5 class="font-bold text-emerald-700 text-lg">✅ লোন অনুমোদন</h5>
+                            <p class="text-sm text-gray-600 mt-1">
+                                <strong>${loan.member_name}</strong> (${loan.member_id})
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- মূল লোন তথ্য -->
+                <div class="bg-gray-50 p-3 rounded-lg border">
+                    <div class="grid grid-cols-2 gap-2 text-sm">
+                        <div><span class="text-gray-500">📋 লোনের ধরন:</span> <strong>${loan.loan_type || '-'}</strong></div>
+                        <div><span class="text-gray-500">📅 মেয়াদ:</span> <strong>${durationMonths} মাস</strong></div>
+                        <div><span class="text-gray-500">📊 মুনাফার হার:</span> <strong>${profitRate}%</strong></div>
+                        <div><span class="text-gray-500">💰 আবেদনকৃত পরিমাণ:</span> <strong class="text-blue-600">${formatAmountWithText(originalAmount)}</strong></div>
+                    </div>
+                </div>
+                
+                <!-- 🔥 পরিমাণ পরিবর্তন -->
+                <div class="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border-2 border-blue-300">
+                    <h6 class="font-bold text-blue-700 mb-3">
+                        <i class="fas fa-sliders-h mr-2"></i>💰 লোনের পরিমাণ পরিবর্তন
+                    </h6>
+                    
+                    <div class="space-y-3">
+                        <!-- পরিবর্তনের ধরন -->
+                        <div class="grid grid-cols-3 gap-2">
+                            <label class="cursor-pointer">
+                                <input type="radio" name="approvalAmountAction" value="keep" 
+                                       class="peer hidden approval-action-radio" checked
+                                       onchange="onApprovalActionChange(${originalAmount})">
+                                <div class="p-3 bg-white border-2 border-gray-200 rounded-lg text-center peer-checked:border-blue-500 peer-checked:bg-blue-50 transition">
+                                    <i class="fas fa-equals text-gray-500 peer-checked:text-blue-600 text-xl"></i>
+                                    <div class="text-xs font-medium mt-1">যেমন আছে</div>
+                                </div>
+                            </label>
+                            
+                            <label class="cursor-pointer">
+                                <input type="radio" name="approvalAmountAction" value="increase"
+                                       class="peer hidden approval-action-radio"
+                                       onchange="onApprovalActionChange(${originalAmount})">
+                                <div class="p-3 bg-white border-2 border-gray-200 rounded-lg text-center peer-checked:border-emerald-500 peer-checked:bg-emerald-50 transition">
+                                    <i class="fas fa-arrow-up text-gray-500 peer-checked:text-emerald-600 text-xl"></i>
+                                    <div class="text-xs font-medium mt-1">➕ বাড়ান</div>
+                                </div>
+                            </label>
+                            
+                            <label class="cursor-pointer">
+                                <input type="radio" name="approvalAmountAction" value="decrease"
+                                       class="peer hidden approval-action-radio"
+                                       onchange="onApprovalActionChange(${originalAmount})">
+                                <div class="p-3 bg-white border-2 border-gray-200 rounded-lg text-center peer-checked:border-red-500 peer-checked:bg-red-50 transition">
+                                    <i class="fas fa-arrow-down text-gray-500 peer-checked:text-red-600 text-xl"></i>
+                                    <div class="text-xs font-medium mt-1">➖ কমান</div>
+                                </div>
+                            </label>
+                        </div>
+                        
+                        <!-- পরিবর্তনের পরিমাণ -->
+                        <div id="amountChangeSection" class="hidden">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">
+                                <span id="amountChangeLabel">পরিবর্তনের পরিমাণ (৳)</span>
+                            </label>
+                            <input type="number" id="approvalChangeAmount" 
+                                   value="0" min="0" step="0.01"
+                                   class="w-full border-2 border-blue-300 focus:border-blue-500 rounded-lg p-3 text-lg font-bold"
+                                   placeholder="0.00"
+                                   oninput="updateApprovalPreview(${originalAmount})">
+                        </div>
+                        
+                        <!-- নতুন পরিমাণ প্রিভিউ -->
+                        <div class="bg-white p-3 rounded-lg border-2 border-gray-200">
+                            <div class="grid grid-cols-2 gap-3 text-sm">
+                                <div class="text-center p-2 bg-gray-50 rounded">
+                                    <div class="text-xs text-gray-500">আবেদনকৃত</div>
+                                    <div class="font-bold text-gray-700" id="previewOriginalAmount">
+                                        ${formatAmountWithText(originalAmount)}
+                                    </div>
+                                </div>
+                                <div class="text-center p-2 bg-emerald-50 rounded border-2 border-emerald-300">
+                                    <div class="text-xs text-gray-500">নতুন পরিমাণ</div>
+                                    <div class="font-bold text-emerald-700 text-lg" id="previewNewAmount">
+                                        ${formatAmountWithText(originalAmount)}
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mt-2 text-center p-2 bg-amber-50 rounded border border-amber-200">
+                                <div class="text-xs text-gray-500">📊 আনুমানিক মাসিক EMI</div>
+                                <div class="font-bold text-amber-700 text-lg" id="previewEmiAmount">
+                                    ${formatAmountWithText(calculateEMIForPreview(originalAmount, profitRate, durationMonths))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 🔔 সদস্যের জন্য নোট -->
+                <div class="bg-gradient-to-r from-amber-50 to-orange-50 p-4 rounded-lg border-2 border-amber-300">
+                    <h6 class="font-bold text-amber-700 mb-2">
+                        <i class="fas fa-comment-alt mr-2"></i>📢 সদস্যের জন্য নোট (ঐচ্ছিক)
+                    </h6>
+                    <p class="text-xs text-amber-600 mb-2">
+                        এই নোটটি সদস্যের ড্যাশবোর্ডে দেখা যাবে। পরিমাণ পরিবর্তন হলে অটো-নোটও যুক্ত হবে।
+                    </p>
+                    <textarea id="approvalAdminNote" rows="3"
+                              class="w-full border-2 border-amber-300 focus:border-amber-500 rounded-lg p-2.5"
+                              placeholder="যেমন: আপনার আবেদনকৃত পরিমাণ থেকে ৫,০০০ টাকা কমিয়ে অনুমোদন দেওয়া হয়েছে..."></textarea>
+                </div>
+                
+                <!-- অ্যাকশন বাটন -->
+                <div class="flex flex-wrap gap-2 pt-2 border-t">
+                    <button onclick="confirmLoanApproval(${loanId}, ${originalAmount}, ${profitRate}, ${durationMonths})"
+                            class="btn btn-success flex-1 py-3 min-w-[150px]">
+                        <i class="fas fa-check-circle mr-2"></i> অনুমোদন নিশ্চিত করুন
+                    </button>
+                    <button onclick="closeCustomModal()"
+                            class="btn btn-danger py-3 min-w-[100px]">
+                        <i class="fas fa-times mr-2"></i> বাতিল
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        showCustomModal('📝 লোন অনুমোদন', html);
+        
+    } catch(e) {
+        console.error('❌ Open approval modal error:', e);
+        showToast('লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ✅ EMI প্রিভিউ ক্যালকুলেটর
+// ============================================================
+function calculateEMIForPreview(amount, profitRate, durationMonths) {
+    const monthlyRate = (profitRate / 100) / 12;
+    if (monthlyRate > 0 && durationMonths > 0) {
+        return (amount * monthlyRate * Math.pow(1 + monthlyRate, durationMonths)) /
+               (Math.pow(1 + monthlyRate, durationMonths) - 1);
+    }
+    return durationMonths > 0 ? amount / durationMonths : 0;
+}
+
+// ============================================================
+// ✅ পরিবর্তনের ধরন পরিবর্তন হলে
+// ============================================================
+function onApprovalActionChange(originalAmount) {
+    const action = document.querySelector('input[name="approvalAmountAction"]:checked')?.value;
+    const section = document.getElementById('amountChangeSection');
+    const label = document.getElementById('amountChangeLabel');
+    const input = document.getElementById('approvalChangeAmount');
+    
+    if (!section || !label || !input) return;
+    
+    if (action === 'keep') {
+        section.classList.add('hidden');
+        input.value = 0;
+    } else {
+        section.classList.remove('hidden');
+        if (action === 'increase') {
+            label.textContent = '➕ বাড়ানোর পরিমাণ (৳)';
+            input.style.borderColor = '#059669';
+            input.removeAttribute('max');
+        } else {
+            label.textContent = `➖ কমানোর পরিমাণ (৳) — সর্বোচ্চ ${formatAmount(originalAmount)}`;
+            input.style.borderColor = '#dc2626';
+            input.max = originalAmount;
+        }
+    }
+    
+    updateApprovalPreview(originalAmount);
+}
+
+// ============================================================
+// ✅ লোন অনুমোদন নিশ্চিত করুন
+// ============================================================
+async function confirmLoanApproval(loanId, originalAmount, profitRate, durationMonths) {
+    const action = document.querySelector('input[name="approvalAmountAction"]:checked')?.value || 'keep';
+    const changeAmount = parseFloat(document.getElementById('approvalChangeAmount')?.value) || 0;
+    const adminNote = document.getElementById('approvalAdminNote')?.value?.trim() || '';
+    
+    // ✅ ভ্যালিডেশন
+    if (action === 'decrease' && changeAmount > originalAmount) {
+        showToast(`❌ সর্বোচ্চ ${formatAmountWithText(originalAmount)} কমানো যাবে!`, 'error');
+        return;
+    }
+    
+    if (action !== 'keep' && changeAmount <= 0) {
+        showToast('❌ পরিবর্তনের পরিমাণ দিন!', 'error');
+        return;
+    }
+    
+    // ✅ নতুন পরিমাণ
+    let newAmount = originalAmount;
+    if (action === 'increase') newAmount = originalAmount + changeAmount;
+    else if (action === 'decrease') newAmount = Math.max(0, originalAmount - changeAmount);
+    
+    // ✅ নিশ্চিতকরণ
+    let confirmMsg = `✅ লোন অনুমোদন নিশ্চিত করুন\n\n━━━━━━━━━━━━━━━━━━━━\n`;
+    confirmMsg += `📊 আবেদনকৃত: ${formatAmountWithText(originalAmount)}\n`;
+    confirmMsg += `📊 নতুন পরিমাণ: ${formatAmountWithText(newAmount)}\n`;
+    if (action !== 'keep') {
+        confirmMsg += `⚙️ পরিবর্তন: ${action === 'increase' ? '➕ বাড়ানো' : '➖ কমানো'} ${formatAmountWithText(changeAmount)}\n`;
+    }
+    if (adminNote) confirmMsg += `📝 নোট: ${adminNote}\n`;
+    confirmMsg += `━━━━━━━━━━━━━━━━━━━━`;
+    
+    if (!window.confirm(confirmMsg)) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        showToast('⏳ অনুমোদন প্রক্রিয়াকরণ...', 'info');
+        
+        // ✅ লোন ডেটা লোড
+        const { data: loan, error: loadError } = await client
+            .from('loan_applications')
+            .select('*')
+            .eq('id', loanId)
+            .single();
+        
+        if (loadError || !loan) {
+            showToast('❌ লোন পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        const adminName = currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন';
+        
+        // ✅ EMI ক্যালকুলেশন
+        const monthlyRate = (profitRate / 100) / 12;
+        let emiAmount;
+        if (monthlyRate > 0 && durationMonths > 0) {
+            emiAmount = (newAmount * monthlyRate * Math.pow(1 + monthlyRate, durationMonths)) /
+                        (Math.pow(1 + monthlyRate, durationMonths) - 1);
+        } else {
+            emiAmount = durationMonths > 0 ? newAmount / durationMonths : newAmount;
+        }
+        
+        const totalPayable = emiAmount * durationMonths;
+        const profitAmount = totalPayable - newAmount;
+        
+        // ✅ Adjustment history
+        const historyEntry = {
+            action: action,
+            old_amount: originalAmount,
+            new_amount: newAmount,
+            difference: newAmount - originalAmount,
+            by: adminName,
+            at: new Date().toISOString(),
+            note: adminNote || null
         };
         
-        if (emiAmount) updateData.emi_amount = Math.round(emiAmount * 100) / 100;
-        if (totalPayable) updateData.total_payable = Math.round(totalPayable * 100) / 100;
+        const existingHistory = Array.isArray(loan.adjustment_history) ? loan.adjustment_history : [];
         
-        console.log('📝 আপডেট ডেটা:', updateData);
+        // ✅ লোন আপডেট
+        const updateData = {
+            status: 'approved',
+            amount: newAmount,
+            original_amount: loan.original_amount || originalAmount,
+            total_amount: totalPayable,
+            emi_amount: Math.round(emiAmount * 100) / 100,
+            profit_amount: Math.round(profitAmount * 100) / 100,
+            approved_by: adminName,
+            approved_at: new Date().toISOString(),
+            adjustment_history: [...existingHistory, historyEntry],
+            updated_at: new Date().toISOString()
+        };
+        
+        if (action === 'increase') {
+            updateData.increased_amount = (Number(loan.increased_amount) || 0) + changeAmount;
+        } else if (action === 'decrease') {
+            updateData.decreased_amount = (Number(loan.decreased_amount) || 0) + changeAmount;
+        }
+        
+        if (adminNote) {
+            updateData.admin_note = adminNote;
+            updateData.admin_note_at = new Date().toISOString();
+            updateData.admin_note_by = adminName;
+        }
         
         const { error: updateError } = await client
             .from('loan_applications')
@@ -8264,6 +8569,52 @@ async function approveLoan(loanId) {
             .eq('id', loanId);
         
         if (updateError) throw updateError;
+        
+        // ✅ সদস্যের জন্য নোটিফিকেশন
+        if (action !== 'keep' || adminNote) {
+            let title = '';
+            let message = '';
+            let notificationType = '';
+            
+            if (action === 'increase') {
+                title = '📈 লোনের পরিমাণ বাড়ানো হয়েছে';
+                message = `আপনার লোনের পরিমাণ ${formatAmountWithText(originalAmount)} থেকে ` +
+                          `${formatAmountWithText(newAmount)} এ বাড়ানো হয়েছে। ` +
+                          `(+${formatAmountWithText(changeAmount)})`;
+                notificationType = 'loan_increased';
+            } else if (action === 'decrease') {
+                title = '📉 লোনের পরিমাণ কমানো হয়েছে';
+                message = `আপনার লোনের পরিমাণ ${formatAmountWithText(originalAmount)} থেকে ` +
+                          `${formatAmountWithText(newAmount)} এ কমানো হয়েছে। ` +
+                          `(-${formatAmountWithText(changeAmount)})`;
+                notificationType = 'loan_decreased';
+            } else {
+                title = '✅ লোন অনুমোদিত';
+                message = `আপনার ${formatAmountWithText(newAmount)} টাকার লোন অনুমোদিত হয়েছে।`;
+                notificationType = 'loan_approved';
+            }
+            
+            if (adminNote) {
+                message += `\n\n📝 এডমিন নোট: ${adminNote}`;
+            }
+            
+            try {
+                await client.from('member_loan_notifications').insert([{
+                    loan_id: loanId,
+                    member_id: loan.member_id,
+                    notification_type: notificationType,
+                    title: title,
+                    message: message,
+                    old_amount: originalAmount,
+                    new_amount: newAmount,
+                    difference: newAmount - originalAmount,
+                    created_by: adminName
+                }]);
+                console.log('✅ সদস্যের জন্য নোটিফিকেশন তৈরি');
+            } catch(notifErr) {
+                console.warn('⚠️ Notification warning:', notifErr);
+            }
+        }
         
         // ✅ ব্রাঞ্চ ব্যালেন্স আপডেট
         if (loan.branch_id) {
@@ -8275,64 +8626,80 @@ async function approveLoan(loanId) {
                     .maybeSingle();
                 
                 if (balance) {
-                    await client
-                        .from('branch_balances')
-                        .update({
-                            total_loan_given: (balance.total_loan_given || 0) + loan.amount,
-                            net_balance: (balance.net_balance || 0) - loan.amount,
-                            updated_at: new Date().toISOString()
-                        })
-                        .eq('branch_id', loan.branch_id);
+                    await client.from('branch_balances').update({
+                        total_loan_given: (balance.total_loan_given || 0) + newAmount,
+                        net_balance: (balance.net_balance || 0) - newAmount,
+                        updated_at: new Date().toISOString()
+                    }).eq('branch_id', loan.branch_id);
                 } else {
-                    await client
-                        .from('branch_balances')
-                        .insert([{
-                            branch_id: loan.branch_id,
-                            total_loan_given: loan.amount,
-                            net_balance: -loan.amount,
-                            updated_at: new Date().toISOString()
-                        }]);
+                    await client.from('branch_balances').insert([{
+                        branch_id: loan.branch_id,
+                        total_loan_given: newAmount,
+                        net_balance: -newAmount,
+                        updated_at: new Date().toISOString()
+                    }]);
                 }
             } catch(e) {
-                console.warn('Branch balance update warning:', e);
+                console.warn('Branch balance warning:', e);
             }
         }
         
-        // ✅ ক্যাশ ক্লিয়ার করুন - allLoansData রিসেট
-        allLoansData = [];
-        
-        // ✅ ফোর্স রিলোড - সরাসরি নতুন ডেটা আনুন
-        const { data: freshLoans, error: reloadError } = await client
-            .from('loan_applications')
-            .select('*, branches(branch_name)')
-            .order('submitted_at', { ascending: false });
-        
-        if (!reloadError && freshLoans) {
-            allLoansData = freshLoans;
+        // ✅ Audit log
+        try {
+            await client.from('audit_logs').insert([{
+                admin_name: adminName,
+                action: action === 'keep' ? 'APPROVE' : 'APPROVE_WITH_ADJUSTMENT',
+                table_name: 'loan_applications',
+                record_id: String(loanId),
+                changes: {
+                    old_amount: originalAmount,
+                    new_amount: newAmount,
+                    action: action,
+                    note: adminNote
+                },
+                created_at: new Date().toISOString()
+            }]);
+        } catch(e) {
+            console.warn('Audit log warning:', e);
         }
         
-        // ✅ সব ট্যাব রিলোড (ক্যাশ ক্লিয়ার সহ)
-        await loadPendingLoans();  // পেন্ডিং লিস্ট রিফ্রেশ
-        await loadAllLoans();     // সব লোন ট্যাব রিফ্রেশ
+        // ✅ ব্রডকাস্ট
+        try {
+            const bc = new BroadcastChannel('tuknbd_updates');
+            bc.postMessage({
+                type: 'loan_approved',
+                loanId: loanId,
+                memberId: loan.member_id,
+                oldAmount: originalAmount,
+                newAmount: newAmount,
+                timestamp: new Date().toISOString()
+            });
+            setTimeout(() => { try { bc.close(); } catch(e) {} }, 1000);
+        } catch(e) {}
+        
+        // ✅ সফল মেসেজ
+        let successMsg = `✅ লোন অনুমোদিত হয়েছে!\n`;
+        if (action !== 'keep') {
+            successMsg += `💰 ${formatAmountWithText(originalAmount)} → ${formatAmountWithText(newAmount)}\n`;
+        }
+        if (adminNote) successMsg += `📝 নোট সদস্যকে পাঠানো হয়েছে`;
+        
+        showToast(successMsg, 'success');
+        
+        // ✅ ক্যাশ ক্লিয়ার
+        allLoansData = [];
+        
+        // ✅ রিফ্রেশ
+        closeCustomModal();
+        await loadPendingLoans();
+        await loadAllLoans();
         await loadBranchReport();
         await updateAllBadges();
         await loadRealDashboard();
         
-        // ✅ মডাল বন্ধ
-        closeCustomModal();
-        closePendingLoanDetailsModal();
-        
-        showToast(`✅ "${loan.member_name || 'সদস্য'}" এর লোন অনুমোদিত হয়েছে!`, 'success');
-        console.log('✅ Loan approval completed!');
-        
     } catch(e) {
-        console.error('❌ Loan approval error:', e);
-        showToast(`❌ লোন অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
-    } finally {
-        btns.forEach(btn => {
-            btn.disabled = false;
-            btn.innerHTML = '✅ অনুমোদন';
-        });
+        console.error('❌ Confirm approval error:', e);
+        showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
     }
 }
 
@@ -19844,10 +20211,10 @@ function printLoanEMIDetails() {
 }
 
 // ============================================================
-// ✅ ৪. লোন সমন্বয় (Loan Adjustment) মডাল
+// ✅ openLoanAdjustmentModal() — কমানো + বাড়ানো দুটোই
 // ============================================================
 async function openLoanAdjustmentModal(loanId) {
-    console.log('🔧 openLoanAdjustmentModal called for:', loanId);
+    console.log('🔧 openLoanAdjustmentModal:', loanId);
     
     const client = initSupabaseClient();
     if (!client) {
@@ -19867,108 +20234,169 @@ async function openLoanAdjustmentModal(loanId) {
             return;
         }
         
+        if (loan.status !== 'approved') {
+            showToast('⚠️ শুধু অনুমোদিত লোন সমন্বয় করা যাবে!', 'warning');
+            return;
+        }
+        
+        const currentAmount = Number(loan.amount) || 0;
+        const currentProfit = Number(loan.profit_amount) || 0;
+        const currentTotal = Number(loan.total_amount) || currentAmount;
+        const durationMonths = loan.duration_months || 12;
+        const profitRate = loan.profit_rate || 12;
+        const currentEmi = Number(loan.emi_amount) || (currentAmount / durationMonths);
+        
+        window._adjustProfitRate = profitRate;
+        window._adjustDuration = durationMonths;
+        
         const html = `
             <div class="space-y-4">
-                <!-- সতর্কতা -->
-                <div class="bg-amber-50 p-3 rounded-lg border-2 border-amber-300">
-                    <div class="flex items-start gap-2">
-                        <i class="fas fa-exclamation-triangle text-amber-600 text-xl"></i>
-                        <div>
-                            <h5 class="font-bold text-amber-700">⚠️ সতর্কতা</h5>
-                            <p class="text-sm text-amber-600">
-                                লোন সমন্বয় করলে মূল হিসাব পরিবর্তিত হবে। এই কাজ লগে সংরক্ষিত হবে।
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                
                 <!-- সদস্য তথ্য -->
                 <div class="bg-gray-50 p-3 rounded-lg border">
                     <div class="grid grid-cols-2 gap-2 text-sm">
                         <div><strong>সদস্য:</strong> ${loan.member_name}</div>
                         <div><strong>আইডি:</strong> ${loan.member_id}</div>
+                        <div><strong>মেয়াদ:</strong> ${durationMonths} মাস</div>
+                        <div><strong>মুনাফা:</strong> ${profitRate}%</div>
                     </div>
                 </div>
                 
                 <!-- বর্তমান হিসাব -->
                 <div class="bg-blue-50 p-3 rounded-lg border-2 border-blue-200">
                     <h5 class="font-bold text-blue-700 mb-2">📊 বর্তমান হিসাব</h5>
-                    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-                        <div class="bg-white p-2 rounded">
+                    <div class="grid grid-cols-3 gap-2 text-sm">
+                        <div class="bg-white p-2 rounded text-center">
                             <div class="text-xs text-gray-500">মূল লোন</div>
-                            <div class="font-bold text-blue-700">${formatAmountWithText(loan.amount)}</div>
+                            <div class="font-bold text-blue-700">${formatAmountWithText(currentAmount)}</div>
                         </div>
-                        <div class="bg-white p-2 rounded">
+                        <div class="bg-white p-2 rounded text-center">
                             <div class="text-xs text-gray-500">লভ্যাংশ</div>
-                            <div class="font-bold text-purple-700">${formatAmountWithText(loan.profit_amount || 0)}</div>
+                            <div class="font-bold text-purple-700">${formatAmountWithText(currentProfit)}</div>
                         </div>
-                        <div class="bg-white p-2 rounded">
-                            <div class="text-xs text-gray-500">সার্ভিস চার্জ</div>
-                            <div class="font-bold text-indigo-700">${formatAmountWithText(loan.service_charge || 0)}</div>
-                        </div>
-                        <div class="bg-white p-2 rounded">
+                        <div class="bg-white p-2 rounded text-center border-2 border-red-300">
                             <div class="text-xs text-gray-500">মোট</div>
-                            <div class="font-bold text-red-700">${formatAmountWithText(loan.total_amount || loan.amount)}</div>
+                            <div class="font-bold text-red-700">${formatAmountWithText(currentTotal)}</div>
                         </div>
+                    </div>
+                    <div class="mt-2 text-center p-2 bg-emerald-50 rounded border border-emerald-200">
+                        <div class="text-xs text-gray-500">📊 বর্তমান EMI</div>
+                        <div class="font-bold text-emerald-700">${formatAmountWithText(currentEmi)}</div>
                     </div>
                 </div>
                 
-                <!-- সমন্বয় ফর্ম -->
-                <div class="border-2 border-amber-200 rounded-lg p-3">
-                    <h5 class="font-bold text-amber-700 mb-3">🔧 সমন্বয় করুন</h5>
+                <!-- 🔥 বাড়ান / কমান -->
+                <div class="border-2 border-emerald-300 rounded-lg p-4 bg-gradient-to-r from-emerald-50 to-green-50">
+                    <h5 class="font-bold text-emerald-700 mb-3">
+                        <i class="fas fa-exchange-alt mr-2"></i>🔄 পরিমাণ পরিবর্তন
+                    </h5>
                     
-                    <div class="space-y-3">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">
-                                মূল লোন কমান (৳)
-                            </label>
-                            <input type="number" id="adjustPrincipal" value="0" min="0" max="${loan.amount}"
-                                   step="0.01" class="w-full border-2 border-gray-300 rounded-lg p-2"
-                                   placeholder="0.00">
-                            <p class="text-xs text-gray-500 mt-1">সর্বোচ্চ: ${formatAmountWithText(loan.amount)}</p>
-                        </div>
+                    <div class="grid grid-cols-2 gap-2 mb-3">
+                        <label class="cursor-pointer">
+                            <input type="radio" name="adjustmentAction" value="increase" 
+                                   class="peer hidden" checked
+                                   onchange="toggleAdjustmentSections()">
+                            <div class="p-4 bg-white border-2 border-gray-200 rounded-lg text-center 
+                                        peer-checked:border-emerald-500 peer-checked:bg-emerald-50 transition">
+                                <i class="fas fa-arrow-up text-2xl text-emerald-600"></i>
+                                <div class="font-bold text-sm mt-1 text-emerald-700">➕ লোন বাড়ান</div>
+                                <div class="text-xs text-gray-500 mt-0.5">পরিমাণ বাড়বে</div>
+                            </div>
+                        </label>
                         
+                        <label class="cursor-pointer">
+                            <input type="radio" name="adjustmentAction" value="decrease"
+                                   class="peer hidden"
+                                   onchange="toggleAdjustmentSections()">
+                            <div class="p-4 bg-white border-2 border-gray-200 rounded-lg text-center
+                                        peer-checked:border-red-500 peer-checked:bg-red-50 transition">
+                                <i class="fas fa-arrow-down text-2xl text-red-600"></i>
+                                <div class="font-bold text-sm mt-1 text-red-700">➖ লোন কমান</div>
+                                <div class="text-xs text-gray-500 mt-0.5">পরিমাণ কমবে</div>
+                            </div>
+                        </label>
+                    </div>
+                    
+                    <!-- ➕ বাড়ানোর সেকশন -->
+                    <div id="increaseSection" class="space-y-3">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">
-                                লভ্যাংশ কমান (৳)
+                                💰 বাড়ানোর পরিমাণ (৳) <span class="text-red-500">*</span>
                             </label>
-                            <input type="number" id="adjustProfit" value="0" min="0" 
-                                   max="${loan.profit_amount || 0}" step="0.01"
-                                   class="w-full border-2 border-gray-300 rounded-lg p-2"
-                                   placeholder="0.00">
-                            <p class="text-xs text-gray-500 mt-1">সর্বোচ্চ: ${formatAmountWithText(loan.profit_amount || 0)}</p>
+                            <input type="number" id="increaseAmount" 
+                                   value="0" min="0" step="0.01"
+                                   class="w-full border-2 border-emerald-300 focus:border-emerald-500 rounded-lg p-3 text-lg font-bold"
+                                   placeholder="0.00"
+                                   oninput="previewAdjustment(${currentAmount}, ${profitRate}, ${durationMonths})">
                         </div>
-                        
+                    </div>
+                    
+                    <!-- ➖ কমানোর সেকশন -->
+                    <div id="decreaseSection" class="space-y-3 hidden">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">
-                                সার্ভিস চার্জ মাফ (৳)
+                                💰 কমানোর পরিমাণ (৳) <span class="text-red-500">*</span>
                             </label>
-                            <input type="number" id="adjustService" value="0" min="0" 
-                                   max="${loan.service_charge || 0}" step="0.01"
-                                   class="w-full border-2 border-gray-300 rounded-lg p-2"
-                                   placeholder="0.00">
-                            <p class="text-xs text-gray-500 mt-1">সর্বোচ্চ: ${formatAmountWithText(loan.service_charge || 0)}</p>
+                            <input type="number" id="decreaseAmount" 
+                                   value="0" min="0" max="${currentAmount}" step="0.01"
+                                   class="w-full border-2 border-red-300 focus:border-red-500 rounded-lg p-3 text-lg font-bold"
+                                   placeholder="0.00"
+                                   oninput="previewAdjustment(${currentAmount}, ${profitRate}, ${durationMonths})">
+                            <p class="text-xs text-gray-500 mt-1">সর্বোচ্চ: ${formatAmountWithText(currentAmount)}</p>
                         </div>
-                        
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">
-                                কারণ <span class="text-red-500">*</span>
-                            </label>
-                            <textarea id="adjustReason" rows="3" 
-                                      class="w-full border-2 border-gray-300 rounded-lg p-2"
-                                      placeholder="যেমন: সদস্য অসুস্থ ছিলেন, আর্থিক সমস্যা..."></textarea>
+                    </div>
+                    
+                    <!-- প্রিভিউ -->
+                    <div class="mt-4 bg-white p-3 rounded-lg border-2 border-gray-200">
+                        <h6 class="font-bold text-gray-700 mb-2 text-sm">📊 নতুন হিসাব</h6>
+                        <div class="grid grid-cols-3 gap-2 text-sm">
+                            <div class="text-center p-2 bg-blue-50 rounded">
+                                <div class="text-xs text-gray-500">মূল লোন</div>
+                                <div class="font-bold text-blue-700" id="previewMainAmount">
+                                    ${formatAmountWithText(currentAmount)}
+                                </div>
+                            </div>
+                            <div class="text-center p-2 bg-purple-50 rounded">
+                                <div class="text-xs text-gray-500">লভ্যাংশ</div>
+                                <div class="font-bold text-purple-700" id="previewProfitAmount">
+                                    ${formatAmountWithText(currentProfit)}
+                                </div>
+                            </div>
+                            <div class="text-center p-2 bg-red-50 rounded border-2 border-red-300">
+                                <div class="text-xs text-gray-500">মোট</div>
+                                <div class="font-bold text-red-700" id="previewTotalAmount">
+                                    ${formatAmountWithText(currentTotal)}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-2 text-center p-2 bg-emerald-50 rounded border border-emerald-200">
+                            <div class="text-xs text-gray-500">📊 নতুন EMI</div>
+                            <div class="font-bold text-emerald-700 text-lg" id="previewEmiAmount">
+                                ${formatAmountWithText(currentEmi)}
+                            </div>
                         </div>
                     </div>
                 </div>
                 
-                <!-- অ্যাকশন বাটন -->
-                <div class="flex gap-3">
-                    <button onclick="saveLoanAdjustment(${loanId})" 
-                            class="btn btn-success flex-1 py-2.5">
+                <!-- 🔔 নোট -->
+                <div class="bg-gradient-to-r from-amber-50 to-orange-50 p-4 rounded-lg border-2 border-amber-300">
+                    <h6 class="font-bold text-amber-700 mb-2">
+                        <i class="fas fa-comment-alt mr-2"></i>📢 সদস্যের জন্য নোট <span class="text-red-500">*</span>
+                    </h6>
+                    <p class="text-xs text-amber-600 mb-2">
+                        এই নোটটি সদস্যের ড্যাশবোর্ডে দেখা যাবে।
+                    </p>
+                    <textarea id="adjustmentNote" rows="3"
+                              class="w-full border-2 border-amber-300 focus:border-amber-500 rounded-lg p-2.5"
+                              placeholder="যেমন: সদস্যের অনুরোধে লোন বাড়ানো হয়েছে..."></textarea>
+                </div>
+                
+                <div class="flex flex-wrap gap-2 pt-2 border-t">
+                    <button onclick="saveLoanAdjustment(${loanId}, ${currentAmount}, ${profitRate}, ${durationMonths})"
+                            class="btn btn-success flex-1 py-3 min-w-[150px]">
                         <i class="fas fa-save mr-2"></i> সংরক্ষণ করুন
                     </button>
-                    <button onclick="closeCustomModal()" 
-                            class="btn btn-danger flex-1 py-2.5">
+                    <button onclick="closeCustomModal()"
+                            class="btn btn-danger py-3 min-w-[100px]">
                         <i class="fas fa-times mr-2"></i> বাতিল
                     </button>
                 </div>
@@ -19984,139 +20412,230 @@ async function openLoanAdjustmentModal(loanId) {
 }
 
 // ============================================================
-// ✅ ৫. লোন সমন্বয় সংরক্ষণ
+// ✅ টগল সেকশন
 // ============================================================
-async function saveLoanAdjustment(loanId) {
-    const adjustPrincipal = parseFloat(document.getElementById('adjustPrincipal').value) || 0;
-    const adjustProfit = parseFloat(document.getElementById('adjustProfit').value) || 0;
-    const adjustService = parseFloat(document.getElementById('adjustService').value) || 0;
-    const reason = document.getElementById('adjustReason').value.trim();
+function toggleAdjustmentSections() {
+    const action = document.querySelector('input[name="adjustmentAction"]:checked')?.value;
+    const incSec = document.getElementById('increaseSection');
+    const decSec = document.getElementById('decreaseSection');
     
-    // ভ্যালিডেশন
-    if (!reason) {
-        showToast('❌ সমন্বয়ের কারণ লিখুন!', 'error');
-        document.getElementById('adjustReason').focus();
+    if (action === 'increase') {
+        incSec.classList.remove('hidden');
+        decSec.classList.add('hidden');
+    } else {
+        incSec.classList.add('hidden');
+        decSec.classList.remove('hidden');
+    }
+    
+    const currentAmount = parseFloat(window._adjustCurrentAmount) || 0;
+    const profitRate = window._adjustProfitRate || 12;
+    const durationMonths = window._adjustDuration || 12;
+    previewAdjustment(currentAmount, profitRate, durationMonths);
+}
+
+// ============================================================
+// ✅ প্রিভিউ আপডেট
+// ============================================================
+function previewAdjustment(currentAmount, profitRate, durationMonths) {
+    window._adjustCurrentAmount = currentAmount;
+    
+    const action = document.querySelector('input[name="adjustmentAction"]:checked')?.value || 'increase';
+    
+    let changeAmount = 0;
+    if (action === 'increase') {
+        changeAmount = parseFloat(document.getElementById('increaseAmount')?.value) || 0;
+    } else {
+        changeAmount = parseFloat(document.getElementById('decreaseAmount')?.value) || 0;
+        if (changeAmount > currentAmount) {
+            document.getElementById('decreaseAmount').value = currentAmount;
+            showToast(`⚠️ সর্বোচ্চ ${formatAmountWithText(currentAmount)} কমানো যাবে!`, 'warning');
+            changeAmount = currentAmount;
+        }
+    }
+    
+    let newAmount = currentAmount;
+    if (action === 'increase') newAmount = currentAmount + changeAmount;
+    else newAmount = Math.max(0, currentAmount - changeAmount);
+    
+    const newEmi = calculateEMIForPreview(newAmount, profitRate, durationMonths);
+    const newTotal = newEmi * durationMonths;
+    const newProfit = newTotal - newAmount;
+    
+    const setText = (id, text) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    };
+    
+    setText('previewMainAmount', formatAmountWithText(newAmount));
+    setText('previewProfitAmount', formatAmountWithText(newProfit));
+    setText('previewTotalAmount', formatAmountWithText(newTotal));
+    setText('previewEmiAmount', formatAmountWithText(newEmi));
+}
+
+// ============================================================
+// ✅ লোন সমন্বয় সংরক্ষণ
+// ============================================================
+async function saveLoanAdjustment(loanId, currentAmount, profitRate, durationMonths) {
+    const action = document.querySelector('input[name="adjustmentAction"]:checked')?.value || 'increase';
+    const changeAmount = action === 'increase' 
+        ? parseFloat(document.getElementById('increaseAmount')?.value) || 0
+        : parseFloat(document.getElementById('decreaseAmount')?.value) || 0;
+    const note = document.getElementById('adjustmentNote')?.value?.trim() || '';
+    
+    if (changeAmount <= 0) {
+        showToast('❌ পরিবর্তনের পরিমাণ দিন!', 'error');
         return;
     }
     
-    if (adjustPrincipal === 0 && adjustProfit === 0 && adjustService === 0) {
-        showToast('❌ অন্তত একটি মান পরিবর্তন করুন!', 'error');
+    if (!note) {
+        showToast('❌ সদস্যের জন্য নোট লিখুন!', 'error');
+        document.getElementById('adjustmentNote')?.focus();
         return;
     }
     
-    if (adjustPrincipal < 0 || adjustProfit < 0 || adjustService < 0) {
-        showToast('❌ ঋণাত্মক মান দেওয়া যাবে না!', 'error');
+    if (action === 'decrease' && changeAmount > currentAmount) {
+        showToast(`❌ সর্বোচ্চ ${formatAmountWithText(currentAmount)} কমানো যাবে!`, 'error');
         return;
     }
     
-    const totalAdjustment = adjustPrincipal + adjustProfit + adjustService;
+    let newAmount = action === 'increase' 
+        ? currentAmount + changeAmount 
+        : Math.max(0, currentAmount - changeAmount);
     
-    if (!confirm(
-        `আপনি কি নিশ্চিত?\n\n` +
-        `মূল লোন কমান: ${formatAmountWithText(adjustPrincipal)}\n` +
-        `লভ্যাংশ কমান: ${formatAmountWithText(adjustProfit)}\n` +
-        `সার্ভিস চার্জ মাফ: ${formatAmountWithText(adjustService)}\n` +
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `মোট মউকুফ: ${formatAmountWithText(totalAdjustment)}\n\n` +
-        `কারণ: ${reason}`
-    )) return;
+    const confirmMsg = `✅ লোন সমন্বয় নিশ্চিত করুন\n\n━━━━━━━━━━━━━━━━━━━━\n` +
+        `📊 বর্তমান: ${formatAmountWithText(currentAmount)}\n` +
+        `📊 নতুন: ${formatAmountWithText(newAmount)}\n` +
+        `⚙️ ${action === 'increase' ? '➕ বাড়ানো' : '➖ কমানো'}: ${formatAmountWithText(changeAmount)}\n` +
+        `📝 নোট: ${note}\n` +
+        `━━━━━━━━━━━━━━━━━━━━`;
+    
+    if (!window.confirm(confirmMsg)) return;
     
     const client = initSupabaseClient();
-    if (!client) return;
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
     
     try {
-        // ✅ লোন ডেটা লোড
-        const { data: loan } = await client
+        showToast('⏳ সমন্বয় প্রক্রিয়াকরণ...', 'info');
+        
+        const { data: loan, error: loadError } = await client
             .from('loan_applications')
             .select('*')
             .eq('id', loanId)
             .single();
         
-        if (!loan) {
+        if (loadError || !loan) {
             showToast('❌ লোন পাওয়া যায়নি!', 'error');
             return;
         }
         
-        // ✅ নতুন হিসাব
-        const newAmount = Math.max(0, (loan.amount || 0) - adjustPrincipal);
-        const newProfit = Math.max(0, (loan.profit_amount || 0) - adjustProfit);
-        const newService = Math.max(0, (loan.service_charge || 0) - adjustService);
-        const newTotal = newAmount + newProfit + newService;
-        const newEmi = newTotal / (loan.duration_months || 12);
-        
         const adminName = currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন';
         
-        // ✅ লোন আপডেট
+        // ✅ নতুন EMI ক্যালকুলেশন
+        const newEmi = calculateEMIForPreview(newAmount, profitRate, durationMonths);
+        const newTotal = newEmi * durationMonths;
+        const newProfit = newTotal - newAmount;
+        
+        const historyEntry = {
+            action: action,
+            old_amount: currentAmount,
+            new_amount: newAmount,
+            difference: newAmount - currentAmount,
+            by: adminName,
+            at: new Date().toISOString(),
+            note: note
+        };
+        
+        const existingHistory = Array.isArray(loan.adjustment_history) ? loan.adjustment_history : [];
+        
+        const updateData = {
+            amount: newAmount,
+            total_amount: newTotal,
+            emi_amount: Math.round(newEmi * 100) / 100,
+            profit_amount: Math.round(newProfit * 100) / 100,
+            adjustment_note: note,
+            adjustment_history: [...existingHistory, historyEntry],
+            updated_at: new Date().toISOString()
+        };
+        
+        if (action === 'increase') {
+            updateData.increased_amount = (Number(loan.increased_amount) || 0) + changeAmount;
+        } else {
+            updateData.decreased_amount = (Number(loan.decreased_amount) || 0) + changeAmount;
+        }
+        
         const { error: updateError } = await client
             .from('loan_applications')
-            .update({
-                original_amount: loan.amount,
-                amount: newAmount,
-                profit_amount: newProfit,
-                service_charge: newService,
-                total_amount: newTotal,
-                emi_amount: newEmi,
-                adjusted_amount: totalAdjustment,
-                adjustment_reason: reason,
-                adjusted_by: adminName,
-                adjusted_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-            })
+            .update(updateData)
             .eq('id', loanId);
         
         if (updateError) throw updateError;
         
-        // ✅ Waiver লগ তৈরি
+        // ✅ সদস্যের জন্য নোটিফিকেশন
+        let title = action === 'increase' ? '📈 লোনের পরিমাণ বাড়ানো হয়েছে' : '📉 লোনের পরিমাণ কমানো হয়েছে';
+        let message = action === 'increase'
+            ? `আপনার লোনের পরিমাণ ${formatAmountWithText(currentAmount)} থেকে ${formatAmountWithText(newAmount)} এ বাড়ানো হয়েছে। (+${formatAmountWithText(changeAmount)})\n\n📝 এডমিন নোট: ${note}`
+            : `আপনার লোনের পরিমাণ ${formatAmountWithText(currentAmount)} থেকে ${formatAmountWithText(newAmount)} এ কমানো হয়েছে। (-${formatAmountWithText(changeAmount)})\n\n📝 এডমিন নোট: ${note}`;
+        
         try {
-            await client.from('loan_waivers').insert([{
+            await client.from('member_loan_notifications').insert([{
                 loan_id: loanId,
-                waiver_type: 'adjustment',
-                waived_amount: totalAdjustment,
-                original_amount: loan.total_amount,
-                reason: reason,
-                waived_by: adminName,
-                waived_at: new Date().toISOString()
+                member_id: loan.member_id,
+                notification_type: action === 'increase' ? 'loan_increased' : 'loan_decreased',
+                title: title,
+                message: message,
+                old_amount: currentAmount,
+                new_amount: newAmount,
+                difference: newAmount - currentAmount,
+                created_by: adminName
             }]);
-        } catch(e) {
-            console.warn('⚠️ Waiver log warning:', e);
+        } catch(notifErr) {
+            console.warn('Notification warning:', notifErr);
         }
         
         // ✅ Audit log
         try {
             await client.from('audit_logs').insert([{
                 admin_name: adminName,
-                action: 'UPDATE',
+                action: 'ADJUST_LOAN',
                 table_name: 'loan_applications',
                 record_id: String(loanId),
-                changes: {
-                    amount: { old: loan.amount, new: newAmount },
-                    profit_amount: { old: loan.profit_amount, new: newProfit },
-                    service_charge: { old: loan.service_charge, new: newService },
-                    total_amount: { old: loan.total_amount, new: newTotal }
-                },
+                changes: { old_amount: currentAmount, new_amount: newAmount, action, note },
                 created_at: new Date().toISOString()
             }]);
         } catch(e) {
-            console.warn('⚠️ Audit log warning:', e);
+            console.warn('Audit log warning:', e);
         }
         
-        showToast(
-            `✅ লোন সমন্বয় সফল!\n` +
-            `মোট মউকুফ: ${formatAmountWithText(totalAdjustment)}`,
-            'success'
-        );
+        // ✅ ব্রডকাস্ট
+        try {
+            const bc = new BroadcastChannel('tuknbd_updates');
+            bc.postMessage({
+                type: 'loan_adjusted',
+                loanId: loanId,
+                memberId: loan.member_id,
+                newAmount: newAmount,
+                timestamp: new Date().toISOString()
+            });
+            setTimeout(() => { try { bc.close(); } catch(e) {} }, 1000);
+        } catch(e) {}
         
+        showToast(`✅ লোন সমন্বয় সফল!\n💰 ${formatAmountWithText(currentAmount)} → ${formatAmountWithText(newAmount)}`, 'success');
+        
+        allLoansData = [];
         closeCustomModal();
-        
-        // ✅ সব ডেটা রিফ্রেশ
         await loadAllLoans();
         await loadRealDashboard();
+        await updateAllBadges();
         
     } catch(e) {
         console.error('❌ Save adjustment error:', e);
         showToast(`❌ সংরক্ষণ ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
     }
 }
+    
 
 // ============================================================
 // ✅ ৬. মওকুফ মডাল — অ্যাডভান্সড (খাত ভিত্তিক + কিস্তি ভিত্তিক)
@@ -21960,17 +22479,9 @@ window.toggleManualVoucher = toggleManualVoucher;
 window.refreshAutoVoucher = refreshAutoVoucher;
 window.checkVoucherExists = checkVoucherExists;
 window.validateManualVoucher = validateManualVoucher;
-
-console.log('✅ Balance Adjustment System v1.0 Loaded!');
-
-
-// ============================================================
-// ✅ ৮. গ্লোবাল এক্সপোজ (HTML থেকে কল করার জন্য)
-// ============================================================
 window.showLoanEMIDetails = showLoanEMIDetails;
 window.closeLoanEMIModal = closeLoanEMIModal;
 window.printLoanEMIDetails = printLoanEMIDetails;
-window.openLoanAdjustmentModal = openLoanAdjustmentModal;
 window.saveLoanAdjustment = saveLoanAdjustment;
 window.openWaiverModal = openWaiverModal;
 window.loadBranchesForAdminSelect = loadBranchesForAdminSelect;
@@ -21979,15 +22490,7 @@ window.applyCustomWaiver = applyCustomWaiver;
 window.quickWaiveAll = quickWaiveAll;
 window.selectWaiveType = selectWaiveType;
 window.onWaiveCategoryChange = onWaiveCategoryChange;
-window.waiveSingleLateFee = waiveSingleLateFee;    
-
-console.log('✅ লোন ম্যানেজমেন্ট ফাংশনসমূহ লোড সম্পূর্ণ!');
-console.log('✅ showLoanEMIDetails:', typeof window.showLoanEMIDetails);
-console.log('✅ openLoanAdjustmentModal:', typeof window.openLoanAdjustmentModal);
-console.log('✅ openWaiverModal:', typeof window.openWaiverModal);
-                        
-
-// ✅ গ্লোবাল এক্সপোজ
+window.waiveSingleLateFee = waiveSingleLateFee;
 window.loadNoticesList = loadNoticesList;
 window.filterNotices = filterNotices;
 window.renderNoticesList = renderNoticesList;
@@ -21997,8 +22500,22 @@ window.editNotice = editNotice;
 window.saveEditedNotice = saveEditedNotice;
 window.deleteNotice = deleteNotice;
 window.updateNoticePreview = updateNoticePreview;
+window.openLoanApprovalModal = openLoanApprovalModal;
+window.confirmLoanApproval = confirmLoanApproval;
+window.onApprovalActionChange = onApprovalActionChange;
+window.updateApprovalPreview = updateApprovalPreview;
+window.calculateEMIForPreview = calculateEMIForPreview;
+window.toggleAdjustmentSections = toggleAdjustmentSections;
+window.previewAdjustment = previewAdjustment;
+window.openLoanAdjustmentModal = openLoanAdjustmentModal;    
 
     
+
+console.log('✅ Balance Adjustment System v1.0 Loaded!');
+console.log('✅ লোন ম্যানেজমেন্ট ফাংশনসমূহ লোড সম্পূর্ণ!');
+console.log('✅ showLoanEMIDetails:', typeof window.showLoanEMIDetails);
+console.log('✅ openLoanAdjustmentModal:', typeof window.openLoanAdjustmentModal);
+console.log('✅ openWaiverModal:', typeof window.openWaiverModal);
 console.log('✅ Notice Management System v2.0 loaded!');
 console.log('✅ TUKNBD Admin Panel Loaded Successfully!');
 console.log('🔐 Permission System Active!');
