@@ -9931,116 +9931,98 @@ async function emergencyStopAndFix() {
         console.log('  checkAndFixDuplicateWithdrawals() - ডুপ্লিকেট চেক');
         
         
-    // ============================================================
-    // ✅ নোটিশ পপআপ নোটিফিকেশন সিস্টেম
-    // ============================================================
-
-let unreadNotices = [];
-let currentNoticeIndex = 0;
-
-async function loadUnreadNotices() {
-    if (!currentUser || !currentUser.id) {
-        console.log('❌ currentUser নেই, নোটিশ লোড বাতিল');
-        return;
-    }
+   // ✅ নোটিশ পপআপ নোটিফিকেশন সিস্টেম — প্রতিবার লগইনে দেখাবে
+    let unreadNotices = [];
+    let currentNoticeIndex = 0;
     
-    const client = await initSupabase();
-    if (!client) {
-        console.error('❌ Supabase client নেই');
-        return;
-    }
-    
-    try {
-        console.log('📢 অবাঞ্ছিত নোটিশ লোড করা হচ্ছে...');
-        
-        const now = new Date().toISOString();
-        
-        // ✅ priority কলাম ছাড়া (যদি না থাকে)
-        const { data: notices, error: noticeError } = await client
-            .from('notices')
-            .select('*')
-            .eq('status', 'active')
-            .or(`expires_at.is.null,expires_at.gt.${now}`)
-            .order('created_at', { ascending: false });
-        
-        if (noticeError) {
-            console.error('❌ নোটিশ লোড error:', noticeError);
+    async function loadUnreadNotices() {
+        if (!currentUser || !currentUser.id) {
+            console.log('❌ currentUser নেই, নোটিশ লোড বাতিল');
             return;
         }
         
-        console.log(`📊 ${notices?.length || 0} টি সক্রিয় নোটিশ পাওয়া গেছে`);
-        
-        if (!notices || notices.length === 0) {
-            console.log('📭 কোনো সক্রিয় নোটিশ নেই');
+        const client = await initSupabase();
+        if (!client) {
+            console.error('❌ Supabase client নেই');
             return;
         }
         
-        // ✅ notice_reads টেবিল না থাকলেও crash করবে না
-        let readNoticeIds = new Set();
         try {
-            const { data: readNotices } = await client
-                .from('notice_reads')
-                .select('notice_id')
-                .eq('member_id', currentUser.id);
+            console.log('📢 নোটিশ লোড করা হচ্ছে...');
             
-            if (readNotices) {
-                readNoticeIds = new Set(readNotices.map(r => r.notice_id));
+            const now = new Date().toISOString();
+            
+            // ✅ শুধু সক্রিয় + মেয়াদোত্তীর্ণ নয় এমন নোটিশ আনুন
+            const { data: notices, error: noticeError } = await client
+                .from('notices')
+                .select('*')
+                .eq('status', 'active')
+                .or(`expires_at.is.null,expires_at.gt.${now}`)
+                .order('created_at', { ascending: false });
+            
+            if (noticeError) {
+                console.error('❌ নোটিশ লোড error:', noticeError);
+                return;
             }
-        } catch(e) {
-            console.warn('⚠️ notice_reads লোড ব্যর্থ (সমস্যা নেই):', e);
+            
+            console.log(`📊 ${notices?.length || 0} টি সক্রিয় নোটিশ পাওয়া গেছে`);
+            
+            if (!notices || notices.length === 0) {
+                console.log('📭 কোনো সক্রিয় নোটিশ নেই');
+                return;
+            }
+            
+            // ✅ শুধু target_audience ফিল্টার — read ফিল্টার নেই!
+            const memberStatus = currentUser.status || 'active';
+            unreadNotices = notices.filter(n => {
+                if (!n.target_audience || n.target_audience === 'all') return true;
+                if (n.target_audience === 'active' && (memberStatus === 'active' || memberStatus === 'approved')) return true;
+                if (n.target_audience === 'pending' && memberStatus === 'pending') return true;
+                return false;
+            });
+            
+            console.log(`✅ ${unreadNotices.length} টি নোটিশ দেখানো হবে`);
+            
+            // ✅ পপআপ দেখান (প্রতিবার লগইনে)
+            if (unreadNotices.length > 0) {
+                currentNoticeIndex = 0;
+                showNoticePopup();
+            } else {
+                console.log('ℹ️ এই মুহূর্তে আপনার জন্য কোনো নোটিশ নেই');
+            }
+            
+        } catch (e) {
+            console.error('❌ loadUnreadNotices error:', e);
+        }
+    }
+    
+        // ============================================================
+    // ✅ showNoticePopup() — সম্পূর্ণ সংশোধিত ফাংশন
+    // ============================================================
+    
+    function showNoticePopup() {
+        console.log('🎯 showNoticePopup কল হয়েছে');
+        
+        // ============================================================
+        // ১. ভ্যালিডেশন
+        // ============================================================
+        if (!unreadNotices || unreadNotices.length === 0) {
+            console.warn('⚠️ unreadNotices খালি');
+            return;
         }
         
-        // ✅ ফিল্টার
-        const memberStatus = currentUser.status || 'active';
-        unreadNotices = notices.filter(n => {
-            if (readNoticeIds.has(n.id)) return false;
-            if (!n.target_audience || n.target_audience === 'all') return true;
-            if (n.target_audience === 'active' && (memberStatus === 'active' || memberStatus === 'approved')) return true;
-            if (n.target_audience === 'pending' && memberStatus === 'pending') return true;
-            return false;
-        });
-        
-        console.log(`✅ ${unreadNotices.length} টি অবাঞ্ছিত নোটিশ`);
-        
-        if (unreadNotices.length > 0) {
-            currentNoticeIndex = 0;
-            showNoticePopup();
-        } else {
-            console.log('✅ সব নোটিশ পড়া হয়ে গেছে');
+        const notice = unreadNotices[currentNoticeIndex];
+        if (!notice) {
+            console.warn('⚠️ currentNoticeIndex এ কোনো নোটিশ নেই:', currentNoticeIndex);
+            return;
         }
         
-    } catch (e) {
-        console.error('❌ loadUnreadNotices error:', e);
-    }
-}
-
-    // ============================================================
-// ✅ showNoticePopup() — সম্পূর্ণ সংশোধিত ফাংশন
-// ============================================================
-
-function showNoticePopup() {
-    console.log('🎯 showNoticePopup কল হয়েছে');
-    
-    // ============================================================
-    // ১. ভ্যালিডেশন
-    // ============================================================
-    if (!unreadNotices || unreadNotices.length === 0) {
-        console.warn('⚠️ unreadNotices খালি');
-        return;
-    }
-    
-    const notice = unreadNotices[currentNoticeIndex];
-    if (!notice) {
-        console.warn('⚠️ currentNoticeIndex এ কোনো নোটিশ নেই:', currentNoticeIndex);
-        return;
-    }
-    
-    const modal = document.getElementById('noticePopupModal');
-    if (!modal) {
-        console.error('❌ noticePopupModal এলিমেন্ট পাওয়া যায়নি!');
-        return;
-    }
-    
+        const modal = document.getElementById('noticePopupModal');
+        if (!modal) {
+            console.error('❌ noticePopupModal এলিমেন্ট পাওয়া যায়নি!');
+            return;
+        }
+        
     console.log(`📢 নোটিশ দেখানো হচ্ছে [${currentNoticeIndex + 1}/${unreadNotices.length}]:`, notice.title);
     
     // ============================================================
