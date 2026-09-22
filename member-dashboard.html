@@ -4699,6 +4699,7 @@ async function loadLoanHistory() {
 
 // ============================================================
 // viewLoanDetail — সম্পূর্ণ সংশোধিত ভার্সন
+// (ডেটাবেসে স্টোর করা late_fee আগে চেক করে, না থাকলে লাইভ হিসাব)
 // ============================================================
 async function viewLoanDetail(loanId) {
     if(!loanId) { showToast('লোন আইডি পাওয়া যায়নি!', 'error'); return; }
@@ -4795,24 +4796,40 @@ async function viewLoanDetail(loanId) {
                 accountNumber = payment.account_number || '';
             }
             
-            // লাইভ জরিমানা হিসাব
+            // ============================================================
+            // ✅ লাইভ জরিমানা হিসাব — ডেটাবেসে স্টোর করা মান আগে চেক করে
+            // ============================================================
+            let calculatedLateFee = 0;
+            
             if (isFullyWaived) {
-                lateFee = 0;
+                // ১. সম্পূর্ণ কিস্তি মওকুফ → জরিমানা ০
+                calculatedLateFee = 0;
             } 
             else if (isLateFeeLocked) {
-                lateFee = Math.max(0, lateFee - waivedLateFee);
+                // ২. শুধু জরিমানা লকড → স্টোর করা মান থেকে মওকুফ বিয়োগ
+                calculatedLateFee = Math.max(0, lateFee - waivedLateFee);
             } 
             else if (paymentStatus === 'pending' || paymentStatus === 'pending_verification') {
-                const graceEndDate = new Date(dueDate);
-                graceEndDate.setDate(dueDate.getDate() + gracePeriod);
-                
-                if (today > graceEndDate) {
-                    const daysOverdue = Math.floor((today - graceEndDate) / (1000 * 60 * 60 * 24));
-                    const monthsOverdue = Math.ceil(daysOverdue / 30);
-                    const rawLateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
-                    lateFee = Math.max(0, rawLateFee - waivedLateFee);
+                // ৩. প্রথমে ডেটাবেসে স্টোর করা late_fee চেক করুন
+                if (lateFee > 0) {
+                    // স্টোর করা মান আছে → সেটাই ব্যবহার করুন (pg_cron আগে থেকে হিসাব করেছে)
+                    calculatedLateFee = Math.max(0, lateFee - waivedLateFee);
+                } else {
+                    // স্টোর করা মান নেই → লাইভ হিসাব করুন
+                    const graceEndDate = new Date(dueDate);
+                    graceEndDate.setDate(dueDate.getDate() + gracePeriod);
+                    
+                    if (today > graceEndDate) {
+                        const daysOverdue = Math.floor((today - graceEndDate) / (1000 * 60 * 60 * 24));
+                        const monthsOverdue = Math.max(1, Math.ceil(daysOverdue / 30));
+                        const rawLateFee = emiAmount * (lateFeePercent / 100) * monthsOverdue;
+                        calculatedLateFee = Math.max(0, rawLateFee - waivedLateFee);
+                    }
                 }
             }
+            
+            // ✅ lateFee ভেরিয়েবলে সেট করুন
+            lateFee = calculatedLateFee;
             
             let statusText = '', statusClass = '', isPaid = false;
             
@@ -4903,8 +4920,8 @@ async function viewLoanDetail(loanId) {
         let emiRows = '';
         emiData.forEach((emi, index) => {
             const totalAmount = (emi.totalAmount || 0).toFixed(2);
-            const emiAmount = (emi.emiAmount || 0).toFixed(2);
-            const lateFee = (emi.lateFee || 0).toFixed(2);
+            const emiAmountShow = (emi.emiAmount || 0).toFixed(2);
+            const lateFeeShow = (emi.lateFee || 0).toFixed(2);
             
             let payButton = '';
             
@@ -4937,9 +4954,9 @@ async function viewLoanDetail(loanId) {
                 <tr class="${emi.isFullyWaived ? 'bg-green-100' : emi.isPaid ? 'bg-green-50' : emi.status === 'pending_verification' ? 'bg-yellow-50' : emi.isLateFeeLocked ? 'bg-blue-50' : ''}">
                     <td class="text-center font-semibold">${emi.installmentNo}</td>
                     <td class="text-center">${emi.dueDateDisplay}</td>
-                    <td class="text-center font-medium text-emerald-600">${emiAmount} টাকা</td>
+                    <td class="text-center font-medium text-emerald-600">${emiAmountShow} টাকা</td>
                     <td class="text-center ${emi.lateFee > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}">
-                        ${lateFee} টাকা
+                        ${lateFeeShow} টাকা
                         ${emi.waivedLateFee > 0 ? `<br><span class="text-xs text-green-600 font-medium">✓ মওকুফ: ${emi.waivedLateFee.toFixed(2)} টাকা</span>` : ''}
                         ${emi.isLateFeeLocked && !emi.isFullyWaived ? `<br><span class="text-xs text-blue-600 font-medium">🔒 জরিমানা লকড</span>` : ''}
                         ${emi.isFullyWaived ? `<br><span class="text-xs text-green-700 font-bold">🎁 সম্পূর্ণ মওকুফ</span>` : ''}
