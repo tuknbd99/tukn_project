@@ -1640,9 +1640,180 @@ function startMembershipTimer(approvedAt) {
 }
 
 // ============================================================
+// ✅ লোন নোটিফিকেশন লোড করা (আপডেটেড)
+// ============================================================
+async function loadLoanNotifications() {
+    if (!currentUser || !currentUser.id) {
+        console.log('❌ currentUser নেই, লোন নোটিফিকেশন স্কিপ');
+        return;
+    }
+    
+    const client = await initSupabase();
+    if (!client) {
+        console.error('❌ Supabase client নেই');
+        return;
+    }
+    
+    try {
+        // ✅ আনরিড নোটিফিকেশন লোড করুন
+        const { data: notifications, error } = await client
+            .from('member_loan_notifications')
+            .select('*')
+            .eq('member_id', currentUser.id)
+            .eq('is_read', false)
+            .order('created_at', { ascending: false })
+            .limit(5); // ✅ সর্বোচ্চ ৫টি
+        
+        if (error) {
+            // ✅ টেবিল না থাকলে চুপচাপ স্কিপ করুন (console spam বন্ধ)
+            if (error.code === '42P01' || error.message?.includes('does not exist')) {
+                console.log('ℹ️ member_loan_notifications টেবিল এখনো তৈরি হয়নি');
+                return;
+            }
+            console.error('❌ লোন নোটিফিকেশন লোড error:', error);
+            return;
+        }
+        
+        if (!notifications || notifications.length === 0) {
+            console.log('✅ কোনো নতুন লোন নোটিফিকেশন নেই');
+            return;
+        }
+        
+        console.log(`📢 ${notifications.length} টি লোন নোটিফিকেশন পাওয়া গেছে`);
+        
+        // ✅ একে একে দেখান (৮০০ms delay সহ, যাতে সব একসাথে না আসে)
+        for (const notification of notifications) {
+            showLoanNotificationPopup(notification);
+            await new Promise(resolve => setTimeout(resolve, 800));
+        }
+        
+    } catch(e) {
+        console.error('❌ loadLoanNotifications error:', e);
+    }
+}
+
+// ============================================================
+// ✅ লোন নোটিফিকেশন পপআপ দেখানো
+// ============================================================
+function showLoanNotificationPopup(notification) {
+    const modal = document.getElementById('loanNotificationModal');
+    if (!modal) {
+        // মডাল না থাকলে টোস্ট দেখান
+        const type = notification.notification_type === 'loan_increased' ? 'success' :
+                     notification.notification_type === 'loan_decreased' ? 'warning' :
+                     'info';
+        showToast(`📢 ${notification.title}\n${notification.message}`, type);
+        markLoanNotificationAsRead(notification.id);
+        return;
+    }
+    
+    // ✅ মডালের কন্টেন্ট সেট করুন
+    const titleEl = document.getElementById('loanNotifTitle');
+    const messageEl = document.getElementById('loanNotifMessage');
+    const iconEl = document.getElementById('loanNotifIcon');
+    const headerEl = document.getElementById('loanNotifHeader');
+    const amountEl = document.getElementById('loanNotifAmount');
+    
+    if (titleEl) titleEl.textContent = notification.title || 'লোন আপডেট';
+    if (messageEl) messageEl.textContent = notification.message || '';
+    
+    // ✅ টাইপ অনুযায়ী রঙ ও আইকন
+    let bgColor = 'linear-gradient(135deg, #3b82f6, #2563eb)';
+    let icon = 'fa-info-circle';
+    
+    if (notification.notification_type === 'loan_increased') {
+        bgColor = 'linear-gradient(135deg, #10b981, #059669)';
+        icon = 'fa-arrow-up';
+    } else if (notification.notification_type === 'loan_decreased') {
+        bgColor = 'linear-gradient(135deg, #dc2626, #b91c1c)';
+        icon = 'fa-arrow-down';
+    } else if (notification.notification_type === 'loan_approved') {
+        bgColor = 'linear-gradient(135deg, #10b981, #059669)';
+        icon = 'fa-check-circle';
+    }
+    
+    if (headerEl) headerEl.style.background = bgColor;
+    if (iconEl) iconEl.className = `fas ${icon}`;
+    
+    // ✅ পরিমাণ পরিবর্তন দেখান
+    if (amountEl && notification.old_amount && notification.new_amount) {
+        const diff = notification.difference || (notification.new_amount - notification.old_amount);
+        const sign = diff > 0 ? '+' : '';
+        amountEl.innerHTML = `
+            <div class="flex justify-between items-center gap-3 bg-white/10 p-3 rounded-lg">
+                <div class="text-center flex-1">
+                    <div class="text-xs opacity-80">পূর্বের</div>
+                    <div class="font-bold">${formatAmountWithText(notification.old_amount)}</div>
+                </div>
+                <i class="fas fa-arrow-right text-xl"></i>
+                <div class="text-center flex-1">
+                    <div class="text-xs opacity-80">নতুন</div>
+                    <div class="font-bold">${formatAmountWithText(notification.new_amount)}</div>
+                </div>
+                <div class="text-center">
+                    <div class="text-xs opacity-80">পরিবর্তন</div>
+                    <div class="font-bold ${diff > 0 ? 'text-green-200' : 'text-red-200'}">${sign}${formatAmountWithText(diff)}</div>
+                </div>
+            </div>
+        `;
+    } else if (amountEl) {
+        amountEl.innerHTML = '';
+    }
+    
+    // ✅ বাটনে notification.id সেট করুন
+    const closeBtn = document.getElementById('loanNotifCloseBtn');
+    if (closeBtn) {
+        closeBtn.onclick = () => {
+            markLoanNotificationAsRead(notification.id);
+            closeLoanNotificationModal();
+        };
+    }
+    
+    // ✅ মডাল দেখান
+    modal.style.display = 'flex';
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    document.body.style.overflow = 'hidden';
+}
+
+// ============================================================
+// ✅ নোটিফিকেশন পড়া হিসেবে মার্ক করা
+// ============================================================
+async function markLoanNotificationAsRead(notificationId) {
+    const client = await initSupabase();
+    if (!client) return;
+    
+    try {
+        await client
+            .from('member_loan_notifications')
+            .update({
+                is_read: true,
+                read_at: new Date().toISOString()
+            })
+            .eq('id', notificationId);
+        
+        console.log(`✅ নোটিফিকেশন #${notificationId} পড়া হিসেবে মার্ক করা হয়েছে`);
+    } catch(e) {
+        console.error('❌ Mark as read error:', e);
+    }
+}
+
+// ============================================================
+// ✅ লোন নোটিফিকেশন মডাল বন্ধ করা
+// ============================================================
+function closeLoanNotificationModal() {
+    const modal = document.getElementById('loanNotificationModal');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        document.body.style.overflow = '';
+    }
+}
+    
+// ============================================================
 // বকেয়া/সর্বশেষ জমা নোটিফিকেশন
 // ============================================================
-
 async function checkDueNotifications() {
     const container = document.getElementById('dueNotificationsContainer');
     if (!container) return;
@@ -2063,44 +2234,77 @@ function updateCurrentMemberStatus() {
     }
 }
     
+// ============================================================
+// ✅ updateUI() — সম্পূর্ণ আপডেটেড (লোন নোটিফিকেশন সহ)
+// ============================================================
 async function updateUI() {
-    if(!currentUser) return;
+    if (!currentUser) return;
+    
+    // ✅ ১. Supabase থেকে তাজা ডেটা লোড
     await refreshMemberDataFromSupabase();
     
+    // ============================================================
+    // ✅ ২. গ্রিটিং ও বেসিক ইনফরমেশন
+    // ============================================================
     const greeting = getGreeting();
     document.getElementById('greetingMessage').innerHTML = `${greeting}, ${currentUser.name}!`;
     document.getElementById('memberIdDisplay').innerHTML = currentUser.id;
     
+    // ✅ রেফারেল কোড
     const referCode = currentUser.referId || currentUser.refer_code || 'N/A';
     document.getElementById('referIdDisplay').innerHTML = referCode;
     document.getElementById('cardReferId').innerHTML = referCode;
     
+    // ✅ মোবাইল ও তারিখ
     document.getElementById('memberMobile').innerHTML = currentUser.mobile;
     
-    if(currentUser.joinDate) document.getElementById('joinDateDisplay').innerHTML = formatDateBD(currentUser.joinDate);
-    if(currentUser.approved_at) document.getElementById('approvalDateDisplay').innerHTML = formatDateTimeBD(currentUser.approved_at);
+    if (currentUser.joinDate) {
+        document.getElementById('joinDateDisplay').innerHTML = formatDateBD(currentUser.joinDate);
+    }
+    if (currentUser.approved_at) {
+        document.getElementById('approvalDateDisplay').innerHTML = formatDateTimeBD(currentUser.approved_at);
+    }
     
+    // ✅ আইডি কার্ড
     document.getElementById('cardName').innerHTML = currentUser.name;
     document.getElementById('cardId').innerHTML = currentUser.id;
     
+    // ============================================================
+    // ✅ ৩. মেম্বারশিপ স্ট্যাটাস আপডেট
+    // ============================================================
     updateMembershipTypeDisplay();
     updateMembershipStatus();
-    updateCurrentMemberStatus(); 
+    updateCurrentMemberStatus();
     
+    // ============================================================
+    // ✅ ৪. মাসিক সঞ্চয় ও QR কোড
+    // ============================================================
     document.getElementById('monthlySavingsDisplay').innerHTML = currentUser.monthlySavings + ' টাকা';
     document.getElementById('perMonthSavings').innerHTML = currentUser.monthlySavings;
     document.getElementById('qrCode').src = `https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(currentUser.id)}`;
     
-    if(currentUser.profileImage && currentUser.profileImage !== 'images/logo.png') {
+    // ============================================================
+    // ✅ ৫. প্রোফাইল ছবি
+    // ============================================================
+    if (currentUser.profileImage && currentUser.profileImage !== 'images/logo.png') {
         document.getElementById('profileImage').src = currentUser.profileImage;
         document.getElementById('cardProfileImage').src = currentUser.profileImage;
     }
     
+    // ============================================================
+    // ✅ ৬. ঠিকানা দেখানো
+    // ============================================================
     document.getElementById('presentAddressDisplay').innerHTML = currentUser.presentAddress || 'যোগ করা হয়নি';
     document.getElementById('permanentAddressDisplay').innerHTML = currentUser.permanentAddress || 'যোগ করা হয়নি';
     
+    // ============================================================
+    // ✅ ৭. রেফারেল লিংক
+    // ============================================================
     updateReferralLink();
     
+    // ============================================================
+    // ✅ ৮. মেম্বারশিপ টাইমার ও মেয়াদ কাউন্টডাউন
+    // ============================================================
     const timerStartDate = currentUser.approved_at || currentUser.joinDate;
     if (timerStartDate) {
         startMembershipTimer(timerStartDate);
@@ -2109,8 +2313,15 @@ async function updateUI() {
         document.getElementById('membershipDuration').innerHTML = 'তারিখ পাওয়া যায়নি';
     }
     
+    // ============================================================
+    // ✅ ৯. মাস ও বছর পপুলেট
+    // ============================================================
     populateYearAndMonths();
     populateTransferMonths();
+    
+    // ============================================================
+    // ✅ ১০. ডেটা লোড (Parallel)
+    // ============================================================
     await loadPaymentHistory();
     await loadUserFunds();
     await loadSavingsData();
@@ -2119,26 +2330,67 @@ async function updateUI() {
     await loadLoanHistory();
     await loadTransferHistory();
     
+    // ============================================================
+    // ✅ ১১. 🆕 লোন নোটিফিকেশন লোড (নতুন যোগ করা)
+    // ============================================================
+    await loadLoanNotifications();
+    
+    // ============================================================
+    // ✅ ১২. রেফারেল ডেটা (Delay সহ)
+    // ============================================================
     setTimeout(() => {
         loadReferralData();
     }, 500);
     
+    // ============================================================
+    // ✅ ১৩. নোটিশ ও অভিযোগ
+    // ============================================================
     await loadNotices();
     await loadComplaintReplies();
+    
+    // ============================================================
+    // ✅ ১৪. টাইম ইন্টারভাল সেটআপ
+    // ============================================================
     setupTimeIntervals();
-
+    
+    // ============================================================
+    // ✅ ১৫. ডিফল্ট তারিখ সেট
+    // ============================================================
     setDefaultDates();
     
+    // ============================================================
+    // ✅ ১৬. বকেয়া/আসন্ন পেমেন্ট নোটিফিকেশন চেক
+    // ============================================================
     await checkDueNotifications();
     
-    // ✅ রিয়েল-টাইম ব্যালেন্স চেক চালু করুন
+    // ============================================================
+    // ✅ ১৭. রিয়েল-টাইম ব্যালেন্স চেক চালু
+    // ============================================================
     startRealTimeBalanceCheck();
     
-    // ✅ ব্রডকাস্ট চ্যানেল সেটআপ
+    // ============================================================
+    // ✅ ১৮. ব্রডকাস্ট চ্যানেল সেটআপ
+    // ============================================================
     setupBroadcastChannel();
     
-    // ✅ অ্যাডমিন আপডেট পোলিং চালু করুন
+    // ============================================================
+    // ✅ ১৯. অ্যাডমিন আপডেট পোলিং চালু
+    // ============================================================
     startAdminUpdatePolling();
+    
+    // ============================================================
+    // ✅ ২০. লোন নোটিফিকেশন রিয়েল-টাইম চেক (প্রতি ২ মিনিটে)
+    // ============================================================
+    if (window.loanNotificationInterval) {
+        clearInterval(window.loanNotificationInterval);
+    }
+    window.loanNotificationInterval = setInterval(async () => {
+        if (document.visibilityState === 'visible' && currentUser) {
+            await loadLoanNotifications();
+        }
+    }, 120000); // ২ মিনিট
+    
+    console.log('✅ updateUI() সম্পূর্ণ - সব ডেটা লোড হয়েছে');
 }
 
 function updateMembershipTypeDisplay() {
@@ -10005,7 +10257,11 @@ function showNoticePopup() {
     window.showNoticePopup = showNoticePopup;
     window.markNoticeAsReadAndClose = markNoticeAsReadAndClose;
     window.closeNoticePopup = closeNoticePopup;
-    window.markCurrentNoticeAsRead = markCurrentNoticeAsRead;
+    wwindow.loadLoanNotifications = loadLoanNotifications;
+    window.showLoanNotificationPopup = showLoanNotificationPopup;
+    window.markLoanNotificationAsRead = markLoanNotificationAsRead;
+    window.closeLoanNotificationModal = closeLoanNotificationModal;indow.markCurrentNoticeAsRead = markCurrentNoticeAsRead;
+    
     
     console.log('✅ নোটিশ ফাংশন এক্সপোজ সম্পূর্ণ:');
     console.log('  markNoticeAsReadAndClose:', typeof window.markNoticeAsReadAndClose);
@@ -10014,7 +10270,9 @@ function showNoticePopup() {
             
         </script>
 
-        <!-- ✅ নোটিশ পপআপ মডাল -->
+<!-- ============================================================ -->
+<!-- ✅ ১. নোটিশ পপআপ মডাল (অপরিবর্তিত) -->
+<!-- ============================================================ -->
 <div id="noticePopupModal" class="fixed inset-0 z-[999999] items-center justify-center p-4" 
      style="display: none; background: rgba(0,0,0,0.75); backdrop-filter: blur(6px);">
     <div class="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] overflow-hidden shadow-2xl"
@@ -10079,6 +10337,65 @@ function showNoticePopup() {
         </div>
     </div>
 </div>
+
+<!-- ============================================================ -->
+<!-- ✅ ২. লোন নোটিফিকেশন মডাল (নতুন যোগ করা) -->
+<!-- ============================================================ -->
+<div id="loanNotificationModal" 
+     class="fixed inset-0 z-[999999] items-center justify-center p-4" 
+     style="display: none; background: rgba(0,0,0,0.75); backdrop-filter: blur(6px);">
+    <div class="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] overflow-hidden shadow-2xl"
+         style="animation: noticePopupIn 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);">
+        
+        <!-- হেডার -->
+        <div id="loanNotifHeader" 
+             class="p-4 text-white relative overflow-hidden"
+             style="background: linear-gradient(135deg, #10b981, #059669);">
+            <div class="flex items-center gap-3">
+                <div class="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center text-2xl">
+                    <i id="loanNotifIcon" class="fas fa-hand-holding-usd"></i>
+                </div>
+                <div class="flex-1">
+                    <p class="text-xs opacity-90">💰 লোন আপডেট</p>
+                    <h3 id="loanNotifTitle" class="text-lg font-bold">লোন আপডেট</h3>
+                </div>
+            </div>
+            <div class="absolute top-0 right-0 w-32 h-32 rounded-full opacity-10"
+                 style="background: white; transform: translate(30%, -30%);"></div>
+        </div>
+
+        <!-- বডি -->
+        <div class="p-5 max-h-[50vh] overflow-y-auto">
+            <!-- পরিমাণ পরিবর্তন (পূর্বের → নতুন) -->
+            <div id="loanNotifAmount" class="mb-3"></div>
+            
+            <!-- বার্তা -->
+            <div id="loanNotifMessage" 
+                 class="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">
+                নোটিফিকেশন বার্তা...
+            </div>
+            
+            <!-- তারিখ ও প্রেরক -->
+            <div class="mt-4 pt-3 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+                <span id="loanNotifDate"><i class="fas fa-clock mr-1"></i>-</span>
+                <span id="loanNotifSender"><i class="fas fa-user-shield mr-1"></i>-</span>
+            </div>
+        </div>
+        
+        <!-- ফুটার / অ্যাকশন বাটন -->
+        <div class="p-4 bg-gray-50 border-t flex gap-2">
+            <button id="loanNotifCloseBtn" 
+                    class="flex-1 bg-emerald-600 text-white py-3 rounded-lg hover:bg-emerald-700 transition font-semibold">
+                <i class="fas fa-check-circle mr-2"></i> বুঝেছি / পড়েছি
+            </button>
+            <button onclick="closeLoanNotificationModal()" 
+                    class="px-5 bg-gray-200 text-gray-700 py-3 rounded-lg hover:bg-gray-300 transition">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+</div>
+    
         
         <!-- ✅ পপআপ অ্যানিমেশন CSS -->
         <style>
