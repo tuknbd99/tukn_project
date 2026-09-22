@@ -4698,7 +4698,7 @@ async function loadLoanHistory() {
 }
 
 // ============================================================
-// viewLoanDetail
+// viewLoanDetail — সম্পূর্ণ সংশোধিত ভার্সন
 // ============================================================
 async function viewLoanDetail(loanId) {
     if(!loanId) { showToast('লোন আইডি পাওয়া যায়নি!', 'error'); return; }
@@ -4758,13 +4758,13 @@ async function viewLoanDetail(loanId) {
                 timeZone: 'Asia/Dhaka'
             });
             
-           let paymentStatus = 'pending';
+            let paymentStatus = 'pending';
             let paidAmount = 0;
             let lateFee = 0;
             let waivedLateFee = 0;
-            let isLateFeeLocked = false;      // ✅ শুধু জরিমানা মওকুফ
-            let isFullyWaived = false;        // ✅ সম্পূর্ণ কিস্তি মওকুফ
-            let isLocked = false;             // ✅ সামঞ্জস্যের জন্য
+            let isLateFeeLocked = false;
+            let isFullyWaived = false;
+            let isLocked = false;
             let lockReason = '';
             let transactionId = '';
             let paidDate = '';
@@ -4781,7 +4781,6 @@ async function viewLoanDetail(loanId) {
                 lateFee = payment.late_fee || 0;
                 waivedLateFee = Number(payment.late_fee_waived) || 0;
                 
-                // ✅ ২ ধরনের মওকুফের ফ্ল্যাগ
                 isLateFeeLocked = payment.late_fee_locked === true;
                 isFullyWaived = payment.installment_waived === true;
                 
@@ -4796,13 +4795,11 @@ async function viewLoanDetail(loanId) {
                 accountNumber = payment.account_number || '';
             }
             
-            // ✅ লাইভ জরিমানা হিসাব — ২ ধরনের মওকুফ বিবেচনা করে
+            // লাইভ জরিমানা হিসাব
             if (isFullyWaived) {
-                // সম্পূর্ণ কিস্তি মওকুফ → জরিমানা ০
                 lateFee = 0;
             } 
             else if (isLateFeeLocked) {
-                // শুধু জরিমানা লকড → স্টোর করা মান থেকে মওকুফ বিয়োগ
                 lateFee = Math.max(0, lateFee - waivedLateFee);
             } 
             else if (paymentStatus === 'pending' || paymentStatus === 'pending_verification') {
@@ -4819,24 +4816,20 @@ async function viewLoanDetail(loanId) {
             
             let statusText = '', statusClass = '', isPaid = false;
             
-            // ✅ ১. সম্পূর্ণ কিস্তি মওকুফ (সদস্যকে দিতে হবে না)
             if (isFullyWaived) {
                 statusText = '🎁 সম্পূর্ণ মওকুফ';
                 statusClass = 'emi-paid';
                 isPaid = true;
             }
-            // ✅ ২. পরিশোধিত
             else if (paymentStatus === 'approved' || paymentStatus === 'paid') {
                 statusText = '✅ পরিশোধিত';
                 statusClass = 'emi-paid';
                 isPaid = true;
             }
-            // ✅ ৩. যাচাইকরণে
             else if (paymentStatus === 'pending_verification') {
                 statusText = '⏳ যাচাইকরণে';
                 statusClass = 'emi-pending';
             }
-            // ✅ ৪. অপেক্ষমান (জরিমানা লকড বা না)
             else if (paymentStatus === 'pending') {
                 if (today > dueDate) {
                     if (isLateFeeLocked) {
@@ -4869,9 +4862,9 @@ async function viewLoanDetail(loanId) {
                 emiAmount: emiAmount,
                 lateFee: lateFee,
                 waivedLateFee: waivedLateFee,
-                isLateFeeLocked: isLateFeeLocked,       // ✅ নতুন — শুধু জরিমানা লক
-                isFullyWaived: isFullyWaived,           // ✅ নতুন — সম্পূর্ণ কিস্তি মওকুফ
-                isLocked: isLateFeeLocked,              // ✅ সামঞ্জস্যের জন্য
+                isLateFeeLocked: isLateFeeLocked,
+                isFullyWaived: isFullyWaived,
+                isLocked: isLateFeeLocked,
                 lockReason: lockReason,
                 totalAmount: emiAmount + lateFee,
                 status: paymentStatus,
@@ -4906,72 +4899,60 @@ async function viewLoanDetail(loanId) {
             'rejected': 'text-red-600'
         };
         
+        // EMI rows তৈরি
         let emiRows = '';
-emiData.forEach((emi, index) => {
-    const totalAmount = (emi.totalAmount || 0).toFixed(2);
-    const emiAmount = (emi.emiAmount || 0).toFixed(2);
-    const lateFee = (emi.lateFee || 0).toFixed(2);
-    
-        // ============================================================
-        // ✅ payButton লজিক — ৩ ধরনের অবস্থা
-        // ============================================================
-        let payButton = '';
-        
-        // ✅ ১. সম্পূর্ণ কিস্তি মওকুফ হয়েছে
-        if (emi.isFullyWaived) {
-            payButton = `<span class="text-green-700 text-xs font-bold">🎁 মওকুফ হয়েছে</span>`;
-        }
-        // ✅ ২. শুধু জরিমানা লকড (মূল কিস্তি বাকি) — পরিশোধ করা যাবে
-        else if (emi.isPaid) {
-            payButton = `<span class="text-green-600 text-xs font-bold">✅ পরিশোধিত</span>`;
-        }
-        // ✅ ৩. অপেক্ষমান (লকড হলেও মূল কিস্তি পরিশোধ করা যাবে)
-        else if (emi.isPending) {
-            payButton = `
-                <button onclick="paySpecificInstallment('${loan.id}', ${emi.installmentNo}, ${emi.emiAmount}, ${emi.lateFee})" 
-                        class="bg-emerald-600 text-white px-2 py-1 rounded text-xs hover:bg-emerald-700 transition">
-                    💳 পরিশোধ
-                </button>
+        emiData.forEach((emi, index) => {
+            const totalAmount = (emi.totalAmount || 0).toFixed(2);
+            const emiAmount = (emi.emiAmount || 0).toFixed(2);
+            const lateFee = (emi.lateFee || 0).toFixed(2);
+            
+            let payButton = '';
+            
+            if (emi.isFullyWaived) {
+                payButton = `<span class="text-green-700 text-xs font-bold">🎁 মওকুফ হয়েছে</span>`;
+            }
+            else if (emi.isPaid) {
+                payButton = `<span class="text-green-600 text-xs font-bold">✅ পরিশোধিত</span>`;
+            }
+            else if (emi.isPending) {
+                payButton = `
+                    <button onclick="paySpecificInstallment('${loan.id}', ${emi.installmentNo}, ${emi.emiAmount}, ${emi.lateFee})" 
+                            class="bg-emerald-600 text-white px-2 py-1 rounded text-xs hover:bg-emerald-700 transition">
+                        💳 পরিশোধ
+                    </button>
+                `;
+            }
+            else {
+                payButton = `<span class="text-gray-400 text-xs">⏳ অপেক্ষমান</span>`;
+            }
+            
+            let txIdHtml = emi.transactionId 
+                ? `<span class="text-xs text-gray-400 font-mono">${emi.transactionId}</span>` 
+                : '-';
+            let approvedByHtml = emi.approvedBy 
+                ? `<span class="text-xs text-gray-500">${emi.approvedBy}</span>` 
+                : '⏳ অপেক্ষমান';
+            
+            emiRows += `
+                <tr class="${emi.isFullyWaived ? 'bg-green-100' : emi.isPaid ? 'bg-green-50' : emi.status === 'pending_verification' ? 'bg-yellow-50' : emi.isLateFeeLocked ? 'bg-blue-50' : ''}">
+                    <td class="text-center font-semibold">${emi.installmentNo}</td>
+                    <td class="text-center">${emi.dueDateDisplay}</td>
+                    <td class="text-center font-medium text-emerald-600">${emiAmount} টাকা</td>
+                    <td class="text-center ${emi.lateFee > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}">
+                        ${lateFee} টাকা
+                        ${emi.waivedLateFee > 0 ? `<br><span class="text-xs text-green-600 font-medium">✓ মওকুফ: ${emi.waivedLateFee.toFixed(2)} টাকা</span>` : ''}
+                        ${emi.isLateFeeLocked && !emi.isFullyWaived ? `<br><span class="text-xs text-blue-600 font-medium">🔒 জরিমানা লকড</span>` : ''}
+                        ${emi.isFullyWaived ? `<br><span class="text-xs text-green-700 font-bold">🎁 সম্পূর্ণ মওকুফ</span>` : ''}
+                    </td>
+                    <td class="text-center font-bold text-blue-600">${totalAmount} টাকা</td>
+                    <td class="text-center"><span class="px-2 py-1 rounded-full text-xs ${emi.statusClass}">${emi.statusText}</span></td>
+                    <td class="text-center text-xs">${emi.paidDate ? formatDateBD(emi.paidDate) : '-'}</td>
+                    <td class="text-center text-xs">${txIdHtml}</td>
+                    <td class="text-center text-xs">${approvedByHtml}</td>
+                    <td class="text-center">${payButton}</td>
+                </tr>
             `;
-        }
-        // ✅ ৪. অন্য সব অবস্থা
-        else {
-            payButton = `<span class="text-gray-400 text-xs">⏳ অপেক্ষমান</span>`;
-        }
-        
-        // ============================================================
-        // ✅ লেনদেন আইডি ও অনুমোদনকারী
-        // ============================================================
-        let txIdHtml = emi.transactionId 
-            ? `<span class="text-xs text-gray-400 font-mono">${emi.transactionId}</span>` 
-            : '-';
-        let approvedByHtml = emi.approvedBy 
-            ? `<span class="text-xs text-gray-500">${emi.approvedBy}</span>` 
-            : '⏳ অপেক্ষমান';
-        
-        // ============================================================
-        // ✅ টেবিলের সারি তৈরি
-        // ============================================================
-        emiRows += `
-            <tr class="${emi.isFullyWaived ? 'bg-green-100' : emi.isPaid ? 'bg-green-50' : emi.status === 'pending_verification' ? 'bg-yellow-50' : emi.isLateFeeLocked ? 'bg-blue-50' : ''}">
-                <td class="text-center font-semibold">${emi.installmentNo}</td>
-                <td class="text-center">${emi.dueDateDisplay}</td>
-                <td class="text-center font-medium text-emerald-600">${emiAmount} টাকা</td>
-                <td class="text-center ${emi.lateFee > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}">
-                    ${lateFee} টাকা
-                    ${emi.waivedLateFee > 0 ? `<br><span class="text-xs text-green-600 font-medium">✓ মওকুফ: ${emi.waivedLateFee.toFixed(2)} টাকা</span>` : ''}
-                    ${emi.isLateFeeLocked && !emi.isFullyWaived ? `<br><span class="text-xs text-blue-600 font-medium">🔒 জরিমানা লকড</span>` : ''}
-                    ${emi.isFullyWaived ? `<br><span class="text-xs text-green-700 font-bold">🎁 সম্পূর্ণ মওকুফ</span>` : ''}
-                </td>
-                <td class="text-center font-bold text-blue-600">${totalAmount} টাকা</td>
-                <td class="text-center"><span class="px-2 py-1 rounded-full text-xs ${emi.statusClass}">${emi.statusText}</span></td>
-                <td class="text-center text-xs">${emi.paidDate ? formatDateBD(emi.paidDate) : '-'}</td>
-                <td class="text-center text-xs">${txIdHtml}</td>
-                <td class="text-center text-xs">${approvedByHtml}</td>
-                <td class="text-center">${payButton}</td>
-            </tr>
-        `;
-    });
+        });
         
         const totalPaid = emiData.filter(e => e.isPaid).reduce((sum, e) => sum + e.emiAmount, 0);
         const totalLateFeePaid = emiData.filter(e => e.isPaid).reduce((sum, e) => sum + e.lateFee, 0);
@@ -4984,87 +4965,87 @@ emiData.forEach((emi, index) => {
             </button>
         ` : '';
         
+        // ✅ সম্পূর্ণ HTML একসাথে (একটি মাত্র content.innerHTML)
         content.innerHTML = `
-    <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg mb-4">
-        <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">লোনের ধরন</span>
-                <span class="font-semibold text-emerald-700 text-sm">${loan.loan_type || 'সাধারণ লোন'}</span>
+            <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg mb-4">
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">লোনের ধরন</span>
+                        <span class="font-semibold text-emerald-700 text-sm">${loan.loan_type || 'সাধারণ লোন'}</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">পরিমাণ</span>
+                        <span class="font-semibold text-emerald-700 text-sm">${Number(loan.amount || 0).toLocaleString()} টাকা</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">মেয়াদ</span>
+                        <span class="font-semibold text-emerald-700 text-sm">${loan.duration_months || loan.duration || '-'} মাস</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">প্রতি কিস্তি</span>
+                        <span class="font-semibold text-emerald-700 text-sm">${(loan.emi_amount || 0).toFixed(2)} টাকা</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">মোট পরিশোধ্য</span>
+                        <span class="font-semibold text-emerald-700 text-sm">${(loan.total_payable || 0).toFixed(2)} টাকা</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">স্ট্যাটাস</span>
+                        <span class="font-semibold ${statusColorMap[loan.status] || 'text-gray-600'} text-sm">${statusMap[loan.status] || loan.status}</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">পরিশোধিত</span>
+                        <span class="font-semibold text-green-600 text-sm">${totalPaid.toFixed(2)} টাকা</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">বাকি ব্যালেন্স</span>
+                        <span class="font-semibold text-red-600 text-sm">${remainingBalance.toFixed(2)} টাকা</span>
+                    </div>
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">মোট বিলম্ব ফি</span>
+                        <span class="font-semibold text-orange-600 text-sm">${totalLateFeePaid.toFixed(2)} টাকা</span>
+                    </div>
+                    ${totalWaivedLateFee > 0 ? `
+                    <div class="flex justify-between items-center border-b border-dashed border-green-300 py-2 bg-green-50/70 px-2 rounded">
+                        <span class="font-bold text-green-700 text-sm">🎁 মোট মওকুফ</span>
+                        <span class="font-semibold text-green-700 text-sm">${totalWaivedLateFee.toFixed(2)} টাকা</span>
+                    </div>
+                    ` : ''}
+                    ${loan.application_no ? `
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">🔢 সিরিয়াল নম্বর</span>
+                        <span class="font-semibold text-emerald-700 text-sm font-mono">${loan.application_no}</span>
+                    </div>
+                    ` : ''}
+                    ${loan.approved_by ? `
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">অনুমোদনকারী</span>
+                        <span class="font-semibold text-emerald-700 text-sm">${loan.approved_by}</span>
+                    </div>
+                    ` : ''}
+                    ${loan.approved_at ? `
+                    <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
+                        <span class="font-bold text-gray-700 text-sm">অনুমোদনের তারিখ</span>
+                        <span class="font-semibold text-emerald-700 text-sm">${formatDateBD(loan.approved_at)}</span>
+                    </div>
+                    ` : ''}
+                    ${loan.reject_reason ? `
+                    <div class="col-span-1 md:col-span-2 flex justify-between items-center border-b border-dashed border-red-200 py-2 bg-red-50/50 px-2 rounded">
+                        <span class="font-bold text-red-600 text-sm">❌ বাতিলের কারণ</span>
+                        <span class="font-semibold text-red-700 text-sm">${loan.reject_reason}</span>
+                    </div>
+                    ` : ''}
+                    ${loan.special_note ? `
+                    <div class="col-span-1 md:col-span-2 flex justify-between items-center border-b border-dashed border-blue-200 py-2 bg-blue-50/50 px-2 rounded">
+                        <span class="font-bold text-blue-600 text-sm">📝 বিশেষ নোট</span>
+                        <span class="font-semibold text-blue-800 text-sm">${loan.special_note}</span>
+                    </div>
+                    ` : ''}
+                </div>
             </div>
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">পরিমাণ</span>
-                <span class="font-semibold text-emerald-700 text-sm">${Number(loan.amount || 0).toLocaleString()} টাকা</span>
-            </div>
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">মেয়াদ</span>
-                <span class="font-semibold text-emerald-700 text-sm">${loan.duration_months || loan.duration || '-'} মাস</span>
-            </div>
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">প্রতি কিস্তি</span>
-                <span class="font-semibold text-emerald-700 text-sm">${(loan.emi_amount || 0).toFixed(2)} টাকা</span>
-            </div>
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">মোট পরিশোধ্য</span>
-                <span class="font-semibold text-emerald-700 text-sm">${(loan.total_payable || 0).toFixed(2)} টাকা</span>
-            </div>
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">স্ট্যাটাস</span>
-                <span class="font-semibold ${statusColorMap[loan.status] || 'text-gray-600'} text-sm">${statusMap[loan.status] || loan.status}</span>
-            </div>
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">পরিশোধিত</span>
-                <span class="font-semibold text-green-600 text-sm">${totalPaid.toFixed(2)} টাকা</span>
-            </div>
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">বাকি ব্যালেন্স</span>
-                <span class="font-semibold text-red-600 text-sm">${remainingBalance.toFixed(2)} টাকা</span>
-            </div>
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">মোট বিলম্ব ফি</span>
-                <span class="font-semibold text-orange-600 text-sm">${totalLateFeePaid.toFixed(2)} টাকা</span>
-            </div>
-            ${totalWaivedLateFee > 0 ? `
-            <div class="flex justify-between items-center border-b border-dashed border-green-300 py-2 bg-green-50/70 px-2 rounded">
-                <span class="font-bold text-green-700 text-sm">🎁 মোট মওকুফ</span>
-                <span class="font-semibold text-green-700 text-sm">${totalWaivedLateFee.toFixed(2)} টাকা</span>
-            </div>
-            ` : ''}
-            ${loan.application_no ? `
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">🔢 সিরিয়াল নম্বর</span>
-                <span class="font-semibold text-emerald-700 text-sm font-mono">${loan.application_no}</span>
-            </div>
-            ` : ''}
-            ${loan.approved_by ? `
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">অনুমোদনকারী</span>
-                <span class="font-semibold text-emerald-700 text-sm">${loan.approved_by}</span>
-            </div>
-            ` : ''}
-            ${loan.approved_at ? `
-            <div class="flex justify-between items-center border-b border-dashed border-gray-200 py-2">
-                <span class="font-bold text-gray-700 text-sm">অনুমোদনের তারিখ</span>
-                <span class="font-semibold text-emerald-700 text-sm">${formatDateBD(loan.approved_at)}</span>
-            </div>
-            ` : ''}
-            ${loan.reject_reason ? `
-            <div class="col-span-1 md:col-span-2 flex justify-between items-center border-b border-dashed border-red-200 py-2 bg-red-50/50 px-2 rounded">
-                <span class="font-bold text-red-600 text-sm">❌ বাতিলের কারণ</span>
-                <span class="font-semibold text-red-700 text-sm">${loan.reject_reason}</span>
-            </div>
-            ` : ''}
-            ${loan.special_note ? `
-            <div class="col-span-1 md:col-span-2 flex justify-between items-center border-b border-dashed border-blue-200 py-2 bg-blue-50/50 px-2 rounded">
-                <span class="font-bold text-blue-600 text-sm">📝 বিশেষ নোট</span>
-                <span class="font-semibold text-blue-800 text-sm">${loan.special_note}</span>
-            </div>
-            ` : ''}
-        </div>
-    </div>
-`;
             
             <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
-                <h4 class="font-bold text-emerald-700">📅 কিস্তির সময়সূচি (${emiData.length} টি কিস্তি)</h4>
+                <h4 class="font-bold text-emerald-700">📅 কিস্তির সময়সূচি (${emiData.length} টি কিস্তি)</h4>
                 <div class="flex gap-2 flex-wrap">
                     <span class="text-xs text-gray-500">🟢 পরিশোধিত | 🟡 যাচাইকরণে | 🔴 বিলম্বিত</span>
                     ${showSlipBtn}
