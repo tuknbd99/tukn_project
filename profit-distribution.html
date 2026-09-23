@@ -490,7 +490,7 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
 }
 
 // ============================================================
-// প্রিভিউ দেখানো (সম্পূর্ণ ফান্ড সহ)
+// প্রিভিউ দেখানো (মাস্টার লেভেল ডুপ্লিকেট চেক সহ) ✅
 // ============================================================
 async function calculateAndPreview() {
     const month = document.getElementById('profitMonth').value;
@@ -513,6 +513,80 @@ async function calculateAndPreview() {
     previewBtn.innerHTML = '<span class="loading"></span> গণনা হচ্ছে...';
     
     try {
+        const client = initSupabase();
+        if (!client) {
+            showToast('Supabase সংযোগ সমস্যা!', 'error');
+            previewBtn.disabled = false;
+            previewBtn.innerHTML = '<i class="fas fa-calculator mr-2"></i> প্রিভিউ দেখুন';
+            return;
+        }
+        
+        // ============================================================
+        // ✅✅✅ নতুন যোগ: মাস্টার লেভেল ডুপ্লিকেট চেক ✅✅✅
+        // ============================================================
+        console.log(`🔍 চেক করা হচ্ছে: ${month} ${year} মাসে ইতিমধ্যে বন্টন হয়েছে কি?`);
+        
+        const { data: existingMaster, error: masterCheckError } = await client
+            .from('profit_distributions')
+            .select('id, month, year, totaldistributed, distributed_at')
+            .eq('month', month)
+            .eq('year', year);
+        
+        if (masterCheckError) {
+            console.warn('⚠️ মাস্টার চেক error:', masterCheckError.message);
+        }
+        
+        if (existingMaster && existingMaster.length > 0) {
+            console.warn(`⚠️ এই মাসে ইতিমধ্যে ${existingMaster.length} টি বন্টন আছে!`);
+            
+            const existing = existingMaster[0];
+            const date = existing.distributed_at 
+                ? new Date(existing.distributed_at).toLocaleString('bn-BD')
+                : 'অজানা';
+            
+            const errorMsg = `
+🚨 ডুপ্লিকেট বন্টন সনাক্ত!
+━━━━━━━━━━━━━━━━━━━━━━
+📅 মাস: ${month} ${year}
+💰 আগের বিতরণ: ${formatAmountText(existing.totaldistributed)}
+📆 তারিখ: ${date}
+━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ এই মাসে ইতিমধ্যে লভ্যাংশ বন্টন হয়েছে!
+
+🔒 আপনি চাইলে:
+• ভিন্ন মাস নির্বাচন করুন
+• অথবা "ফেইলড সদস্যদের" জন্য বন্টন করুন
+
+❌ এখানে আবার বন্টন করা যাবে না।
+            `.trim();
+            
+            alert(errorMsg);
+            
+            // ✅ প্রিভিউ দেখাবেন না
+            previewBtn.disabled = false;
+            previewBtn.innerHTML = '<i class="fas fa-calculator mr-2"></i> প্রিভিউ দেখুন';
+            confirmBtn.disabled = true;
+            
+            // ✅ সতর্ক বার্তা দেখান
+            document.getElementById('previewMessage').innerHTML = `
+                <div class="bg-red-50 p-3 rounded-lg border-2 border-red-300 text-red-700">
+                    <i class="fas fa-ban mr-2"></i>
+                    <strong>⛔ ডুপ্লিকেট বন্টন!</strong> এই মাসে (${month} ${year}) ইতিমধ্যে বন্টন হয়েছে।
+                    <br><span class="text-sm">তারিখ: ${date} | বিতরণ: ${formatAmountText(existing.totaldistributed)}</span>
+                    <br><span class="text-xs mt-2 block">💡 ভিন্ন মাস নির্বাচন করুন অথবা ফেইলড সদস্যদের জন্য বন্টন করুন।</span>
+                </div>
+            `;
+            
+            return;
+        }
+        
+        console.log(`✅ মাস্টার চেক পাস — ${month} ${year} এ এখনো বন্টন হয়নি`);
+        
+        // ============================================================
+        // বাকি কোড অপরিবর্তিত
+        // ============================================================
+        
         const result = await calculateProfitDistribution(totalProfit, welfarePercent, month, year);
         
         if (!result || result.memberCount === 0) {
@@ -523,6 +597,11 @@ async function calculateAndPreview() {
         }
         
         previewData = result;
+        
+        // ✅ মাস্টার চেক পাস করলে ডাটা দেখান
+        const existingMasterInfo = existingMaster && existingMaster.length > 0 
+            ? `🚨 এই মাসে ইতিমধ্যে বন্টন হয়েছে!` 
+            : '';
         
         document.getElementById('summarySection').style.display = 'block';
         document.getElementById('sumTotalProfit').innerHTML = formatAmountText(result.totalProfit);
@@ -536,8 +615,8 @@ async function calculateAndPreview() {
         
         document.getElementById('membersSection').style.display = 'block';
         document.getElementById('memberCount').innerHTML = `
-            ✅ ${result.memberCount} জন সদস্য পাবেন (${month} ${year} পর্যন্ত জমা অনুযায়ী)
-            <span class="text-red-500">| 🚫 ${result.excludedCount} জন বাদ পড়েছেন (ফান্ড ০)</span>
+            ✅ ${result.memberCount} জন সদস্য পাবেন (${month} ${year} পর্যন্ত জমা অনুযায়ী)
+            <span class="text-red-500">| 🚫 ${result.excludedCount} জন বাদ পড়েছেন</span>
         `;
         
         const tbody = document.getElementById('membersTableBody');
@@ -545,11 +624,10 @@ async function calculateAndPreview() {
             tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-gray-500">কোনো যোগ্য সদস্য নেই</td></tr>';
         } else {
             tbody.innerHTML = result.results.map((m, i) => {
-                // ফান্ড ব্রেকডাউন দেখান
                 const fundParts = [];
-                if (m.totalSavings > 0) fundParts.push(`সঞ্চয়: ${formatAmountText(m.totalSavings)}`);
-                if (m.profitSavings > 0) fundParts.push(`সঞ্চয় লাভ: ${formatAmountText(m.profitSavings)}`);
-                if (m.profitInvestment > 0) fundParts.push(`বিনিয়োগ লাভ: ${formatAmountText(m.profitInvestment)}`);
+                if (m.totalSavings > 0) fundParts.push(`সঞ্চয়: ${formatAmountText(m.totalSavings)}`);
+                if (m.profitSavings > 0) fundParts.push(`সঞ্চয় লাভ: ${formatAmountText(m.profitSavings)}`);
+                if (m.profitInvestment > 0) fundParts.push(`বিনিয়োগ লাভ: ${formatAmountText(m.profitInvestment)}`);
                 if (m.profitReferral > 0) fundParts.push(`রেফারেল লাভ: ${formatAmountText(m.profitReferral)}`);
                 const fundBreakdown = fundParts.join(' + ');
                 
@@ -578,9 +656,9 @@ async function calculateAndPreview() {
         document.getElementById('previewMessage').innerHTML = `
             <div class="bg-green-50 p-3 rounded-lg border border-green-200 text-green-700">
                 <i class="fas fa-check-circle mr-2"></i> 
-                <strong>${result.memberCount}</strong> জন সদস্যের মধ্যে <strong>${formatAmountText(result.distributableAmount)}</strong> বিতরণ করা হবে (${month} ${year} পর্যন্ত জমা অনুযায়ী)। 
+                <strong>${result.memberCount}</strong> জন সদস্যের মধ্যে <strong>${formatAmountText(result.distributableAmount)}</strong> বিতরণ করা হবে (${month} ${year} পর্যন্ত জমা অনুযায়ী)। 
                 প্রতি টাকার লভ্যাংশ: <strong>${result.perTakaProfit.toFixed(4)}</strong> টাকা
-                ${result.excludedCount > 0 ? `<br><span class="text-amber-600">⚠️ ${result.excludedCount} জন সদস্য বাদ পড়েছেন (ফান্ড ০)</span>` : ''}
+                ${result.excludedCount > 0 ? `<br><span class="text-amber-600">⚠️ ${result.excludedCount} জন সদস্য বাদ পড়েছেন</span>` : ''}
             </div>
         `;
         
@@ -596,7 +674,7 @@ async function calculateAndPreview() {
 }
 
 // ============================================================
-// লভ্যাংশ বন্টন নিশ্চিতকরণ (Retry Logic + Safety Check) ✅
+// লভ্যাংশ বন্টন নিশ্চিতকরণ (সব সুরক্ষা সহ) ✅
 // ============================================================
 async function confirmDistribution() {
     if (!previewData) {
@@ -640,6 +718,42 @@ async function confirmDistribution() {
         isProcessing = true;
         
         // ============================================================
+        // ✅✅✅ নতুন যোগ: চূড়ান্ত মাস্টার চেক (নিরাপত্তার জন্য) ✅✅✅
+        // ============================================================
+        console.log('🛡️ চূড়ান্ত মাস্টার চেক চলছে...');
+        
+        const { data: finalMasterCheck, error: finalCheckError } = await client
+            .from('profit_distributions')
+            .select('id, month, year, totaldistributed, distributed_at')
+            .eq('month', month)
+            .eq('year', year);
+        
+        if (finalCheckError) {
+            console.warn('⚠️ চূড়ান্ত চেক error:', finalCheckError.message);
+        }
+        
+        if (finalMasterCheck && finalMasterCheck.length > 0) {
+            const existing = finalMasterCheck[0];
+            const date = existing.distributed_at 
+                ? new Date(existing.distributed_at).toLocaleString('bn-BD')
+                : 'অজানা';
+            
+            showToast(
+                `🚨 ডুপ্লিকেট! ${month} ${year} এ ইতিমধ্যে বন্টন হয়েছে!\n` +
+                `📅 তারিখ: ${date}\n` +
+                `💰 বিতরণ: ${formatAmountText(existing.totaldistributed)}`,
+                'error'
+            );
+            
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i> বন্টন নিশ্চিত করুন';
+            isProcessing = false;
+            return;
+        }
+        
+        console.log('✅ চূড়ান্ত মাস্টার চেক পাস');
+        
+        // ============================================================
         // ✅ ১. মাস্টার এন্ট্রি তৈরি
         // ============================================================
         const { data: masterData, error: masterError } = await client
@@ -658,7 +772,22 @@ async function confirmDistribution() {
             }])
             .select();
         
-        if (masterError) throw masterError;
+        if (masterError) {
+            // ✅ UNIQUE constraint error handle
+            if (masterError.code === '23505' || masterError.message.includes('duplicate')) {
+                showToast(
+                    `🚨 ডুপ্লিকেট! এই মাসে ইতিমধ্যে বন্টন হয়েছে!\n` +
+                    `(ডেটাবেস লেভেলে ব্লক করা হয়েছে)`,
+                    'error'
+                );
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i> বন্টন নিশ্চিত করুন';
+                isProcessing = false;
+                return;
+            }
+            throw masterError;
+        }
+        
         const distributionId = masterData[0].id;
         console.log('✅ মাস্টার এন্ট্রি তৈরি:', distributionId);
         
@@ -720,19 +849,18 @@ async function confirmDistribution() {
         }
         
         // ============================================================
-        // ✅ ৪. প্রতিটি সদস্যের জন্য লভ্যাংশ বিতরণ (Retry Logic সহ) ✅
+        // ✅ ৪. প্রতিটি সদস্যের জন্য লভ্যাংশ বিতরণ (Retry Logic সহ)
         // ============================================================
         console.log('🔄 লভ্যাংশ বিতরণ শুরু...');
         
         let successCount = 0;
         let updateFailCount = 0;
         const historyEntries = [];
-        const failedMembers = [];  // ✅ ফেইলড সদস্য তালিকা
+        const failedMembers = [];
         
-        // ✅ Retry Configuration
-        const MAX_RETRIES = 3;          // সর্বোচ্চ ৩ বার চেষ্টা
-        const RETRY_DELAY_MS = 500;     // প্রতিটি retry-এর মাঝে ৫০০ms delay
-        const BETWEEN_MEMBERS_DELAY = 100;  // প্রতিটি সদস্যের মাঝে ১০০ms delay
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY_MS = 500;
+        const BETWEEN_MEMBERS_DELAY = 100;
         
         let processedCount = 0;
         
@@ -742,7 +870,7 @@ async function confirmDistribution() {
                 let retries = 0;
                 let lastError = null;
                 
-                // ✅ Retry Loop — সর্বোচ্চ ৩ বার চেষ্টা
+                // ✅ Retry Loop
                 while (!success && retries < MAX_RETRIES) {
                     try {
                         // ✅ সদস্যের ব্যালেন্স আপডেট
@@ -759,14 +887,12 @@ async function confirmDistribution() {
                             retries++;
                             console.warn(`⚠️ [${retries}/${MAX_RETRIES}] Retry for ${m.full_name} (${m.member_id}):`, updateError.message);
                             
-                            // ✅ Retry Delay
                             if (retries < MAX_RETRIES) {
                                 await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
                             }
                             continue;
                         }
                         
-                        // ✅ সফল
                         success = true;
                         
                     } catch(e) {
@@ -808,7 +934,6 @@ async function confirmDistribution() {
                         distributed_at: new Date().toISOString()
                     });
                 } else {
-                    // ✅ সব retry শেষেও fail
                     updateFailCount++;
                     failedMembers.push({
                         member_id: m.member_id,
@@ -821,12 +946,10 @@ async function confirmDistribution() {
                 
                 processedCount++;
                 
-                // ✅ Progress log প্রতি ১০ জনে
                 if (processedCount % 10 === 0) {
                     console.log(`📊 Progress: ${processedCount}/${verifiedResults.length} (সফল: ${successCount}, ব্যর্থ: ${updateFailCount})`);
                 }
                 
-                // ✅ প্রতিটি সদস্যের পর delay (rate limit এড়াতে)
                 await new Promise(resolve => setTimeout(resolve, BETWEEN_MEMBERS_DELAY));
             }
         }
@@ -834,21 +957,26 @@ async function confirmDistribution() {
         console.log(`✅ সব প্রসেস সম্পন্ন: সফল ${successCount}, ব্যর্থ ${updateFailCount}`);
         
         // ============================================================
-        // ✅ ৫. ইতিহাস এন্ট্রি insert (সব সফল সদস্যদের জন্য)
+        // ✅ ৫. ইতিহাস এন্ট্রি insert
         // ============================================================
         if (historyEntries.length > 0) {
             console.log(`📝 ${historyEntries.length} টি history entry insert করা হচ্ছে...`);
             
-            // ✅ Batch insert (একসাথে)
             const { error: historyError } = await client
                 .from('profit_distribution_history')
                 .insert(historyEntries);
             
             if (historyError) {
-                console.error('❌ History insert error:', historyError);
-                throw historyError;
+                // ✅ UNIQUE constraint error handle
+                if (historyError.code === '23505' || historyError.message.includes('duplicate')) {
+                    console.warn('⚠️ কিছু history entry ইতিমধ্যে আছে — skip করা হচ্ছে');
+                } else {
+                    console.error('❌ History insert error:', historyError);
+                    throw historyError;
+                }
+            } else {
+                console.log(`✅ ${historyEntries.length} টি ইতিহাস এন্ট্রি তৈরি`);
             }
-            console.log(`✅ ${historyEntries.length} টি ইতিহাস এন্ট্রি তৈরি`);
         }
         
         // ============================================================
@@ -877,7 +1005,7 @@ async function confirmDistribution() {
         await loadDistributionHistory();
         resetForm();
         
-        // ✅ সফলতার শেষ লগ
+        // ✅ চূড়ান্ত লগ
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('📊 লভ্যাংশ বন্টন সম্পন্ন');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -888,7 +1016,14 @@ async function confirmDistribution() {
         
     } catch(e) {
         console.error('❌ Distribution error:', e);
-        showToast('লভ্যাংশ বন্টন ব্যর্থ: ' + e.message, 'error');
+        
+        // ✅ UNIQUE constraint error সুন্দর মেসেজ
+        let errorMsg = e.message || 'Unknown error';
+        if (e.code === '23505' || errorMsg.includes('duplicate')) {
+            errorMsg = `🚨 ডুপ্লিকেট! এই মাসে ইতিমধ্যে বন্টন হয়েছে।`;
+        }
+        
+        showToast('লভ্যাংশ বন্টন ব্যর্থ: ' + errorMsg, 'error');
         confirmBtn.disabled = false;
         confirmBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i> বন্টন নিশ্চিত করুন';
         isProcessing = false;
