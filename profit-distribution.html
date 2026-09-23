@@ -342,7 +342,7 @@ async function getMemberProfitBalanceUpToMonth(memberId, targetMonth, targetYear
 }
 
 // ============================================================
-// লভ্যাংশ গণনা (সম্পূর্ণ ফান্ড সহ)
+// লভ্যাংশ গণনা (ডুপ্লিকেট চেক সহ) ✅
 // ============================================================
 async function calculateProfitDistribution(totalProfit, welfarePercent, month, year) {
     const welfareAmount = totalProfit * (welfarePercent / 100);
@@ -351,6 +351,7 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
     const client = initSupabase();
     if (!client) return null;
     
+    // ✅ ১. সব সক্রিয় সদস্য লোড করুন
     const { data: allMembers, error } = await client
         .from('members')
         .select('member_id, full_name, mobile, status, referral_bonus')
@@ -367,11 +368,45 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
         return null;
     }
     
+    // ============================================================
+    // ✅✅✅ নতুন সংযোজন: ডুপ্লিকেট চেক ✅✅✅
+    // ============================================================
+    const { data: alreadyDistributed, error: checkError } = await client
+        .from('profit_distribution_history')
+        .select('member_id')
+        .eq('month', month)
+        .eq('year', year)
+        .eq('status', 'completed');
+    
+    if (checkError) {
+        console.warn('⚠️ ডুপ্লিকেট চেক error:', checkError);
+    }
+    
+    const alreadyDistributedIds = new Set(
+        (alreadyDistributed || []).map(d => d.member_id)
+    );
+    
+    console.log(`📊 ${month} ${year} এ ইতিমধ্যে পেয়েছে: ${alreadyDistributedIds.size} জন`);
+    
+    // ============================================================
+    
     const memberFunds = [];
+    const skippedMembers = [];  // ✅ স্কিপ হওয়া সদস্য
     let totalFund = 0;
     
     for (const member of allMembers) {
-        // ১. সঞ্চয় (জমা - উত্তোলন)
+        // ✅✅✅ নতুন সংযোজন: ইতিমধ্যে পেয়েছে কি চেক করুন ✅✅✅
+        if (alreadyDistributedIds.has(member.member_id)) {
+            console.log(`⏭️ স্কিপ: ${member.full_name} (${member.member_id}) - ইতিমধ্যে পেয়েছে`);
+            skippedMembers.push({
+                member_id: member.member_id,
+                full_name: member.full_name,
+                reason: 'already_received'
+            });
+            continue;   // ⏭️ পরবর্তী সদস্যে যান
+        }
+        
+        // ১. সঞ্চয় (জমা - উত্তোলন)
         const savings = await getMemberSavingsUpToMonth(member.member_id, month, year);
         
         // ২. পূর্ববর্তী লভ্যাংশ ব্যালেন্স
@@ -380,7 +415,7 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
         // ৩. রেফারেল বোনাস (বাদ)
         const referralBonus = 0;
         
-        // ৪. মোট ফান্ড = সঞ্চয় + সকল পূর্ববর্তী লভ্যাংশ
+        // ৪. মোট ফান্ড = সঞ্চয় + সকল পূর্ববর্তী লভ্যাংশ
         const fund = savings 
             + profitBalances.savings 
             + profitBalances.investment 
@@ -389,23 +424,30 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
         if (fund > 0) {
             memberFunds.push({
                 ...member,
-                // সঞ্চয়
                 totalSavings: savings,
-                // রেফারেল বোনাস (বাদ)
                 referralBonus: 0,
-                // পূর্ববর্তী লভ্যাংশ
                 profitSavings: profitBalances.savings,
                 profitInvestment: profitBalances.investment,
                 profitReferral: profitBalances.referral,
-                // মোট ফান্ড
                 totalFund: fund
             });
             totalFund += fund;
+        } else {
+            // ✅ ফান্ড ০ হলে বাদ
+            skippedMembers.push({
+                member_id: member.member_id,
+                full_name: member.full_name,
+                reason: 'zero_fund'
+            });
         }
     }
     
     if (memberFunds.length === 0) {
-        showToast(`কোনো যোগ্য সদস্য নেই! (${month} ${year} পর্যন্ত ফান্ড ০)`, 'error');
+        if (alreadyDistributedIds.size > 0) {
+            showToast(`✅ সব সদস্য ইতিমধ্যে ${month} ${year} এ পেয়েছে!`, 'info');
+        } else {
+            showToast(`কোনো যোগ্য সদস্য নেই! (${month} ${year} পর্যন্ত ফান্ড ০)`, 'error');
+        }
         return null;
     }
     
@@ -418,14 +460,12 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
             member_id: m.member_id,
             full_name: m.full_name,
             mobile: m.mobile,
-            // সকল ফান্ড
             totalSavings: m.totalSavings,
             referralBonus: 0,
             profitSavings: m.profitSavings,
             profitInvestment: m.profitInvestment,
             profitReferral: m.profitReferral,
             totalFund: m.totalFund,
-            // প্রাপ্ত লভ্যাংশ
             profitShare: profitShare,
             perTaka: perTakaProfit
         };
@@ -441,7 +481,9 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
         results,
         memberCount: memberFunds.length,
         totalMembers: allMembers.length,
-        excludedCount: allMembers.length - memberFunds.length,
+        excludedCount: skippedMembers.length,        // ✅ মোট বাদ পড়া
+        alreadyReceivedCount: alreadyDistributedIds.size,  // ✅ ইতিমধ্যে পেয়েছে
+        skippedMembers: skippedMembers,              // ✅ বিস্তারিত তালিকা
         month: month,
         year: year
     };
@@ -554,7 +596,7 @@ async function calculateAndPreview() {
 }
 
 // ============================================================
-// লভ্যাংশ বন্টন নিশ্চিতকরণ
+// লভ্যাংশ বন্টন নিশ্চিতকরণ (Retry Logic + Safety Check) ✅
 // ============================================================
 async function confirmDistribution() {
     if (!previewData) {
@@ -588,10 +630,18 @@ async function confirmDistribution() {
     
     try {
         const client = initSupabase();
-        if (!client) { showToast('Supabase সংযোগ সমস্যা!', 'error'); return; }
+        if (!client) { 
+            showToast('Supabase সংযোগ সমস্যা!', 'error'); 
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i> বন্টন নিশ্চিত করুন';
+            return; 
+        }
         
         isProcessing = true;
         
+        // ============================================================
+        // ✅ ১. মাস্টার এন্ট্রি তৈরি
+        // ============================================================
         const { data: masterData, error: masterError } = await client
             .from('profit_distributions')
             .insert([{
@@ -612,6 +662,9 @@ async function confirmDistribution() {
         const distributionId = masterData[0].id;
         console.log('✅ মাস্টার এন্ট্রি তৈরি:', distributionId);
         
+        // ============================================================
+        // ✅ ২. কল্যাণ তহবিলে জমা
+        // ============================================================
         if (previewData.welfareAmount > 0) {
             const { error: welfareError } = await client
                 .from('welfare_fund')
@@ -619,6 +672,7 @@ async function confirmDistribution() {
                     total: previewData.welfareAmount,
                     created_at: new Date().toISOString()
                 }]);
+            
             if (welfareError) {
                 console.error('Welfare insert error:', welfareError);
                 throw welfareError;
@@ -626,64 +680,196 @@ async function confirmDistribution() {
             console.log('✅ কল্যাণ তহবিলে জমা:', previewData.welfareAmount);
         }
         
-        let successCount = 0;
-        const historyEntries = [];
+        // ============================================================
+        // ✅ ৩. সেফটি চেক — প্রতিটি সদস্যের জন্য আবার চেক করুন
+        // ============================================================
+        console.log('🛡️ সেফটি চেক চলছে — ডুপ্লিকেট প্রিভেন্ট...');
+        
+        const verifiedResults = [];
+        let duplicateSkipped = 0;
         
         for (const m of previewData.results) {
+            const { data: alreadyCheck, error: checkErr } = await client
+                .rpc('check_profit_already_distributed', {
+                    p_member_id: m.member_id,
+                    p_month: month,
+                    p_year: String(year)
+                });
+            
+            if (checkErr) {
+                console.warn(`⚠️ সেফটি চেক error (${m.member_id}):`, checkErr.message);
+            }
+            
+            if (alreadyCheck === true) {
+                console.warn(`⏭️ সেফটি স্কিপ: ${m.full_name} (${m.member_id}) ইতিমধ্যে পেয়েছে`);
+                duplicateSkipped++;
+                continue;
+            }
+            
+            verifiedResults.push(m);
+        }
+        
+        console.log(`✅ সেফটি চেক সম্পন্ন: ${verifiedResults.length} জন প্রসেস হবে, ${duplicateSkipped} জন স্কিপ`);
+        
+        if (verifiedResults.length === 0) {
+            showToast('❌ সব সদস্য ইতিমধ্যে পেয়েছে! নতুন কেউ নেই।', 'warning');
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i> বন্টন নিশ্চিত করুন';
+            isProcessing = false;
+            return;
+        }
+        
+        // ============================================================
+        // ✅ ৪. প্রতিটি সদস্যের জন্য লভ্যাংশ বিতরণ (Retry Logic সহ) ✅
+        // ============================================================
+        console.log('🔄 লভ্যাংশ বিতরণ শুরু...');
+        
+        let successCount = 0;
+        let updateFailCount = 0;
+        const historyEntries = [];
+        const failedMembers = [];  // ✅ ফেইলড সদস্য তালিকা
+        
+        // ✅ Retry Configuration
+        const MAX_RETRIES = 3;          // সর্বোচ্চ ৩ বার চেষ্টা
+        const RETRY_DELAY_MS = 500;     // প্রতিটি retry-এর মাঝে ৫০০ms delay
+        const BETWEEN_MEMBERS_DELAY = 100;  // প্রতিটি সদস্যের মাঝে ১০০ms delay
+        
+        let processedCount = 0;
+        
+        for (const m of verifiedResults) {
             if (m.profitShare > 0) {
-                const { error: updateError } = await client
-                    .from('members')
-                    .update({ 
-                        profit_balance_savings: (m.profitSavings || 0) + m.profitShare 
-                    })
-                    .eq('member_id', m.member_id);
+                let success = false;
+                let retries = 0;
+                let lastError = null;
                 
-                if (updateError) {
-                    console.error(`Update error for ${m.member_id}:`, updateError);
+                // ✅ Retry Loop — সর্বোচ্চ ৩ বার চেষ্টা
+                while (!success && retries < MAX_RETRIES) {
+                    try {
+                        // ✅ সদস্যের ব্যালেন্স আপডেট
+                        const { error: updateError } = await client
+                            .from('members')
+                            .update({ 
+                                profit_balance_savings: (m.profitSavings || 0) + m.profitShare,
+                                updated_at: new Date().toISOString()
+                            })
+                            .eq('member_id', m.member_id);
+                        
+                        if (updateError) {
+                            lastError = updateError;
+                            retries++;
+                            console.warn(`⚠️ [${retries}/${MAX_RETRIES}] Retry for ${m.full_name} (${m.member_id}):`, updateError.message);
+                            
+                            // ✅ Retry Delay
+                            if (retries < MAX_RETRIES) {
+                                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+                            }
+                            continue;
+                        }
+                        
+                        // ✅ সফল
+                        success = true;
+                        
+                    } catch(e) {
+                        lastError = e;
+                        retries++;
+                        console.warn(`⚠️ [${retries}/${MAX_RETRIES}] Exception for ${m.full_name}:`, e.message);
+                        
+                        if (retries < MAX_RETRIES) {
+                            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+                        }
+                    }
                 }
                 
-                successCount++;
+                // ✅ সফল হলে history entry যোগ করুন
+                if (success) {
+                    successCount++;
+                    
+                    historyEntries.push({
+                        distribution_id: distributionId,
+                        member_id: m.member_id,
+                        member_name: m.full_name,
+                        month: month,
+                        year: year,
+                        total_profit: totalProfit,
+                        welfare_percent: welfarePercent,
+                        welfare_amount: previewData.welfareAmount,
+                        per_taka_profit: previewData.perTakaProfit,
+                        savings_amount: m.totalSavings || 0,
+                        referral_bonus: 0,
+                        savings_profit_balance: m.profitSavings || 0,
+                        referral_profit_balance: m.profitReferral || 0,
+                        savings_profit: 0,
+                        referral_bonus_profit: 0,
+                        savings_balance_profit: m.profitShare,
+                        investment_profit: 0,
+                        referral_balance_profit: 0,
+                        total_received: m.profitShare,
+                        status: 'completed',
+                        distributed_at: new Date().toISOString()
+                    });
+                } else {
+                    // ✅ সব retry শেষেও fail
+                    updateFailCount++;
+                    failedMembers.push({
+                        member_id: m.member_id,
+                        member_name: m.full_name,
+                        reason: lastError?.message || 'Unknown error',
+                        amount: m.profitShare
+                    });
+                    console.error(`❌ ${m.full_name} (${m.member_id}) — ${MAX_RETRIES} বার চেষ্টার পরও ব্যর্থ:`, lastError?.message);
+                }
                 
-                historyEntries.push({
-                    distribution_id: distributionId,
-                    member_id: m.member_id,
-                    member_name: m.full_name,
-                    month: month,
-                    year: year,
-                    total_profit: totalProfit,
-                    welfare_percent: welfarePercent,
-                    welfare_amount: previewData.welfareAmount,
-                    per_taka_profit: previewData.perTakaProfit,
-                    savings_amount: m.totalSavings || 0,
-                    referral_bonus: 0,
-                    savings_profit_balance: m.profitSavings || 0,
-                    referral_profit_balance: m.profitReferral || 0,
-                    savings_profit: 0,
-                    referral_bonus_profit: 0,
-                    savings_balance_profit: m.profitShare,
-                    investment_profit: 0,
-                    referral_balance_profit: 0,
-                    total_received: m.profitShare,
-                    status: 'approved',
-                    distributed_at: new Date().toISOString()
-                });
+                processedCount++;
+                
+                // ✅ Progress log প্রতি ১০ জনে
+                if (processedCount % 10 === 0) {
+                    console.log(`📊 Progress: ${processedCount}/${verifiedResults.length} (সফল: ${successCount}, ব্যর্থ: ${updateFailCount})`);
+                }
+                
+                // ✅ প্রতিটি সদস্যের পর delay (rate limit এড়াতে)
+                await new Promise(resolve => setTimeout(resolve, BETWEEN_MEMBERS_DELAY));
             }
         }
         
+        console.log(`✅ সব প্রসেস সম্পন্ন: সফল ${successCount}, ব্যর্থ ${updateFailCount}`);
+        
+        // ============================================================
+        // ✅ ৫. ইতিহাস এন্ট্রি insert (সব সফল সদস্যদের জন্য)
+        // ============================================================
         if (historyEntries.length > 0) {
+            console.log(`📝 ${historyEntries.length} টি history entry insert করা হচ্ছে...`);
+            
+            // ✅ Batch insert (একসাথে)
             const { error: historyError } = await client
                 .from('profit_distribution_history')
                 .insert(historyEntries);
             
             if (historyError) {
-                console.error('History insert error:', historyError);
+                console.error('❌ History insert error:', historyError);
                 throw historyError;
             }
             console.log(`✅ ${historyEntries.length} টি ইতিহাস এন্ট্রি তৈরি`);
         }
         
-        showToast(`✅ ${successCount} জন সদস্যের মধ্যে লভ্যাংশ বিতরণ সম্পন্ন!`, 'success');
+        // ============================================================
+        // ✅ ৬. সফল মেসেজ
+        // ============================================================
+        let successMsg = `✅ ${successCount} জন সদস্যের মধ্যে লভ্যাংশ বিতরণ সম্পন্ন!`;
         
+        if (duplicateSkipped > 0) {
+            successMsg += `\n⏭️ ${duplicateSkipped} জন ইতিমধ্যে পেয়েছিল — স্কিপ করা হয়েছে`;
+        }
+        
+        if (updateFailCount > 0) {
+            successMsg += `\n❌ ${updateFailCount} জন এখনো ব্যর্থ — Console দেখুন`;
+            console.warn('❌ ফেইলড সদস্য তালিকা:', failedMembers);
+        }
+        
+        showToast(successMsg, 'success');
+        
+        // ============================================================
+        // ✅ ৭. বাটন রিসেট ও UI আপডেট
+        // ============================================================
         confirmBtn.disabled = false;
         confirmBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i> বন্টন নিশ্চিত করুন';
         isProcessing = false;
@@ -691,8 +877,17 @@ async function confirmDistribution() {
         await loadDistributionHistory();
         resetForm();
         
+        // ✅ সফলতার শেষ লগ
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📊 লভ্যাংশ বন্টন সম্পন্ন');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`✅ সফল: ${successCount} জন`);
+        console.log(`⏭️ স্কিপ (ইতিমধ্যে পেয়েছে): ${duplicateSkipped} জন`);
+        console.log(`❌ ব্যর্থ: ${updateFailCount} জন`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
     } catch(e) {
-        console.error('Distribution error:', e);
+        console.error('❌ Distribution error:', e);
         showToast('লভ্যাংশ বন্টন ব্যর্থ: ' + e.message, 'error');
         confirmBtn.disabled = false;
         confirmBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i> বন্টন নিশ্চিত করুন';
