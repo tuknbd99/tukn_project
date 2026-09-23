@@ -5538,7 +5538,11 @@ function updateApprovalPreview(originalAmount) {
 
    
 // ============================================================
-// ✅ FIXED: approveWithdrawalWithNote() - রেফারেল ফান্ড সঠিকভাবে চেক
+// ✅ FINAL FIX: approveWithdrawalWithNote()
+// - শুধু withdrawals.status update করে
+// - Balance কমানোর কাজ DATABASE TRIGGER (auto_deduct_withdrawal) করবে
+// - কোনো .select() নেই (constraint check হবে না)
+// - Rollback-এ balance change নেই (কারণ JS balance ছোঁয় না)
 // ============================================================
 async function approveWithdrawalWithNote(id, amount, memberId, type) {
     console.log('🔍 উত্তোলন অনুমোদন শুরু:', { id, amount, memberId, type });
@@ -5551,20 +5555,20 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
     } else {
         const note = prompt('📝 উত্তোলন অনুমোদনের নোট লিখুন:', '');
         if (note === null) {
-            showToast('অপারেশন বাতিল করা হয়েছে', 'warning');
+            showToast('অপারেশন বাতিল করা হয়েছে', 'warning');
             return;
         }
         noteText = note.trim() || '';
     }
     
-    if (!confirm(`${formatAmount(amount)} টাকা উত্তোলন অনুমোদন দেবেন?`)) return;
-    
+    // ✅ প্রাক-যাচাই: পর্যাপ্ত ব্যালেন্স আছে কিনা
     const client = initSupabaseClient();
     if (!client) {
         showToast('সংযোগ সমস্যা!', 'error');
         return;
     }
     
+    // ✅ Btn disable
     const btns = document.querySelectorAll(`[onclick*="approveWithdrawalWithNote('${id}'"]`);
     btns.forEach(btn => {
         btn.disabled = true;
@@ -5573,7 +5577,7 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
     
     try {
         // ============================================================
-        // ✅ ১. উত্তোলন ডেটা লোড করুন
+        // ✅ ১. উত্তোলন ডেটা লোড
         // ============================================================
         const { data: withdrawal, error: withdrawalError } = await client
             .from('withdrawals')
@@ -5583,26 +5587,31 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
         
         if (withdrawalError) throw withdrawalError;
         if (!withdrawal) {
-            showToast('❌ উত্তোলন পাওয়া যায়নি!', 'error');
+            showToast('❌ উত্তোলন পাওয়া যায়নি!', 'error');
             return;
         }
         
         console.log('📋 উত্তোলন ডেটা:', withdrawal);
         
+        // ✅ ইতিমধ্যে approved হলে স্কিপ করুন
+        if (withdrawal.status === 'approved') {
+            showToast('ℹ️ এই উত্তোলন ইতিমধ্যে অনুমোদিত!', 'info');
+            await loadPendingWithdrawals();
+            return;
+        }
+        
         // ============================================================
-        // ✅ ২. সঠিক ফিল্ড নির্ধারণ করুন
+        // ✅ ২. সঠিক ফিল্ড নির্ধারণ (শুধু চেক করার জন্য, update-এর জন্য নয়)
         // ============================================================
         let updateField = 'balance';
-        let typeDisplay = type || withdrawal.type || 'মূলধন';
-        typeDisplay = typeDisplay.replace(/ উত্তোলন/g, '');
+        let typeDisplay = String(withdrawal.type || type || 'মূলধন').trim();
+        typeDisplay = typeDisplay.replace(/ উত্তোলন/g, '').trim();
         
-        // 🔥 রেফারেল বোনাস চিহ্নিত করুন
         if (typeDisplay.includes('রেফারেল বোনাস')) {
             updateField = 'referral_bonus';
-            console.log('✅ রেফারেল বোনাস সনাক্ত করা হয়েছে!');
-        } else if (typeDisplay.includes('সঞ্চয় লভ্যাংশ') || typeDisplay.includes('সঞ্চয় লভ্যাংশ')) {
+        } else if (typeDisplay.includes('সঞ্চয় লভ্যাংশ') || typeDisplay.includes('সঞ্চয় লভ্যাংশ')) {
             updateField = 'profit_balance_savings';
-        } else if (typeDisplay.includes('বিনিয়োগ লভ্যাংশ') || typeDisplay.includes('বিনিয়োগ লভ্যাংশ')) {
+        } else if (typeDisplay.includes('বিনিয়োগ লভ্যাংশ') || typeDisplay.includes('বিনিয়োগ লভ্যাংশ')) {
             updateField = 'profit_balance_investment';
         } else if (typeDisplay.includes('রেফারেল লভ্যাংশ')) {
             updateField = 'profit_balance_referral';
@@ -5613,89 +5622,77 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
             return;
         }
         
-        console.log('📊 আপডেট ফিল্ড:', updateField);
-        console.log(`📊 ফিল্ড নাম: ${updateField}`);
+        console.log('📊 আপডেট ফিল্ড (শুধু চেকের জন্য):', updateField);
         
         // ============================================================
-        // ✅ ৩. সদস্যের সম্পূর্ণ ডেটা লোড করুন (সব ফিল্ড সহ)
+        // ✅ ৩. সদস্যের ডেটা লোড (শুধু ব্যালেন্স যাচাইয়ের জন্য)
         // ============================================================
         const { data: member, error: memberError } = await client
             .from('members')
-            .select('*')  // ✅ সব ফিল্ড লোড করুন
+            .select('*')
             .eq('member_id', memberId)
             .maybeSingle();
         
-        if (memberError) {
-            console.error('❌ Member load error:', memberError);
-            throw memberError;
-        }
-        
+        if (memberError) throw memberError;
         if (!member) {
-            showToast('❌ সদস্য পাওয়া যায়নি!', 'error');
+            showToast('❌ সদস্য পাওয়া যায়নি!', 'error');
             return;
         }
         
-        // ✅ সদস্যের সব ফান্ড দেখুন
-        console.log('👤 সদস্যের ডেটা:', {
-            member_id: member.member_id,
-            full_name: member.full_name,
-            balance: member.balance,
-            referral_bonus: member.referral_bonus,
-            profit_balance_savings: member.profit_balance_savings,
-            profit_balance_investment: member.profit_balance_investment,
-            profit_balance_referral: member.profit_balance_referral
-        });
+        // ✅ NULL-safe বর্তমান মান
+        const rawValue = member[updateField];
+        const currentAmount = (rawValue === null || rawValue === undefined) ? 0 : Number(rawValue) || 0;
+        const withdrawAmount = Number(amount) || 0;
         
-        // ✅ বর্তমান ব্যালেন্স (সঠিক ফিল্ড থেকে)
-        const currentAmount = Number(member[updateField]) || 0;
-        console.log(`💰 বর্তমান ${updateField}: ${currentAmount}`);
-        console.log(`💰 উত্তোলন চাচ্ছেন: ${amount}`);
+        const fieldLabels = {
+            'balance': 'মূলধন',
+            'referral_bonus': 'রেফারেল বোনাস',
+            'profit_balance_savings': 'সঞ্চয় লভ্যাংশ',
+            'profit_balance_investment': 'বিনিয়োগ লভ্যাংশ',
+            'profit_balance_referral': 'রেফারেল লভ্যাংশ'
+        };
+        const fieldLabel = fieldLabels[updateField] || updateField;
+        
+        console.log(`💰 ${fieldLabel}: ${currentAmount} | উত্তোলন: ${withdrawAmount}`);
         
         // ============================================================
-        // ✅ ৪. ব্যালেন্স চেক করুন (সঠিক ফিল্ড থেকে)
+        // ✅ ৪. পর্যাপ্ত ব্যালেন্স চেক
         // ============================================================
-        if (currentAmount < amount) {
-            // ❌ পর্যাপ্ত ব্যালেন্স নেই
-            const fieldLabels = {
-                'balance': 'মূলধন',
-                'referral_bonus': 'রেফারেল বোনাস',
-                'profit_balance_savings': 'সঞ্চয় লভ্যাংশ',
-                'profit_balance_investment': 'বিনিয়োগ লভ্যাংশ',
-                'profit_balance_referral': 'রেফারেল লভ্যাংশ'
-            };
-            const fieldLabel = fieldLabels[updateField] || updateField;
-            
+        if (withdrawAmount <= 0) {
+            showToast('❌ উত্তোলনের পরিমাণ বৈধ নয়!', 'error');
+            return;
+        }
+        
+        if (currentAmount < withdrawAmount) {
             showToast(
-                `❌ পর্যাপ্ত ${fieldLabel} নেই!\n` +
-                `বর্তমান: ${formatAmount(currentAmount)}\n` +
-                `প্রয়োজন: ${formatAmount(amount)}`,
+                `❌ পর্যাপ্ত ${fieldLabel} নেই!\n\n` +
+                `📊 বর্তমান: ${formatAmount(currentAmount)} টাকা\n` +
+                `💰 প্রয়োজন: ${formatAmount(withdrawAmount)} টাকা\n` +
+                `📉 ঘাটতি: ${formatAmount(withdrawAmount - currentAmount)} টাকা`,
                 'error'
             );
             return;
         }
         
-        // ✅ ব্যালেন্স আপডেট
-        const newAmount = currentAmount - amount;
-        console.log(`📊 ব্যালেন্স আপডেট: ${currentAmount} → ${newAmount}`);
+        // ============================================================
+        // ✅ ৫. কনফার্মেশন
+        // ============================================================
+        const newAmount = currentAmount - withdrawAmount;
+        if (!confirm(
+            `✅ উত্তোলন অনুমোদন নিশ্চিত করুন\n\n` +
+            `👤 সদস্য: ${member.full_name}\n` +
+            `📋 ধরন: ${fieldLabel}\n` +
+            `📊 বর্তমান: ${formatAmount(currentAmount)} টাকা\n` +
+            `💰 উত্তোলন: ${formatAmount(withdrawAmount)} টাকা\n` +
+            `✨ নতুন: ${formatAmount(newAmount)} টাকা\n\n` +
+            `"OK" চাপুন নিশ্চিত করতে।`
+        )) return;
         
         // ============================================================
-        // ✅ ৫. সদস্যের ব্যালেন্স আপডেট করুন (সঠিক ফিল্ড)
-        // ============================================================
-        const { error: updateMemberError } = await client
-            .from('members')
-            .update({
-                [updateField]: newAmount,
-                updated_at: new Date().toISOString()
-            })
-            .eq('member_id', memberId);
-        
-        if (updateMemberError) {
-            console.error('❌ Member update error:', updateMemberError);
-            throw updateMemberError;
-        }
-        
-        // ============================================================
-        // ✅ ৬. উত্তোলন আপডেট করুন
+        // ✅ ৬. শুধু withdrawals আপডেট করুন
+        // ✅ Database Trigger (auto_deduct_withdrawal) স্বয়ংক্রিয়ভাবে
+        //    members টেবিলের সঠিক ফিল্ড থেকে balance কমাবে
+        // ✅ কোনো .select() নেই (constraint check হবে না)
         // ============================================================
         const updateData = {
             status: 'approved',
@@ -5708,29 +5705,47 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
         }
         
         console.log('📝 উত্তোলন আপডেট ডেটা:', updateData);
+        console.log('🔄 Trigger balance কমাবে (auto_deduct_withdrawal)');
         
-        const { error: updateWithdrawalError, data: updatedData } = await client
+        // ✅ শুধু এটাই যথেষ্ট — .select() ছাড়া
+        const { error: updateWithdrawalError } = await client
             .from('withdrawals')
             .update(updateData)
-            .eq('id', id)
-            .select();
+            .eq('id', id);
         
         if (updateWithdrawalError) {
             console.error('❌ Withdrawal update error:', updateWithdrawalError);
-            
-            // ব্যালেন্স রোলব্যাক
-            await client
-                .from('members')
-                .update({ [updateField]: currentAmount })
-                .eq('member_id', memberId);
-            
             throw updateWithdrawalError;
         }
         
-        console.log('✅ উত্তোলন আপডেট সফল:', updatedData);
+        console.log('✅ উত্তোলন আপডেট সফল!');
         
         // ============================================================
-        // ✅ ৭. ক্যাশ রিফ্রেশ
+        // ✅ ৭. Trigger-এর কাজ শেষ হওয়ার জন্য সামান্য অপেক্ষা করুন
+        // ============================================================
+        await new Promise(resolve => setTimeout(resolve, 800));
+        
+        // ============================================================
+        // ✅ ৮. যাচাই করুন Trigger সঠিকভাবে balance কমিয়েছে
+        // ============================================================
+        const { data: memberAfter } = await client
+            .from('members')
+            .select('referral_bonus, balance, profit_balance_savings, profit_balance_investment, profit_balance_referral')
+            .eq('member_id', memberId)
+            .maybeSingle();
+        
+        const afterValue = (memberAfter && memberAfter[updateField] !== null) 
+            ? Number(memberAfter[updateField]) || 0 
+            : 0;
+        
+        console.log(`📊 Trigger-এর পর ${updateField}: ${afterValue}`);
+        
+        if (afterValue !== newAmount) {
+            console.warn(`⚠️ Balance mismatch! প্রত্যাশিত: ${newAmount}, পাওয়া: ${afterValue}`);
+        }
+        
+        // ============================================================
+        // ✅ ৯. UI রিফ্রেশ
         // ============================================================
         pendingWithdrawalsData = pendingWithdrawalsData.filter(w => w.id != id);
         
@@ -5740,37 +5755,30 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
         await loadRealDashboard();
         await loadMembers();
         
-        // ✅ সাফল্যের মেসেজ
-        const fieldLabels = {
-            'balance': 'মূলধন',
-            'referral_bonus': 'রেফারেল বোনাস',
-            'profit_balance_savings': 'সঞ্চয় লভ্যাংশ',
-            'profit_balance_investment': 'বিনিয়োগ লভ্যাংশ',
-            'profit_balance_referral': 'রেফারেল লভ্যাংশ'
-        };
-        const fieldLabel = fieldLabels[updateField] || typeDisplay;
-        
+        // ============================================================
+        // ✅ ১০. সফল মেসেজ
+        // ============================================================
         showToast(
-            `✅ ${formatAmount(amount)} টাকা উত্তোলন অনুমোদিত হয়েছে! (${fieldLabel})${noteText ? '\n📝 নোট: ' + noteText : ''}`,
+            `✅ ${formatAmount(withdrawAmount)} টাকা উত্তোলন অনুমোদিত!\n` +
+            `📋 ${fieldLabel}: ${formatAmount(currentAmount)} → ${formatAmount(afterValue)}` +
+            (noteText ? '\n📝 নোট: ' + noteText : ''),
             'success'
         );
         
-        // ✅ BroadcastChannel
+        // ✅ BroadcastChannel — সদস্য ড্যাশবোর্ডে আপডেট পাঠান
         try {
             const bc = new BroadcastChannel('tuknbd_updates');
             bc.postMessage({
                 type: 'withdrawal_approved',
                 memberId: memberId,
-                amount: amount,
+                amount: withdrawAmount,
                 field: updateField,
                 timestamp: new Date().toISOString()
             });
             setTimeout(() => {
                 try { bc.close(); } catch(e) {}
             }, 1000);
-        } catch(e) {
-            console.log('BroadcastChannel সমর্থিত নয়:', e);
-        }
+        } catch(e) {}
         
     } catch(e) {
         console.error('❌ Withdrawal approval error:', e);
