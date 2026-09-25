@@ -12610,8 +12610,8 @@ document.getElementById('directDepositForm')?.addEventListener('submit', async f
     }
 }
 
-   // ============================================================
-// ===== CONFIRM TRANSFER =====
+// ============================================================
+// ===== CONFIRM TRANSFER — সম্পূর্ণ ঠিক করা =====
 // ============================================================
 async function confirmTransfer() {
     if (!transferMemberData) {
@@ -12627,7 +12627,7 @@ async function confirmTransfer() {
         return;
     }
     
-    // ✅ নিশ্চিত করুন — নিজের ব্রাঞ্চে transfer হচ্ছে না
+    // ✅ নিজের ব্রাঞ্চে transfer হচ্ছে না কিনা চেক
     if (window._transferFromBranchId && 
         String(window._transferFromBranchId) === String(toBranchId)) {
         showToast('⚠️ সদস্য ইতিমধ্যে এই ব্রাঞ্চে আছেন!', 'warning');
@@ -12642,7 +12642,7 @@ async function confirmTransfer() {
         return;
     }
     
-    // ✅ বাটন disable করুন (double click এড়াতে)
+    // ✅ বাটন disable
     const submitBtn = document.querySelector('[onclick="confirmTransfer()"]');
     const originalText = submitBtn?.innerHTML || 'স্থানান্তর নিশ্চিত করুন';
     if (submitBtn) {
@@ -12650,21 +12650,24 @@ async function confirmTransfer() {
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> স্থানান্তর হচ্ছে...';
     }
     
+    let inactiveRecordIds = [];  // Rollback এর জন্য
+    
     try {
         const adminName = currentAdmin?.full_name || 
                          currentAdmin?.username || 
                          'সুপার অ্যাডমিন';
         
-        // ✅ ১. সদস্যের বর্তমান ব্রাঞ্চ বের করুন (from_branch_id এর জন্য)
+        // ✅ ১. from_branch_id নির্ধারণ
         let fromBranchId = window._transferFromBranchId || null;
         
-        // যদি আগে থেকে না থাকে, এবার লোড করুন
         if (!fromBranchId) {
             const { data: currentBranch } = await client
                 .from('branch_members')
                 .select('branch_id')
                 .eq('member_id', transferMemberData.member_id)
                 .eq('status', 'active')
+                .order('joined_at', { ascending: false })
+                .limit(1)
                 .maybeSingle();
             
             if (currentBranch?.branch_id) {
@@ -12681,52 +12684,86 @@ async function confirmTransfer() {
         console.log('   📝 কারণ:', reason);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
-        // ✅ ২. পুরনো ব্রাঞ্চ থেকে সদস্য সরান (inactive)
-        const { error: removeError } = await client
+        // ============================================================
+        // 🔥 STEP 1: পুরনো ব্রাঞ্চের সব active record inactive করুন
+        // ✅ .select() দিয়ে কতটি row আপডেট হল যাচাই করুন
+        // ============================================================
+        console.log('⏳ STEP 1: পুরনো ব্রাঞ্চ inactive করছি...');
+        
+        const { data: inactiveData, error: removeError } = await client
             .from('branch_members')
             .update({ 
                 status: 'inactive', 
                 left_at: new Date().toISOString() 
             })
             .eq('member_id', transferMemberData.member_id)
-            .eq('status', 'active');
+            .eq('status', 'active')
+            .select('id, branch_id');  // ✅ কতটি row আপডেট হল জানতে
         
-        if (removeError) throw removeError;
+        if (removeError) {
+            console.error('❌ STEP 1 failed:', removeError);
+            throw new Error(`পুরনো ব্রাঞ্চে inactive করা যায়নি: ${removeError.message}`);
+        }
         
-        // ✅ ৩. নতুন ব্রাঞ্চে সদস্য যোগ করুন
-        const { error: addError } = await client
+        inactiveRecordIds = (inactiveData || []).map(r => r.id);
+        console.log(`✅ STEP 1: ${inactiveRecordIds.length} টি record inactive হয়েছে`);
+        console.log('   Inactive IDs:', inactiveRecordIds);
+        
+        if (inactiveRecordIds.length === 0) {
+            console.warn('⚠️ কোনো active record পাওয়া যায়নি — সম্ভবত সদস্য ইতিমধ্যে inactive');
+        }
+        
+        // ============================================================
+        // 🔥 STEP 2: নতুন ব্রাঞ্চে active record যোগ করুন
+        // ============================================================
+        console.log('⏳ STEP 2: নতুন ব্রাঞ্চে যোগ করছি...');
+        
+        const { data: newData, error: addError } = await client
             .from('branch_members')
             .insert([{
                 branch_id: parseInt(toBranchId),
                 member_id: transferMemberData.member_id,
                 joined_at: new Date().toISOString(),
                 status: 'active'
-            }]);
+            }])
+            .select();
         
         if (addError) {
-            // Rollback — পুরনো ব্রাঞ্চে ফিরিয়ে আনুন
-            console.warn('⚠️ Insert failed, rolling back...');
-            await client
-                .from('branch_members')
-                .update({ 
-                    status: 'active', 
-                    left_at: null 
-                })
-                .eq('member_id', transferMemberData.member_id)
-                .eq('status', 'inactive')
-                .order('left_at', { ascending: false })
-                .limit(1);
+            console.error('❌ STEP 2 failed:', addError);
             
-            throw addError;
+            // 🔥 ROLLBACK — Step 1 undo
+            if (inactiveRecordIds.length > 0) {
+                console.warn('⚠️ Rolling back STEP 1...');
+                const { error: rollbackError } = await client
+                    .from('branch_members')
+                    .update({ 
+                        status: 'active', 
+                        left_at: null 
+                    })
+                    .in('id', inactiveRecordIds);
+                
+                if (rollbackError) {
+                    console.error('❌ Rollback failed:', rollbackError);
+                } else {
+                    console.log('✅ Rollback সম্পন্ন');
+                }
+            }
+            
+            throw new Error(`নতুন ব্রাঞ্চে যোগ করা যায়নি: ${addError.message}`);
         }
         
-        // ✅ ৪. member_transfers টেবিলে history record রাখুন
-        // 🔥 মূল ঠিক করা অংশ — from_branch_id সঠিকভাবে সেভ করুন
+        console.log(`✅ STEP 2: নতুন record তৈরি (ID: ${newData?.[0]?.id})`);
+        
+        // ============================================================
+        // 🔥 STEP 3: member_transfers history সেভ
+        // ============================================================
+        console.log('⏳ STEP 3: Transfer history সেভ করছি...');
+        
         const { error: historyError } = await client
             .from('member_transfers')
             .insert([{
                 member_id: transferMemberData.member_id,
-                from_branch_id: fromBranchId,     // ✅ এখন সঠিক branch id সেভ হবে
+                from_branch_id: fromBranchId,
                 to_branch_id: parseInt(toBranchId),
                 reason: reason,
                 transferred_by: adminName,
@@ -12735,10 +12772,13 @@ async function confirmTransfer() {
         
         if (historyError) {
             console.warn('⚠️ History save warning:', historyError);
-            // History save fail হলেও transfer সম্পন্ন হয়েছে — শুধু warn করব
+        } else {
+            console.log('✅ STEP 3: History saved');
         }
         
-        // ✅ ৫. Audit Log
+        // ============================================================
+        // 🔥 STEP 4: Audit log
+        // ============================================================
         try {
             await client.from('audit_logs').insert([{
                 admin_name: adminName,
@@ -12753,15 +12793,23 @@ async function confirmTransfer() {
                 },
                 created_at: new Date().toISOString()
             }]);
+            console.log('✅ STEP 4: Audit log saved');
         } catch(e) {
             console.warn('⚠️ Audit log warning:', e);
         }
         
+        // ============================================================
+        // ✅ সাফল্য
+        // ============================================================
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('✅ স্থানান্তর সম্পূর্ণ!');
+        console.log(`   📊 ${inactiveRecordIds.length} record inactive`);
+        console.log(`   📊 1 নতুন record active`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
         showToast(`✅ "${transferMemberData.full_name}" সফলভাবে স্থানান্তরিত হয়েছে!`, 'success');
         
-        console.log('✅ স্থানান্তর সম্পূর্ণ!');
-        
-        // ✅ ৬. Form রিসেট
+        // ✅ Form রিসেট
         document.getElementById('transferSearch').value = '';
         document.getElementById('transferMemberResult').innerHTML = '';
         document.getElementById('transferForm').style.display = 'none';
@@ -12771,7 +12819,7 @@ async function confirmTransfer() {
         window._transferMemberData = null;
         window._transferFromBranchId = null;
         
-        // ✅ ৭. সব রিলোড করুন
+        // ✅ সব রিলোড
         if (typeof loadTransferHistory === 'function') {
             loadTransferHistory();
         }
@@ -12786,7 +12834,6 @@ async function confirmTransfer() {
         console.error('❌ Transfer error:', e);
         showToast(`❌ স্থানান্তর ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
     } finally {
-        // ✅ বাটন আবার enable করুন
         if (submitBtn) {
             submitBtn.disabled = false;
             submitBtn.innerHTML = originalText;
