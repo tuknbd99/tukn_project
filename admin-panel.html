@@ -6737,71 +6737,6 @@ function loadAllData() {
     }, 500);
 }
 
-// ============================================================
-// ===== DOM CONTENT LOADED - INITIALIZE =====
-// ============================================================
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('📄 পেজ লোড হয়েছে - ইনিশিয়ালাইজ শুরু...');
-    
-    initSupabaseClient();
-    
-    if (!checkAdmin()) return;
-    
-    try {
-        if (typeof ReportDashboard !== 'undefined') {
-            if (typeof reportDashboardInstance === 'undefined' || reportDashboardInstance === null) {
-                reportDashboardInstance = new ReportDashboard();
-                console.log('✅ ReportDashboard initialized successfully');
-            }
-        } else {
-            console.warn('ReportDashboard class not found, will retry...');
-        }
-    } catch(e) {
-        console.warn('ReportDashboard initialization skipped:', e.message);
-    }
-    
-    try {
-        if (typeof LoanEMICalculator !== 'undefined') {
-            if (typeof loanEMICalculator === 'undefined' || loanEMICalculator === null) {
-                loanEMICalculator = new LoanEMICalculator();
-                console.log('✅ LoanEMICalculator initialized successfully');
-            }
-        } else {
-            console.warn('LoanEMICalculator class not found, will retry...');
-        }
-    } catch(e) {
-        console.warn('LoanEMICalculator initialization skipped:', e.message);
-    }
-    
-    setTimeout(() => {
-        loadAllData();
-    }, 100);
-    
-    setInterval(() => {
-        if (typeof loadRealDashboard === 'function') loadRealDashboard();
-    }, 30000);
-    
-    setInterval(() => { 
-        if (typeof loadPendingPayments === 'function') loadPendingPayments();
-        if (typeof loadPendingWithdrawals === 'function') loadPendingWithdrawals();
-        if (typeof loadPendingLoans === 'function') loadPendingLoans();
-        if (typeof loadPendingLoanPayments === 'function') loadPendingLoanPayments();
-        if (typeof loadPendingApplications === 'function') loadPendingApplications();
-        if (typeof loadLoanCollectionReport === 'function') loadLoanCollectionReport();
-        if (typeof loadSavingsLoanReport === 'function') loadSavingsLoanReport();
-        if (typeof loadSavingsDueReport === 'function') loadSavingsDueReport();
-        if (typeof loadAllEventsAdmin === 'function') loadAllEventsAdmin();
-        if (typeof updateAllBadges === 'function') updateAllBadges();
-    }, 60000);
-    
-    const activeTab = document.querySelector('.tab-content.active-tab');
-    if (activeTab && activeTab.id === 'allWithdrawalsTab') {
-        setTimeout(fixWithdrawalsDisplay, 1000);
-    }
-    
-    console.log('✅ ইনিশিয়ালাইজ সম্পূর্ণ!');
-});
-
     // ============================================================
     // ===== Quick Statement =====
     // ============================================================
@@ -7019,6 +6954,123 @@ document.addEventListener('DOMContentLoaded', function() {
     const auditLogger = new AuditLogger();
     const transactionManager = new TransactionManager();
     console.log('✅ Permission Manager initialized');
+
+    // ============================================================
+// ✅ searchMemberForDeposit() — জমার জন্য সদস্য খুঁজুন
+// ============================================================
+async function searchMemberForDeposit() {
+    const searchTerm = document.getElementById('depositMemberSearch')?.value?.trim();
+    
+    if (!searchTerm) {
+        showToast('❌ সদস্য আইডি বা মোবাইল দিন!', 'error');
+        return;
+    }
+    
+    const resultDiv = document.getElementById('depositMemberResult');
+    if (!resultDiv) return;
+    
+    resultDiv.innerHTML = `<div class="text-center py-3"><div class="loading-spinner mx-auto"></div><p class="text-gray-500 text-sm mt-2">খোঁজা হচ্ছে...</p></div>`;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        resultDiv.innerHTML = '<div class="text-red-500 p-3 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        const { data: member, error } = await client
+            .from('members')
+            .select('*')
+            .or(`member_id.eq.${searchTerm},mobile.eq.${searchTerm}`)
+            .maybeSingle();
+        
+        if (error) throw error;
+        
+        if (!member) {
+            resultDiv.innerHTML = `<div class="bg-red-50 border-2 border-red-200 p-4 rounded-lg text-center"><i class="fas fa-user-times text-red-500 text-3xl mb-2"></i><p class="text-red-600 font-semibold">❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!</p></div>`;
+            document.getElementById('depositFormContainer').classList.add('hidden');
+            return;
+        }
+        
+        // সদস্যের তথ্য দেখান
+        const totalProfit = (member.profit_balance_savings || 0) + (member.profit_balance_investment || 0) + (member.profit_balance_referral || 0);
+        
+        resultDiv.innerHTML = `
+            <div class="bg-green-50 border-2 border-green-300 p-4 rounded-lg">
+                <div class="flex items-center gap-3 mb-3">
+                    <div class="w-14 h-14 rounded-full bg-emerald-500 flex items-center justify-center text-white font-bold text-2xl">${member.full_name?.charAt(0) || '?'}</div>
+                    <div class="flex-1">
+                        <p class="font-bold text-gray-800 text-lg">${member.full_name || '-'}</p>
+                        <p class="text-sm text-gray-600">🆔 ${member.member_id} | 📱 ${member.mobile}</p>
+                    </div>
+                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${member.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'}">${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}</span>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm border-t pt-3">
+                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">💰 মূলধন</div><div class="font-bold text-emerald-600">${formatAmount(member.balance || 0)}</div></div>
+                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">🎁 রেফারেল</div><div class="font-bold text-blue-600">${formatAmount(member.referral_bonus || 0)}</div></div>
+                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">📈 সঞ্চয় লাভ</div><div class="font-bold text-purple-600">${formatAmount(member.profit_balance_savings || 0)}</div></div>
+                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">📈 বিনিয়োগ লাভ</div><div class="font-bold text-pink-600">${formatAmount(member.profit_balance_investment || 0)}</div></div>
+                    <div class="bg-white p-2 rounded-lg text-center border-2 border-amber-300"><div class="text-xs text-gray-500">📊 মোট ফান্ড</div><div class="font-bold text-amber-700">${formatAmount((member.balance || 0) + (member.referral_bonus || 0) + totalProfit)}</div></div>
+                </div>
+            </div>
+        `;
+        
+        // ✅ ফর্ম দেখান
+        document.getElementById('depositFormContainer').classList.remove('hidden');
+        document.getElementById('depositMemberId').value = member.member_id;
+        document.getElementById('depositMemberName').value = member.full_name || '';
+        document.getElementById('depositCurrentBalance').value = formatAmountWithText(member.balance || 0);
+        
+        await refreshDepositVoucher();
+        
+        showToast(`✅ ${member.full_name} পাওয়া গেছে!`, 'success');
+        
+    } catch(e) {
+        console.error('❌ Search member for deposit error:', e);
+        resultDiv.innerHTML = `<div class="text-red-500 p-3 text-center">❌ সমস্যা: ${e.message}</div>`;
+    }
+}
+
+    // ============================================================
+// ✅ updateDirectRoleNotices() — Role অনুযায়ী নোটিশ দেখান
+// ============================================================
+function updateDirectRoleNotices() {
+    const depositNotice = document.getElementById('depositRoleNotice');
+    const withdrawalNotice = document.getElementById('withdrawalRoleNotice');
+    const isSuper = isSuperAdmin();
+
+    const noticeHtml = isSuper
+        ? `<div class="bg-green-50 border-l-4 border-green-500 p-4 rounded-lg">
+               <p class="text-green-700 font-bold flex items-center gap-2">
+                   <i class="fas fa-check-circle"></i> আপনি সুপার অ্যাডমিন
+               </p>
+               <p class="text-green-600 text-sm">আপনার অনুমোদনের প্রয়োজন নেই। জমা/উত্তোলন সরাসরি কার্যকর হবে।</p>
+           </div>`
+        : `<div class="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-lg">
+               <p class="text-amber-700 font-bold flex items-center gap-2">
+                   <i class="fas fa-clock"></i> অনুমোদন প্রয়োজন
+               </p>
+               <p class="text-amber-600 text-sm">আপনার জমা/উত্তোলন পেন্ডিং হিসেবে যাবে। একজন সুপার অ্যাডমিন অনুমোদন করলে কার্যকর হবে।</p>
+           </div>`;
+
+    if (depositNotice) depositNotice.innerHTML = noticeHtml;
+    if (withdrawalNotice) withdrawalNotice.innerHTML = noticeHtml;
+}
+
+// ✅ isSuperAdmin helper
+function isSuperAdmin() {
+    return currentAdmin?.role === 'সুপার অ্যাডমিন' 
+        || currentAdmin?.role === 'super_admin'
+        || currentAdmin?.role === 'Super Admin';
+}
+
+// ✅ Global এ expose করুন
+window.updateDirectRoleNotices = updateDirectRoleNotices;
+window.isSuperAdmin = isSuperAdmin;
+    
+
+// ✅ Global এ expose করুন
+window.searchMemberForDeposit = searchMemberForDeposit;
 
     // ============================================================
     // ===== EVENTS FUNCTIONS =====
@@ -25145,6 +25197,72 @@ document.getElementById('balanceAdjustmentForm')?.addEventListener('submit', asy
                             }
                         }, 1500);
                     });
+
+    
+            // ============================================================
+            // ===== DOM CONTENT LOADED - INITIALIZE =====
+            // ============================================================
+            document.addEventListener('DOMContentLoaded', function() {
+                console.log('📄 পেজ লোড হয়েছে - ইনিশিয়ালাইজ শুরু...');
+                
+                initSupabaseClient();
+                
+                if (!checkAdmin()) return;
+                
+                try {
+                    if (typeof ReportDashboard !== 'undefined') {
+                        if (typeof reportDashboardInstance === 'undefined' || reportDashboardInstance === null) {
+                            reportDashboardInstance = new ReportDashboard();
+                            console.log('✅ ReportDashboard initialized successfully');
+                        }
+                    } else {
+                        console.warn('ReportDashboard class not found, will retry...');
+                    }
+                } catch(e) {
+                    console.warn('ReportDashboard initialization skipped:', e.message);
+                }
+                
+                try {
+                    if (typeof LoanEMICalculator !== 'undefined') {
+                        if (typeof loanEMICalculator === 'undefined' || loanEMICalculator === null) {
+                            loanEMICalculator = new LoanEMICalculator();
+                            console.log('✅ LoanEMICalculator initialized successfully');
+                        }
+                    } else {
+                        console.warn('LoanEMICalculator class not found, will retry...');
+                    }
+                } catch(e) {
+                    console.warn('LoanEMICalculator initialization skipped:', e.message);
+                }
+                
+                setTimeout(() => {
+                    loadAllData();
+                }, 100);
+                
+                setInterval(() => {
+                    if (typeof loadRealDashboard === 'function') loadRealDashboard();
+                }, 30000);
+                
+                setInterval(() => { 
+                    if (typeof loadPendingPayments === 'function') loadPendingPayments();
+                    if (typeof loadPendingWithdrawals === 'function') loadPendingWithdrawals();
+                    if (typeof loadPendingLoans === 'function') loadPendingLoans();
+                    if (typeof loadPendingLoanPayments === 'function') loadPendingLoanPayments();
+                    if (typeof loadPendingApplications === 'function') loadPendingApplications();
+                    if (typeof loadLoanCollectionReport === 'function') loadLoanCollectionReport();
+                    if (typeof loadSavingsLoanReport === 'function') loadSavingsLoanReport();
+                    if (typeof loadSavingsDueReport === 'function') loadSavingsDueReport();
+                    if (typeof loadAllEventsAdmin === 'function') loadAllEventsAdmin();
+                    if (typeof updateAllBadges === 'function') updateAllBadges();
+                }, 60000);
+                
+                const activeTab = document.querySelector('.tab-content.active-tab');
+                if (activeTab && activeTab.id === 'allWithdrawalsTab') {
+                    setTimeout(fixWithdrawalsDisplay, 1000);
+                }
+                
+                console.log('✅ ইনিশিয়ালাইজ সম্পূর্ণ!');
+            });
 
                     console.log('✅ Direct Deposit & Withdrawal System v1.0 Loaded!');
                     console.log('📋 Available functions:');
