@@ -11900,42 +11900,462 @@ async function loadBranchView() {
 window.loadBranchView = loadBranchView;
 
 
-    async function loadBranchReport() {
-        const branchId = document.getElementById('branchReportSelector').value;
-        const container = document.getElementById('branchReportContent');
-        if (!container) return;
-        container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">রিপোর্ট লোড হচ্ছে...</p></div>';
-        const client = initSupabaseClient();
-        if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
-        try {
-            let branchQuery = client.from('branches').select('*');
-            if (branchId !== 'all') branchQuery = branchQuery.eq('id', branchId);
-            const { data: branches } = await branchQuery;
-            if (!branches || branches.length === 0) { container.innerHTML = '<div class="text-center text-gray-500 py-12"><p>কোনো ব্রাঞ্চ পাওয়া যায়নি</p></div>'; return; }
-            let html = `<div class="overflow-x-auto"><table class="data-table"><thead><tr><th>ব্রাঞ্চ</th><th>কোড</th><th class="text-left">মোট সঞ্চয়</th><th class="text-left">মোট লোন</th><th class="text-left">মোট আদায়</th><th class="text-left">মোট উত্তোলন</th><th class="text-left">নীট ব্যালেন্স</th><th>সদস্য</th><th>স্ট্যাটাস</th></tr></thead><tbody>`;
-            let grandTotalSavings = 0, grandTotalLoan = 0, grandTotalCollected = 0, grandTotalWithdrawal = 0;
-            for (const branch of branches) {
-                const { data: balance } = await client.from('branch_balances').select('*').eq('branch_id', branch.id).maybeSingle();
-                const { count } = await client.from('branch_members').select('*', { count: 'exact', head: true }).eq('branch_id', branch.id);
-                let collected = 0;
-                const { data: branchLoans } = await client.from('loan_applications').select('id').eq('branch_id', branch.id).eq('status', 'approved');
-                if (branchLoans && branchLoans.length > 0) {
-                    const loanIds = branchLoans.map(l => l.id);
-                    const { data: payments } = await client.from('loan_payments').select('total_amount, emi_amount').in('loan_id', loanIds).eq('status', 'approved');
-                    if (payments) collected = payments.reduce((s, p) => s + (p.total_amount || p.emi_amount || 0), 0);
-                }
-                const savings = balance?.total_savings || 0;
-                const loan = balance?.total_loan_given || 0;
-                const withdrawal = balance?.total_withdrawal || 0;
-                const netBalance = savings - loan - withdrawal + collected;
-                grandTotalSavings += savings; grandTotalLoan += loan; grandTotalCollected += collected; grandTotalWithdrawal += withdrawal;
-                html += `<tr><td><span class="font-medium">${branch.branch_name || branch.name}</span></td><td class="text-xs text-gray-500">${branch.branch_code}</td><td class="text-left text-emerald-600">${formatAmountWithText(savings)}</td><td class="text-left text-blue-600">${formatAmountWithText(loan)}</td><td class="text-left text-emerald-600">${formatAmountWithText(collected)}</td><td class="text-left text-red-600">${formatAmountWithText(withdrawal)}</td><td class="text-left font-bold ${netBalance >= 0 ? 'text-emerald-600' : 'text-red-600'}">${formatAmountWithText(netBalance)}</td><td class="text-center">${count || 0}</td><td><span class="status-badge ${branch.status === 'active' ? 'status-active' : 'status-inactive'}">${branch.status === 'active' ? '✅ সক্রিয়' : '⏸️ নিষ্ক্রিয়'}</span></td></tr>`;
-            }
-            html += `<tr style="font-weight:700; background:#f3f4f6; border-top:2px solid #059669;"><td colspan="2" class="text-left">📊 মোট</td><td class="text-left text-emerald-700">${formatAmountWithText(grandTotalSavings)}</td><td class="text-left text-blue-700">${formatAmountWithText(grandTotalLoan)}</td><td class="text-left text-emerald-700">${formatAmountWithText(grandTotalCollected)}</td><td class="text-left text-red-700">${formatAmountWithText(grandTotalWithdrawal)}</td><td class="text-left text-emerald-700">${formatAmountWithText(grandTotalSavings - grandTotalLoan - grandTotalWithdrawal + grandTotalCollected)}</td><td colspan="2"></td></tr>`;
-            html += '</tbody></table></div>';
-            container.innerHTML = html;
-        } catch(e) { console.error('Branch report error:', e); container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ রিপোর্ট লোড করতে সমস্যা!</div>'; }
+    // ============================================================
+// ✅ COMPLETELY FIXED: loadBranchReport()
+// ✅ LIVE ডেটা থেকে হিসাব — branch_balances এর উপর নির্ভর না
+// ============================================================
+async function loadBranchReport() {
+    const branchId = document.getElementById('branchReportSelector')?.value;
+    const fromDate = document.getElementById('branchReportFrom')?.value || '';
+    const toDate = document.getElementById('branchReportTo')?.value || '';
+    const container = document.getElementById('branchReportContent');
+    
+    if (!container) return;
+    
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('📊 ব্রাঞ্চ রিপোর্ট লোড (LIVE DATA)');
+    console.log('   🏢 branchId:', branchId);
+    console.log('   📅 Date:', fromDate || 'all', '→', toDate || 'all');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-2">রিপোর্ট লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
     }
+    
+    try {
+        const isAllBranches = !branchId || branchId === 'all';
+        const numericBranchId = isAllBranches ? null : parseInt(branchId, 10);
+        
+        // ============================================================
+        // ✅ ১. ব্রাঞ্চ লিস্ট লোড
+        // ============================================================
+        let branchQuery = client
+            .from('branches')
+            .select('id, branch_name, branch_code, district, manager_name, status')
+            .order('branch_name');
+        
+        if (!isAllBranches && !isNaN(numericBranchId)) {
+            branchQuery = branchQuery.eq('id', numericBranchId);
+        }
+        
+        const { data: branches, error: bError } = await branchQuery;
+        if (bError) throw bError;
+        
+        console.log(`   🏢 Branches: ${branches?.length || 0}`);
+        
+        if (!branches || branches.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fas fa-store text-4xl block mb-3 text-gray-300"></i>
+                    <p>কোনো ব্রাঞ্চ পাওয়া যায়নি</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // ============================================================
+        // ✅ ২. প্রতিটি ব্রাঞ্চের জন্য LIVE ডেটা সংগ্রহ
+        // ============================================================
+        const branchDataList = [];
+        
+        let grandTotalSavings = 0;
+        let grandTotalReferral = 0;
+        let grandTotalProfit = 0;
+        let grandTotalLoanGiven = 0;
+        let grandTotalCollected = 0;
+        let grandTotalWithdrawal = 0;
+        let grandUniqueMemberIds = new Set();
+        
+        for (const branch of branches) {
+            console.log(`\n   🔍 Processing: ${branch.branch_name} (ID: ${branch.id})`);
+            
+            // ✅ ২.১ এই ব্রাঞ্চের সক্রিয় সদস্য লোড
+            const { data: branchMembers, error: bmError } = await client
+                .from('branch_members')
+                .select('member_id')
+                .eq('branch_id', branch.id)
+                .eq('status', 'active');
+            
+            if (bmError) {
+                console.error(`   ❌ ${branch.branch_name} members error:`, bmError);
+                branchDataList.push({
+                    branch,
+                    memberCount: 0,
+                    totalSavings: 0,
+                    totalReferral: 0,
+                    totalProfit: 0,
+                    totalLoanGiven: 0,
+                    totalCollected: 0,
+                    totalWithdrawal: 0,
+                    totalDue: 0
+                });
+                continue;
+            }
+            
+            // ✅ Unique member IDs
+            const rawIds = (branchMembers || []).map(bm => bm.member_id).filter(Boolean);
+            const uniqueMemberIds = [...new Set(rawIds)];
+            
+            console.log(`   👥 Members: ${uniqueMemberIds.length}`);
+            
+            if (uniqueMemberIds.length === 0) {
+                branchDataList.push({
+                    branch,
+                    memberCount: 0,
+                    totalSavings: 0,
+                    totalReferral: 0,
+                    totalProfit: 0,
+                    totalLoanGiven: 0,
+                    totalCollected: 0,
+                    totalWithdrawal: 0,
+                    totalDue: 0
+                });
+                continue;
+            }
+            
+            // ✅ Global unique set এ যোগ
+            uniqueMemberIds.forEach(id => grandUniqueMemberIds.add(id));
+            
+            // ✅ ২.২ এই ব্রাঞ্চের সদস্যদের ডেটা
+            const { data: membersData } = await client
+                .from('members')
+                .select(`
+                    member_id,
+                    balance,
+                    referral_bonus,
+                    profit_balance_savings,
+                    profit_balance_investment,
+                    profit_balance_referral
+                `)
+                .in('member_id', uniqueMemberIds);
+            
+            let totalSavings = 0;
+            let totalReferral = 0;
+            let totalProfit = 0;
+            
+            (membersData || []).forEach(m => {
+                totalSavings += Number(m.balance) || 0;
+                totalReferral += Number(m.referral_bonus) || 0;
+                totalProfit += 
+                    (Number(m.profit_balance_savings) || 0) +
+                    (Number(m.profit_balance_investment) || 0) +
+                    (Number(m.profit_balance_referral) || 0);
+            });
+            
+            console.log(`   💰 Savings: ${totalSavings}, Referral: ${totalReferral}`);
+            
+            // ✅ ২.৩ লোন ডেটা
+            let loanQuery = client
+                .from('loan_applications')
+                .select('id, member_id, amount, status')
+                .in('member_id', uniqueMemberIds);
+            
+            if (fromDate) loanQuery = loanQuery.gte('submitted_at', fromDate);
+            if (toDate) loanQuery = loanQuery.lte('submitted_at', toDate + 'T23:59:59');
+            
+            const { data: branchLoans } = await loanQuery;
+            
+            let totalLoanGiven = 0;
+            const approvedLoanIds = [];
+            
+            (branchLoans || []).forEach(loan => {
+                if (loan.status === 'approved') {
+                    totalLoanGiven += Number(loan.amount) || 0;
+                    approvedLoanIds.push(loan.id);
+                }
+            });
+            
+            console.log(`   🏦 Loans Given: ${totalLoanGiven}`);
+            
+            // ✅ ২.৪ লোন আদায়
+            let totalCollected = 0;
+            
+            if (approvedLoanIds.length > 0) {
+                let payQuery = client
+                    .from('loan_payments')
+                    .select('total_amount, emi_amount')
+                    .in('loan_id', approvedLoanIds)
+                    .eq('status', 'approved');
+                
+                if (fromDate) payQuery = payQuery.gte('payment_date', fromDate);
+                if (toDate) payQuery = payQuery.lte('payment_date', toDate + 'T23:59:59');
+                
+                const { data: payments } = await payQuery;
+                
+                (payments || []).forEach(p => {
+                    totalCollected += Number(p.total_amount || p.emi_amount || 0);
+                });
+            }
+            
+            console.log(`   📥 Collected: ${totalCollected}`);
+            
+            // ✅ ২.৫ উত্তোলন
+            let totalWithdrawal = 0;
+            
+            let wQuery = client
+                .from('withdrawals')
+                .select('amount')
+                .in('member_id', uniqueMemberIds)
+                .eq('status', 'approved');
+            
+            if (fromDate) wQuery = wQuery.gte('requested_at', fromDate);
+            if (toDate) wQuery = wQuery.lte('requested_at', toDate + 'T23:59:59');
+            
+            const { data: withdrawals } = await wQuery;
+            
+            (withdrawals || []).forEach(w => {
+                totalWithdrawal += Number(w.amount) || 0;
+            });
+            
+            console.log(`   💸 Withdrawal: ${totalWithdrawal}`);
+            
+            // ✅ Branch data যোগ
+            branchDataList.push({
+                branch,
+                memberCount: uniqueMemberIds.length,
+                totalSavings,
+                totalReferral,
+                totalProfit,
+                totalLoanGiven,
+                totalCollected,
+                totalWithdrawal,
+                totalDue: Math.max(0, totalLoanGiven - totalCollected)
+            });
+            
+            // ✅ Grand totals
+            grandTotalSavings += totalSavings;
+            grandTotalReferral += totalReferral;
+            grandTotalProfit += totalProfit;
+            grandTotalLoanGiven += totalLoanGiven;
+            grandTotalCollected += totalCollected;
+            grandTotalWithdrawal += totalWithdrawal;
+        }
+        
+        // ============================================================
+        // ✅ ৩. Grand Total
+        // ============================================================
+        const grandTotalMembers = grandUniqueMemberIds.size;
+        const grandTotalDue = Math.max(0, grandTotalLoanGiven - grandTotalCollected);
+        
+        console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📊 GRAND TOTALS:');
+        console.log(`   👥 Unique Members: ${grandTotalMembers}`);
+        console.log(`   💰 Savings: ${grandTotalSavings}`);
+        console.log(`   🎁 Referral: ${grandTotalReferral}`);
+        console.log(`   📈 Profit: ${grandTotalProfit}`);
+        console.log(`   🏦 Loan Given: ${grandTotalLoanGiven}`);
+        console.log(`   📥 Collected: ${grandTotalCollected}`);
+        console.log(`   💸 Withdrawal: ${grandTotalWithdrawal}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+        
+        // ============================================================
+        // ✅ ৪. HTML তৈরি
+        // ============================================================
+        let html = `
+            <!-- ✅ সামারি কার্ড -->
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">
+                <div class="bg-emerald-50 p-3 rounded-lg border border-emerald-200 text-center">
+                    <p class="text-xs text-gray-600">🏢 মোট ব্রাঞ্চ</p>
+                    <p class="text-xl font-bold text-emerald-700">${branches.length}</p>
+                </div>
+                <div class="bg-blue-50 p-3 rounded-lg border border-blue-200 text-center">
+                    <p class="text-xs text-gray-600">👥 মোট সদস্য</p>
+                    <p class="text-xl font-bold text-blue-700">${grandTotalMembers}</p>
+                </div>
+                <div class="bg-purple-50 p-3 rounded-lg border border-purple-200 text-center">
+                    <p class="text-xs text-gray-600">💰 মোট সঞ্চয়</p>
+                    <p class="text-base font-bold text-purple-700">${formatAmount(grandTotalSavings)}</p>
+                </div>
+                <div class="bg-indigo-50 p-3 rounded-lg border border-indigo-200 text-center">
+                    <p class="text-xs text-gray-600">🎁 রেফারেল</p>
+                    <p class="text-base font-bold text-indigo-700">${formatAmount(grandTotalReferral)}</p>
+                </div>
+                <div class="bg-pink-50 p-3 rounded-lg border border-pink-200 text-center">
+                    <p class="text-xs text-gray-600">📈 লভ্যাংশ</p>
+                    <p class="text-base font-bold text-pink-700">${formatAmount(grandTotalProfit)}</p>
+                </div>
+                <div class="bg-amber-50 p-3 rounded-lg border border-amber-200 text-center">
+                    <p class="text-xs text-gray-600">🏦 মোট লোন</p>
+                    <p class="text-base font-bold text-amber-700">${formatAmount(grandTotalLoanGiven)}</p>
+                </div>
+                <div class="bg-red-50 p-3 rounded-lg border border-red-200 text-center">
+                    <p class="text-xs text-gray-600">⏳ বকেয়া</p>
+                    <p class="text-base font-bold text-red-700">${formatAmount(grandTotalDue)}</p>
+                </div>
+            </div>
+            
+            <!-- ✅ তারিখ রেঞ্জ -->
+            ${fromDate || toDate ? `
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                    <p class="text-sm text-blue-700">
+                        <i class="fas fa-calendar-alt mr-2"></i>
+                        <strong>তারিখ:</strong> 
+                        ${fromDate ? new Date(fromDate).toLocaleDateString('bn-BD') : 'শুরু'} 
+                        → 
+                        ${toDate ? new Date(toDate).toLocaleDateString('bn-BD') : 'আজ'}
+                    </p>
+                </div>
+            ` : ''}
+            
+            <!-- ✅ টেবিল -->
+            <div class="overflow-x-auto bg-white rounded-lg border">
+                <table class="data-table" style="width: 100%;">
+                    <thead style="background: #f3f4f6; position: sticky; top: 0;">
+                        <tr>
+                            <th style="padding: 10px; text-align: left;">ব্রাঞ্চ</th>
+                            <th style="padding: 10px; text-align: center;">কোড</th>
+                            <th style="padding: 10px; text-align: center;">👥 সদস্য</th>
+                            <th style="padding: 10px; text-align: right;">💰 সঞ্চয়</th>
+                            <th style="padding: 10px; text-align: right;">🎁 রেফারেল</th>
+                            <th style="padding: 10px; text-align: right;">📈 লভ্যাংশ</th>
+                            <th style="padding: 10px; text-align: right;">🏦 লোন</th>
+                            <th style="padding: 10px; text-align: right;">📥 আদায়</th>
+                            <th style="padding: 10px; text-align: right;">💸 উত্তোলন</th>
+                            <th style="padding: 10px; text-align: right;">⏳ বকেয়া</th>
+                            <th style="padding: 10px; text-align: center;">স্ট্যাটাস</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        // ✅ প্রতিটি ব্রাঞ্চ
+        branchDataList.forEach(item => {
+            const { branch } = item;
+            const statusClass = branch.status === 'active' ? 'status-active' : 'status-inactive';
+            const statusText = branch.status === 'active' ? '✅ সক্রিয়' : '⏸️ নিষ্ক্রিয়';
+            
+            html += `
+                <tr class="hover:bg-gray-50">
+                    <td style="padding: 8px 10px;">
+                        <span class="font-semibold text-gray-800">${branch.branch_name}</span>
+                        ${branch.district ? `<br><span class="text-xs text-gray-500">📍 ${branch.district}</span>` : ''}
+                    </td>
+                    <td style="padding: 8px 10px; text-align: center;">
+                        <span class="text-xs font-mono bg-gray-100 px-2 py-1 rounded">${branch.branch_code || '-'}</span>
+                    </td>
+                    <td style="padding: 8px 10px; text-align: center;">
+                        <span class="font-bold text-blue-600">${item.memberCount}</span>
+                    </td>
+                    <td style="padding: 8px 10px; text-align: right;">
+                        <span class="font-semibold text-emerald-600">${formatAmount(item.totalSavings)}</span>
+                    </td>
+                    <td style="padding: 8px 10px; text-align: right;">
+                        <span class="text-indigo-600">${formatAmount(item.totalReferral)}</span>
+                    </td>
+                    <td style="padding: 8px 10px; text-align: right;">
+                        <span class="text-pink-600">${formatAmount(item.totalProfit)}</span>
+                    </td>
+                    <td style="padding: 8px 10px; text-align: right;">
+                        <span class="font-semibold text-amber-600">${formatAmount(item.totalLoanGiven)}</span>
+                    </td>
+                    <td style="padding: 8px 10px; text-align: right;">
+                        <span class="text-emerald-600">${formatAmount(item.totalCollected)}</span>
+                    </td>
+                    <td style="padding: 8px 10px; text-align: right;">
+                        <span class="text-orange-600">${formatAmount(item.totalWithdrawal)}</span>
+                    </td>
+                    <td style="padding: 8px 10px; text-align: right;">
+                        <span class="font-bold ${item.totalDue > 0 ? 'text-red-600' : 'text-emerald-600'}">
+                            ${formatAmount(item.totalDue)}
+                        </span>
+                    </td>
+                    <td style="padding: 8px 10px; text-align: center;">
+                        <span class="status-badge ${statusClass}">${statusText}</span>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        // ✅ Grand Total Row
+        html += `
+                        <tr style="background: linear-gradient(90deg, #ecfdf5, #dbeafe); font-weight: 700; border-top: 3px solid #059669;">
+                            <td colspan="2" style="padding: 12px 10px; text-align: right; color: #047857;">
+                                📊 <strong>মোট (${branches.length} টি)</strong>
+                            </td>
+                            <td style="padding: 12px 10px; text-align: center; color: #1d4ed8; font-size: 16px;">
+                                ${grandTotalMembers}
+                            </td>
+                            <td style="padding: 12px 10px; text-align: right; color: #047857; font-size: 14px;">
+                                ${formatAmount(grandTotalSavings)}
+                            </td>
+                            <td style="padding: 12px 10px; text-align: right; color: #4338ca;">
+                                ${formatAmount(grandTotalReferral)}
+                            </td>
+                            <td style="padding: 12px 10px; text-align: right; color: #be185d;">
+                                ${formatAmount(grandTotalProfit)}
+                            </td>
+                            <td style="padding: 12px 10px; text-align: right; color: #b45309; font-size: 14px;">
+                                ${formatAmount(grandTotalLoanGiven)}
+                            </td>
+                            <td style="padding: 12px 10px; text-align: right; color: #047857;">
+                                ${formatAmount(grandTotalCollected)}
+                            </td>
+                            <td style="padding: 12px 10px; text-align: right; color: #c2410c;">
+                                ${formatAmount(grandTotalWithdrawal)}
+                            </td>
+                            <td style="padding: 12px 10px; text-align: right; color: #dc2626; font-size: 14px;">
+                                ${formatAmount(grandTotalDue)}
+                            </td>
+                            <td style="padding: 12px 10px;"></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- ✅ Cross-check -->
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div class="bg-emerald-50 p-3 rounded-lg border border-emerald-200">
+                    <p class="text-xs text-gray-600 mb-1">💰 মোট ফান্ড (সঞ্চয় + রেফারেল + লভ্যাংশ)</p>
+                    <p class="text-lg font-bold text-emerald-700">
+                        ${formatAmountWithText(grandTotalSavings + grandTotalReferral + grandTotalProfit)}
+                    </p>
+                </div>
+                <div class="bg-blue-50 p-3 rounded-lg border border-blue-200">
+                    <p class="text-xs text-gray-600 mb-1">📊 নেট লোন (লোন − আদায়)</p>
+                    <p class="text-lg font-bold ${(grandTotalLoanGiven - grandTotalCollected) > 0 ? 'text-red-600' : 'text-emerald-600'}">
+                        ${formatAmountWithText(Math.abs(grandTotalLoanGiven - grandTotalCollected))}
+                    </p>
+                </div>
+                <div class="bg-purple-50 p-3 rounded-lg border border-purple-200">
+                    <p class="text-xs text-gray-600 mb-1">🏦 সার্বিক ব্যালেন্স</p>
+                    <p class="text-lg font-bold text-purple-700">
+                        ${formatAmountWithText(
+                            grandTotalSavings + grandTotalReferral + grandTotalProfit + 
+                            (grandTotalLoanGiven - grandTotalCollected)
+                        )}
+                    </p>
+                </div>
+            </div>
+        `;
+        
+        container.innerHTML = html;
+        
+        console.log(`✅ রিপোর্ট রেন্ডার সম্পূর্ণ`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+    } catch(e) {
+        console.error('❌ Branch report error:', e);
+        container.innerHTML = `
+            <div class="text-red-500 p-4 text-center">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p class="font-bold">❌ রিপোর্ট লোড করতে সমস্যা!</p>
+                <p class="text-xs text-gray-500 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="loadBranchReport()" class="btn btn-info btn-sm mt-3">
+                    <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
+                </button>
+            </div>
+        `;
+    }
+}
 
     function exportBranchReport() {
         const table = document.querySelector('#branchReportContent table');
