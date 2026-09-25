@@ -12430,142 +12430,359 @@ document.getElementById('directDepositForm')?.addEventListener('submit', async f
     loadRealDashboard();
 });
 
-    // ============================================================
-    // ===== SEARCH MEMBER FOR TRANSFER =====
-    // ============================================================
-    function searchMemberForTransfer() {
-        const searchTerm = document.getElementById('transferSearch')?.value?.trim();
-        if (!searchTerm) {
-            showToast('সদস্য আইডি বা মোবাইল দিন!', 'error');
-            return;
-        }
-        const resultDiv = document.getElementById('transferMemberResult');
-        if (!resultDiv) return;
+   async function searchMemberForTransfer() {
+    const searchTerm = document.getElementById('transferSearch')?.value?.trim();
+    if (!searchTerm) {
+        showToast('সদস্য আইডি বা মোবাইল দিন!', 'error');
+        return;
+    }
+    
+    const resultDiv = document.getElementById('transferMemberResult');
+    if (!resultDiv) return;
+    
+    resultDiv.innerHTML = `
+        <div class="text-center py-4">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-2">খোঁজা হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        resultDiv.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        // ✅ ১. সদস্য খুঁজুন
+        const { data: members, error: memberError } = await client
+            .from('members')
+            .select('*')
+            .or(`member_id.eq.${searchTerm},mobile.eq.${searchTerm}`)
+            .limit(1);
         
-        let member = membersData.find(m => m.member_id === searchTerm || m.mobile === searchTerm);
+        if (memberError) throw memberError;
         
-        if (!member) {
+        if (!members || members.length === 0) {
             resultDiv.innerHTML = `
-                <div class="bg-red-50 border border-red-200 p-3 rounded-lg text-red-600 text-center">
-                    <i class="fas fa-exclamation-circle mr-2"></i>
-                    এই আইডি/মোবাইলে কোনো সদস্য নেই!
+                <div class="text-center text-red-500 py-4">
+                    <i class="fas fa-user-times text-3xl block mb-2"></i>
+                    <p>এই আইডি/মোবাইলে কোনো সদস্য নেই!</p>
                 </div>
             `;
-            document.getElementById('transferForm').style.display = 'none';
+            const transferForm = document.getElementById('transferForm');
+            if (transferForm) transferForm.style.display = 'none';
             return;
         }
         
-        transferMemberData = member;
+        const member = members[0];
         
-        const currentBranchDisplay = document.getElementById('currentBranchDisplay');
-        if (currentBranchDisplay) {
-            const client = initSupabaseClient();
-            if (client) {
-                client.from('branch_members')
-                    .select('branches(branch_name)')
-                    .eq('member_id', member.member_id)
-                    .maybeSingle()
-                    .then(({ data }) => {
-                        const branchName = data?.branches?.branch_name || 'ব্রাঞ্চে যুক্ত নয়';
-                        currentBranchDisplay.value = branchName;
-                    });
+        // ✅ ২. সদস্যের বর্তমান ব্রাঞ্চ বের করুন
+        let currentBranchName = 'ব্রাঞ্চে যুক্ত নয়';
+        let currentBranchId = null;
+        
+        const { data: branchMember } = await client
+            .from('branch_members')
+            .select('branch_id, branches(id, branch_name, branch_code)')
+            .eq('member_id', member.member_id)
+            .eq('status', 'active')
+            .maybeSingle();
+        
+        if (branchMember?.branches) {
+            currentBranchName = branchMember.branches.branch_name || 'ব্রাঞ্চ';
+            if (branchMember.branches.branch_code) {
+                currentBranchName += ` (${branchMember.branches.branch_code})`;
             }
+            currentBranchId = branchMember.branches.id;
         }
         
+        // ✅ ৩. সদস্যের তথ্য দেখান
         resultDiv.innerHTML = `
-            <div class="bg-green-50 border border-green-200 p-3 rounded-lg">
-                <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 font-bold">
+            <div class="bg-green-50 border border-green-300 p-4 rounded-lg">
+                <div class="flex items-center gap-3 mb-3">
+                    <div class="w-12 h-12 rounded-full bg-emerald-500 flex items-center justify-center text-white font-bold text-lg">
                         ${member.full_name?.charAt(0) || '?'}
                     </div>
-                    <div>
-                        <p class="font-bold text-gray-800">${member.full_name}</p>
-                        <p class="text-sm text-gray-500">🆔 ${member.member_id} | 📱 ${member.mobile}</p>
-                        <p class="text-xs text-gray-400">📍 ${member.present_district || 'জেলা নেই'}</p>
+                    <div class="flex-1">
+                        <p class="font-bold text-gray-800 text-base">${member.full_name || '-'}</p>
+                        <p class="text-sm text-gray-600">🆔 ${member.member_id} | 📱 ${member.mobile || '-'}</p>
+                        <p class="text-xs text-gray-500">📍 ${member.present_district || 'জেলা নেই'}</p>
                     </div>
+                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${
+                        member.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'
+                    }">
+                        ${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}
+                    </span>
                 </div>
-                <div class="mt-2 grid grid-cols-2 gap-2 text-sm border-t pt-2">
-                    <div><span class="text-gray-500">ব্যালেন্স:</span> <span class="font-bold text-emerald-600">${formatAmountWithText(member.balance || 0)}</span></div>
-                    <div><span class="text-gray-500">রেফারেল বোনাস:</span> <span class="font-bold text-blue-600">${formatAmountWithText(member.referral_bonus || 0)}</span></div>
-                    <div><span class="text-gray-500">মোট লভ্যাংশ:</span> <span class="font-bold text-purple-600">${formatAmountWithText((member.profit_balance_savings||0) + (member.profit_balance_investment||0) + (member.profit_balance_referral||0))}</span></div>
-                    <div><span class="text-gray-500">স্ট্যাটাস:</span> <span class="px-2 py-0.5 rounded-full text-xs ${member.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}</span></div>
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm border-t pt-3">
+                    <div class="bg-white p-2 rounded">
+                        <div class="text-xs text-gray-500">💰 ব্যালেন্স</div>
+                        <div class="font-bold text-emerald-600">${formatAmountWithText ? formatAmountWithText(member.balance || 0) : (member.balance || 0).toFixed(2) + ' টাকা'}</div>
+                    </div>
+                    <div class="bg-white p-2 rounded">
+                        <div class="text-xs text-gray-500">🎁 রেফারেল</div>
+                        <div class="font-bold text-blue-600">${(member.referral_bonus || 0).toFixed(2)} টাকা</div>
+                    </div>
+                    <div class="bg-white p-2 rounded">
+                        <div class="text-xs text-gray-500">📈 মোট লভ্যাংশ</div>
+                        <div class="font-bold text-purple-600">${((member.profit_balance_savings || 0) + (member.profit_balance_investment || 0) + (member.profit_balance_referral || 0)).toFixed(2)} টাকা</div>
+                    </div>
                 </div>
             </div>
         `;
         
+        // ✅ ৪. বর্তমান ব্রাঞ্চ সেট করুন
+        const currentBranchInput = document.getElementById('currentBranchDisplay');
+        if (currentBranchInput) currentBranchInput.value = currentBranchName;
+        
+        // ✅ ৫. 🔥 সব ব্রাঞ্চ লোড করে dropdown populate করুন (মূল সমাধান)
+        const { data: allBranches, error: branchError } = await client
+            .from('branches')
+            .select('id, branch_name, branch_code, status')
+            .order('branch_name');
+        
+        if (branchError) {
+            console.error('❌ Branches load error:', branchError);
+            showToast('⚠️ ব্রাঞ্চ লোড করতে সমস্যা!', 'warning');
+        }
+        
+        const branchSelect = document.getElementById('transferToBranch');
+        if (branchSelect) {
+            // ✅ placeholder
+            branchSelect.innerHTML = '<option value="">-- ব্রাঞ্চ নির্বাচন করুন --</option>';
+            
+            if (allBranches && allBranches.length > 0) {
+                allBranches.forEach(branch => {
+                    // ✅ বর্তমান ব্রাঞ্চ বাদ দিন
+                    if (currentBranchId && String(branch.id) === String(currentBranchId)) {
+                        return;
+                    }
+                    
+                    const option = document.createElement('option');
+                    option.value = branch.id;
+                    
+                    const statusIcon = branch.status === 'active' ? '🟢' : '🔴';
+                    const branchName = branch.branch_name || 'ব্রাঞ্চ';
+                    const branchCode = branch.branch_code || '';
+                    
+                    option.textContent = `${statusIcon} ${branchName}${branchCode ? ' (' + branchCode + ')' : ''}`;
+                    branchSelect.appendChild(option);
+                });
+                
+                console.log(`✅ ${allBranches.length} টি ব্রাঞ্চ লোড হয়েছে`);
+            } else {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = '⚠️ কোনো ব্রাঞ্চ পাওয়া যায়নি';
+                option.disabled = true;
+                branchSelect.appendChild(option);
+                showToast('⚠️ Supabase-এ কোনো ব্রাঞ্চ নেই!', 'warning');
+            }
+        }
+        
+        // ✅ ৬. ফর্ম দেখান
         const transferForm = document.getElementById('transferForm');
-        if (transferForm) {
-            transferForm.style.display = 'block';
-        }
+        if (transferForm) transferForm.style.display = 'block';
+        
+        // ✅ ৭. গ্লোবাল ভেরিয়েবলে সদস্য সেভ করুন (পরবর্তী ধাপে দরকার)
+        window._transferMemberData = member;
+        window._transferFromBranchId = currentBranchId;
+        
+        showToast(`✅ ${member.full_name} পাওয়া গেছে!`, 'success');
+        
+    } catch(e) {
+        console.error('❌ Search member error:', e);
+        resultDiv.innerHTML = `
+            <div class="text-red-500 p-4 text-center">
+                ❌ সমস্যা: ${e.message || 'অজানা ত্রুটি'}
+            </div>
+        `;
     }
+}
 
-    // ============================================================
-    // ===== CONFIRM TRANSFER =====
-    // ============================================================
-    async function confirmTransfer() {
-        if (!transferMemberData) {
-            showToast('প্রথমে সদস্য খুঁজুন!', 'error');
-            return;
-        }
+   // ============================================================
+// ===== CONFIRM TRANSFER =====
+// ============================================================
+async function confirmTransfer() {
+    if (!transferMemberData) {
+        showToast('প্রথমে সদস্য খুঁজুন!', 'error');
+        return;
+    }
+    
+    const toBranchId = document.getElementById('transferToBranch')?.value;
+    const reason = document.getElementById('transferReason')?.value?.trim() || 'স্থানান্তর করা হয়েছে';
+    
+    if (!toBranchId) {
+        showToast('ব্রাঞ্চ নির্বাচন করুন!', 'error');
+        return;
+    }
+    
+    // ✅ নিশ্চিত করুন — নিজের ব্রাঞ্চে transfer হচ্ছে না
+    if (window._transferFromBranchId && 
+        String(window._transferFromBranchId) === String(toBranchId)) {
+        showToast('⚠️ সদস্য ইতিমধ্যে এই ব্রাঞ্চে আছেন!', 'warning');
+        return;
+    }
+    
+    if (!confirm(`"${transferMemberData.full_name}" কে এই ব্রাঞ্চে স্থানান্তর করবেন?`)) return;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    // ✅ বাটন disable করুন (double click এড়াতে)
+    const submitBtn = document.querySelector('[onclick="confirmTransfer()"]');
+    const originalText = submitBtn?.innerHTML || 'স্থানান্তর নিশ্চিত করুন';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> স্থানান্তর হচ্ছে...';
+    }
+    
+    try {
+        const adminName = currentAdmin?.full_name || 
+                         currentAdmin?.username || 
+                         'সুপার অ্যাডমিন';
         
-        const toBranchId = document.getElementById('transferToBranch')?.value;
-        const reason = document.getElementById('transferReason')?.value?.trim() || 'স্থানান্তর করা হয়েছে';
+        // ✅ ১. সদস্যের বর্তমান ব্রাঞ্চ বের করুন (from_branch_id এর জন্য)
+        let fromBranchId = window._transferFromBranchId || null;
         
-        if (!toBranchId) {
-            showToast('ব্রাঞ্চ নির্বাচন করুন!', 'error');
-            return;
-        }
-        
-        if (!confirm(`"${transferMemberData.full_name}" কে এই ব্রাঞ্চে স্থানান্তর করবেন?`)) return;
-        
-        const client = initSupabaseClient();
-        if (!client) {
-            showToast('সংযোগ সমস্যা!', 'error');
-            return;
-        }
-        
-        try {
-            await client
+        // যদি আগে থেকে না থাকে, এবার লোড করুন
+        if (!fromBranchId) {
+            const { data: currentBranch } = await client
                 .from('branch_members')
-                .update({ status: 'inactive', left_at: new Date().toISOString() })
+                .select('branch_id')
                 .eq('member_id', transferMemberData.member_id)
-                .eq('status', 'active');
+                .eq('status', 'active')
+                .maybeSingle();
             
+            if (currentBranch?.branch_id) {
+                fromBranchId = currentBranch.branch_id;
+            }
+        }
+        
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('🔄 সদস্য স্থানান্তর শুরু');
+        console.log('   👤 সদস্য:', transferMemberData.full_name);
+        console.log('   🆔 আইডি:', transferMemberData.member_id);
+        console.log('   🏢 থেকে:', fromBranchId || 'N/A');
+        console.log('   🏢 তে:', toBranchId);
+        console.log('   📝 কারণ:', reason);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        // ✅ ২. পুরনো ব্রাঞ্চ থেকে সদস্য সরান (inactive)
+        const { error: removeError } = await client
+            .from('branch_members')
+            .update({ 
+                status: 'inactive', 
+                left_at: new Date().toISOString() 
+            })
+            .eq('member_id', transferMemberData.member_id)
+            .eq('status', 'active');
+        
+        if (removeError) throw removeError;
+        
+        // ✅ ৩. নতুন ব্রাঞ্চে সদস্য যোগ করুন
+        const { error: addError } = await client
+            .from('branch_members')
+            .insert([{
+                branch_id: parseInt(toBranchId),
+                member_id: transferMemberData.member_id,
+                joined_at: new Date().toISOString(),
+                status: 'active'
+            }]);
+        
+        if (addError) {
+            // Rollback — পুরনো ব্রাঞ্চে ফিরিয়ে আনুন
+            console.warn('⚠️ Insert failed, rolling back...');
             await client
                 .from('branch_members')
-                .insert([{
-                    branch_id: toBranchId,
-                    member_id: transferMemberData.member_id,
-                    joined_at: new Date().toISOString(),
-                    status: 'active'
-                }]);
+                .update({ 
+                    status: 'active', 
+                    left_at: null 
+                })
+                .eq('member_id', transferMemberData.member_id)
+                .eq('status', 'inactive')
+                .order('left_at', { ascending: false })
+                .limit(1);
             
-            await client
-                .from('member_transfers')
-                .insert([{
-                    member_id: transferMemberData.member_id,
-                    from_branch_id: null,
-                    to_branch_id: toBranchId,
-                    reason: reason,
-                    transferred_by: currentAdmin?.username || 'সুপার অ্যাডমিন',
-                    transferred_at: new Date().toISOString()
-                }]);
-            
-            showToast(`✅ "${transferMemberData.full_name}" স্থানান্তরিত হয়েছে!`, 'success');
-            
-            document.getElementById('transferSearch').value = '';
-            document.getElementById('transferMemberResult').innerHTML = '';
-            document.getElementById('transferForm').style.display = 'none';
-            transferMemberData = null;
-            
-            loadBranches();
-            loadBranchView();
-            
+            throw addError;
+        }
+        
+        // ✅ ৪. member_transfers টেবিলে history record রাখুন
+        // 🔥 মূল ঠিক করা অংশ — from_branch_id সঠিকভাবে সেভ করুন
+        const { error: historyError } = await client
+            .from('member_transfers')
+            .insert([{
+                member_id: transferMemberData.member_id,
+                from_branch_id: fromBranchId,     // ✅ এখন সঠিক branch id সেভ হবে
+                to_branch_id: parseInt(toBranchId),
+                reason: reason,
+                transferred_by: adminName,
+                transferred_at: new Date().toISOString()
+            }]);
+        
+        if (historyError) {
+            console.warn('⚠️ History save warning:', historyError);
+            // History save fail হলেও transfer সম্পন্ন হয়েছে — শুধু warn করব
+        }
+        
+        // ✅ ৫. Audit Log
+        try {
+            await client.from('audit_logs').insert([{
+                admin_name: adminName,
+                action: 'TRANSFER_MEMBER',
+                table_name: 'member_transfers',
+                record_id: transferMemberData.member_id,
+                changes: {
+                    member_name: transferMemberData.full_name,
+                    from_branch_id: fromBranchId,
+                    to_branch_id: parseInt(toBranchId),
+                    reason: reason
+                },
+                created_at: new Date().toISOString()
+            }]);
         } catch(e) {
-            console.error('Transfer error:', e);
-            showToast(`❌ স্থানান্তর ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+            console.warn('⚠️ Audit log warning:', e);
+        }
+        
+        showToast(`✅ "${transferMemberData.full_name}" সফলভাবে স্থানান্তরিত হয়েছে!`, 'success');
+        
+        console.log('✅ স্থানান্তর সম্পূর্ণ!');
+        
+        // ✅ ৬. Form রিসেট
+        document.getElementById('transferSearch').value = '';
+        document.getElementById('transferMemberResult').innerHTML = '';
+        document.getElementById('transferForm').style.display = 'none';
+        document.getElementById('transferReason').value = '';
+        
+        transferMemberData = null;
+        window._transferMemberData = null;
+        window._transferFromBranchId = null;
+        
+        // ✅ ৭. সব রিলোড করুন
+        if (typeof loadTransferHistory === 'function') {
+            loadTransferHistory();
+        }
+        if (typeof loadBranches === 'function') {
+            loadBranches();
+        }
+        if (typeof loadBranchView === 'function') {
+            loadBranchView();
+        }
+        
+    } catch(e) {
+        console.error('❌ Transfer error:', e);
+        showToast(`❌ স্থানান্তর ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        // ✅ বাটন আবার enable করুন
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalText;
         }
     }
+}
 
     // ============================================================
     // ===== LOAD TRANSFER HISTORY =====
