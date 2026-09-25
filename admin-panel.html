@@ -7032,6 +7032,123 @@ async function searchMemberForDeposit() {
 }
 
     // ============================================================
+// ✅ searchMemberForWithdrawal() — উত্তোলনের জন্য সদস্য খুঁজুন
+// ============================================================
+async function searchMemberForWithdrawal() {
+    const searchTerm = document.getElementById('withdrawalMemberSearch')?.value?.trim();
+    
+    if (!searchTerm) {
+        showToast('❌ সদস্য আইডি বা মোবাইল দিন!', 'error');
+        return;
+    }
+    
+    const resultDiv = document.getElementById('withdrawalMemberResult');
+    if (!resultDiv) return;
+    
+    resultDiv.innerHTML = `<div class="text-center py-3"><div class="loading-spinner mx-auto"></div><p class="text-gray-500 text-sm mt-2">খোঁজা হচ্ছে...</p></div>`;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        resultDiv.innerHTML = '<div class="text-red-500 p-3 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        const { data: member, error } = await client
+            .from('members')
+            .select('*')
+            .or(`member_id.eq.${searchTerm},mobile.eq.${searchTerm}`)
+            .maybeSingle();
+        
+        if (error) throw error;
+        
+        if (!member) {
+            resultDiv.innerHTML = `<div class="bg-red-50 border-2 border-red-200 p-4 rounded-lg text-center">
+                <i class="fas fa-user-times text-red-500 text-3xl mb-2"></i>
+                <p class="text-red-600 font-semibold">❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!</p>
+            </div>`;
+            document.getElementById('withdrawalFormContainer').classList.add('hidden');
+            return;
+        }
+        
+        // সদস্যের তথ্য দেখান
+        const totalProfit = (member.profit_balance_savings || 0) + (member.profit_balance_investment || 0) + (member.profit_balance_referral || 0);
+        
+        resultDiv.innerHTML = `
+            <div class="bg-red-50 border-2 border-red-300 p-4 rounded-lg">
+                <div class="flex items-center gap-3 mb-3">
+                    <div class="w-14 h-14 rounded-full bg-red-500 flex items-center justify-center text-white font-bold text-2xl">${member.full_name?.charAt(0) || '?'}</div>
+                    <div class="flex-1">
+                        <p class="font-bold text-gray-800 text-lg">${member.full_name || '-'}</p>
+                        <p class="text-sm text-gray-600">🆔 ${member.member_id} | 📱 ${member.mobile}</p>
+                    </div>
+                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${member.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'}">
+                        ${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}
+                    </span>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm border-t pt-3">
+                    <div class="bg-white p-2 rounded-lg text-center">
+                        <div class="text-xs text-gray-500">💰 মূলধন</div>
+                        <div class="font-bold text-emerald-600">${formatAmount(member.balance || 0)}</div>
+                    </div>
+                    <div class="bg-white p-2 rounded-lg text-center">
+                        <div class="text-xs text-gray-500">🎁 রেফারেল</div>
+                        <div class="font-bold text-blue-600">${formatAmount(member.referral_bonus || 0)}</div>
+                    </div>
+                    <div class="bg-white p-2 rounded-lg text-center">
+                        <div class="text-xs text-gray-500">📈 সঞ্চয় লাভ</div>
+                        <div class="font-bold text-purple-600">${formatAmount(member.profit_balance_savings || 0)}</div>
+                    </div>
+                    <div class="bg-white p-2 rounded-lg text-center">
+                        <div class="text-xs text-gray-500">📈 বিনিয়োগ লাভ</div>
+                        <div class="font-bold text-pink-600">${formatAmount(member.profit_balance_investment || 0)}</div>
+                    </div>
+                    <div class="bg-white p-2 rounded-lg text-center border-2 border-amber-300">
+                        <div class="text-xs text-gray-500">📊 মোট ফান্ড</div>
+                        <div class="font-bold text-amber-700">${formatAmount((member.balance || 0) + (member.referral_bonus || 0) + totalProfit)}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // ✅ ফর্ম দেখান
+        document.getElementById('withdrawalFormContainer').classList.remove('hidden');
+        document.getElementById('withdrawalMemberId').value = member.member_id;
+        document.getElementById('withdrawalMemberName').value = member.full_name || '';
+        document.getElementById('withdrawalMemberMobile').value = member.mobile || '';
+        
+        // ✅ ফান্ড ব্রেকডাউন আপডেট করুন
+        const setFund = (id, value) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = formatAmount(value);
+        };
+        
+        setFund('fundBalance', member.balance || 0);
+        setFund('fundReferral', member.referral_bonus || 0);
+        setFund('fundProfitSavings', member.profit_balance_savings || 0);
+        setFund('fundProfitInvestment', member.profit_balance_investment || 0);
+        setFund('fundProfitReferral', member.profit_balance_referral || 0);
+        
+        // ✅ নির্বাচিত ফান্ডের ব্যালেন্স দেখান
+        if (typeof onWithdrawalFundChange === 'function') {
+            onWithdrawalFundChange();
+        }
+        
+        // ✅ ভাউচার জেনারেট করুন
+        await refreshWithdrawalVoucher();
+        
+        showToast(`✅ ${member.full_name} পাওয়া গেছে!`, 'success');
+        
+    } catch(e) {
+        console.error('❌ Search member for withdrawal error:', e);
+        resultDiv.innerHTML = `<div class="text-red-500 p-3 text-center">❌ সমস্যা: ${e.message}</div>`;
+    }
+}
+
+// ✅ Global এ expose করুন
+window.searchMemberForWithdrawal = searchMemberForWithdrawal;
+
+    // ============================================================
 // ✅ updateDirectRoleNotices() — Role অনুযায়ী নোটিশ দেখান
 // ============================================================
 function updateDirectRoleNotices() {
