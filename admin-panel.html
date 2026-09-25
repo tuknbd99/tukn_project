@@ -11327,14 +11327,19 @@ async function loadAllTransactions() {
 }
 
 // ============================================================
-// ✅ BRANCH VIEW — সম্পূর্ণ সংশোধিত ও কার্যকর
+// ✅ COMPLETELY FIXED: loadBranchView()
+// ✅ সদস্য কার্ডে সব আর্থিক তথ্য দেখাবে
 // ============================================================
 async function loadBranchView() {
     const branchId = document.getElementById('branchViewSelector')?.value;
     const container = document.getElementById('branchViewContent');
     if (!container) return;
     
-    // ✅ লোডিং স্টেট
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('🔍 ব্রাঞ্চ ভিউ লোড');
+    console.log('   🏢 branchId:', branchId);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    
     container.innerHTML = `
         <div class="text-center py-8">
             <div class="loading-spinner mx-auto"></div>
@@ -11349,24 +11354,29 @@ async function loadBranchView() {
     }
     
     try {
-        // ============================================================
-        // ✅ ১. Branch ID নির্ধারণ
-        // ============================================================
         const isAllBranches = !branchId || branchId === 'all';
         const numericBranchId = isAllBranches ? null : parseInt(branchId, 10);
         
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('🔍 ব্রাঞ্চ ভিউ লোড');
-        console.log('   🏢 Branch ID:', numericBranchId);
-        console.log('   🌐 All?:', isAllBranches);
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        // ============================================================
+        // ✅ ১. selectedBranch লোড
+        // ============================================================
+        let selectedBranch = null;
+        if (!isAllBranches && !isNaN(numericBranchId)) {
+            const { data: branchData } = await client
+                .from('branches')
+                .select('*')
+                .eq('id', numericBranchId)
+                .maybeSingle();
+            
+            selectedBranch = branchData;
+        }
         
         // ============================================================
-        // ✅ ২. branch_members লোড (members + branches সহ)
+        // ✅ ২. branch_members লোড
         // ============================================================
         let query = client
             .from('branch_members')
-            .select('*, members(*), branches(*)')
+            .select('id, branch_id, member_id, joined_at, status')
             .eq('status', 'active');
         
         if (!isAllBranches && !isNaN(numericBranchId)) {
@@ -11378,7 +11388,6 @@ async function loadBranchView() {
         
         console.log(`   👥 Members found: ${branchMembers?.length || 0}`);
         
-        // ✅ কোনো সদস্য না থাকলে
         if (!branchMembers || branchMembers.length === 0) {
             container.innerHTML = `
                 <div class="text-center text-gray-500 py-12">
@@ -11389,41 +11398,94 @@ async function loadBranchView() {
             return;
         }
         
+        const memberIds = branchMembers.map(bm => bm.member_id).filter(Boolean);
+        const uniqueMemberIds = [...new Set(memberIds)];
+        
+        console.log(`   🆔 Unique Member IDs: ${uniqueMemberIds.length}`);
+        
         // ============================================================
-        // ✅ ৩. uniqueBranchIds — একবার ডিফাইন (scope ঠিক)
+        // ✅ ৩. সদস্যদের সম্পূর্ণ ডেটা লোড (EXPLICIT columns)
+        // ============================================================
+        const { data: membersData, error: mError } = await client
+            .from('members')
+            .select(`
+                member_id,
+                full_name,
+                mobile,
+                status,
+                balance,
+                referral_bonus,
+                profit_balance_savings,
+                profit_balance_investment,
+                profit_balance_referral,
+                monthly_savings,
+                present_district,
+                created_at
+            `)
+            .in('member_id', uniqueMemberIds);
+        
+        if (mError) {
+            console.error('❌ Members load error:', mError);
+            throw new Error('সদস্যদের তথ্য লোড করা যায়নি');
+        }
+        
+        console.log(`   📊 Members data loaded: ${membersData?.length || 0}`);
+        
+                // ✅ Debug: প্রথম সদস্যের সম্পূর্ণ ডেটা দেখান
+        if (membersData && membersData[0]) {
+            const s = membersData[0];
+            console.log('   🔍 Sample member (FULL):', {
+                id: s.member_id,
+                name: s.full_name,
+                balance: s.balance,
+                referral: s.referral_bonus,
+                profit_savings: s.profit_balance_savings,
+                profit_investment: s.profit_balance_investment,
+                profit_referral: s.profit_balance_referral
+            });
+        }
+        
+        const memberMap = {};
+        (membersData || []).forEach(m => {
+            memberMap[m.member_id] = m;
+        });
+        
+        // ============================================================
+        // ✅ ৪. branches লোড
         // ============================================================
         const uniqueBranchIds = [...new Set(
-            branchMembers
-                .map(bm => bm.branch_id)
-                .filter(Boolean)
+            branchMembers.map(bm => bm.branch_id).filter(Boolean)
         )];
         
-        console.log(`   🏢 Unique Branches: ${uniqueBranchIds.length}`);
-        
-        // ============================================================
-        // ✅ ৪. সদস্যদের member_id সংগ্রহ
-        // ============================================================
-        const memberIds = branchMembers
-            .map(bm => bm.members?.member_id)
-            .filter(Boolean);
-        
-        // ============================================================
-        // ✅ ৫. লোন লোড (member_id দিয়ে)
-        // ============================================================
-        let allLoans = [];
-        if (memberIds.length > 0) {
-            const { data: loansData, error: loansError } = await client
-                .from('loan_applications')
-                .select('id, member_id, branch_id, amount, status, emi_amount, duration_months')
-                .in('member_id', memberIds);
+        let branchesMap = {};
+        if (uniqueBranchIds.length > 0) {
+            const { data: bData } = await client
+                .from('branches')
+                .select('id, branch_name, branch_code, district, manager_name, phone')
+                .in('id', uniqueBranchIds);
             
-            if (!loansError) {
-                allLoans = loansData || [];
-            }
+            (bData || []).forEach(b => {
+                branchesMap[b.id] = b;
+            });
         }
         
         // ============================================================
-        // ✅ ৬. পেমেন্ট লোড (approved loan_ids দিয়ে)
+        // ✅ ৫. লোন লোড
+        // ============================================================
+        let allLoans = [];
+        if (uniqueMemberIds.length > 0) {
+            const { data: loansData } = await client
+                .from('loan_applications')
+                .select('id, member_id, amount, status, emi_amount, duration_months')
+                .in('member_id', uniqueMemberIds);
+            
+            allLoans = loansData || [];
+        }
+        
+        console.log(`   🏦 Loans loaded: ${allLoans.length}`);
+        
+        // ============================================================
+        // ✅ ৬. Loan Payments লোড
         // ============================================================
         let allPayments = [];
         const approvedLoanIds = allLoans
@@ -11440,9 +11502,7 @@ async function loadBranchView() {
             allPayments = paymentsData || [];
         }
         
-        // ============================================================
-        // ✅ ৭. পেমেন্ট Map তৈরি
-        // ============================================================
+        // ✅ paymentMap তৈরি
         const paymentMap = {};
         allPayments.forEach(p => {
             const loanId = String(p.loan_id);
@@ -11451,7 +11511,7 @@ async function loadBranchView() {
         });
         
         // ============================================================
-        // ✅ ৮. Member-wise Loan Map তৈরি
+        // ✅ ৭. Member-wise Loan Map
         // ============================================================
         const memberLoanMap = {};
         allLoans.forEach(loan => {
@@ -11474,170 +11534,129 @@ async function loadBranchView() {
         });
         
         // ============================================================
-        // ✅ ৯. Total লোন সামারি
+        // ✅ ৮. Grand totals হিসাব
         // ============================================================
-        const memberIdsSet = new Set(memberIds.map(id => String(id)));
-        
         let totalLoanGiven = 0;
         let totalLoanCollected = 0;
         
         allLoans.forEach(loan => {
             if (loan.status !== 'approved') return;
+            totalLoanGiven += Number(loan.amount) || 0;
             
-            const loanMemberIdStr = String(loan.member_id);
-            if (isAllBranches || memberIdsSet.has(loanMemberIdStr)) {
-                totalLoanGiven += Number(loan.amount) || 0;
-                
-                const loanIdStr = String(loan.id);
-                if (paymentMap[loanIdStr]) {
-                    totalLoanCollected += paymentMap[loanIdStr];
-                }
+            const loanIdStr = String(loan.id);
+            if (paymentMap[loanIdStr]) {
+                totalLoanCollected += paymentMap[loanIdStr];
             }
         });
         
-        // ============================================================
-        // ✅ ১০. সদস্যদের সব ফান্ড থেকে মোট সঞ্চয়/লভ্যাংশ/রেফারেল
-        // ============================================================
         let totalSavings = 0;
         let totalReferralBonus = 0;
         let totalProfit = 0;
-        let totalBalance = 0;
         
-        branchMembers.forEach(bm => {
-            const m = bm.members;
-            if (!m) return;
-            
-            // ✅ মূল সঞ্চয় (balance)
-            totalBalance += Number(m.balance) || 0;
+        (membersData || []).forEach(m => {
             totalSavings += Number(m.balance) || 0;
-            
-            // ✅ রেফারেল বোনাস
             totalReferralBonus += Number(m.referral_bonus) || 0;
-            
-            // ✅ সব লভ্যাংশ
             totalProfit += 
                 (Number(m.profit_balance_savings) || 0) +
                 (Number(m.profit_balance_investment) || 0) +
                 (Number(m.profit_balance_referral) || 0);
         });
         
-        // ✅ Cross-check (শুধু সব ব্রাঞ্চ এর জন্য)
-        if (isAllBranches && uniqueBranchIds.length > 0) {
-            const { data: balances } = await client
-                .from('branch_balances')
-                .select('total_savings')
-                .in('branch_id', uniqueBranchIds);
-            
-            if (balances && balances.length > 0) {
-                const branchBalanceSum = balances.reduce(
-                    (s, b) => s + (Number(b.total_savings) || 0), 0
-                );
-                console.log(`   📊 Branch Balance (cross-check): ${branchBalanceSum}`);
-            }
-        }
-        
         console.log(`   💰 Total Savings: ${totalSavings}`);
         console.log(`   🎁 Total Referral: ${totalReferralBonus}`);
         console.log(`   📈 Total Profit: ${totalProfit}`);
-        console.log(`   💵 Total Loan Given: ${totalLoanGiven}`);
-        console.log(`   📥 Total Loan Collected: ${totalLoanCollected}`);
+        console.log(`   💵 Total Loan: ${totalLoanGiven}`);
+        console.log(`   📥 Total Collected: ${totalLoanCollected}`);
         
         // ============================================================
-        // ✅ ১১. ব্রাঞ্চ নাম ও কোড — সুন্দরভাবে
+        // ✅ ৯. ব্রাঞ্চ হেডিং
         // ============================================================
-        let branchName = 'সব ব্রাঞ্চ';
-        let branchCode = '';
         let branchFullDisplay = '';
-        let branchSystemId = '';
+        let branchInfo = '';
+        let totalMembersCount = uniqueMemberIds.length;
         
-        if (!isAllBranches && branchMembers.length > 0) {
-            // ✅ প্রথম সদস্যের branch ডেটা থেকে নিন
-            const branch = branchMembers[0]?.branches;
-            
-            if (branch) {
-                branchName = branch.branch_name || 'ব্রাঞ্চ';
-                branchCode = branch.branch_code || '';
-                branchSystemId = branch.id || numericBranchId || '';
-                
-                if (branchCode) {
-                    branchFullDisplay = `
-                        ${branchName} 
-                        <span class="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-mono ml-2">
-                            ${branchCode}
-                        </span>
-                    `;
-                } else {
-                    branchFullDisplay = branchName;
-                }
-            } else {
-                branchFullDisplay = `ব্রাঞ্চ #${numericBranchId}`;
-            }
-        } else {
-            // ✅ সব ব্রাঞ্চ এর জন্য (uniqueBranchIds এখানে ব্যবহার!)
+        if (!isAllBranches && selectedBranch) {
             branchFullDisplay = `
-                সব ব্রাঞ্চ 
-                <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-mono ml-2">
-                    ${uniqueBranchIds.length} টি ব্রাঞ্চ
+                <span class="flex items-center gap-2">
+                    <span>${selectedBranch.branch_name}</span>
+                    ${selectedBranch.branch_code ? `
+                        <span class="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-mono font-semibold">
+                            ${selectedBranch.branch_code}
+                        </span>
+                    ` : ''}
                 </span>
+            `;
+            
+            branchInfo = `
+                <div class="text-xs text-gray-500 mt-1 flex flex-wrap gap-3">
+                    ${selectedBranch.district ? `<span><i class="fas fa-map-marker-alt text-blue-600"></i> ${selectedBranch.district}</span>` : ''}
+                    ${selectedBranch.manager_name ? `<span><i class="fas fa-user-tie text-purple-600"></i> ${selectedBranch.manager_name}</span>` : ''}
+                    ${selectedBranch.phone ? `<span><i class="fas fa-phone text-emerald-600"></i> ${selectedBranch.phone}</span>` : ''}
+                </div>
+            `;
+        } else {
+            branchFullDisplay = `
+                <span class="flex items-center gap-2">
+                    <span>🌐 সব ব্রাঞ্চ</span>
+                    <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-mono font-semibold">
+                        ${uniqueBranchIds.length} টি ব্রাঞ্চ
+                    </span>
+                </span>
+            `;
+            
+            branchInfo = `
+                <p class="text-xs text-gray-500 mt-1">
+                    <i class="fas fa-store"></i> ${uniqueBranchIds.length} টি ব্রাঞ্চে সক্রিয় সদস্য রয়েছে
+                </p>
             `;
         }
         
         // ============================================================
-        // ✅ ১২. HTML তৈরি
+        // ✅ ১০. HTML তৈরি
         // ============================================================
         const totalDue = Math.max(0, totalLoanGiven - totalLoanCollected);
         
         let html = `
-            <!-- ✅ হেডিং — ব্রাঞ্চ নাম + কোড -->
+            <!-- ✅ হেডিং -->
             <div class="mb-4 bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-xl border-2 border-emerald-200">
                 <div class="flex flex-wrap justify-between items-center gap-3">
                     <div class="flex items-center gap-3">
-                        <div class="w-12 h-12 rounded-full bg-emerald-500 flex items-center justify-center text-white text-xl">
+                        <div class="w-12 h-12 rounded-full bg-emerald-500 flex items-center justify-center text-white text-xl flex-shrink-0">
                             <i class="fas fa-store"></i>
                         </div>
                         <div>
-                            <h3 class="text-lg font-bold text-gray-800 flex items-center flex-wrap gap-2">
-                                ${branchFullDisplay}
-                            </h3>
-                            ${!isAllBranches && branchCode ? `
-                                <p class="text-xs text-gray-500 mt-1">
-                                    <i class="fas fa-hashtag"></i> ব্রাঞ্চ আইডি: 
-                                    <span class="font-mono font-semibold text-emerald-700">${branchCode}</span>
-                                    <span class="text-gray-400 mx-1">|</span>
-                                    <i class="fas fa-database"></i> System ID: 
-                                    <span class="font-mono font-semibold">#${branchSystemId}</span>
-                                </p>
-                            ` : `
-                                <p class="text-xs text-gray-500 mt-1">
-                                    <i class="fas fa-store"></i> ${uniqueBranchIds.length} টি ব্রাঞ্চে সক্রিয় সদস্য রয়েছে
-                                </p>
-                            `}
+                            <h3 class="text-lg font-bold text-gray-800">${branchFullDisplay}</h3>
+                            ${branchInfo}
                         </div>
                     </div>
                     <div class="bg-white px-4 py-2 rounded-lg border border-emerald-200">
                         <p class="text-xs text-gray-500">মোট সদস্য</p>
-                        <p class="text-2xl font-bold text-emerald-700">${branchMembers.length}</p>
+                        <p class="text-2xl font-bold text-emerald-700">${totalMembersCount}</p>
                     </div>
                 </div>
             </div>
             
             <!-- ✅ সামারি কার্ড -->
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                <div class="bg-blue-50 p-3 rounded-lg border border-blue-200 text-center">
-                    <p class="text-xs text-gray-600">💰 মোট লোন প্রদান</p>
-                    <p class="text-lg font-bold text-blue-600">${formatAmountWithText(totalLoanGiven)}</p>
-                </div>
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
                 <div class="bg-emerald-50 p-3 rounded-lg border border-emerald-200 text-center">
-                    <p class="text-xs text-gray-600">📥 মোট লোন আদায়</p>
-                    <p class="text-lg font-bold text-emerald-600">${formatAmountWithText(totalLoanCollected)}</p>
+                    <p class="text-xs text-gray-600">💰 মোট সঞ্চয়</p>
+                    <p class="text-lg font-bold text-emerald-600">${formatAmountWithText(totalSavings)}</p>
+                </div>
+                <div class="bg-blue-50 p-3 rounded-lg border border-blue-200 text-center">
+                    <p class="text-xs text-gray-600">🎁 রেফারেল</p>
+                    <p class="text-lg font-bold text-blue-600">${formatAmountWithText(totalReferralBonus)}</p>
+                </div>
+                <div class="bg-purple-50 p-3 rounded-lg border border-purple-200 text-center">
+                    <p class="text-xs text-gray-600">📈 মোট লভ্যাংশ</p>
+                    <p class="text-lg font-bold text-purple-600">${formatAmountWithText(totalProfit)}</p>
+                </div>
+                <div class="bg-amber-50 p-3 rounded-lg border border-amber-200 text-center">
+                    <p class="text-xs text-gray-600">🏦 মোট লোন</p>
+                    <p class="text-lg font-bold text-amber-600">${formatAmountWithText(totalLoanGiven)}</p>
                 </div>
                 <div class="bg-red-50 p-3 rounded-lg border border-red-200 text-center">
                     <p class="text-xs text-gray-600">⏳ বকেয়া</p>
                     <p class="text-lg font-bold text-red-600">${formatAmountWithText(totalDue)}</p>
-                </div>
-                <div class="bg-purple-50 p-3 rounded-lg border border-purple-200 text-center">
-                    <p class="text-xs text-gray-600">📊 মোট সঞ্চয়</p>
-                    <p class="text-lg font-bold text-purple-600">${formatAmountWithText(totalSavings)}</p>
                 </div>
             </div>
             
@@ -11646,12 +11665,32 @@ async function loadBranchView() {
         `;
         
         // ============================================================
-        // ✅ ১৩. প্রতিটি সদস্যের কার্ড
+        // ✅ ১১. প্রতিটি সদস্যের কার্ড
         // ============================================================
-        for (const bm of branchMembers) {
-            const m = bm.members;
-            if (!m) continue;
+        branchMembers.forEach(bm => {
+            const m = memberMap[bm.member_id];
             
+            if (!m) {
+                console.warn(`⚠️ Member not in map: ${bm.member_id}`);
+                
+                // ✅ সদস্য না পাওয়া গেলে minimal card
+                html += `
+                    <div class="bg-red-50 p-4 rounded-lg border-2 border-red-300">
+                        <div class="flex items-center gap-3">
+                            <div class="w-12 h-12 rounded-full bg-red-200 flex items-center justify-center text-red-600 font-bold text-lg">
+                                ❌
+                            </div>
+                            <div class="flex-1">
+                                <p class="font-semibold text-red-800">ডেটা পাওয়া যায়নি</p>
+                                <p class="text-xs text-red-600">🆔 ${bm.member_id}</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+            
+            // ✅ ✅ ✅ মূল অংশ — সব ফিল্ড safely পড়ুন
             const memberIdStr = String(m.member_id);
             const loanInfo = memberLoanMap[memberIdStr] || {
                 totalLoan: 0,
@@ -11659,7 +11698,7 @@ async function loadBranchView() {
                 approvedLoanIds: []
             };
             
-            // ✅ সদস্যের পরিশোধিত লোন ক্যালকুলেট
+            // ✅ সদস্যের পরিশোধিত লোন
             let memberCollected = 0;
             loanInfo.approvedLoanIds.forEach(loanId => {
                 const loanIdStr = String(loanId);
@@ -11668,119 +11707,173 @@ async function loadBranchView() {
                 }
             });
             
-            // ✅ স্ট্যাটাস color
+            // ✅ Status
             const statusColor = m.status === 'active'
                 ? 'bg-green-100 text-green-700'
                 : 'bg-yellow-100 text-yellow-700';
             const statusText = m.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং';
             
-            // ✅ ব্রাঞ্চের তথ্য
-            const memberBranchName = bm.branches?.branch_name || 'ব্রাঞ্চ নেই';
-            const memberBranchCode = bm.branches?.branch_code || '';
-            const memberBranchId = bm.branches?.id || bm.branch_id;
+            // ✅ ব্রাঞ্চ তথ্য
+            const memberBranch = branchesMap[bm.branch_id];
+            const memberBranchName = memberBranch?.branch_name || 'ব্রাঞ্চ নেই';
+            const memberBranchCode = memberBranch?.branch_code || '';
             
-            // ✅ সদস্যের মোট লভ্যাংশ
-            const memberTotalProfit = 
-                (Number(m.profit_balance_savings) || 0) +
-                (Number(m.profit_balance_investment) || 0) +
-                (Number(m.profit_balance_referral) || 0);
+            // ✅ ✅ ✅ আর্থিক তথ্য — Number() দিয়ে safe
+            const balance = Number(m.balance) || 0;
+            const referralBonus = Number(m.referral_bonus) || 0;
+            const profitSavings = Number(m.profit_balance_savings) || 0;
+            const profitInvestment = Number(m.profit_balance_investment) || 0;
+            const profitReferral = Number(m.profit_balance_referral) || 0;
+            const memberTotalProfit = profitSavings + profitInvestment + profitReferral;
+            
+            // ✅ Debug log
+            if (balance > 0 || referralBonus > 0) {
+                console.log(`   ✅ Card: ${m.full_name} | Balance: ${balance} | Referral: ${referralBonus}`);
+            }
             
             html += `
-                <div class="bg-white p-4 rounded-lg border hover:shadow-md transition-shadow duration-200">
-                    <!-- ✅ সদস্যের হেডার -->
+                <div class="bg-white p-4 rounded-lg border-2 border-gray-200 hover:shadow-lg hover:border-emerald-300 transition-all duration-200">
+                    <!-- ✅ হেডার -->
                     <div class="flex items-center gap-3">
-                        <div class="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 font-bold text-lg flex-shrink-0">
-                            ${m.full_name?.charAt(0) || '?'}
+                        <div class="w-12 h-12 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
+                            ${(m.full_name || '?')?.charAt(0)}
                         </div>
                         <div class="flex-1 min-w-0">
                             <p class="font-semibold text-gray-800 truncate" title="${m.full_name || 'নাম নেই'}">
                                 ${m.full_name || 'নাম নেই'}
                             </p>
                             <p class="text-xs text-gray-500">🆔 ${m.member_id || '-'}</p>
+                            ${m.mobile ? `<p class="text-xs text-gray-400">📱 ${m.mobile}</p>` : ''}
                         </div>
                         <span class="text-xs px-2 py-1 rounded-full ${statusColor} flex-shrink-0">
                             ${statusText}
                         </span>
                     </div>
                     
-                    <!-- ✅ ব্রাঞ্চ তথ্য -->
-                    <div class="mt-2 p-2 bg-gradient-to-r from-emerald-50 to-blue-50 rounded-lg border border-emerald-100">
-                        <div class="flex flex-wrap items-center gap-2 text-xs">
-                            <span class="flex items-center gap-1 text-gray-700 font-semibold">
-                                <i class="fas fa-store text-emerald-600"></i>
-                                ${memberBranchName}
-                            </span>
-                            ${memberBranchCode ? `
-                                <span class="bg-emerald-600 text-white px-2 py-0.5 rounded font-mono font-bold text-[10px]">
-                                    ${memberBranchCode}
+                    <!-- ✅ ব্রাঞ্চ ব্যাজ (All Branches মোডে) -->
+                    ${isAllBranches ? `
+                        <div class="mt-2 p-2 bg-gradient-to-r from-emerald-50 to-blue-50 rounded-lg border border-emerald-100">
+                            <div class="flex flex-wrap items-center gap-2 text-xs">
+                                <span class="flex items-center gap-1 text-gray-700 font-semibold">
+                                    <i class="fas fa-store text-emerald-600"></i>
+                                    ${memberBranchName}
                                 </span>
-                            ` : ''}
-                            ${memberBranchId ? `
-                                <span class="text-gray-400 text-[10px]">
-                                    ID: #${memberBranchId}
-                                </span>
-                            ` : ''}
+                                ${memberBranchCode ? `
+                                    <span class="bg-emerald-600 text-white px-2 py-0.5 rounded font-mono font-bold text-[10px]">
+                                        ${memberBranchCode}
+                                    </span>
+                                ` : ''}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <!-- ✅ ✅ ✅ আর্থিক তথ্য — BIG CARDS -->
+                    <div class="mt-3 grid grid-cols-2 gap-2">
+                        <!-- সঞ্চয় -->
+                        <div class="bg-gradient-to-br from-emerald-50 to-emerald-100 p-3 rounded-lg border-2 border-emerald-300">
+                            <div class="flex items-center gap-1 mb-1">
+                                <i class="fas fa-wallet text-emerald-600 text-sm"></i>
+                                <span class="text-[10px] text-gray-600 font-medium">💰 সঞ্চয়</span>
+                            </div>
+                            <p class="font-bold text-emerald-700 text-base">
+                                ${formatAmountWithText(balance)}
+                            </p>
+                        </div>
+                        
+                        <!-- রেফারেল -->
+                        <div class="bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-lg border-2 border-blue-300">
+                            <div class="flex items-center gap-1 mb-1">
+                                <i class="fas fa-gift text-blue-600 text-sm"></i>
+                                <span class="text-[10px] text-gray-600 font-medium">🎁 রেফারেল</span>
+                            </div>
+                            <p class="font-bold text-blue-700 text-base">
+                                ${formatAmountWithText(referralBonus)}
+                            </p>
+                        </div>
+                        
+                        <!-- মোট লোন -->
+                        <div class="bg-gradient-to-br from-amber-50 to-amber-100 p-3 rounded-lg border-2 border-amber-300">
+                            <div class="flex items-center gap-1 mb-1">
+                                <i class="fas fa-hand-holding-usd text-amber-600 text-sm"></i>
+                                <span class="text-[10px] text-gray-600 font-medium">🏦 মোট লোন</span>
+                            </div>
+                            <p class="font-bold text-amber-700 text-base">
+                                ${formatAmountWithText(loanInfo.totalLoan)}
+                            </p>
+                        </div>
+                        
+                        <!-- লোন আদায় -->
+                        <div class="bg-gradient-to-br from-green-50 to-green-100 p-3 rounded-lg border-2 border-green-300">
+                            <div class="flex items-center gap-1 mb-1">
+                                <i class="fas fa-check-circle text-green-600 text-sm"></i>
+                                <span class="text-[10px] text-gray-600 font-medium">📥 আদায়</span>
+                            </div>
+                            <p class="font-bold text-green-700 text-base">
+                                ${formatAmountWithText(memberCollected)}
+                            </p>
                         </div>
                     </div>
                     
-                    <!-- ✅ আর্থিক তথ্য -->
-                    <div class="mt-3 grid grid-cols-2 gap-2 text-sm border-t pt-3">
-                        <div>
-                            <span class="text-gray-500 text-xs">সঞ্চয়:</span>
-                            <span class="font-medium text-emerald-600 block">
-                                ${formatAmountWithText(m.balance || 0)}
-                            </span>
-                        </div>
-                        <div>
-                            <span class="text-gray-500 text-xs">রেফারেল:</span>
-                            <span class="font-medium text-blue-600 block">
-                                ${formatAmountWithText(m.referral_bonus || 0)}
-                            </span>
-                        </div>
-                        <div>
-                            <span class="text-gray-500 text-xs">মোট লোন:</span>
-                            <span class="font-medium text-red-600 block">
-                                ${formatAmountWithText(loanInfo.totalLoan)}
-                            </span>
-                        </div>
-                        <div>
-                            <span class="text-gray-500 text-xs">লোন আদায়:</span>
-                            <span class="font-medium text-emerald-600 block">
-                                ${formatAmountWithText(memberCollected)}
-                            </span>
-                        </div>
-                        
-                        ${loanInfo.pendingLoan > 0 ? `
-                            <div class="col-span-2 bg-amber-50 p-2 rounded border border-amber-200">
-                                <span class="text-gray-600 text-xs">⏳ পেন্ডিং লোন:</span>
-                                <span class="font-bold text-amber-700 ml-1">
-                                    ${formatAmountWithText(loanInfo.pendingLoan)}
+                    <!-- ✅ মোট লভ্যাংশ (Full Width) -->
+                    ${memberTotalProfit > 0 ? `
+                        <div class="mt-2 bg-gradient-to-r from-purple-50 to-pink-50 p-3 rounded-lg border-2 border-purple-300">
+                            <div class="flex justify-between items-center">
+                                <span class="text-xs text-gray-600 font-medium">
+                                    📈 মোট লভ্যাংশ
                                 </span>
-                            </div>
-                        ` : ''}
-                        
-                        ${memberTotalProfit > 0 ? `
-                            <div class="col-span-2 bg-purple-50 p-2 rounded border border-purple-200">
-                                <span class="text-gray-600 text-xs">📈 মোট লভ্যাংশ:</span>
-                                <span class="font-bold text-purple-700 ml-1">
+                                <span class="font-bold text-purple-700 text-base">
                                     ${formatAmountWithText(memberTotalProfit)}
                                 </span>
                             </div>
-                        ` : ''}
-                        
-                        <div class="col-span-2 text-xs text-gray-400 border-t pt-2 mt-1">
+                            <div class="grid grid-cols-3 gap-1 mt-2 text-[10px]">
+                                <div class="text-center">
+                                    <p class="text-gray-500">সঞ্চয়</p>
+                                    <p class="font-semibold text-purple-600">${formatAmount(profitSavings)}</p>
+                                </div>
+                                <div class="text-center">
+                                    <p class="text-gray-500">বিনিয়োগ</p>
+                                    <p class="font-semibold text-pink-600">${formatAmount(profitInvestment)}</p>
+                                </div>
+                                <div class="text-center">
+                                    <p class="text-gray-500">রেফারেল</p>
+                                    <p class="font-semibold text-teal-600">${formatAmount(profitReferral)}</p>
+                                </div>
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <!-- ✅ পেন্ডিং লোন -->
+                    ${loanInfo.pendingLoan > 0 ? `
+                        <div class="mt-2 bg-yellow-50 p-2 rounded border-2 border-yellow-300">
+                            <div class="flex justify-between items-center">
+                                <span class="text-xs text-yellow-700 font-medium">
+                                    ⏳ পেন্ডিং লোন
+                                </span>
+                                <span class="font-bold text-yellow-700">
+                                    ${formatAmountWithText(loanInfo.pendingLoan)}
+                                </span>
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <!-- ✅ Footer -->
+                    <div class="mt-3 pt-3 border-t border-gray-200 flex justify-between items-center text-[10px] text-gray-400">
+                        <span>
                             📅 যোগদান: ${bm.joined_at
                                 ? new Date(bm.joined_at).toLocaleDateString('bn-BD', {
-                                    year: 'numeric',
-                                    month: 'long',
-                                    day: 'numeric'
+                                    day: 'numeric',
+                                    month: 'short',
+                                    year: 'numeric'
                                 })
                                 : '-'}
-                        </div>
+                        </span>
+                        <span>
+                            💼 মোট ফান্ড: ${formatAmount(balance + referralBonus + memberTotalProfit)}
+                        </span>
                     </div>
                 </div>
             `;
-        }
+        });
         
         html += `</div>`;
         container.innerHTML = html;
@@ -11793,8 +11886,8 @@ async function loadBranchView() {
         container.innerHTML = `
             <div class="text-red-500 p-4 text-center">
                 <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
-                <p>❌ লোড করতে সমস্যা</p>
-                <p class="text-xs text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <p class="font-bold">❌ লোড করতে সমস্যা</p>
+                <p class="text-xs text-gray-500 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
                 <button onclick="loadBranchView()" class="btn btn-info btn-sm mt-3">
                     <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
                 </button>
