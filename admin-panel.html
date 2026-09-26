@@ -25836,6 +25836,814 @@ document.getElementById('balanceAdjustmentForm')?.addEventListener('submit', asy
                         }
                     }
 
+        // ============================================================
+    // ✅ loadRecentAdjustments — সাম্প্রতিক ব্যালেন্স সমন্বয় লোড
+    // ============================================================
+    async function loadRecentAdjustments() {
+        const container = document.getElementById('recentAdjustmentsList');
+        if (!container) {
+            console.warn('⚠️ recentAdjustmentsList element not found');
+            return;
+        }
+        
+        container.innerHTML = `<div class="text-center py-8"><div class="loading-spinner mx-auto"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>`;
+        
+        const client = initSupabaseClient();
+        if (!client) { 
+            container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; 
+            return; 
+        }
+        
+        try {
+            const { data, error } = await client
+                .from('admin_balance_adjustments')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(20);
+            
+            if (error) throw error;
+            
+            if (!data || data.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-8">
+                        <i class="fas fa-inbox text-4xl block mb-2 text-gray-300"></i>
+                        <p>এখনো কোনো সমন্বয় হয়নি</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            const fundLabels = {
+                'balance': '💰 মূলধন',
+                'referral_bonus': '🎁 রেফারেল বোনাস',
+                'profit_balance_savings': '📈 সঞ্চয় লভ্যাংশ',
+                'profit_balance_investment': '📈 বিনিয়োগ লভ্যাংশ',
+                'profit_balance_referral': '📈 রেফারেল লভ্যাংশ'
+            };
+            
+            let html = `<table class="data-table">
+                <thead>
+                    <tr>
+                        <th>ভাউচার</th>
+                        <th>সদস্য</th>
+                        <th>ফান্ড</th>
+                        <th class="text-right">পরিমাণ</th>
+                        <th>অ্যাডমিন</th>
+                        <th>সময়</th>
+                        <th>অ্যাকশন</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+            
+            data.forEach(adj => {
+                const isDeduct = adj.adjustment_direction === 'deduct';
+                const amountClass = isDeduct ? 'text-red-600' : 'text-emerald-600';
+                const sign = isDeduct ? '➖' : '➕';
+                
+                html += `
+                    <tr>
+                        <td><span class="text-xs font-mono bg-emerald-50 text-emerald-700 px-2 py-1 rounded font-bold">${adj.voucher_no}</span></td>
+                        <td>
+                            <span class="font-medium text-sm">${adj.member_name || '-'}</span>
+                            <span class="text-xs text-gray-500 block">${adj.member_id || ''}</span>
+                        </td>
+                        <td><span class="text-xs">${fundLabels[adj.adjustment_type] || adj.adjustment_type}</span></td>
+                        <td class="text-right font-bold ${amountClass}">${sign} ${formatAmountWithText ? formatAmountWithText(adj.amount) : adj.amount + ' টাকা'}</td>
+                        <td><span class="text-xs font-medium">${adj.admin_name || '-'}</span></td>
+                        <td class="text-xs text-gray-500">${adj.created_at ? new Date(adj.created_at).toLocaleString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                        <td>
+                            <button onclick="showAdjustmentVoucherById(${adj.id})" class="btn btn-purple btn-xs" title="ভাউচার">
+                                <i class="fas fa-receipt"></i>
+                            </button>
+                            <button onclick="viewAdjustmentDetails(${adj.id})" class="btn btn-info btn-xs" title="বিস্তারিত">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            html += `</tbody></table>`;
+            container.innerHTML = html;
+            
+        } catch(e) {
+            console.error('❌ Load recent adjustments error:', e);
+            container.innerHTML = `
+                <div class="text-center text-red-500 py-8">
+                    <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                    <p>লোড করতে সমস্যা</p>
+                    <p class="text-xs mt-1">${e.message || ''}</p>
+                </div>
+            `;
+        }
+    }
+
+    // ============================================================
+// ✅ BALANCE ADJUSTMENT — Complete Functions Set
+// ৯টি Missing ফাংশন
+// ============================================================
+
+// ============================================================
+// ✅ ১. clearAdjustmentForm — ফর্ম রিসেট
+// ============================================================
+function clearAdjustmentForm() {
+    // Input fields রিসেট
+    const fields = [
+        'adjMemberSearch',
+        'adjMemberResult',
+        'adjustmentFormContainer',
+        'adjAmount',
+        'adjReason',
+        'adjNote',
+        'adjFundType',
+        'adjDirection',
+        'adjFundCurrent',
+        'adjNewBalance',
+        'adjConfirm',
+        'adjManualVoucher',
+        'adjAutoVoucher',
+        'adjManualVoucherStatus'
+    ];
+    
+    // Search input
+    const searchInput = document.getElementById('adjMemberSearch');
+    if (searchInput) searchInput.value = '';
+    
+    // Result div
+    const resultDiv = document.getElementById('adjMemberResult');
+    if (resultDiv) resultDiv.innerHTML = '';
+    
+    // Form container লুকান
+    const formContainer = document.getElementById('adjustmentFormContainer');
+    if (formContainer) formContainer.classList.add('hidden');
+    
+    // Amount, reason, note clear
+    ['adjAmount', 'adjReason', 'adjNote'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    
+    // Fund type reset
+    const fundType = document.getElementById('adjFundType');
+    if (fundType) fundType.value = '';
+    
+    const direction = document.getElementById('adjDirection');
+    if (direction) direction.value = 'deduct';
+    
+    // Computed fields clear
+    ['adjFundCurrent', 'adjNewBalance'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    
+    // Checkbox uncheck
+    const confirmCheckbox = document.getElementById('adjConfirm');
+    if (confirmCheckbox) confirmCheckbox.checked = false;
+    
+    // Manual voucher reset
+    const manualCheckbox = document.getElementById('adjUseManualVoucher');
+    if (manualCheckbox) manualCheckbox.checked = false;
+    
+    const manualContainer = document.getElementById('adjManualVoucherContainer');
+    if (manualContainer) manualContainer.classList.add('hidden');
+    
+    const manualVoucher = document.getElementById('adjManualVoucher');
+    if (manualVoucher) {
+        manualVoucher.value = '';
+        manualVoucher.dataset.valid = '';
+        manualVoucher.style.borderColor = '';
+        manualVoucher.style.backgroundColor = '';
+    }
+    
+    const manualStatus = document.getElementById('adjManualVoucherStatus');
+    if (manualStatus) manualStatus.innerHTML = '';
+    
+    // Global adjustment member data clear
+    if (typeof adjustmentMemberData !== 'undefined') {
+        window.adjustmentMemberData = null;
+    }
+    
+    // নতুন auto voucher generate
+    if (typeof refreshAutoVoucher === 'function') {
+        refreshAutoVoucher();
+    }
+    
+    if (typeof showToast === 'function') {
+        showToast('✅ ফর্ম রিসেট হয়েছে', 'info');
+    }
+    
+    console.log('✅ clearAdjustmentForm — সম্পন্ন');
+}
+
+// ============================================================
+// ✅ ২. loadRecentAdjustments — সাম্প্রতিক ২০টি সমন্বয়
+// ============================================================
+async function loadRecentAdjustments() {
+    const container = document.getElementById('recentAdjustmentsList');
+    if (!container) {
+        console.warn('⚠️ recentAdjustmentsList element not found');
+        return;
+    }
+    
+    container.innerHTML = `<div class="text-center py-8"><div class="loading-spinner mx-auto"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>`;
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; 
+        return; 
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('admin_balance_adjustments')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(20);
+        
+        if (error) throw error;
+        
+        if (!data || data.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-inbox text-4xl block mb-2 text-gray-300"></i>
+                    <p>এখনো কোনো সমন্বয় হয়নি</p>
+                </div>
+            `;
+            return;
+        }
+        
+        const fundLabels = {
+            'balance': '💰 মূলধন',
+            'referral_bonus': '🎁 রেফারেল বোনাস',
+            'profit_balance_savings': '📈 সঞ্চয় লভ্যাংশ',
+            'profit_balance_investment': '📈 বিনিয়োগ লভ্যাংশ',
+            'profit_balance_referral': '📈 রেফারেল লভ্যাংশ'
+        };
+        
+        let html = `<table class="data-table">
+            <thead>
+                <tr>
+                    <th>ভাউচার</th>
+                    <th>সদস্য</th>
+                    <th>ফান্ড</th>
+                    <th class="text-right">পরিমাণ</th>
+                    <th>অ্যাডমিন</th>
+                    <th>সময়</th>
+                    <th>অ্যাকশন</th>
+                </tr>
+            </thead>
+            <tbody>`;
+        
+        data.forEach(adj => {
+            const isDeduct = adj.adjustment_direction === 'deduct';
+            const amountClass = isDeduct ? 'text-red-600' : 'text-emerald-600';
+            const sign = isDeduct ? '➖' : '➕';
+            const formattedAmount = typeof formatAmountWithText === 'function' 
+                ? formatAmountWithText(adj.amount) 
+                : (adj.amount || 0).toFixed(2) + ' টাকা';
+            
+            html += `
+                <tr>
+                    <td><span class="text-xs font-mono bg-emerald-50 text-emerald-700 px-2 py-1 rounded font-bold">${adj.voucher_no || '-'}</span></td>
+                    <td>
+                        <span class="font-medium text-sm">${adj.member_name || '-'}</span>
+                        <span class="text-xs text-gray-500 block">${adj.member_id || ''}</span>
+                    </td>
+                    <td><span class="text-xs">${fundLabels[adj.adjustment_type] || adj.adjustment_type || '-'}</span></td>
+                    <td class="text-right font-bold ${amountClass}">${sign} ${formattedAmount}</td>
+                    <td><span class="text-xs font-medium">${adj.admin_name || '-'}</span></td>
+                    <td class="text-xs text-gray-500">
+                        ${adj.created_at ? new Date(adj.created_at).toLocaleString('bn-BD', { 
+                            year: 'numeric', month: 'short', day: 'numeric', 
+                            hour: '2-digit', minute: '2-digit' 
+                        }) : '-'}
+                    </td>
+                    <td>
+                        <button onclick="showAdjustmentVoucherById(${adj.id})" class="btn btn-purple btn-xs" title="ভাউচার">
+                            <i class="fas fa-receipt"></i>
+                        </button>
+                        <button onclick="viewAdjustmentDetails(${adj.id})" class="btn btn-info btn-xs" title="বিস্তারিত">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+        
+        console.log(`✅ loadRecentAdjustments — ${data.length} টি record লোড হয়েছে`);
+        
+    } catch(e) {
+        console.error('❌ loadRecentAdjustments error:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>লোড করতে সমস্যা</p>
+                <p class="text-xs mt-1">${e.message || ''}</p>
+            </div>
+        `;
+    }
+}
+
+// ============================================================
+// ✅ ৩. loadAdjustmentHistory — সম্পূর্ণ হিস্টোরি (৫০০টি)
+// ============================================================
+async function loadAdjustmentHistory() {
+    const client = initSupabaseClient();
+    if (!client) {
+        if (typeof showToast === 'function') showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('admin_balance_adjustments')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(500);
+        
+        if (error) throw error;
+        
+        if (!data || data.length === 0) {
+            if (typeof showToast === 'function') showToast('📭 কোনো হিস্টোরি নেই!', 'info');
+            return;
+        }
+        
+        const fundLabels = {
+            'balance': '💰 মূলধন',
+            'referral_bonus': '🎁 রেফারেল বোনাস',
+            'profit_balance_savings': '📈 সঞ্চয় লভ্যাংশ',
+            'profit_balance_investment': '📈 বিনিয়োগ লভ্যাংশ',
+            'profit_balance_referral': '📈 রেফারেল লভ্যাংশ'
+        };
+        
+        let totalDeduct = 0, totalAdd = 0;
+        data.forEach(d => {
+            if (d.adjustment_direction === 'deduct') totalDeduct += Number(d.amount) || 0;
+            else totalAdd += Number(d.amount) || 0;
+        });
+        
+        const fmt = (n) => typeof formatAmountWithText === 'function' 
+            ? formatAmountWithText(n) 
+            : (n || 0).toFixed(2) + ' টাকা';
+        
+        let html = `
+            <div class="grid grid-cols-3 gap-3 mb-4">
+                <div class="bg-blue-50 p-3 rounded-lg border text-center">
+                    <p class="text-xs text-gray-500">মোট</p>
+                    <p class="text-2xl font-bold text-blue-700">${data.length}</p>
+                </div>
+                <div class="bg-red-50 p-3 rounded-lg border text-center">
+                    <p class="text-xs text-gray-500">কমানো</p>
+                    <p class="text-xl font-bold text-red-700">${fmt(totalDeduct)}</p>
+                </div>
+                <div class="bg-emerald-50 p-3 rounded-lg border text-center">
+                    <p class="text-xs text-gray-500">বাড়ানো</p>
+                    <p class="text-xl font-bold text-emerald-700">${fmt(totalAdd)}</p>
+                </div>
+            </div>
+            <div class="table-scroll max-h-96">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ভাউচার</th>
+                            <th>সময়</th>
+                            <th>সদস্য</th>
+                            <th>ফান্ড</th>
+                            <th class="text-right">পরিমাণ</th>
+                            <th>অ্যাডমিন</th>
+                            <th>অ্যাকশন</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        data.forEach(adj => {
+            const isDeduct = adj.adjustment_direction === 'deduct';
+            html += `
+                <tr>
+                    <td class="text-xs font-mono">${adj.voucher_no || '-'}</td>
+                    <td class="text-xs">
+                        ${adj.created_at ? new Date(adj.created_at).toLocaleString('bn-BD', { 
+                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+                        }) : '-'}
+                    </td>
+                    <td>
+                        <span class="text-sm font-medium">${adj.member_name || '-'}</span>
+                        <span class="text-xs text-gray-500 block">${adj.member_id || ''}</span>
+                    </td>
+                    <td class="text-xs">${fundLabels[adj.adjustment_type] || adj.adjustment_type}</td>
+                    <td class="text-right font-bold ${isDeduct ? 'text-red-600' : 'text-emerald-600'}">
+                        ${isDeduct ? '➖' : '➕'} ${fmt(adj.amount)}
+                    </td>
+                    <td class="text-xs">${adj.admin_name || '-'}</td>
+                    <td>
+                        <button onclick="showAdjustmentVoucherById(${adj.id})" class="btn btn-purple btn-xs">
+                            <i class="fas fa-receipt"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        html += `</tbody></table></div>`;
+        
+        if (typeof showCustomModal === 'function') {
+            showCustomModal('📋 সম্পূর্ণ সমন্বয় হিস্টোরি', html);
+        }
+        
+        console.log(`✅ loadAdjustmentHistory — ${data.length} টি record লোড হয়েছে`);
+        
+    } catch(e) {
+        console.error('❌ loadAdjustmentHistory error:', e);
+        if (typeof showToast === 'function') showToast('❌ লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ✅ ৪. showAdjustmentVoucher — ভাউচার মডাল
+// ============================================================
+function showAdjustmentVoucher(data) {
+    const modal = document.getElementById('adjustmentVoucherModal');
+    const content = document.getElementById('adjustmentVoucherContent');
+    if (!modal || !content) {
+        console.warn('⚠️ Voucher modal not found');
+        return;
+    }
+    
+    const isDeduct = data.adjustment_direction === 'deduct';
+    const currentDate = new Date(data.created_at || new Date());
+    
+    const fundLabels = {
+        'balance': 'মূলধন (মূল সঞ্চয়)',
+        'referral_bonus': 'রেফারেল বোনাস',
+        'profit_balance_savings': 'সঞ্চয় লভ্যাংশ',
+        'profit_balance_investment': 'বিনিয়োগ লভ্যাংশ',
+        'profit_balance_referral': 'রেফারেল লভ্যাংশ'
+    };
+    
+    const fmt = (n) => typeof formatAmount === 'function' 
+        ? formatAmount(n) 
+        : (Number(n) || 0).toFixed(2);
+    
+    content.innerHTML = `
+        <div id="voucherPrintArea" style="background: white; padding: 30px; border: 2px solid #059669; border-radius: 8px;">
+            <div style="text-align: center; border-bottom: 2px solid #059669; padding-bottom: 15px; margin-bottom: 20px;">
+                <h1 style="color: #059669; font-size: 24px; font-weight: 700; margin-bottom: 5px;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h1>
+                <p style="color: #666; font-size: 14px;">TUKNBD - ব্যালেন্স সমন্বয় ভাউচার</p>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+                <div>
+                    <p style="color: #666; font-size: 12px;">ভাউচার নম্বর</p>
+                    <p style="font-size: 18px; font-weight: 700; color: #059669; font-family: monospace;">${data.voucher_no || '-'}</p>
+                </div>
+                <div style="text-align: right;">
+                    <p style="color: #666; font-size: 12px;">তারিখ ও সময়</p>
+                    <p style="font-size: 14px; font-weight: 600;">${currentDate.toLocaleString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                </div>
+            </div>
+            
+            <div style="background: #f0fdf4; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #86efac;">
+                <h3 style="color: #065f46; font-size: 14px; margin-bottom: 10px; font-weight: 700;">👤 সদস্যের তথ্য</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
+                    <div><strong>নাম:</strong> ${data.member_name || '-'}</div>
+                    <div><strong>সদস্য আইডি:</strong> ${data.member_id || '-'}</div>
+                    <div><strong>মোবাইল:</strong> ${data.member_phone || '-'}</div>
+                    <div><strong>জেলা:</strong> ${data.member_district || '-'}</div>
+                </div>
+            </div>
+            
+            <div style="background: ${isDeduct ? '#fef2f2' : '#f0fdf4'}; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 2px solid ${isDeduct ? '#fca5a5' : '#86efac'};">
+                <h3 style="color: ${isDeduct ? '#991b1b' : '#065f46'}; font-size: 14px; margin-bottom: 10px; font-weight: 700;">
+                    ${isDeduct ? '➖ কর্তন (Deduction)' : '➕ সংযোজন (Addition)'}
+                </h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
+                    <div><strong>ফান্ড:</strong> ${fundLabels[data.adjustment_type] || data.adjustment_type}</div>
+                    <div><strong>অপারেশন:</strong> ${isDeduct ? 'কমানো' : 'বাড়ানো'}</div>
+                    <div><strong>পূর্বের:</strong> ${fmt(data.previous_amount)} টাকা</div>
+                    <div><strong>নতুন:</strong> ${fmt(data.new_amount)} টাকা</div>
+                </div>
+                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px dashed #999;">
+                    <p style="font-size: 12px; color: #666; margin-bottom: 5px; text-align: center;">সমন্বয়ের পরিমাণ</p>
+                    <p style="font-size: 32px; font-weight: 700; color: ${isDeduct ? '#dc2626' : '#059669'}; text-align: center; font-family: monospace;">
+                        ${isDeduct ? '−' : '+'} ৳ ${fmt(data.amount)}
+                    </p>
+                </div>
+            </div>
+            
+            <div style="background: #fff7ed; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #fed7aa;">
+                <h3 style="color: #9a3412; font-size: 14px; margin-bottom: 8px; font-weight: 700;">📝 কারণ</h3>
+                <p style="font-size: 13px; color: #431407;">${data.reason || '-'}</p>
+                ${data.note ? `<p style="font-size: 12px; color: #78716c; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #fed7aa;"><strong>নোট:</strong> ${data.note}</p>` : ''}
+            </div>
+            
+            <div style="background: #eff6ff; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #93c5fd;">
+                <h3 style="color: #1e40af; font-size: 14px; margin-bottom: 8px; font-weight: 700;">🔐 অনুমোদনকারী</h3>
+                <div style="font-size: 13px;">
+                    <p><strong>অ্যাডমিন:</strong> ${data.admin_name || '-'}</p>
+                    <p><strong>পদবী:</strong> ${data.admin_role || '-'}</p>
+                </div>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; margin-top: 50px; padding-top: 20px; border-top: 1px solid #ddd;">
+                <div style="text-align: center; width: 45%;">
+                    <div style="border-top: 2px solid #333; padding-top: 5px; margin-top: 40px;">
+                        <p style="font-size: 12px; color: #666;">সদস্যের স্বাক্ষর</p>
+                    </div>
+                </div>
+                <div style="text-align: center; width: 45%;">
+                    <div style="border-top: 2px solid #333; padding-top: 5px; margin-top: 40px;">
+                        <p style="font-size: 12px; color: #666;">অনুমোদনকারী অ্যাডমিনের স্বাক্ষর</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px dashed #999;">
+                <p style="font-size: 11px; color: #999;">এই ডকুমেন্টটি সিস্টেম জেনারেটেড | TUKNBD Admin Panel</p>
+            </div>
+        </div>
+    `;
+    
+    modal.classList.add('active');
+    modal.style.display = 'flex';
+    
+    console.log('✅ showAdjustmentVoucher — মডাল খোলা হয়েছে');
+}
+
+// ============================================================
+// ✅ ৫. showAdjustmentVoucherById — ID দিয়ে ভাউচার
+// ============================================================
+async function showAdjustmentVoucherById(adjustmentId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        if (typeof showToast === 'function') showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('admin_balance_adjustments')
+            .select('*')
+            .eq('id', adjustmentId)
+            .single();
+        
+        if (error || !data) {
+            if (typeof showToast === 'function') showToast('❌ ভাউচার পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        showAdjustmentVoucher(data);
+        
+    } catch(e) {
+        console.error('❌ showAdjustmentVoucherById error:', e);
+        if (typeof showToast === 'function') showToast('❌ লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ✅ ৬. closeAdjustmentVoucherModal — মডাল বন্ধ
+// ============================================================
+function closeAdjustmentVoucherModal() {
+    const modal = document.getElementById('adjustmentVoucherModal');
+    if (modal) {
+        modal.classList.remove('active');
+        modal.style.display = 'none';
+    }
+    console.log('✅ Voucher modal বন্ধ');
+}
+
+// ============================================================
+// ✅ ৭. printAdjustmentVoucher — প্রিন্ট
+// ============================================================
+function printAdjustmentVoucher() {
+    const content = document.getElementById('voucherPrintArea');
+    if (!content) {
+        if (typeof showToast === 'function') showToast('❌ প্রিন্ট করার ডেটা নেই!', 'error');
+        return;
+    }
+    
+    const printWindow = window.open('', '_blank', 'width=900,height=700');
+    if (!printWindow) {
+        if (typeof showToast === 'function') showToast('❌ পপ-আপ ব্লক!', 'error');
+        return;
+    }
+    
+    printWindow.document.write(`
+        <!DOCTYPE html>
+        <html lang="bn">
+        <head>
+            <meta charset="UTF-8">
+            <title>ব্যালেন্স সমন্বয় ভাউচার</title>
+            <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&display=swap" rel="stylesheet">
+            <style>
+                * { font-family: 'Noto Sans Bengali', sans-serif; }
+                body { padding: 20px; background: white; }
+                @media print { 
+                    body { padding: 0; } 
+                    @page { size: A4 portrait; margin: 10mm; }
+                }
+            </style>
+        </head>
+        <body>
+            ${content.outerHTML}
+            <script>
+                window.onload = function() { 
+                    setTimeout(() => window.print(), 500); 
+                }
+            <\/script>
+        </body>
+        </html>
+    `);
+    printWindow.document.close();
+    
+    console.log('✅ printAdjustmentVoucher — প্রিন্ট উইন্ডো খোলা');
+}
+
+// ============================================================
+// ✅ ৮. viewAdjustmentDetails — বিস্তারিত মডাল
+// ============================================================
+async function viewAdjustmentDetails(adjustmentId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        if (typeof showToast === 'function') showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('admin_balance_adjustments')
+            .select('*')
+            .eq('id', adjustmentId)
+            .single();
+        
+        if (error || !data) {
+            if (typeof showToast === 'function') showToast('❌ তথ্য পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        const isDeduct = data.adjustment_direction === 'deduct';
+        const fundLabels = {
+            'balance': '💰 মূলধন',
+            'referral_bonus': '🎁 রেফারেল বোনাস',
+            'profit_balance_savings': '📈 সঞ্চয় লভ্যাংশ',
+            'profit_balance_investment': '📈 বিনিয়োগ লভ্যাংশ',
+            'profit_balance_referral': '📈 রেফারেল লভ্যাংশ'
+        };
+        
+        const fmt = (n) => typeof formatAmountWithText === 'function' 
+            ? formatAmountWithText(n) 
+            : (Number(n) || 0).toFixed(2) + ' টাকা';
+        
+        const html = `
+            <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-3 text-sm">
+                    <div class="bg-emerald-50 p-3 rounded-lg">
+                        <span class="text-gray-500 text-xs">ভাউচার</span>
+                        <p class="font-mono font-bold text-emerald-700">${data.voucher_no}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg">
+                        <span class="text-gray-500 text-xs">সময়</span>
+                        <p class="font-semibold">${new Date(data.created_at).toLocaleString('bn-BD')}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg">
+                        <span class="text-gray-500 text-xs">সদস্য</span>
+                        <p class="font-semibold">${data.member_name}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg">
+                        <span class="text-gray-500 text-xs">আইডি</span>
+                        <p class="font-semibold">${data.member_id}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg">
+                        <span class="text-gray-500 text-xs">ফান্ড</span>
+                        <p class="font-semibold">${fundLabels[data.adjustment_type] || data.adjustment_type}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg">
+                        <span class="text-gray-500 text-xs">অপারেশন</span>
+                        <p class="font-semibold ${isDeduct ? 'text-red-600' : 'text-emerald-600'}">
+                            ${isDeduct ? '➖ কমান' : '➕ বাড়ান'}
+                        </p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg">
+                        <span class="text-gray-500 text-xs">পূর্বের</span>
+                        <p class="font-semibold">${fmt(data.previous_amount)}</p>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-lg">
+                        <span class="text-gray-500 text-xs">নতুন</span>
+                        <p class="font-semibold">${fmt(data.new_amount)}</p>
+                    </div>
+                    <div class="bg-red-50 p-3 rounded-lg col-span-2 text-center border-2 border-red-200">
+                        <span class="text-gray-500 text-xs">পরিমাণ</span>
+                        <p class="font-bold text-2xl ${isDeduct ? 'text-red-600' : 'text-emerald-600'}">
+                            ${isDeduct ? '−' : '+'} ${fmt(data.amount)}
+                        </p>
+                    </div>
+                    <div class="bg-amber-50 p-3 rounded-lg col-span-2">
+                        <span class="text-gray-500 text-xs">কারণ</span>
+                        <p class="font-semibold">${data.reason || '-'}</p>
+                    </div>
+                    ${data.note ? `
+                        <div class="bg-amber-50 p-3 rounded-lg col-span-2">
+                            <span class="text-gray-500 text-xs">নোট</span>
+                            <p>${data.note}</p>
+                        </div>
+                    ` : ''}
+                    <div class="bg-blue-50 p-3 rounded-lg">
+                        <span class="text-gray-500 text-xs">অ্যাডমিন</span>
+                        <p class="font-semibold">${data.admin_name}</p>
+                    </div>
+                    <div class="bg-blue-50 p-3 rounded-lg">
+                        <span class="text-gray-500 text-xs">পদবী</span>
+                        <p class="font-semibold">${data.admin_role || '-'}</p>
+                    </div>
+                </div>
+                <div class="flex gap-2 justify-center pt-3 border-t no-print">
+                    <button onclick="closeCustomModal(); showAdjustmentVoucherById(${data.id})" class="btn btn-purple py-2">
+                        <i class="fas fa-receipt mr-1"></i> ভাউচার
+                    </button>
+                    <button onclick="closeCustomModal()" class="btn btn-warning py-2">
+                        <i class="fas fa-times mr-1"></i> বন্ধ
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        if (typeof showCustomModal === 'function') {
+            showCustomModal('📋 সমন্বয় বিস্তারিত', html);
+        } else {
+            alert('showCustomModal function missing!');
+        }
+        
+    } catch(e) {
+        console.error('❌ viewAdjustmentDetails error:', e);
+        if (typeof showToast === 'function') showToast('❌ লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ============================================================
+// ✅ ৯. exportAdjustmentReport — CSV export
+// ============================================================
+async function exportAdjustmentReport() {
+    const client = initSupabaseClient();
+    if (!client) {
+        if (typeof showToast === 'function') showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data, error } = await client
+            .from('admin_balance_adjustments')
+            .select('*')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        if (!data || data.length === 0) {
+            if (typeof showToast === 'function') showToast('📭 ডেটা নেই!', 'error');
+            return;
+        }
+        
+        const fundLabels = {
+            'balance': 'মূলধন',
+            'referral_bonus': 'রেফারেল বোনাস',
+            'profit_balance_savings': 'সঞ্চয় লভ্যাংশ',
+            'profit_balance_investment': 'বিনিয়োগ লভ্যাংশ',
+            'profit_balance_referral': 'রেফারেল লভ্যাংশ'
+        };
+        
+        let csv = "ভাউচার,তারিখ,সদস্য নাম,সদস্য আইডি,ফান্ড,অপারেশন,পরিমাণ,পূর্বের,নতুন,কারণ,অ্যাডমিন,পদবী\n";
+        
+        data.forEach(d => {
+            csv += `"${d.voucher_no}","${d.created_at}","${d.member_name}","${d.member_id}","${fundLabels[d.adjustment_type] || d.adjustment_type}","${d.adjustment_direction === 'deduct' ? 'কমান' : 'বাড়ান'}","${d.amount}","${d.previous_amount}","${d.new_amount}","${d.reason}","${d.admin_name}","${d.admin_role || ''}"\n`;
+        });
+        
+        const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `balance_adjustments_${new Date().toISOString().slice(0,10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        
+        if (typeof showToast === 'function') {
+            showToast(`✅ ${data.length} টি রেকর্ড এক্সপোর্ট হয়েছে!`, 'success');
+        }
+        
+    } catch(e) {
+        console.error('❌ exportAdjustmentReport error:', e);
+        if (typeof showToast === 'function') showToast('❌ এক্সপোর্ট ব্যর্থ!', 'error');
+    }
+}
+
+// ============================================================
+// ✅ সব ফাংশন Global Expose করুন
+// ============================================================
+window.clearAdjustmentForm = clearAdjustmentForm;
+window.loadRecentAdjustments = loadRecentAdjustments;
+window.loadAdjust
+
+
                     // ============================================================
                     // ✅ ১৯. Global Expose — সব ফাংশন window এ
                     // ============================================================
@@ -25861,8 +26669,8 @@ document.getElementById('balanceAdjustmentForm')?.addEventListener('submit', asy
                     window.updateDirectRoleNotices = updateDirectRoleNotices;
                     window.isSuperAdmin = isSuperAdmin;
                     window.generateDirectVoucherNumber = generateDirectVoucherNumber;
-
-                                        // ============================================================
+                    
+                     // ============================================================
                     // ✅ ২০. Startup Init
                     // ============================================================
                     document.addEventListener('DOMContentLoaded', function() {
