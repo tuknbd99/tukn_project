@@ -8128,11 +8128,13 @@ window.clearWithdrawalForm = function() {
 
 // ============================================================
 // ✅ onWithdrawalFundChange() — ফান্ড পরিবর্তন হলে ব্যালেন্স আপডেট
-// 🆕 all_funds সাপোর্ট সহ
+// ✅ FIXED: সব ফান্ডে ক্লিক করলে auto-fill হবে
 // ============================================================
 window.onWithdrawalFundChange = function() {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('🔄 onWithdrawalFundChange called');
     
+    // ✅ Step 1: Selected fund চেক
     const selectedFund = document.querySelector('input[name="withdrawalFund"]:checked');
     if (!selectedFund) {
         console.warn('⚠️ কোনো ফান্ড সিলেক্ট করা হয়নি');
@@ -8142,13 +8144,24 @@ window.onWithdrawalFundChange = function() {
     const fundType = selectedFund.value;
     console.log('💰 Selected fund:', fundType);
     
+    // ✅ Step 2: Global member চেক
     const member = window._currentWithdrawalMember;
     if (!member) {
         console.warn('⚠️ _currentWithdrawalMember সেট করা নেই!');
+        
+        // UI reset
+        const selectedBalanceEl = document.getElementById('selectedFundBalance');
+        if (selectedBalanceEl) selectedBalanceEl.textContent = '০ টাকা';
+        
+        const maxAmountEl = document.getElementById('withdrawalMaxAmount');
+        if (maxAmountEl) maxAmountEl.textContent = '০ টাকা';
+        
         return;
     }
     
-    // ✅ প্রতিটি ফান্ডের মান
+    console.log('✅ Member:', member.full_name);
+    
+    // ✅ Step 3: Fund map তৈরি
     const fundMap = {
         'balance': Number(member.balance) || 0,
         'referral_bonus': Number(member.referral_bonus) || 0,
@@ -8157,12 +8170,15 @@ window.onWithdrawalFundChange = function() {
         'profit_balance_referral': Number(member.profit_balance_referral) || 0
     };
     
-    // ✅ 🆕 সব ফান্ডের মোট
+    // ✅ Step 4: Current amount বের করুন
     let currentAmount = 0;
+    
     if (fundType === 'all_funds') {
+        // সব ফান্ডের মোট
         currentAmount = Object.values(fundMap).reduce((sum, val) => sum + val, 0);
+        console.log('📊 all_funds total:', currentAmount);
         
-        // ✅ বিস্তারিত ব্রেকডাউন তৈরি
+        // ✅ Breakdown দেখান
         const breakdown = `
             <div class="text-xs text-gray-600 mt-2 bg-white/30 p-2 rounded">
                 <div class="font-bold mb-1 text-center">📊 ব্রেকডাউন:</div>
@@ -8176,7 +8192,6 @@ window.onWithdrawalFundChange = function() {
             </div>
         `;
         
-        // ✅ selectedFundBalance-এ breakdown দেখান
         const selectedBalanceEl = document.getElementById('selectedFundBalance');
         if (selectedBalanceEl) {
             selectedBalanceEl.innerHTML = `
@@ -8185,7 +8200,9 @@ window.onWithdrawalFundChange = function() {
             `;
         }
     } else {
+        // নির্দিষ্ট ফান্ড
         currentAmount = fundMap[fundType] || 0;
+        console.log('📊 Current amount:', currentAmount);
         
         const selectedBalanceEl = document.getElementById('selectedFundBalance');
         if (selectedBalanceEl) {
@@ -8193,35 +8210,51 @@ window.onWithdrawalFundChange = function() {
         }
     }
     
-    // ✅ max amount আপডেট
+    // ✅ Step 5: Max amount আপডেট
     const maxAmountEl = document.getElementById('withdrawalMaxAmount');
     if (maxAmountEl) {
         if (fundType === 'all_funds') {
-            maxAmountEl.innerHTML = `<span class="text-red-600 font-bold">${formatAmountWithText(currentAmount)}</span> (সম্পূর্ণ ব্যালেন্স)`;
+            maxAmountEl.innerHTML = `<span class="text-red-600 font-bold">${formatAmountWithText(currentAmount)}</span>`;
         } else {
             maxAmountEl.textContent = formatAmountWithText(currentAmount);
         }
     }
     
-    // ✅ amount input আপডেট
+    // ✅ Step 6: Amount input আপডেট — ✅ AUTO-FILL (সব ফান্ডে)
     const amountInput = document.getElementById('withdrawalAmount');
     if (amountInput) {
+        // ✅ max সেট করুন
         amountInput.max = currentAmount;
         
-        // ✅ all_funds হলে — auto-fill করা
-        if (fundType === 'all_funds' && currentAmount > 0) {
+        // ✅ ✅ ✅ AUTO-FILL — সব ফান্ডে (মূলধন, রেফারেল, all_funds, ইত্যাদি)
+        if (currentAmount > 0) {
             amountInput.value = currentAmount;
+            console.log('✅ Amount auto-filled:', currentAmount);
+        } else {
+            amountInput.value = '';
+            console.log('⚠️ Amount = 0 — input খালি');
         }
         
-        const currentValue = parseFloat(amountInput.value) || 0;
-        if (currentValue > currentAmount) {
-            amountInput.value = currentAmount;
-            if (typeof showToast === 'function') {
-                showToast(`⚠️ সর্বোচ্চ ${formatAmountWithText(currentAmount)} উত্তোলন করা যাবে!`, 'warning');
-            }
+        // ✅ Placeholder আপডেট
+        amountInput.placeholder = currentAmount > 0 
+            ? `সর্বোচ্চ ${formatAmount(currentAmount)}`
+            : '❌ এই ফান্ডে ব্যালেন্স নেই';
+        
+        // ✅ Border color (০ হলে লাল)
+        if (currentAmount <= 0) {
+            amountInput.style.borderColor = '#dc2626';
+            amountInput.style.backgroundColor = '#fef2f2';
+        } else {
+            amountInput.style.borderColor = '';
+            amountInput.style.backgroundColor = '';
         }
     }
+    
+    console.log('✅ Updated — Amount:', currentAmount);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 };
+
+console.log('✅ onWithdrawalFundChange() — AUTO-FILL version loaded!');
 
     // ============================================================
 // ✅ checkWithdrawalAmount() — উত্তোলনের পরিমাণ যাচাই
