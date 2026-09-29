@@ -785,7 +785,10 @@
     
     <!-- উত্তোলন ইতিহাস সেকশন -->
     <div class="bg-white rounded-xl shadow-md p-4 mt-6">
-        <div class="flex justify-between items-center mb-3"><h3 class="font-bold text-emerald-700"><i class="fas fa-history mr-2"></i>আমার উত্তোলন ইতিহাস</h3><button onclick="loadWithdrawalHistory()" class="text-emerald-600 text-sm hover:text-emerald-700">রিফ্রেশ</button></div>
+    <h3 class="font-bold text-emerald-700"><i class="fas fa-history mr-2"></i>আমার উত্তোলন ইতিহাস</h3>
+    <button onclick="refreshWithdrawalHistory()" class="text-emerald-600 text-sm hover:text-emerald-700 flex items-center gap-1">
+    <i class="fas fa-sync-alt"></i> রিফ্রেশ</button>
+        
         <div id="withdrawalHistoryList" class="space-y-2 max-h-96 overflow-y-auto"><div class="text-center text-gray-400 py-4">লোড হচ্ছে...</div></div>
     </div>
     
@@ -4523,191 +4526,407 @@ function closeWithdrawModal() {
 }
 
 // ============================================================
-// LOAD WITHDRAWAL HISTORY WITH SLIP BUTTON
+// ✅ loadWithdrawalHistory() — সম্পূর্ণ আপডেটেড ভার্সন
+// ✅ Debug log | ✅ Loading state | ✅ Error UI | ✅ Statistics
+// ✅ Case-insensitive method | ✅ Auto-refresh | ✅ Bengali numbers
 // ============================================================
 async function loadWithdrawalHistory() {
-    let client = await initSupabase();
-    if(!client) return;
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('🔄 উত্তোলন ইতিহাস লোড শুরু...');
+    
+    // ============================================================
+    // ১. Container চেক করুন
+    // ============================================================
+    const container = document.getElementById('withdrawalHistoryList');
+    if (!container) {
+        console.error('❌ withdrawalHistoryList কন্টেইনার পাওয়া যায়নি!');
+        return;
+    }
+    
+    // ============================================================
+    // ২. Loading state দেখান
+    // ============================================================
+    container.innerHTML = `
+        <div class="text-center py-6">
+            <div class="loading-spinner" style="display:inline-block;width:24px;height:24px;border:3px solid #e5e7eb;border-top-color:#059669;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+            <p class="text-gray-400 text-sm mt-2">উত্তোলন ইতিহাস লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    // ============================================================
+    // ৩. currentUser চেক করুন
+    // ============================================================
+    if (!currentUser || !currentUser.id) {
+        console.error('❌ currentUser পাওয়া যায়নি!');
+        container.innerHTML = `
+            <div class="text-center py-6 text-red-500 text-sm">
+                <i class="fas fa-exclamation-circle text-2xl block mb-2"></i>
+                সেশন এক্সপায়ার হয়েছে! পেজ রিফ্রেশ করুন।
+            </div>
+        `;
+        return;
+    }
+    
+    // ============================================================
+    // ৪. Supabase client চেক করুন
+    // ============================================================
+    const client = await initSupabase();
+    if (!client) {
+        console.error('❌ Supabase client পাওয়া যায়নি!');
+        container.innerHTML = `
+            <div class="text-center py-6 text-red-500 text-sm">
+                <i class="fas fa-exclamation-circle text-2xl block mb-2"></i>
+                সার্ভার সংযোগ সমস্যা!
+            </div>
+        `;
+        return;
+    }
+    
     try {
+        console.log('👤 সদস্য ID:', currentUser.id);
+        
+        // ============================================================
+        // ৫. ডাটাবেস থেকে উত্তোলন লোড করুন
+        // ============================================================
         const { data, error } = await client
             .from('withdrawals')
             .select('*')
             .eq('member_id', currentUser.id)
             .order('requested_at', { ascending: false });
-            
-        if(error) {
+        
+        // ============================================================
+        // ৬. Error handling
+        // ============================================================
+        if (error) {
             console.error('❌ উত্তোলন ইতিহাস লোড error:', error);
+            container.innerHTML = `
+                <div class="text-center py-6 text-red-500 text-sm">
+                    <i class="fas fa-exclamation-triangle text-2xl block mb-2"></i>
+                    ইতিহাস লোড করতে সমস্যা!
+                    <p class="text-xs text-gray-400 mt-1">${error.message || ''}</p>
+                    <button onclick="loadWithdrawalHistory()" class="mt-3 bg-emerald-600 text-white px-4 py-1.5 rounded-lg text-xs hover:bg-emerald-700 transition">
+                        🔄 পুনরায় চেষ্টা করুন
+                    </button>
+                </div>
+            `;
             return;
         }
         
-        const container = document.getElementById('withdrawalHistoryList');
-        if(!container) return;
+        console.log(`✅ ${data?.length || 0} টি উত্তোলন পাওয়া গেছে`);
         
-        if(data && data.length > 0) {
-            container.innerHTML = data.map(w => {
-                // স্ট্যাটাস নির্ধারণ
-                let statusClass = '', statusIcon = '', statusText = '';
-                let isApproved = false, isPending = false, isRejected = false;
-                
-                if(w.status === 'approved') {
-                    statusClass = 'status-approved';
-                    statusIcon = '✅';
-                    statusText = 'অনুমোদিত';
-                    isApproved = true;
-                } else if(w.status === 'rejected') {
-                    statusClass = 'status-rejected';
-                    statusIcon = '❌';
-                    statusText = 'বাতিল';
-                    isRejected = true;
-                } else {
-                    statusClass = 'status-pending';
-                    statusIcon = '⏳';
-                    statusText = 'বিচারাধীন';
-                    isPending = true;
-                }
-                
-                // উত্তোলনের ধরন ক্লিন করুন
-                let cleanType = w.type ? w.type.replace(/ উত্তোলন/g, '') : 'উত্তোলন';
-                
-                // মাধ্যম নির্ধারণ
-                let methodDisplay = w.payment_method || '-';
-                let methodIcon = '';
-                if(methodDisplay === 'bkash' || methodDisplay === 'bKash') {
-                    methodIcon = '💚';
-                    methodDisplay = 'bKash';
-                } else if(methodDisplay === 'nagad' || methodDisplay === 'Nagad') {
-                    methodIcon = '🧡';
-                    methodDisplay = 'Nagad';
-                } else if(methodDisplay === 'rocket' || methodDisplay === 'Rocket') {
-                    methodIcon = '💜';
-                    methodDisplay = 'Rocket';
-                } else if(methodDisplay === 'bank' || methodDisplay === 'ব্যাংক') {
-                    methodIcon = '🏦';
-                    methodDisplay = 'ব্যাংক';
-                } else if(methodDisplay === 'cash' || methodDisplay === 'ক্যাশ') {
-                    methodIcon = '💵';
-                    methodDisplay = 'ক্যাশ';
-                }
-                
-                // অনুমোদনকারী
-                let approvedBy = w.approved_by || '⏳ অপেক্ষমান';
-                let approvedAt = w.approved_at ? formatDateTimeBD(w.approved_at) : '-';
-                
-                // লেনদেন আইডি
-                let transactionId = w.transaction_id || '-';
-                
-                // গ্রহীতার তথ্য
-                let receiverInfo = '';
-                if(w.receiver_name) {
-                    receiverInfo += `<span class="text-xs text-gray-500">👤 গ্রহীতা: ${w.receiver_name}</span>`;
-                }
-                if(w.receiver_mobile) {
-                    receiverInfo += `<span class="text-xs text-gray-500 ml-2">📱 ${w.receiver_mobile}</span>`;
-                }
-                if(w.receiver_id) {
-                    receiverInfo += `<span class="text-xs text-gray-500 ml-2">🆔 ${w.receiver_id}</span>`;
-                }
-                
-                // ব্যাংক তথ্য
-                let bankInfo = '';
-                if(w.bank_name) {
-                    bankInfo += `<span class="text-xs text-gray-500">🏦 ${w.bank_name}</span>`;
-                }
-                if(w.account_number) {
-                    bankInfo += `<span class="text-xs text-gray-500 ml-2">🔢 ${w.account_number}</span>`;
-                }
-                if(w.account_name) {
-                    bankInfo += `<span class="text-xs text-gray-500 ml-2">👤 ${w.account_name}</span>`;
-                }
-                
-                // সেন্ডার মোবাইল
-                let senderInfo = '';
-                if(w.sender_mobile) {
-                    senderInfo = `<span class="text-xs text-gray-500">📱 প্রেরক: ${w.sender_mobile}</span>`;
-                }
-                
-                // নোট
-                let noteHtml = '';
-                if(w.note) {
-                    noteHtml = `<div class="text-xs text-amber-600 bg-amber-50 p-1 rounded mt-1">📝 নোট: ${w.note}</div>`;
-                }
-                
-                // বাতিলের কারণ
-                let rejectHtml = '';
-                if(w.rejection_reason) {
-                    rejectHtml = `<div class="text-xs text-red-600 bg-red-50 p-1 rounded mt-1">❌ বাতিলের কারণ: ${w.rejection_reason}</div>`;
-                }
-                
-                const requestDate = formatDateTimeBD(w.requested_at);
-                const amount = Number(w.amount || 0).toLocaleString();
-                
-                return `
-                <div class="border rounded-lg p-3 mb-2 hover:shadow-md transition ${isApproved ? 'bg-green-50/50' : isRejected ? 'bg-red-50/50' : 'bg-amber-50/50'}">
+        // ============================================================
+        // ৭. কোনো উত্তোলন না থাকলে
+        // ============================================================
+        if (!data || data.length === 0) {
+            console.log('📭 কোনো উত্তোলন নেই');
+            container.innerHTML = `
+                <div class="text-center py-8 text-gray-400">
+                    <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                    <p class="text-base font-medium">📭 কোনো উত্তোলন ইতিহাস নেই</p>
+                    <p class="text-xs text-gray-400 mt-1">উত্তোলন করলে এখানে দেখা যাবে</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // ============================================================
+        // ৮. Statistics গণনা
+        // ============================================================
+        const stats = {
+            total: data.length,
+            approved: data.filter(w => w.status === 'approved').length,
+            pending: data.filter(w => w.status === 'pending').length,
+            rejected: data.filter(w => w.status === 'rejected').length,
+            totalAmount: data
+                .filter(w => w.status === 'approved')
+                .reduce((sum, w) => sum + (Number(w.amount) || 0), 0)
+        };
+        
+        // ============================================================
+        // ৯. Statistics Bar
+        // ============================================================
+        let statsHtml = `
+            <div class="grid grid-cols-4 gap-2 mb-3 p-2 bg-gray-50 rounded-lg border border-gray-200">
+                <div class="text-center">
+                    <p class="text-[10px] text-gray-500">মোট</p>
+                    <p class="text-base font-bold text-gray-700">${stats.total}</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-[10px] text-gray-500">✅ অনুমোদিত</p>
+                    <p class="text-base font-bold text-emerald-600">${stats.approved}</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-[10px] text-gray-500">⏳ পেন্ডিং</p>
+                    <p class="text-base font-bold text-amber-600">${stats.pending}</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-[10px] text-gray-500">❌ বাতিল</p>
+                    <p class="text-base font-bold text-red-600">${stats.rejected}</p>
+                </div>
+            </div>
+            <div class="mb-3 p-2 bg-emerald-50 rounded-lg border border-emerald-200 text-center">
+                <p class="text-xs text-gray-600">💰 মোট অনুমোদিত উত্তোলন</p>
+                <p class="text-xl font-bold text-emerald-700">${stats.totalAmount.toLocaleString('bn-BD')} টাকা</p>
+            </div>
+        `;
+        
+        // ============================================================
+        // ১০. প্রতিটি উত্তোলনের কার্ড তৈরি করুন
+        // ============================================================
+        const cardsHtml = data.map((w, index) => {
+            // ─── স্ট্যাটাস নির্ধারণ ───
+            let statusClass = '', statusIcon = '', statusText = '';
+            let isApproved = false, isPending = false, isRejected = false;
+            
+            if (w.status === 'approved') {
+                statusClass = 'status-approved';
+                statusIcon = '✅';
+                statusText = 'অনুমোদিত';
+                isApproved = true;
+            } else if (w.status === 'rejected') {
+                statusClass = 'status-rejected';
+                statusIcon = '❌';
+                statusText = 'বাতিল';
+                isRejected = true;
+            } else {
+                statusClass = 'status-pending';
+                statusIcon = '⏳';
+                statusText = 'বিচারাধীন';
+                isPending = true;
+            }
+            
+            // ─── উত্তোলনের ধরন ক্লিন ───
+            let cleanType = w.type ? w.type.replace(/ উত্তোলন/g, '').trim() : 'উত্তোলন';
+            
+            // ─── ✅ FIXED: পেমেন্ট মাধ্যম (case-insensitive) ───
+            const rawMethod = String(w.payment_method || '').toLowerCase();
+            let methodDisplay = '-';
+            let methodIcon = '';
+            let methodColor = 'text-gray-600';
+            
+            if (rawMethod === 'bkash') {
+                methodIcon = '💚';
+                methodDisplay = 'bKash';
+                methodColor = 'text-pink-600';
+            } else if (rawMethod === 'nagad') {
+                methodIcon = '🧡';
+                methodDisplay = 'Nagad';
+                methodColor = 'text-orange-600';
+            } else if (rawMethod === 'rocket') {
+                methodIcon = '💜';
+                methodDisplay = 'Rocket';
+                methodColor = 'text-purple-600';
+            } else if (rawMethod === 'bank' || rawMethod === 'ব্যাংক') {
+                methodIcon = '🏦';
+                methodDisplay = 'ব্যাংক';
+                methodColor = 'text-blue-600';
+            } else if (rawMethod === 'cash' || rawMethod === 'ক্যাশ') {
+                methodIcon = '💵';
+                methodDisplay = 'ক্যাশ';
+                methodColor = 'text-emerald-600';
+            } else if (rawMethod) {
+                methodDisplay = w.payment_method;
+                methodIcon = '💳';
+            }
+            
+            // ─── অনুমোদনকারী ───
+            const approvedBy = w.approved_by || '⏳ অপেক্ষমান';
+            const approvedAt = w.approved_at ? formatDateTimeBD(w.approved_at) : '-';
+            
+            // ─── লেনদেন আইডি ───
+            const transactionId = w.transaction_id || '';
+            
+            // ─── গ্রহীতার তথ্য ───
+            let receiverInfo = '';
+            if (w.receiver_name || w.receiver_mobile || w.receiver_id) {
+                const parts = [];
+                if (w.receiver_name) parts.push(`👤 ${w.receiver_name}`);
+                if (w.receiver_mobile) parts.push(`📱 ${w.receiver_mobile}`);
+                if (w.receiver_id) parts.push(`🆔 ${w.receiver_id}`);
+                receiverInfo = `
+                    <div class="text-xs text-gray-600 bg-blue-50 p-1 rounded mt-1">
+                        📦 গ্রহীতা: ${parts.join(' | ')}
+                    </div>
+                `;
+            }
+            
+            // ─── ব্যাংক তথ্য ───
+            let bankInfo = '';
+            if (w.bank_name || w.account_number) {
+                const parts = [];
+                if (w.bank_name) parts.push(`🏦 ${w.bank_name}`);
+                if (w.account_number) parts.push(`🔢 ${w.account_number}`);
+                if (w.account_name) parts.push(`👤 ${w.account_name}`);
+                bankInfo = `
+                    <div class="text-xs text-gray-600 bg-indigo-50 p-1 rounded mt-1">
+                        💳 ${parts.join(' | ')}
+                    </div>
+                `;
+            }
+            
+            // ─── সেন্ডার মোবাইল ───
+            let senderInfo = '';
+            if (w.sender_mobile) {
+                senderInfo = `
+                    <div class="text-xs text-gray-600 bg-gray-50 p-1 rounded mt-1">
+                        📱 প্রেরক: ${w.sender_mobile}
+                    </div>
+                `;
+            }
+            
+            // ─── নোট ───
+            let noteHtml = '';
+            if (w.note) {
+                noteHtml = `
+                    <div class="text-xs text-amber-700 bg-amber-50 p-1 rounded mt-1">
+                        📝 নোট: ${w.note}
+                    </div>
+                `;
+            }
+            
+            // ─── বাতিলের কারণ ───
+            let rejectHtml = '';
+            if (isRejected && w.rejection_reason) {
+                rejectHtml = `
+                    <div class="text-xs text-red-700 bg-red-50 p-1 rounded mt-1 border border-red-200">
+                        ❌ বাতিলের কারণ: ${w.rejection_reason}
+                    </div>
+                `;
+            }
+            
+            // ─── স্লিপ বাটন (শুধু approved) ───
+            const slipButton = isApproved ? `
+                <button onclick="viewWithdrawalSlip('${w.id}')" 
+                        class="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700 transition mt-1 flex items-center gap-1">
+                    <i class="fas fa-receipt"></i> স্লিপ দেখুন
+                </button>
+            ` : '';
+            
+            // ─── কার্ডের রঙ ───
+            const cardBg = isApproved 
+                ? 'bg-green-50/50 border-green-200' 
+                : isRejected 
+                    ? 'bg-red-50/50 border-red-200' 
+                    : 'bg-amber-50/50 border-amber-200';
+            
+            const amountColor = isApproved 
+                ? 'text-emerald-600' 
+                : isRejected 
+                    ? 'text-red-600' 
+                    : 'text-amber-600';
+            
+            const requestDate = formatDateTimeBD(w.requested_at);
+            const amount = Number(w.amount || 0).toLocaleString('bn-BD');
+            
+            // ─── HTML তৈরি ───
+            return `
+                <div class="border-2 ${cardBg} rounded-lg p-3 mb-2 hover:shadow-md transition">
                     <div class="flex flex-wrap justify-between items-start gap-2">
+                        
+                        <!-- বাম দিকের তথ্য -->
                         <div class="flex-1 min-w-[200px]">
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <p class="font-semibold text-gray-800">${cleanType}</p>
-                                <span class="${statusClass} text-xs px-2 py-0.5 rounded-full">${statusIcon} ${statusText}</span>
+                            <div class="flex items-center gap-2 flex-wrap mb-1">
+                                <p class="font-bold text-gray-800 text-base">${cleanType}</p>
+                                <span class="${statusClass} text-xs px-2 py-0.5 rounded-full font-semibold">${statusIcon} ${statusText}</span>
+                                <span class="text-[10px] text-gray-400">#${index + 1}</span>
                             </div>
                             
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-1 mt-2 text-sm">
                                 <div>
-                                    <span class="text-gray-500">📅 আবেদন:</span>
-                                    <span class="font-medium text-gray-700">${requestDate}</span>
+                                    <span class="text-gray-500 text-xs">📅 আবেদন:</span>
+                                    <span class="font-medium text-gray-700 text-xs ml-1">${requestDate}</span>
                                 </div>
                                 ${isApproved ? `
                                 <div>
-                                    <span class="text-gray-500">✅ অনুমোদন:</span>
-                                    <span class="font-medium text-green-700">${approvedAt}</span>
+                                    <span class="text-gray-500 text-xs">✅ অনুমোদন:</span>
+                                    <span class="font-medium text-green-700 text-xs ml-1">${approvedAt}</span>
                                 </div>
                                 ` : ''}
                                 <div>
-                                    <span class="text-gray-500">💳 মাধ্যম:</span>
-                                    <span class="font-medium">${methodIcon} ${methodDisplay}</span>
+                                    <span class="text-gray-500 text-xs">💳 মাধ্যম:</span>
+                                    <span class="font-medium ${methodColor} text-xs ml-1">${methodIcon} ${methodDisplay}</span>
                                 </div>
-                                ${transactionId !== '-' ? `
                                 <div>
-                                    <span class="text-gray-500">📝 লেনদেন ID:</span>
-                                    <span class="font-medium font-mono text-xs text-blue-600">${transactionId}</span>
+                                    <span class="text-gray-500 text-xs">👤 অনুমোদনকারী:</span>
+                                    <span class="font-medium text-gray-700 text-xs ml-1">${approvedBy}</span>
+                                </div>
+                                ${transactionId ? `
+                                <div class="col-span-1 md:col-span-2">
+                                    <span class="text-gray-500 text-xs">📝 লেনদেন ID:</span>
+                                    <span class="font-mono text-xs text-blue-600 ml-1 break-all">${transactionId}</span>
                                 </div>
                                 ` : ''}
-                                <div>
-                                    <span class="text-gray-500">👤 অনুমোদনকারী:</span>
-                                    <span class="font-medium">${approvedBy}</span>
-                                </div>
                             </div>
                             
-                            ${senderInfo ? `<div class="mt-1">${senderInfo}</div>` : ''}
-                            ${receiverInfo ? `<div class="mt-1">${receiverInfo}</div>` : ''}
-                            ${bankInfo ? `<div class="mt-1">${bankInfo}</div>` : ''}
+                            ${senderInfo}
+                            ${receiverInfo}
+                            ${bankInfo}
                             ${noteHtml}
                             ${rejectHtml}
                         </div>
                         
-                        <div class="text-right min-w-[140px]">
-                            <p class="text-xl font-bold ${isApproved ? 'text-emerald-600' : isRejected ? 'text-red-600' : 'text-amber-600'}">
-                                ${amount} টাকা
-                            </p>
-                            ${isApproved ? '<p class="text-xs text-green-600 mt-1">✅ উত্তোলন সম্পন্ন হয়েছে</p>' : ''}
-                            ${isPending ? '<p class="text-xs text-amber-600 mt-1">⏳ অনুমোদনের অপেক্ষায়</p>' : ''}
-                            ${isRejected ? '<p class="text-xs text-red-600 mt-1">❌ বাতিল হয়েছে</p>' : ''}
-                            ${isApproved ? `
-                            <button onclick="viewWithdrawalSlip('${w.id}')" class="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700 transition mt-1">
-                                <i class="fas fa-receipt mr-1"></i> স্লিপ দেখুন
-                            </button>
-                            ` : ''}
+                        <!-- ডান দিকের পরিমাণ ও বাটন -->
+                        <div class="text-right min-w-[130px] flex flex-col items-end">
+                            <p class="text-xs text-gray-500">পরিমাণ</p>
+                            <p class="text-2xl font-bold ${amountColor}">${amount}</p>
+                            <p class="text-xs text-gray-400 -mt-1">টাকা</p>
+                            
+                            ${isApproved ? '<p class="text-xs text-green-600 mt-1 font-semibold">✅ সম্পন্ন</p>' : ''}
+                            ${isPending ? '<p class="text-xs text-amber-600 mt-1 font-semibold">⏳ অপেক্ষায়</p>' : ''}
+                            ${isRejected ? '<p class="text-xs text-red-600 mt-1 font-semibold">❌ বাতিল</p>' : ''}
+                            
+                            ${slipButton}
                         </div>
                     </div>
                 </div>
-                `;
-            }).join('');
-        } else {
-            container.innerHTML = '<div class="text-center text-gray-400 py-4">📭 কোনো উত্তোলন ইতিহাস নেই</div>';
-        }
-    } catch(e) { 
-        console.error('❌ loadWithdrawalHistory error:', e); 
+            `;
+        }).join('');
+        
+        // ============================================================
+        // ১১. সব একসাথে দেখান
+        // ============================================================
+        container.innerHTML = statsHtml + cardsHtml;
+        console.log('✅ উত্তোলন ইতিহাস রেন্ডার সম্পূর্ণ!');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+    } catch (e) {
+        console.error('❌ loadWithdrawalHistory error:', e);
+        container.innerHTML = `
+            <div class="text-center py-6 text-red-500 text-sm">
+                <i class="fas fa-exclamation-triangle text-2xl block mb-2"></i>
+                ইতিহাস লোড করতে সমস্যা!
+                <p class="text-xs text-gray-400 mt-1">${e.message || ''}</p>
+                <button onclick="loadWithdrawalHistory()" class="mt-3 bg-emerald-600 text-white px-4 py-1.5 rounded-lg text-xs hover:bg-emerald-700 transition">
+                    🔄 পুনরায় চেষ্টা করুন
+                </button>
+            </div>
+        `;
     }
 }
+
+// ============================================================
+// ✅ refreshWithdrawalHistory() — ম্যানুয়াল রিফ্রেশ
+// ============================================================
+async function refreshWithdrawalHistory() {
+    showToast('🔄 উত্তোলন ইতিহাস রিফ্রেশ হচ্ছে...', 'info');
+    
+    // DB থেকে তাজা ডেটা আনুন
+    await refreshMemberDataFromSupabase();
+    await loadUserFunds();
+    
+    // উত্তোলন ইতিহাস রিলোড
+    await loadWithdrawalHistory();
+    
+    showToast('✅ উত্তোলন ইতিহাস আপডেট হয়েছে!', 'success');
+}
+
+// ============================================================
+// ✅ Global Expose
+// ============================================================
+window.loadWithdrawalHistory = loadWithdrawalHistory;
+window.refreshWithdrawalHistory = refreshWithdrawalHistory;
+
+console.log('✅ loadWithdrawalHistory() — Fixed ভার্সন লোড হয়েছে!');
 
 // ============================================================
 // Cash Payment - Receiver Search
