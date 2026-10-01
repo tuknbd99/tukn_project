@@ -7173,16 +7173,19 @@ async function loadReferralData() {
         }
         
         // ═══════════════════════════════════════════════════════════
-        // STEP 6: Level 1 Referrals
+        // ✅ STEP 6: Level 1 Referrals (FIXED)
         // ═══════════════════════════════════════════════════════════
         const levelReferrals = {
             1: [], 2: [], 3: [], 4: [], 5: [],
             6: [], 7: [], 8: [], 9: [], 10: []
         };
+        
+        // ✅ visited Set — শুধু member_id ট্র্যাক করবে
         const visited = new Set();
         visited.add(myReferCode);
         visited.add(myInfo.member_id);
         
+        // Level 1 খুঁজুন
         levelReferrals[1] = normalizedMembers.filter(m => {
             if (m.referred_by_normalized !== myReferCode) return false;
             if (isSelfReferral(m)) return false;
@@ -7190,15 +7193,16 @@ async function loadReferralData() {
             return true;
         });
         
+        // ✅ FIXED: শুধু member_id add করুন, refer_code নয়
         levelReferrals[1].forEach(m => {
             if(m.member_id) visited.add(m.member_id);
-            if(m.refer_code_normalized) visited.add(m.refer_code_normalized);
+            // ⚠️ refer_code add করা হবে না!
         });
         
         console.log(`📊 Level 1: ${levelReferrals[1].length} জন`);
         
         // ═══════════════════════════════════════════════════════════
-        // STEP 7: Level 2-10 Chain Referrals
+        // ✅ STEP 7: Level 2-10 Chain Referrals (FIXED)
         // ═══════════════════════════════════════════════════════════
         let currentLevelMembers = [...levelReferrals[1]];
         
@@ -7208,10 +7212,12 @@ async function loadReferralData() {
             for(const member of currentLevelMembers) {
                 if (isSelfReferral(member)) continue;
                 
-                let memberReferCode = member.refer_code_normalized;
+                const memberReferCode = member.refer_code_normalized;
                 
-                if(!memberReferCode || visited.has(memberReferCode)) continue;
+                // ✅ FIXED: শুধু null check
+                if(!memberReferCode) continue;
                 
+                // ✅ Child members খুঁজুন
                 const childRefs = normalizedMembers.filter(m => {
                     if (m.referred_by_normalized !== memberReferCode) return false;
                     if (visited.has(m.member_id)) return false;
@@ -7220,12 +7226,10 @@ async function loadReferralData() {
                     return true;
                 });
                 
+                // ✅ Child যোগ করুন
                 for(const child of childRefs) {
                     if(!visited.has(child.member_id)) {
                         visited.add(child.member_id);
-                        if(child.refer_code_normalized) {
-                            visited.add(child.refer_code_normalized);
-                        }
                         nextLevelMembers.push(child);
                     }
                 }
@@ -7330,41 +7334,60 @@ async function loadReferralData() {
         }
         
         // ═══════════════════════════════════════════════════════════
-        // 🎯 STEP 10: Referral Bonus Update (Safe)
-        // DB value পড়ুন, overwrite করবেন না
+        // STEP 10: Referral Bonus Update (Withdrawal হিসাব সহ)
         // ═══════════════════════════════════════════════════════════
-        const myTotalBonus = Math.round(totalCommission);
         
+        // ১. মোট কমিশন
+        const myTotalBonus = Math.round(totalCommission);
+        console.log(`💰 Total commission (calculated): ৳${myTotalBonus}`);
+        
+        // ২. Withdrawal থেকে রেফারেল বোনাস বের করুন
+        const { data: refWithdrawals } = await client
+            .from('withdrawals')
+            .select('amount')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved')
+            .ilike('type', '%রেফারেল বোনাস%');
+        
+        const totalWithdrawn = refWithdrawals?.reduce((s, w) => 
+            s + Number(w.amount), 0
+        ) || 0;
+        
+        console.log(`💸 Total withdrawn: ৳${totalWithdrawn}`);
+        
+        // ৩. Expected balance = কমিশন - withdraw
+        const expectedBonus = Math.round(myTotalBonus - totalWithdrawn);
+        console.log(`📊 Expected bonus: ৳${expectedBonus}`);
+        
+        // ৪. DB-তে বর্তমান value
         const { data: currentMember } = await client
             .from('members')
             .select('referral_bonus')
             .eq('member_id', currentUser.id)
             .single();
         
-        if (currentMember) {
-            const dbBonus = Number(currentMember.referral_bonus) || 0;
+        const dbBonus = Number(currentMember?.referral_bonus) || 0;
+        console.log(`📊 Currently in DB: ৳${dbBonus}`);
+        
+        // ৫. Update if needed
+        if (dbBonus !== expectedBonus) {
+            console.log(`🔄 Updating: ৳${dbBonus} → ৳${expectedBonus}`);
             
-            // ✅ শুধু তখনই update করুন যখন DB কম
-            if (dbBonus < myTotalBonus) {
-                console.log(`📝 Referral bonus update: ${dbBonus} → ${myTotalBonus}`);
-                
-                const { error: myUpdateError } = await client
-                    .from('members')
-                    .update({ referral_bonus: myTotalBonus })
-                    .eq('member_id', currentUser.id);
-                
-                if(myUpdateError) {
-                    console.error('❌ referral_bonus আপডেট ব্যর্থ:', myUpdateError);
-                    userFunds.referralBonus = dbBonus;
-                } else {
-                    console.log(`✅ referral_bonus updated: ${myTotalBonus}`);
-                    userFunds.referralBonus = myTotalBonus;
-                }
-            } else {
-                // ✅ DB value বড় বা সমান — withdraw হতে পারে, overwrite করবেন না
-                console.log(`ℹ️ DB bonus (${dbBonus}) >= calculated (${myTotalBonus}) — keeping DB value`);
+            const { error: updateError } = await client
+                .from('members')
+                .update({ referral_bonus: expectedBonus })
+                .eq('member_id', currentUser.id);
+            
+            if (updateError) {
+                console.error('❌ Update failed:', updateError);
                 userFunds.referralBonus = dbBonus;
+            } else {
+                console.log(`✅ Updated successfully!`);
+                userFunds.referralBonus = expectedBonus;
             }
+        } else {
+            console.log(`✅ DB value already correct`);
+            userFunds.referralBonus = dbBonus;
         }
         
         // ═══════════════════════════════════════════════════════════
