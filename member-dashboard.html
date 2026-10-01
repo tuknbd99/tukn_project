@@ -620,10 +620,10 @@
             <button onclick="openProfileUpdateForm()" 
                     class="w-full bg-gradient-to-r from-emerald-600 to-blue-600 text-white py-3 rounded-lg hover:from-emerald-700 hover:to-blue-700 transition font-semibold text-base shadow-lg">
                 <i class="fas fa-user-edit mr-2"></i>
-                📝 আমার তথ্য আপডেট করুন (একবারই)
+                📝 তথ্য আপডেট করুন (একবারই সম্ভব)
             </button>
             <p class="text-xs text-center text-gray-500 mt-2">
-                ⚠️ সতর্কতা: একবার আপডেট করার পর আর পরিবর্তন করা যাবে না!
+                ⚠️ সতর্কতা: একবার আপডেট করার পর লক হয়ে যাবে, আর পরিবর্তন করা যাবে না! তাই সঠিক ও নির্ভুল তথ্য প্রদান করুন।
             </p>
         </div>
         
@@ -2370,10 +2370,18 @@ async function updateUI() {
     }
     
     // ============================================================
-    // ✅ ৬. ঠিকানা দেখানো
+    // ✅ ৬. Profile Update Section Load
     // ============================================================
-    document.getElementById('presentAddressDisplay').innerHTML = currentUser.presentAddress || 'যোগ করা হয়নি';
-    document.getElementById('permanentAddressDisplay').innerHTML = currentUser.permanentAddress || 'যোগ করা হয়নি';
+    if (typeof checkProfileUpdateStatus === 'function') {
+        try {
+            await checkProfileUpdateStatus();
+            console.log('✅ Profile Update Section loaded');
+        } catch(e) {
+            console.warn('⚠️ Profile Update Section warning:', e);
+        }
+    } else {
+        console.warn('⚠️ checkProfileUpdateStatus function নেই!');
+    }
     
     // ============================================================
     // ✅ ৭. রেফারেল লিংক
@@ -2602,15 +2610,51 @@ document.getElementById('addressForm')?.addEventListener('submit', async functio
     const permanentAddress = document.getElementById('permanentAddress').value;
     let client = await initSupabase();
     if(!client) { showToast('সার্ভার সংযোগ সমস্যা!', 'error'); return; }
+    document.getElementById('addressForm')?.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const presentAddress = document.getElementById('presentAddress')?.value || '';
+    const permanentAddress = document.getElementById('permanentAddress')?.value || '';
+    
+    const client = await initSupabase();
+    if (!client) { 
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error'); 
+        return; 
+    }
+    
     try {
-        await client.from('members').update({ present_address: presentAddress, permanent_address: permanentAddress }).eq('member_id', currentUser.id);
+        // ✅ Database Update
+        await client
+            .from('members')
+            .update({ 
+                present_address: presentAddress, 
+                permanent_address: permanentAddress 
+            })
+            .eq('member_id', currentUser.id);
+        
+        // ✅ Local State Update
         currentUser.presentAddress = presentAddress;
         currentUser.permanentAddress = permanentAddress;
-        document.getElementById('presentAddressDisplay').innerHTML = presentAddress || 'যোগ করা হয়নি';
-        document.getElementById('permanentAddressDisplay').innerHTML = permanentAddress || 'যোগ করা হয়নি';
-        showToast('ঠিকানা সফলভাবে আপডেট করা হয়েছে!', 'success');
+        
+        // ✅ Safe UI Update (element থাকলে তবেই)
+        const presentEl = document.getElementById('presentAddressDisplay');
+        if (presentEl) presentEl.innerHTML = presentAddress || 'যোগ করা হয়নি';
+        
+        const permanentEl = document.getElementById('permanentAddressDisplay');
+        if (permanentEl) permanentEl.innerHTML = permanentAddress || 'যোগ করা হয়নি';
+        
+        // ✅ Profile Display Refresh
+        if (typeof checkProfileUpdateStatus === 'function') {
+            await checkProfileUpdateStatus();
+        }
+        
+        showToast('✅ ঠিকানা সফলভাবে আপডেট করা হয়েছে!', 'success');
         closeAddressModal();
-    } catch(error) { showToast('ঠিকানা আপডেট করতে ব্যর্থ!', 'error'); }
+        
+    } catch(error) {
+        console.error('❌ Address update error:', error);
+        showToast('❌ ঠিকানা আপডেট করতে ব্যর্থ!', 'error');
+    }
 });
 
 // ============================================================
