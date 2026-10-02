@@ -974,6 +974,54 @@
         width: 0;
         overflow: hidden;
     }
+
+        /* ═══════════════════════════════════════════════════════════ */
+/* 🆕 Sidebar User Avatar — সদস্যের ছবি দেখানোর জন্য            */
+/* ═══════════════════════════════════════════════════════════ */
+
+.sidebar-user-avatar-container {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+}
+
+.sidebar-user-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    background: #059669;
+}
+
+.sidebar-user-avatar-initial {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #059669, #047857);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 700;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    text-transform: uppercase;
+}
+
+/* Sidebar collapsed অবস্থায় ছবি লুকাবে */
+.sidebar.collapsed .sidebar-user-avatar-container {
+    width: 36px;
+    height: 36px;
+}
+
+.sidebar.collapsed .sidebar-user-avatar,
+.sidebar.collapsed .sidebar-user-avatar-initial {
+    width: 36px;
+    height: 36px;
+    font-size: 16px;
+}
 </style>
     
 </head>
@@ -1000,17 +1048,30 @@
             </button>
         </div>
         
-        <!-- User Card (ছোট প্রোফাইল) -->
-        <div class="sidebar-user-card">
-            <img id="sidebarUserAvatar" 
-                 src="images/logo.png" 
-                 class="sidebar-user-avatar"
-                 onerror="this.src='images/logo.png'">
-            <div class="sidebar-user-info">
-                <p class="sidebar-user-name" id="sidebarUserName">লোড হচ্ছে...</p>
-                <p class="sidebar-user-id" id="sidebarUserId">-</p>
-            </div>
+    <!-- User Card (সদস্যের ছবি সহ) -->
+<div class="sidebar-user-card">
+    <!-- সদস্যের ছবি অথবা প্রথম অক্ষর -->
+    <div class="sidebar-user-avatar-container">
+        <img id="sidebarUserAvatar" 
+             src="" 
+             alt="Member"
+             class="sidebar-user-avatar"
+             style="display: none;"
+             onerror="this.style.display='none'; document.getElementById('sidebarUserInitial').style.display='flex';">
+        
+        <!-- ছবি না থাকলে প্রথম অক্ষর দেখাবে -->
+        <div id="sidebarUserInitial" 
+             class="sidebar-user-avatar-initial"
+             style="display: flex;">
+            T
         </div>
+    </div>
+    
+    <div class="sidebar-user-info">
+        <p class="sidebar-user-name" id="sidebarUserName">লোড হচ্ছে...</p>
+        <p class="sidebar-user-id" id="sidebarUserId">-</p>
+    </div>
+</div>
         
         <!-- Navigation -->
         <nav class="sidebar-nav">
@@ -3855,30 +3916,73 @@ function openProfileUpdateForm() {
     openAddressModal();
 }
 
-
-// ============================================================
-// Profile Image Upload
-// ============================================================
 async function uploadProfileImage(event) {
     const file = event.target.files[0];
     if(!file) return;
-    if(file.size > 2*1024*1024) { showToast('ফাইল 2MB এর ছোট হতে হবে!','error'); return; }
+    if(file.size > 2*1024*1024) { 
+        showToast('ফাইল 2MB এর ছোট হতে হবে!','error'); 
+        return; 
+    }
+    
     let client = await initSupabase();
-    if(!client) { showToast('Supabase ক্লায়েন্ট পাওয়া যায়নি!','error'); return; }
+    if(!client) { 
+        showToast('Supabase ক্লায়েন্ট পাওয়া যায়নি!','error'); 
+        return; 
+    }
+    
     showToast('ছবি আপলোড হচ্ছে...','info');
+    
     try {
         const fileExt = file.name.split('.').pop();
         const fileName = `${currentUser.id}_${Date.now()}.${fileExt}`;
         const filePath = `profile-images/${fileName}`;
+        
         await client.storage.from('member-profiles').upload(filePath, file);
         const { data: urlData } = client.storage.from('member-profiles').getPublicUrl(filePath);
         const imageUrl = urlData.publicUrl;
+        
         await client.from('members').update({ profile_image: imageUrl }).eq('member_id', currentUser.id);
         currentUser.profileImage = imageUrl;
-        document.getElementById('profileImage').src = imageUrl;
-        document.getElementById('cardProfileImage').src = imageUrl;
-        showToast('প্রোফাইল ছবি আপলোড সম্পূর্ণ!','success');
-    } catch(error) { showToast('আপলোড ব্যর্থ!','error'); }
+        
+        // ✅ Profile Image আপডেট (Home tab)
+        const profileImgEl = document.getElementById('profileImage');
+        if (profileImgEl) profileImgEl.src = imageUrl;
+        
+        // ✅ Card Profile Image আপডেট (Settings tab)
+        const cardProfileImgEl = document.getElementById('cardProfileImage');
+        if (cardProfileImgEl) cardProfileImgEl.src = imageUrl;
+        
+        // ✅ Sidebar Avatar আপডেট (🆕)
+        const sidebarAvatar = document.getElementById('sidebarUserAvatar');
+        const sidebarInitial = document.getElementById('sidebarUserInitial');
+        
+        if (sidebarAvatar && sidebarInitial) {
+            sidebarAvatar.src = imageUrl;
+            sidebarAvatar.style.display = 'block';
+            sidebarInitial.style.display = 'none';
+            console.log('✅ Sidebar avatar updated:', imageUrl);
+        }
+        
+        // ✅ localStorage আপডেট
+        try {
+            const storedUser = localStorage.getItem('tukn_logged_member') 
+                            || sessionStorage.getItem('tukn_logged_member');
+            if (storedUser) {
+                const user = JSON.parse(storedUser);
+                user.profile_image = imageUrl;
+                localStorage.setItem('tukn_logged_member', JSON.stringify(user));
+                sessionStorage.setItem('tukn_logged_member', JSON.stringify(user));
+            }
+        } catch(e) {
+            console.warn('localStorage sync failed:', e);
+        }
+        
+        showToast('✅ প্রোফাইল ছবি আপলোড সম্পূর্ণ!','success');
+        
+    } catch(error) { 
+        console.error('Upload error:', error);
+        showToast('❌ আপলোড ব্যর্থ!','error'); 
+    }
 }
     
 
@@ -12460,24 +12564,46 @@ async function emergencyStopAndFix() {
             }
         } catch(e) {}
         
-        // ৩. User info sidebar-এ দেখান
         setTimeout(() => {
-            if (window.currentUser) {
-                const nameEl = document.getElementById('sidebarUserName');
-                const idEl = document.getElementById('sidebarUserId');
-                const avatarEl = document.getElementById('sidebarUserAvatar');
-                
-                if (nameEl) nameEl.textContent = currentUser.name || 'সদস্য';
-                if (idEl) idEl.textContent = 'আইডি: ' + (currentUser.id || '-');
-                if (avatarEl && currentUser.profileImage) {
-                    avatarEl.src = currentUser.profileImage;
-                }
-                
-                console.log('✅ Sidebar user info loaded:', currentUser.name);
+    if (window.currentUser) {
+        const nameEl = document.getElementById('sidebarUserName');
+        const idEl = document.getElementById('sidebarUserId');
+        const avatarEl = document.getElementById('sidebarUserAvatar');
+        const initialEl = document.getElementById('sidebarUserInitial');
+        
+        // নাম ও আইডি
+        if (nameEl) nameEl.textContent = currentUser.name || 'সদস্য';
+        if (idEl) idEl.textContent = 'আইডি: ' + (currentUser.id || '-');
+        
+        // ✅ সদস্যের ছবি
+        const defaultImages = ['images/logo.png', '', null, undefined];
+        const hasCustomImage = currentUser.profileImage 
+                            && !defaultImages.includes(currentUser.profileImage);
+        
+        if (avatarEl && initialEl) {
+            if (hasCustomImage) {
+                // ✅ Custom profile image আছে → ছবি দেখান
+                avatarEl.src = currentUser.profileImage;
+                avatarEl.style.display = 'block';
+                initialEl.style.display = 'none';
+                console.log('✅ Sidebar avatar loaded:', currentUser.profileImage);
             } else {
-                console.warn('⚠️ currentUser এখনো লোড হয়নি');
+                // ❌ Custom image নেই → প্রথম অক্ষর দেখান
+                avatarEl.style.display = 'none';
+                initialEl.style.display = 'flex';
+                
+                // নামের প্রথম অক্ষর
+                const firstLetter = (currentUser.name || 'T').trim().charAt(0).toUpperCase();
+                initialEl.textContent = firstLetter;
+                console.log('✅ Sidebar initial loaded:', firstLetter);
             }
-        }, 1000);
+        }
+        
+        console.log('✅ Sidebar user info loaded:', currentUser.name);
+    } else {
+        console.warn('⚠️ currentUser এখনো লোড হয়নি');
+    }
+}, 1000);
         
         console.log('✅ Hybrid Layout initialized');
     });
