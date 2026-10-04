@@ -9551,9 +9551,12 @@ function renderPendingPaymentsList() {
 }
 
 // ============================================================
-// ✅ সম্পূর্ণ approvePayment() - মোবাইল/নাম দিয়ে খোঁজা ও আপডেট
+// ✅ FINAL: approvePayment() — Optimized & Safe
+// ✅ member_id প্রাইমারি lookup (100% reliable — আপনার data-তে)
+// ✅ payments sum (authoritative — double-count প্রতিরোধ)
+// ✅ member_id দিয়ে update (safest)
+// ✅ Rollback on failure
 // ============================================================
-
 async function approvePayment(paymentId) {
     const id = parseInt(paymentId);
     if (isNaN(id) || id <= 0) {
@@ -9563,7 +9566,7 @@ async function approvePayment(paymentId) {
     
     const payment = pendingPaymentsData.find(p => p.id === id);
     if (!payment) { 
-        showToast('পেমেন্ট পাওয়া যায়নি!', 'error'); 
+        showToast('পেমেন্ট পাওয়া যায়নি!', 'error'); 
         return; 
     }
     
@@ -9582,147 +9585,14 @@ async function approvePayment(paymentId) {
     });
     
     try {
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🔄 পেমেন্ট অনুমোদন শুরু:', id);
-        console.log('📋 পেমেন্ট ডেটা:', payment);
-        
-        // ============================================================
-        // ✅ সদস্য খোঁজার লজিক (মোবাইল → নাম → আইডি)
-        // ============================================================
-        let member = null;
-        let foundBy = '';
-        let searchLog = [];
-        
-        // 📌 ১. মোবাইল দিয়ে খোঁজুন (সর্বোচ্চ অগ্রাধিকার)
-        if (payment.mobile && payment.mobile.trim() !== '') {
-            const mobileClean = payment.mobile.trim();
-            console.log('🔍 [১] মোবাইল দিয়ে খোঁজা হচ্ছে:', mobileClean);
-            
-            const { data: memberByMobile, error: errorByMobile } = await client
-                .from('members')
-                .select('member_id, full_name, mobile, balance, referral_bonus, status')
-                .eq('mobile', mobileClean)
-                .maybeSingle();
-            
-            if (memberByMobile) {
-                member = memberByMobile;
-                foundBy = '📱 মোবাইল';
-                searchLog.push({ step: 1, method: 'mobile', success: true });
-                console.log('✅ [১] মোবাইল দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
-            } else {
-                searchLog.push({ step: 1, method: 'mobile', success: false });
-                console.log('❌ [১] মোবাইল দিয়ে সদস্য পাওয়া যায়নি');
-            }
-        }
-        
-        // 📌 ২. মোবাইল না পেলে নাম দিয়ে খোঁজুন
-        if (!member && payment.member_name && payment.member_name.trim() !== '') {
-            const nameClean = payment.member_name.trim();
-            console.log('🔍 [২] নাম দিয়ে খোঁজা হচ্ছে:', nameClean);
-            
-            // নাম দিয়ে খোঁজুন (ILIKE ব্যবহার করছে)
-            const { data: memberByName, error: errorByName } = await client
-                .from('members')
-                .select('member_id, full_name, mobile, balance, referral_bonus, status')
-                .ilike('full_name', `%${nameClean}%`)
-                .maybeSingle();  // প্রথম ম্যাচটা নিবে
-            
-            if (memberByName) {
-                member = memberByName;
-                foundBy = '📛 নাম';
-                searchLog.push({ step: 2, method: 'name', success: true });
-                console.log('✅ [২] নাম দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
-            } else {
-                searchLog.push({ step: 2, method: 'name', success: false });
-                console.log('❌ [২] নাম দিয়ে সদস্য পাওয়া যায়নি');
-            }
-        }
-        
-        // 📌 ৩. কিছুই না পেলে member_id দিয়ে খোঁজুন (শেষ উপায়)
-        if (!member && payment.member_id && payment.member_id.trim() !== '') {
-            const memberIdClean = payment.member_id.trim();
-            console.log('🔍 [৩] member_id দিয়ে খোঁজা হচ্ছে (শেষ উপায়):', memberIdClean);
-            
-            const { data: memberById, error: errorById } = await client
-                .from('members')
-                .select('member_id, full_name, mobile, balance, referral_bonus, status')
-                .eq('member_id', memberIdClean)
-                .maybeSingle();
-            
-            if (memberById) {
-                member = memberById;
-                foundBy = '🆔 member_id (শেষ উপায়)';
-                searchLog.push({ step: 3, method: 'member_id', success: true });
-                console.log('✅ [৩] member_id দিয়ে সদস্য পাওয়া গেছে:', member.member_id);
-            } else {
-                searchLog.push({ step: 3, method: 'member_id', success: false });
-                console.log('❌ [৩] member_id দিয়ে সদস্য পাওয়া যায়নি');
-            }
-        }
-        
-        // 📌 ৪. সব উপায়ে ব্যর্থ হলে
-        if (!member) {
-            console.error('❌ কোনো উপায়েই সদস্য পাওয়া যায়নি!');
-            console.log('📋 সার্চ লগ:', searchLog);
-            
-            let errorMsg = '❌ সদস্য পাওয়া যায়নি!\n\n';
-            errorMsg += 'খোঁজার চেষ্টা:\n';
-            searchLog.forEach(r => {
-                const status = r.success ? '✅ পাওয়া গেছে' : '❌ পাওয়া যায়নি';
-                errorMsg += `   ${r.step}. ${r.method}: ${status}\n`;
-            });
-            errorMsg += `\n📌 member_id: ${payment.member_id || 'N/A'}`;
-            errorMsg += `\n📌 mobile: ${payment.mobile || 'N/A'}`;
-            errorMsg += `\n📌 member_name: ${payment.member_name || 'N/A'}`;
-            
-            showToast(errorMsg, 'error');
-            return;
-        }
-        
-        // ============================================================
-        // ✅ সদস্য পাওয়া গেলে ব্যালেন্স আপডেট করুন (মোবাইল দিয়ে)
-        // ============================================================
-        
-        // ✅ সদস্য সক্রিয় কিনা চেক করুন
-        if (member.status !== 'active' && member.status !== 'approved') {
-            showToast(`⚠️ এই সদস্য (${member.full_name}) সক্রিয় নয়! স্ট্যাটাস: ${member.status}`, 'error');
-            return;
-        }
-        
-        // ✅ বর্তমান ব্যালেন্স নিন
-        const currentBalance = Number(member.balance) || 0;
-        const paymentAmount = Number(payment.amount) || 0;
-        const newBalance = currentBalance + paymentAmount;
-        
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('📊 ব্যালেন্স আপডেট তথ্য:');
-        console.log(`   👤 সদস্য: ${member.full_name}`);
-        console.log(`   📱 মোবাইল: ${member.mobile}`);
-        console.log(`   🔍 পাওয়া গেছে: ${foundBy}`);
-        console.log(`   💰 বর্তমান ব্যালেন্স: ${currentBalance}`);
-        console.log(`   ➕ পেমেন্টের পরিমাণ: ${paymentAmount}`);
-        console.log(`   🆕 নতুন ব্যালেন্স: ${newBalance}`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
-        // ✅ মোবাইল দিয়ে ব্যালেন্স আপডেট করুন (দ্রুত)
-        const { data: updateResult, error: updateError } = await client
-            .from('members')
-            .update({ 
-                balance: newBalance,
-                updated_at: new Date().toISOString()
-            })
-            .eq('mobile', member.mobile)  // ← মোবাইল দিয়ে আপডেট!
-            .select('balance');
-        
-        if (updateError) {
-            console.error('❌ ব্যালেন্স আপডেট error:', updateError);
-            throw updateError;
-        }
-        
-        const updatedBalance = updateResult?.[0]?.balance || newBalance;
-        console.log(`✅ ব্যালেন্স আপডেট সম্পন্ন! নতুন ব্যালেন্স: ${updatedBalance}`);
-        
-        // ✅ পেমেন্ট স্ট্যাটাস আপডেট করুন
-        const { error: statusError } = await client
+        // ============================================================
+        // ✅ STEP ১: Payment status আপডেট (idempotent — double-approve প্রতিরোধ)
+        // ============================================================
+        const { data: statusUpdate, error: statusError } = await client
             .from('payments')
             .update({
                 status: 'approved',
@@ -9730,73 +9600,210 @@ async function approvePayment(paymentId) {
                 approved_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
             })
-            .eq('id', id);
+            .eq('id', id)
+            .eq('status', 'pending')  // ✅ শুধু pending → approved
+            .select('id, member_id, amount, mobile, member_name');
         
         if (statusError) {
-            console.error('❌ পেমেন্ট স্ট্যাটাস আপডেট error:', statusError);
+            console.error('❌ Status update error:', statusError);
             throw statusError;
         }
         
-        // ✅ পেন্ডিং লিস্ট থেকে রিমুভ করুন
-        pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
-        
-        // ✅ membersData রিফ্রেশ করুন
-        const { data: freshMembers, error: loadError } = await client
-            .from('members')
-            .select('*')
-            .order('created_at', { ascending: false });
-        
-        if (!loadError && freshMembers) {
-            membersData = freshMembers;
-            console.log('✅ membersData রিফ্রেশ সম্পন্ন:', membersData.length);
+        // ✅ যদি 0 row আপডেট হয় — ইতিমধ্যে approved
+        if (!statusUpdate || statusUpdate.length === 0) {
+            showToast('⚠️ এই পেমেন্ট ইতিমধ্যে অনুমোদিত হয়েছে!', 'warning');
+            await loadPendingPayments();
+            return;
         }
         
-        // ✅ পেমেন্ট লিস্ট রিলোড
+        console.log('✅ STEP ১: Payment status আপডেট সম্পন্ন');
+        
+        // ============================================================
+        // ✅ STEP ২: সদস্য খোঁজা — member_id → mobile → name
+        // ============================================================
+        const paymentRecord = statusUpdate[0];
+        const paymentAmount = Number(paymentRecord.amount) || 0;
+        const memberIdFromPayment = paymentRecord.member_id;
+        const mobileFromPayment = paymentRecord.mobile || payment.mobile;
+        const nameFromPayment = paymentRecord.member_name || payment.member_name;
+        
+        let member = null;
+        let matchMethod = '';
+        
+        // 🔍 চেষ্টা ১: member_id (প্রাইমারি — আপনার data-তে 100% reliable)
+        if (memberIdFromPayment && memberIdFromPayment.trim() !== '') {
+            const { data: byId } = await client
+                .from('members')
+                .select('member_id, full_name, mobile, balance, status')
+                .eq('member_id', memberIdFromPayment)
+                .maybeSingle();
+            
+            if (byId) {
+                member = byId;
+                matchMethod = '🆔 member_id';
+                console.log(`✅ Match-1: member_id = ${byId.member_id}`);
+            }
+        }
+        
+        // 🔍 চেষ্টা ২: mobile (fallback — UNIQUE constraint-এর কারণে নিরাপদ)
+        if (!member && mobileFromPayment && mobileFromPayment.trim() !== '') {
+            const { data: byMobile } = await client
+                .from('members')
+                .select('member_id, full_name, mobile, balance, status')
+                .eq('mobile', mobileFromPayment)
+                .maybeSingle();
+            
+            if (byMobile) {
+                member = byMobile;
+                matchMethod = '📱 mobile (fallback)';
+                console.log(`✅ Match-2: mobile = ${byMobile.member_id}`);
+            }
+        }
+        
+        // 🔍 চেষ্টা ৩: name (শেষ fallback — partial match)
+        if (!member && nameFromPayment && nameFromPayment.trim() !== '') {
+            const { data: byName } = await client
+                .from('members')
+                .select('member_id, full_name, mobile, balance, status')
+                .ilike('full_name', `%${nameFromPayment.trim()}%`)
+                .limit(1)
+                .maybeSingle();
+            
+            if (byName) {
+                member = byName;
+                matchMethod = '📝 name (last fallback)';
+                console.log(`⚠️ Match-3: name = ${byName.member_id}`);
+            }
+        }
+        
+        // ❌ কিছু না পেলে Rollback
+        if (!member) {
+            console.error('❌ সদস্য পাওয়া যায়নি!');
+            
+            await client
+                .from('payments')
+                .update({ status: 'pending', approved_by: null, approved_at: null })
+                .eq('id', id);
+            
+            showToast(
+                `❌ সদস্য পাওয়া যায়নি!\n` +
+                `🆔 member_id: ${memberIdFromPayment || 'N/A'}\n` +
+                `📱 mobile: ${mobileFromPayment || 'N/A'}\n` +
+                `👤 name: ${nameFromPayment || 'N/A'}\n\n` +
+                `⚠️ Payment record অক্ষত আছে।`,
+                'error'
+            );
+            return;
+        }
+        
+        console.log('✅ STEP ২: সদস্য পাওয়া গেছে');
+        console.log(`   👤 ${member.full_name}`);
+        console.log(`   🆔 ${member.member_id}`);
+        console.log(`   📱 ${member.mobile}`);
+        console.log(`   🔍 Match: ${matchMethod}`);
+        
+        // ✅ সদস্য সক্রিয় কিনা চেক
+        if (member.status !== 'active' && member.status !== 'approved') {
+            // Rollback
+            await client
+                .from('payments')
+                .update({ status: 'pending', approved_by: null, approved_at: null })
+                .eq('id', id);
+            
+            showToast(`⚠️ সদস্য সক্রিয় নয়! Status: ${member.status}`, 'error');
+            return;
+        }
+        
+        // ============================================================
+        // ✅ STEP ৩: payments sum (authoritative — double-count নেই)
+        // ============================================================
+        const { data: allApprovedPayments, error: sumError } = await client
+            .from('payments')
+            .select('amount')
+            .eq('member_id', member.member_id)
+            .eq('status', 'approved');
+        
+        if (sumError) {
+            console.error('❌ Payments sum error:', sumError);
+            throw sumError;
+        }
+        
+        const totalApproved = (allApprovedPayments || [])
+            .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+        
+        console.log(`✅ STEP ৩: Total approved = ${totalApproved}`);
+        
+        // ============================================================
+        // ✅ STEP ৪: members.balance আপডেট (member_id দিয়ে — safest)
+        // ============================================================
+        const { error: balanceError } = await client
+            .from('members')
+            .update({ 
+                balance: totalApproved,
+                updated_at: new Date().toISOString()
+            })
+            .eq('member_id', member.member_id);
+        
+        if (balanceError) {
+            console.error('❌ Balance update error:', balanceError);
+            
+            // Rollback
+            await client
+                .from('payments')
+                .update({ status: 'pending', approved_by: null, approved_at: null })
+                .eq('id', id);
+            
+            showToast('❌ ব্যালেন্স আপডেট ব্যর্থ! Rollback করা হয়েছে।', 'error');
+            return;
+        }
+        
+        console.log('✅ STEP ৪: Balance আপডেট সম্পন্ন!');
+        
+        // ============================================================
+        // ✅ STEP ৫: UI রিফ্রেশ
+        // ============================================================
+        pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
+        
         await loadPendingPayments();
-        
-        // ✅ ড্যাশবোর্ড রিলোড
         await loadRealDashboard();
-        
-        // ✅ ব্যাজ আপডেট
         await updateAllBadges();
-        
-        // ✅ মেম্বার লিস্ট রিলোড
+        await loadMembers();
         renderMembersList();
         renderPendingMembersList();
         
         // ============================================================
-        // 🔥 BroadcastChannel - সদস্য ড্যাশবোর্ডে আপডেট পাঠান
+        // ✅ STEP ৬: Broadcast — Member Dashboard-এ sync
         // ============================================================
         try {
             const bc = new BroadcastChannel('tuknbd_updates');
-            bc.postMessage({ 
-                type: 'payment_approved', 
+            bc.postMessage({
+                type: 'payment_approved',
                 memberId: member.member_id,
                 mobile: member.mobile,
                 amount: paymentAmount,
+                newBalance: totalApproved,
                 timestamp: new Date().toISOString()
             });
-            setTimeout(() => { 
-                try { bc.close(); } catch(e) {} 
-            }, 1000);
-            console.log('📢 সদস্য ড্যাশবোর্ডে পেমেন্ট মেসেজ পাঠানো হয়েছে (📱', member.mobile, ')');
-        } catch(e) {
-            console.log('BroadcastChannel সমর্থিত নয়:', e);
-        }
+            setTimeout(() => { try { bc.close(); } catch(e) {} }, 1000);
+            console.log('📢 Member Dashboard-এ sync পাঠানো হয়েছে');
+        } catch(e) {}
         
-        // ✅ সাফল্যের মেসেজ
+        // ============================================================
+        // ✅ STEP ৭: সফল মেসেজ
+        // ============================================================
         showToast(
-            `✅ ${member.full_name} (📱${member.mobile}) এর ${formatAmount(paymentAmount)} টাকা পেমেন্ট অনুমোদিত!\n` +
-            `📊 নতুন ব্যালেন্স: ${formatAmount(updatedBalance)} টাকা\n` +
-            `🔍 পাওয়া গেছে: ${foundBy}`,
+            `✅ ${member.full_name} (📱${member.mobile}) এর ${formatAmountWithText(paymentAmount)} পেমেন্ট অনুমোদিত!\n` +
+            `💰 নতুন ব্যালেন্স: ${formatAmountWithText(totalApproved)}\n` +
+            `🔍 Match: ${matchMethod}`,
             'success'
         );
         
-        console.log('✅ পেমেন্ট অনুমোদন সম্পূর্ণ!');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('✅ পেমেন্ট অনুমোদন সফলভাবে সম্পন্ন!');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
     } catch(e) {
-        console.error('❌ Approval error:', e);
+        console.error('❌ approvePayment error:', e);
         showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
     } finally {
         btns.forEach(btn => {
