@@ -2143,19 +2143,13 @@
     <input type="number" id="customAmountInput" placeholder="যেকোনো পরিমাণ টাকা লিখুন" class="w-full p-2 border rounded-lg" min="1" step="1">
     <p class="text-xs text-gray-500 mt-1">💡 ইচ্ছেমতো যে কোনো পরিমাণ টাকা জমা দিতে পারেন (সীমাহীন)</p>
 </div>
-
-<!-- বাটন -->
-<button type="button" id="submitPaymentBtn" class="flex-1 bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition">
-    <i class="fas fa-check mr-1"></i> জমা দিন
-</button>
-   
-        
+    
         <div class="mb-3 bg-amber-50 p-3 rounded-lg">
             <div class="flex justify-between">
                 <span class="font-semibold">মোট জমার পরিমাণ:</span>
                 <span id="totalAmountDisplay" class="text-2xl font-bold text-emerald-600">০ টাকা</span>
             </div>
-            <p class="text-xs">* প্রতি মাসের সঞ্চয় <span id="perMonthSavings">500</span> টাকা</p>
+            <p class="text-xs">* প্রতি মাসের সঞ্চয় <span id="perMonthSavings">500</span> টাকা</p>
         </div>
         
         <div class="flex gap-3 mt-4">
@@ -3460,8 +3454,7 @@ if (cardRefEl) cardRefEl.innerHTML = referCode;
     // ============================================================
     // ✅ ৪. মাসিক সঞ্চয় ও QR কোড
     // ============================================================
-    document.getElementById('monthlySavingsDisplay').innerHTML = currentUser.monthlySavings + ' টাকা';
-    document.getElementById('perMonthSavings').innerHTML = currentUser.monthlySavings;
+     document.getElementById('perMonthSavings').innerHTML = currentUser.monthlySavings;
     
     if (currentUser.profileImage && currentUser.profileImage !== 'images/logo.png') {
     const profileImgEl = document.getElementById('profileImage');
@@ -4453,14 +4446,16 @@ window.updateFundsDisplayWithAnimation = updateFundsDisplayWithAnimation;
 window.updateFundsDisplaySilent = updateFundsDisplaySilent;
 
 
-// ============================================================
-// loadSavingsData() - কারেন্ট সদস্যদের জন্য বাকি মাস দেখাবে না
+    // ============================================================
+// ✅ FIXED: loadSavingsData() — Admin Panel-এর সাথে সিংক্রোনাইজড
+// members.balance থেকে সরাসরি balance পড়ে (single source of truth)
 // ============================================================
 
 async function loadSavingsData() {
     if(!currentUser) return;
     let client = await initSupabase();
     if(!client) return;
+    
     try {
         const joinDate = new Date(currentUser.joinDate);
         const joinYear = joinDate.getFullYear(), joinMonth = joinDate.getMonth();
@@ -4468,7 +4463,13 @@ async function loadSavingsData() {
         let totalMonthsSinceJoin = (currentYear - joinYear) * 12 + (currentMonth - joinMonth) + 1;
         if(totalMonthsSinceJoin < 0) totalMonthsSinceJoin = 0;
         
-        const { data: approvedPayments } = await client.from('payments').select('amount, month, year').eq('member_id', currentUser.id).eq('status', 'approved');
+        // ✅ approved payments লোড করুন
+        const { data: approvedPayments } = await client
+            .from('payments')
+            .select('amount, month, year')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved');
+        
         let paidMonthsCount = 0, totalPaid = 0;
         if(approvedPayments && approvedPayments.length > 0) {
             for(const payment of approvedPayments) {
@@ -4479,12 +4480,13 @@ async function loadSavingsData() {
                         const joinDateObj = new Date(joinYear, joinMonth, 1);
                         if(paymentDate >= joinDateObj && paymentDate <= now) { 
                             paidMonthsCount++; 
-                            totalPaid += payment.amount; 
+                            totalPaid += Number(payment.amount) || 0; 
                         }
                     }
                 }
             }
         }
+        
         const dueMonths = Math.max(0, totalMonthsSinceJoin - paidMonthsCount);
         
         // ✅ চেক করুন সদস্য কারেন্ট/মেয়াদহীন কিনা
@@ -4501,12 +4503,44 @@ async function loadSavingsData() {
                 <span class="text-xs text-gray-400 block">(কারেন্ট সদস্য)</span>
             `;
         } else {
-            document.getElementById('dueMonthsDisplay').innerHTML = `<span class="${dueMonths > 0 ? 'text-red-500' : 'text-green-600'}">${dueMonths} মাস</span>`;
+            document.getElementById('dueMonthsDisplay').innerHTML = 
+                `<span class="${dueMonths > 0 ? 'text-red-500' : 'text-green-600'}">${dueMonths} মাস</span>`;
         }
         
         document.getElementById('totalPaidDisplay').innerText = totalPaid.toLocaleString() + ' টাকা';
-    } catch(e) { console.error(e); }
+        
+        // ============================================================
+        // ✅✅✅ MAIN FIX: members.balance থেকে সরাসরি পড়ুন ✅✅✅
+        // ============================================================
+        const { data: memberData, error: mError } = await client
+            .from('members')
+            .select('balance')
+            .eq('member_id', currentUser.id)
+            .single();
+        
+        if (mError) {
+            console.error('❌ member balance fetch error:', mError);
+        }
+        
+        const currentBalance = Number(memberData?.balance) || 0;
+        
+        // ✅ totalBalanceDisplay (মোট সঞ্চয় ব্যালেন্স কার্ড) আপডেট করুন
+        const balanceEl = document.getElementById('totalBalanceDisplay');
+        if (balanceEl) {
+            balanceEl.innerHTML = formatAmountWithText(currentBalance);
+        }
+        
+        // ✅ userFunds-এ সিঙ্ক করুন (কারণ কার্ডগুলো এটা থেকে পড়ে)
+        userFunds.monthlySavings = currentBalance;
+        updateFundsDisplay();
+        
+        console.log('✅ loadSavingsData: totalBalance =', currentBalance);
+        
+    } catch(e) { 
+        console.error('❌ loadSavingsData error:', e); 
+    }
 }
+
 
 // ============================================================
 // ✅ loadPaymentHistory() — সম্পূর্ণ Updated Version
@@ -5154,11 +5188,11 @@ async function openTermMemberPaymentModal() {
     if (customAmountInput) customAmountInput.style.display = 'none';
     if (perMonthSavings) perMonthSavings.style.display = 'inline';
     
-    // ✅ মাসের তালিকা লোড করুন
+      // ✅ মাসের তালিকা লোড করুন
     await populateYearAndMonths();
     
-    // ✅ পেমেন্ট বাটন আপডেট করুন
-    const submitBtn = document.getElementById('submitPaymentBtn');
+    // ✅ পেমেন্ট বাটন আপডেট — নতুন ID নেই, querySelector দিয়ে
+    const submitBtn = document.querySelector('#paymentModal button[onclick*="submitPayment"]');
     if (submitBtn) {
         submitBtn.onclick = submitPayment;
         submitBtn.innerHTML = '<i class="fas fa-check mr-1"></i> জমা দিন';
@@ -5178,7 +5212,10 @@ async function openTermMemberPaymentModal() {
     console.log('✅ মেয়াদী সদস্যের পেমেন্ট মডাল খোলা হয়েছে');
 }
             
-function closePaymentModal() { document.getElementById('paymentModal').classList.add('hidden'); document.getElementById('paymentModal').classList.remove('flex'); }
+function closePaymentModal() { 
+    document.getElementById('paymentModal').classList.add('hidden'); 
+    document.getElementById('paymentModal').classList.remove('flex'); 
+}
 
 function togglePaymentFields() {
     const method = document.getElementById('paymentMethod').value;
@@ -5204,7 +5241,7 @@ function togglePaymentFields() {
 async function openCurrentMemberPaymentModal() {
     const modal = document.getElementById('paymentModal');
     if (!modal) {
-        console.error('❌ paymentModal পাওয়া যায়নি!');
+        console.error('❌ paymentModal পাওয়া যায়নি!');
         return;
     }
     
@@ -5257,8 +5294,8 @@ async function openCurrentMemberPaymentModal() {
         };
     }
     
-    // ✅ পেমেন্ট বাটন আপডেট করুন
-    const submitBtn = document.getElementById('submitPaymentBtn');
+    // ✅ পেমেন্ট বাটন আপডেট — নতুন ID নেই, querySelector দিয়ে
+    const submitBtn = document.querySelector('#paymentModal button[onclick*="submitPayment"]');
     if (submitBtn) {
         submitBtn.onclick = submitCurrentMemberPayment;
         submitBtn.innerHTML = '<i class="fas fa-check mr-1"></i> জমা দিন (সীমাহীন)';
@@ -5313,7 +5350,12 @@ async function submitCurrentMemberPayment() {
         return;
     }
     
-    const btn = document.getElementById('submitPaymentBtn');
+    // ✅ বাটন আপডেট — নতুন ID নেই, querySelector দিয়ে
+    const btn = document.querySelector('#paymentModal button[onclick*="submitPayment"]');
+    if (!btn) {
+        showToast('❌ সাবমিট বাটন খুঁজে পাওয়া যায়নি!', 'error');
+        return;
+    }
     const originalText = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span class="loading-spinner"></span> জমা হচ্ছে...';
@@ -5341,7 +5383,7 @@ async function submitCurrentMemberPayment() {
             member_id: currentUser.id,
             member_name: currentUser.name,
             mobile: currentUser.mobile,
-            month: 'কারেন্ট জমা', // মাসের পরিবর্তে "কারেন্ট জমা"
+            month: 'কারেন্ট জমা',
             year: year,
             amount: customAmount,
             payment_method: paymentMethod,
@@ -5350,11 +5392,13 @@ async function submitCurrentMemberPayment() {
             status: 'pending',
             submitted_at: submittedAt,
             voucher_slip_no: slipNumber,
-            member_type: 'current', // কারেন্ট সদস্য চিহ্নিত করতে
+            member_type: 'current',
             note: `কারেন্ট সদস্য জমা - ${banglaDate} ${banglaTime}`
         };
         
-        // ব্যাংক বা ক্যাশের ক্ষেত্রে অতিরিক্ত ডাটা
+        // ============================================================
+        // ✅ ব্যাংক বা ক্যাশের ক্ষেত্রে অতিরিক্ত ডাটা
+        // ============================================================
         if (paymentMethod === 'bank') {
             paymentData.bank_name = document.getElementById('bankName')?.value || null;
             paymentData.branch_name = document.getElementById('branchName')?.value || null;
@@ -5370,6 +5414,9 @@ async function submitCurrentMemberPayment() {
         console.log('📤 পেমেন্ট ডাটা:', paymentData);
         console.log('🕐 বাংলাদেশ সময়:', banglaDate, banglaTime);
         
+        // ============================================================
+        // ✅ Database-এ insert
+        // ============================================================
         const { data, error } = await client
             .from('payments')
             .insert([paymentData])
@@ -5381,17 +5428,29 @@ async function submitCurrentMemberPayment() {
             return;
         }
         
-        showToast(`✅ ${customAmount.toLocaleString()} টাকা জমার অনুরোধ সফল!\n⏳ অ্যাডমিন অনুমোদনের জন্য অপেক্ষা করুন।`, 'success');
+        // ============================================================
+        // ✅ সফল মেসেজ
+        // ============================================================
+        showToast(
+            `✅ ${customAmount.toLocaleString()} টাকা জমার অনুরোধ সফল!\n` +
+            `⏳ অ্যাডমিন অনুমোদনের জন্য অপেক্ষা করুন।`, 
+            'success'
+        );
+        
         closePaymentModal();
         
-        // ✅ ফিল্ড রিসেট করুন
+        // ============================================================
+        // ✅ ফিল্ড রিসেট
+        // ============================================================
         document.getElementById('senderMobile').value = '';
         document.getElementById('transactionId').value = '';
         document.getElementById('paymentYear').value = '';
         document.getElementById('customAmountInput').value = '';
         document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
         
-        // ✅ ডাটা রিফ্রেশ করুন
+        // ============================================================
+        // ✅ ডাটা রিফ্রেশ
+        // ============================================================
         await loadPaymentHistory();
         await loadUserFunds();
         await refreshMemberDataFromSupabase();
@@ -5403,10 +5462,13 @@ async function submitCurrentMemberPayment() {
         console.error('❌ পেমেন্ট এরর:', e);
         showToast('পেমেন্ট জমা দিতে ব্যর্থ: ' + e.message, 'error');
     } finally {
-        btn.disabled = false;
-        btn.innerHTML = originalText;
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
     }
 }
+    
 // ============================================================
 // সদস্যের সব approved পেমেন্টের মাস লিস্ট ফেরত দেয়
 // ============================================================
@@ -6047,29 +6109,40 @@ function submitWithdraw(type) {
         receiverDetails = { mobile, method };
     }
     
-    // ৫. কনফার্মেশন
+   // ৫. কনফার্মেশন — ✅ FIX: typeName পাঠানো হচ্ছে
     if(confirm(`আপনি কি ${amount.toFixed(2)} টাকা ${typeName} থেকে উত্তোলন করতে চান?\n\nগ্রহীতা: ${receiverInfo}`)) {
-        saveWithdrawRequest(type, amount, method, receiverDetails, typeName);
-        showToast(`✅ ${typeName} উত্তোলনের অনুরোধ জমা হয়েছে! পরিমাণ: ${amount.toFixed(2)} টাকা\n⏳ অনুমোদনের জন্য অপেক্ষা করুন।`, 'success');
-        closeWithdrawModal();
+        saveWithdrawRequest(typeName, amount, method, receiverDetails, typeName);
+        // ✅ showToast এবং closeWithdrawModal() saveWithdrawRequest() এর ভিতরে আছে
     }
 }
 
     
 
 // ============================================================
-// উত্তোলন রিকোয়েস্ট সংরক্ষণ
+// ✅ FIXED: saveWithdrawRequest() — type safely normalized
 // ============================================================
-async function saveWithdrawRequest(type, amount, method, receiverDetails, typeName) {
+async function saveWithdrawRequest(typeName, amount, method, receiverDetails, displayName) {
     const client = await initSupabase();
     if(!client) {
         showToast('সার্ভার সংযোগ সমস্যা!', 'error');
         return;
     }
+    
     try {
-        let normalizedType = typeName;
-        normalizedType = normalizedType.replace(/ উত্তোলন/g, '');
+        // ✅ Type normalize — সব ধরনের input handle করে
+        let normalizedType = (typeName || displayName || 'উত্তোলন')
+            .replace(/ উত্তোলন/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
         
+        // ✅ 'all' → 'সব লভ্যাংশ'
+        if (normalizedType === 'all' || normalizedType === '') {
+            normalizedType = 'সব লভ্যাংশ';
+        }
+        
+        console.log('📤 Normalized type:', normalizedType);
+        
+        // ✅ withdraw data তৈরি
         const withdrawData = {
             member_id: currentUser.id,
             member_name: currentUser.name,
@@ -6078,9 +6151,11 @@ async function saveWithdrawRequest(type, amount, method, receiverDetails, typeNa
             amount: amount,
             status: 'pending',
             requested_at: new Date().toISOString(),
-            payment_method: method
+            payment_method: method,
+            balance_updated: false
         };
         
+        // ✅ পেমেন্ট method অনুযায়ী field
         if (method === 'cash') {
             withdrawData.receiver_name = receiverDetails.receiverName || null;
             withdrawData.receiver_mobile = receiverDetails.receiverMobile || null;
@@ -6093,33 +6168,40 @@ async function saveWithdrawRequest(type, amount, method, receiverDetails, typeNa
             withdrawData.sender_mobile = receiverDetails.mobile || null;
         }
         
-        console.log('📤 উত্তোলন ডাটা:', withdrawData);
+        console.log('📤 withdrawData:', withdrawData);
         
+        // ✅ Database-এ insert
         const { data, error } = await client
             .from('withdrawals')
-            .insert([withdrawData]);
+            .insert([withdrawData])
+            .select();
             
         if(error) {
             console.error('❌ উত্তোলন রিকোয়েস্ট সেভ error:', error);
-            showToast('উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ!', 'error');
-        } else {
-            console.log('✅ উত্তোলন রিকোয়েস্ট সেভ হয়েছে:', data);
-            await loadWithdrawalHistory();
-            
-            // ================================================
-            // ✅ গুরুত্বপূর্ণ: ব্যালেন্স রিফ্রেশ করুন
-            // ================================================
-            await refreshMemberDataFromSupabase();
-            await loadUserFunds();
-            await updateFundsDisplay();
-            
-            // UI তে ব্যালেন্স আপডেট দেখানোর জন্য
-            showToast(`✅ ${typeName} উত্তোলনের অনুরোধ জমা হয়েছে! পরিমাণ: ${amount.toFixed(2)} টাকা\n⏳ অনুমোদনের জন্য অপেক্ষা করুন।`, 'success');
-            closeWithdrawModal();
+            showToast('❌ উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ: ' + error.message, 'error');
+            return;
         }
+        
+        // ✅ সফল মেসেজ
+        showToast(
+            `✅ ${displayName || normalizedType} উত্তোলনের অনুরোধ জমা হয়েছে!\n` +
+            `💰 পরিমাণ: ${amount.toFixed(2)} টাকা\n` +
+            `⏳ অনুমোদনের জন্য অপেক্ষা করুন।`,
+            'success'
+        );
+        
+        // ✅ Modal বন্ধ
+        closeWithdrawModal();
+        
+        // ✅ ডেটা রিফ্রেশ
+        await loadWithdrawalHistory();
+        await refreshMemberDataFromSupabase();
+        await loadUserFunds();
+        updateFundsDisplay();
+        
     } catch(e) {
         console.error('❌ saveWithdrawRequest error:', e);
-        showToast('উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ!', 'error');
+        showToast('❌ উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ!', 'error');
     }
 }
 
@@ -10910,132 +10992,6 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('  forceBalanceUpdate() - শুধু ব্যালেন্স আপডেট করতে');
     console.log('  fixReferralCode() - শুধু রেফারেল কোড ফিক্স করতে');
 });
-    // ============================================================
-// ✅ উত্তোলন অনুমোদনের পর ব্যালেন্স কমানোর ফাংশন
-// ============================================================
-
-async function processWithdrawalApproval(withdrawalId) {
-    console.log('🔄 উত্তোলন প্রক্রিয়াকরণ:', withdrawalId);
-    
-    const client = await initSupabase();
-    if (!client) {
-        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
-        return false;
-    }
-    
-    try {
-        // 1. উত্তোলন ডাটা চেক করুন
-        const { data: withdrawal, error: wError } = await client
-            .from('withdrawals')
-            .select('*')
-            .eq('id', withdrawalId)
-            .single();
-        
-        if (wError || !withdrawal) {
-            console.error('❌ উত্তোলন পাওয়া যায়নি:', wError);
-            return false;
-        }
-        
-        if (withdrawal.status !== 'approved') {
-            console.log('⏳ উত্তোলন এখনও অনুমোদিত হয়নি');
-            return false;
-        }
-        
-        console.log('📥 উত্তোলন ডাটা:', withdrawal);
-        
-        // 2. সদস্যের বর্তমান ব্যালেন্স চেক করুন
-        const { data: member, error: mError } = await client
-            .from('members')
-            .select('balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
-            .eq('member_id', withdrawal.member_id)
-            .single();
-        
-        if (mError || !member) {
-            console.error('❌ সদস্য পাওয়া যায়নি:', mError);
-            return false;
-        }
-        
-        console.log('📊 বর্তমান ব্যালেন্স:', member);
-        
-        // 3. উত্তোলনের ধরন অনুযায়ী ব্যালেন্স কমান
-        const amount = Number(withdrawal.amount) || 0;
-        let updateData = {};
-        let type = withdrawal.type || '';
-        
-        if (type.includes('রেফারেল বোনাস') || type.includes('referral_bonus')) {
-            const newBonus = Math.max(0, (Number(member.referral_bonus) || 0) - amount);
-            updateData.referral_bonus = newBonus;
-            console.log(`✅ রেফারেল বোনাস কমছে: ${member.referral_bonus} → ${newBonus}`);
-        } 
-        else if (type.includes('সঞ্চয় লভ্যাংশ') || type.includes('savings_profit')) {
-            const newProfit = Math.max(0, (Number(member.profit_balance_savings) || 0) - amount);
-            updateData.profit_balance_savings = newProfit;
-            console.log(`✅ সঞ্চয় লভ্যাংশ কমছে: ${member.profit_balance_savings} → ${newProfit}`);
-        }
-        else if (type.includes('বিনিয়োগ লভ্যাংশ') || type.includes('investment_profit')) {
-            const newProfit = Math.max(0, (Number(member.profit_balance_investment) || 0) - amount);
-            updateData.profit_balance_investment = newProfit;
-            console.log(`✅ বিনিয়োগ লভ্যাংশ কমছে: ${member.profit_balance_investment} → ${newProfit}`);
-        }
-        else if (type.includes('রেফারেল লভ্যাংশ') || type.includes('referral_profit')) {
-            const newProfit = Math.max(0, (Number(member.profit_balance_referral) || 0) - amount);
-            updateData.profit_balance_referral = newProfit;
-            console.log(`✅ রেফারেল লভ্যাংশ কমছে: ${member.profit_balance_referral} → ${newProfit}`);
-        }
-        else if (type.includes('মূলধন') || type.includes('capital') || type.includes('সঞ্চয়')) {
-            const newBalance = Math.max(0, (Number(member.balance) || 0) - amount);
-            updateData.balance = newBalance;
-            console.log(`✅ মূলধন কমছে: ${member.balance} → ${newBalance}`);
-        }
-        else {
-            // ডিফল্ট: balance থেকে কমান
-            const newBalance = Math.max(0, (Number(member.balance) || 0) - amount);
-            updateData.balance = newBalance;
-            console.log(`✅ ডিফল্ট: balance কমছে: ${member.balance} → ${newBalance}`);
-        }
-        
-        // 4. ডাটাবেস আপডেট করুন
-        const { error: updateError } = await client
-            .from('members')
-            .update(updateData)
-            .eq('member_id', withdrawal.member_id);
-        
-        if (updateError) {
-            console.error('❌ ব্যালেন্স আপডেট error:', updateError);
-            return false;
-        }
-        
-        console.log('✅ ব্যালেন্স আপডেট সম্পূর্ণ:', updateData);
-        
-        // 5. উত্তোলন ট্রানজেকশন রেকর্ড আপডেট করুন
-        const { error: txError } = await client
-            .from('withdrawals')
-            .update({ 
-                balance_updated: true,
-                balance_updated_at: new Date().toISOString()
-            })
-            .eq('id', withdrawalId);
-        
-        if (txError) {
-            console.error('❌ উত্তোলন আপডেট error:', txError);
-        }
-        
-        // 6. লোকাল ক্যাশ আপডেট করুন
-        if (currentUser && currentUser.id === withdrawal.member_id) {
-            await refreshMemberDataFromSupabase();
-            await loadUserFunds();
-            updateFundsDisplay();
-        }
-        
-        showToast(`✅ ${amount} টাকা উত্তোলন সম্পন্ন! ব্যালেন্স আপডেট করা হয়েছে।`, 'success');
-        return true;
-        
-    } catch(e) {
-        console.error('❌ processWithdrawalApproval error:', e);
-        showToast('❌ ব্যালেন্স আপডেট করতে ব্যর্থ!', 'error');
-        return false;
-    }
-}
 
 // ============================================================
 // ✅ সব পেন্ডিং উত্তোলন প্রক্রিয়াকরণ
@@ -11637,7 +11593,6 @@ async function fixAllWithdrawalsCorrect() {
 // ============================================================
 // ✅ processWithdrawalApproval ফাংশন আপডেট করুন
 // ============================================================
-
 async function processWithdrawalApproval(withdrawalId) {
     console.log('🔄 উত্তোলন প্রক্রিয়াকরণ:', withdrawalId);
     
