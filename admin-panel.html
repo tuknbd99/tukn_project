@@ -10241,8 +10241,11 @@ function closePaymentDetailsModal() {
                         <p class="text-xl font-bold text-amber-600">${formatAmountWithText(w.amount)}</p>
                         <div class="flex gap-2 mt-2 flex-wrap justify-end">
                             <button onclick="showWithdrawalDetails('${w.id}')" class="btn btn-info btn-sm" title="বিস্তারিত"><i class="fas fa-eye"></i></button>
-                            <button onclick="approveWithdrawalWithNote('${w.id}', ${w.amount}, '${w.member_id}', '${cleanType}')" class="btn btn-success btn-sm">অনুমোদন</button>
-                            <button onclick="rejectWithdrawal('${w.id}')" class="btn btn-danger btn-sm">বাতিল</button>
+                            <button onclick="approveWithdrawal('${w.id}')" class="btn btn-success btn-sm" title="অনুমোদন">
+                    <i class="fas fa-check mr-1"></i> অনুমোদন
+                </button>
+                <button onclick="rejectWithdrawal('${w.id}', 'Admin কর্তৃক বাতিল')" class="btn btn-danger btn-sm" title="বাতিল (DB-এর মান ফেরত যাবে)"> <i class="fas fa-times mr-1"></i> বাতিল
+                </button>
                         </div>
                     </div>
                 </div>
@@ -28585,6 +28588,177 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         }
                     }
+
+        // ============================================================
+// 🎯 UTTOlon Reject করার ফাংশন
+// ✅ UTTOlon বাতিল হলে DB-এর referral_bonus ফেরত দেবে
+// ============================================================
+async function rejectWithdrawal(withdrawalId, reason = '') {
+    console.log('🔄 UTTOlon Reject শুরু:', withdrawalId);
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        alert('❌ সার্ভার সংযোগ সমস্যা!');
+        return false;
+    }
+    
+    try {
+        // STEP 1: UTTOlon তথ্য নিন
+        const { data: withdrawal, error: wError } = await client
+            .from('withdrawals')
+            .select('member_id, member_name, amount, type, status, balance_updated')
+            .eq('id', withdrawalId)
+            .single();
+        
+        if (wError || !withdrawal) {
+            alert('❌ UTTOlon পাওয়া যায়নি!');
+            return false;
+        }
+        
+        if (withdrawal.status === 'rejected') {
+            alert('⚠️ ইতিমধ্যে বাতিল করা হয়েছে!');
+            return false;
+        }
+        
+        // STEP 2: DB-এর referral_bonus ফেরত দিন
+        if (withdrawal.type === 'রেফারেল বোনাস' && 
+            (withdrawal.status === 'approved' || withdrawal.status === 'pending')) {
+            
+            const { data: member } = await client
+                .from('members')
+                .select('referral_bonus, full_name')
+                .eq('member_id', withdrawal.member_id)
+                .single();
+            
+            if (member) {
+                const oldBonus = Number(member.referral_bonus) || 0;
+                const newBonus = oldBonus + Number(withdrawal.amount);
+                
+                await client
+                    .from('members')
+                    .update({ 
+                        referral_bonus: newBonus,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('member_id', withdrawal.member_id);
+                
+                console.log(`✅ Referral bonus ফেরত: ${oldBonus} → ${newBonus}`);
+            }
+        }
+        
+        // STEP 3: Withdrawal status আপডেট
+        const { error: txError } = await client
+            .from('withdrawals')
+            .update({ 
+                status: 'rejected',
+                rejected_at: new Date().toISOString(),
+                rejection_reason: reason || 'অ্যাডমিন কর্তৃক বাতিল'
+            })
+            .eq('id', withdrawalId);
+        
+        if (txError) {
+            alert('❌ UTTOlon বাতিল করতে ব্যর্থ!');
+            return false;
+        }
+        
+        // STEP 4: সফল মেসেজ
+        alert(`✅ UTTOlon বাতিল সফল!\n\n👤 সদস্য: ${withdrawal.member_name || withdrawal.member_id}\n💰 পরিমাণ: ${withdrawal.amount} টাকা\n💎 DB-এর মান ফেরত দেওয়া হয়েছে`);
+        
+        // ✅ Refresh করুন
+        if (typeof loadPendingWithdrawals === 'function') {
+            loadPendingWithdrawals();
+        }
+        if (typeof loadAllWithdrawals === 'function') {
+            loadAllWithdrawals();
+        }
+        if (typeof updateAllBadges === 'function') {
+            updateAllBadges();
+        }
+        
+        return true;
+        
+    } catch(e) {
+        console.error('❌ rejectWithdrawal error:', e);
+        alert('❌ UTTOlon বাতিল করতে ব্যর্থ!');
+        return false;
+    }
+}
+
+
+    // ============================================================
+    // 🎯 UTTOlon Approve করার ফাংশন
+    // ============================================================
+    async function approveWithdrawal(withdrawalId) {
+        console.log('🔄 UTTOlon Approve শুরু:', withdrawalId);
+        
+        const client = initSupabaseClient();
+        if (!client) {
+            alert('❌ সার্ভার সংযোগ সমস্যা!');
+            return false;
+        }
+        
+        try {
+            const { data: withdrawal } = await client
+                .from('withdrawals')
+                .select('member_id, member_name, amount, status')
+                .eq('id', withdrawalId)
+                .single();
+            
+            if (!withdrawal) {
+                alert('❌ UTTOlon পাওয়া যায়নি!');
+                return false;
+            }
+            
+            if (withdrawal.status === 'approved') {
+                alert('⚠️ ইতিমধ্যে অনুমোদিত!');
+                return false;
+            }
+            
+            // ✅ Status আপডেট
+            const { error } = await client
+                .from('withdrawals')
+                .update({ 
+                    status: 'approved',
+                    approved_at: new Date().toISOString(),
+                    approved_by: currentAdmin?.username || currentAdmin?.full_name || 'Admin',
+                    balance_updated: true
+                })
+                .eq('id', withdrawalId);
+            
+            if (error) {
+                alert('❌ Approve করতে ব্যর্থ!');
+                return false;
+            }
+            
+            alert(`✅ UTTOlon approve সফল!\n💰 ${withdrawal.amount} টাকা`);
+            
+            // ✅ Refresh করুন
+            if (typeof loadPendingWithdrawals === 'function') {
+                loadPendingWithdrawals();
+            }
+            if (typeof loadAllWithdrawals === 'function') {
+                loadAllWithdrawals();
+            }
+            if (typeof updateAllBadges === 'function') {
+                updateAllBadges();
+            }
+            
+            return true;
+            
+        } catch(e) {
+            console.error('❌ approveWithdrawal error:', e);
+            alert('❌ Approve করতে ব্যর্থ!');
+            return false;
+        }
+    }
+    
+    // ✅ Global Expose
+    window.rejectWithdrawal = rejectWithdrawal;
+    window.approveWithdrawal = approveWithdrawal;
+    
+    console.log('✅ Admin Functions loaded: rejectWithdrawal(), approveWithdrawal()');
+    
+    // ============================================================                    
                     
                     window.setupDirectWithdrawalForm = setupDirectWithdrawalForm;
                     window.setupDirectDepositForm = setupDirectDepositForm;
