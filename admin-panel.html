@@ -28726,27 +28726,38 @@ async function rejectWithdrawal(withdrawalId, reason = '') {
 
 
     // ============================================================
-// 🎯 UTTOlon Approve করার ফাংশন — নোট সহ (সম্পূর্ণ)
-// ✅ Approve করার সময় নোট নেবে
+// 🎯 UTTOlon Approve করার ফাংশন — সম্পূর্ণ ফাইনাল ভার্সন
+// ✅ approved_by — Storage fallback সহ (নিশ্চিত সেভ)
+// ✅ নোট prompt (ঐচ্ছিক)
+// ✅ UI Refresh
+// ✅ Broadcast (Cross-tab sync)
+// ✅ Global Expose (ডুপ্লিকেট ছাড়া)
 // ============================================================
 async function approveWithdrawal(withdrawalId) {
     console.log('🔄 UTTOlon Approve শুরু:', withdrawalId);
     
-    // ✅ আগে UTTOlon তথ্য নিন
     const client = initSupabaseClient();
     if (!client) {
         alert('❌ সার্ভার সংযোগ সমস্যা!');
         return false;
     }
     
+    // ✅ Btn disable
+    const btns = document.querySelectorAll(`[onclick*="approveWithdrawal('${withdrawalId}'"]`);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    });
+    
     try {
-        const { data: withdrawal } = await client
+        // ✅ ১. UTTOlon তথ্য নিন
+        const { data: withdrawal, error: wError } = await client
             .from('withdrawals')
             .select('member_id, member_name, amount, type, status, payment_method, mobile')
             .eq('id', withdrawalId)
             .single();
         
-        if (!withdrawal) {
+        if (wError || !withdrawal) {
             alert('❌ UTTOlon পাওয়া যায়নি!');
             return false;
         }
@@ -28756,7 +28767,32 @@ async function approveWithdrawal(withdrawalId) {
             return false;
         }
         
-        // ✅ নোট prompt (ঐচ্ছিক)
+        if (withdrawal.status === 'rejected') {
+            alert('⚠️ উত্তোলন বাতিল করা হয়েছে — Approve করা যাবে না!');
+            return false;
+        }
+        
+        // ✅ ২. Admin নাম বের করুন (Storage fallback সহ)
+        let adminForApprove = currentAdmin;
+        if (!adminForApprove || !adminForApprove.full_name) {
+            try {
+                const stored = localStorage.getItem('currentAdmin') 
+                             || sessionStorage.getItem('currentAdmin');
+                if (stored) adminForApprove = JSON.parse(stored);
+            } catch(e) {
+                console.warn('Admin parse warning:', e);
+            }
+        }
+        
+        const approvedByName = 
+            adminForApprove?.full_name || 
+            adminForApprove?.name || 
+            adminForApprove?.username || 
+            'Admin';
+        
+        console.log('👤 Approver:', approvedByName);
+        
+        // ✅ ৩. নোট prompt (ঐচ্ছিক)
         const adminNote = prompt(
             `✅ UTTOlon অনুমোদন\n\n` +
             `👤 সদস্য: ${withdrawal.member_name}\n` +
@@ -28767,88 +28803,117 @@ async function approveWithdrawal(withdrawalId) {
             ''
         );
         
-        // ✅ যদি Cancel চাপে, তবুও continue করবে (কারণ নোট ঐচ্ছিক)
+        // ✅ Cancel চাপলে খালি থাকবে (নোট ঐচ্ছিক)
         const noteText = (adminNote !== null) ? adminNote.trim() : '';
         
-        // ✅ Confirm
+        // ✅ ৪. Confirm
         if (!confirm(
             `✅ UTTOlon অনুমোদন করবেন?\n\n` +
             `👤 সদস্য: ${withdrawal.member_name}\n` +
             `💰 পরিমাণ: ${withdrawal.amount} টাকা\n` +
-            (noteText ? `📝 নোট: ${noteText}\n` : '')
+            `👨‍💼 Approver: ${approvedByName}\n` +
+            (noteText ? `📝 নোট: ${noteText}\n` : '') +
+            `\n⚠️ অনুমোদনের পর DB থেকে ব্যালেন্স কমে যাবে!`
         )) return false;
         
-        // ✅ Status আপডেট
+        // ✅ ৫. Update ডেটা তৈরি
         const updateData = {
             status: 'approved',
             approved_at: new Date().toISOString(),
-            approved_by: currentAdmin?.username || currentAdmin?.full_name || 'Admin',
+            approved_by: approvedByName,  // ✅ Storage fallback সহ
             balance_updated: true
         };
         
-        // ✅ নোট থাকলে যোগ করুন
         if (noteText) {
             updateData.note = noteText;
         }
         
+        console.log('📝 Update data:', updateData);
+        
+        // ✅ ৬. Database আপডেট (Trigger balance কমাবে)
         const { error } = await client
             .from('withdrawals')
             .update(updateData)
             .eq('id', withdrawalId);
         
         if (error) {
+            console.error('❌ Update error:', error);
             alert('❌ Approve করতে ব্যর্থ!');
             return false;
         }
         
+        console.log('✅ Approve সফল!');
+        
+        // ✅ ৭. Trigger-এর কাজ শেষ হওয়ার জন্য অপেক্ষা
+        await new Promise(resolve => setTimeout(resolve, 800));
+        
+        // ✅ ৮. সফল মেসেজ
         alert(
             `✅ UTTOlon approve সফল!\n\n` +
             `💰 ${withdrawal.amount} টাকা\n` +
+            `👨‍💼 Approver: ${approvedByName}\n` +
             (noteText ? `📝 নোট: ${noteText}` : '')
         );
         
-        // ✅ Refresh করুন
+        // ✅ ৯. UI Refresh
         if (typeof loadPendingWithdrawals === 'function') {
-            loadPendingWithdrawals();
+            await loadPendingWithdrawals();
         }
         if (typeof loadAllWithdrawals === 'function') {
-            loadAllWithdrawals();
+            await loadAllWithdrawals();
         }
         if (typeof updateAllBadges === 'function') {
-            updateAllBadges();
+            await updateAllBadges();
         }
+        if (typeof loadRealDashboard === 'function') {
+            await loadRealDashboard();
+        }
+        if (typeof loadMembers === 'function') {
+            await loadMembers();
+        }
+        
+        // ✅ ১০. Broadcast (Cross-tab sync)
+        try {
+            const bc = new BroadcastChannel('tuknbd_updates');
+            bc.postMessage({
+                type: 'withdrawal_approved',
+                memberId: withdrawal.member_id,
+                amount: withdrawal.amount,
+                timestamp: new Date().toISOString()
+            });
+            setTimeout(() => { try { bc.close(); } catch(e) {} }, 1000);
+        } catch(e) {}
         
         return true;
         
     } catch(e) {
         console.error('❌ approveWithdrawal error:', e);
-        alert('❌ Approve করতে ব্যর্থ!');
+        alert('❌ Approve করতে ব্যর্থ: ' + (e.message || 'অজানা ত্রুটি'));
         return false;
+    } finally {
+        // ✅ Btn আবার সক্রিয় করুন
+        btns.forEach(btn => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-check mr-1"></i> অনুমোদন';
+        });
     }
 }
 
-// ✅ Global Expose
-window.rejectWithdrawal = rejectWithdrawal;
-window.approveWithdrawal = approveWithdrawal;
-
-console.log('✅ Admin Functions loaded (Note-enabled):');
-console.log('   • rejectWithdrawal() — prompt করে কারণ নেবে');
-console.log('   • approveWithdrawal() — prompt করে নোট নেবে');
-    
-    // ✅ Global Expose
-    window.rejectWithdrawal = rejectWithdrawal;
-    window.approveWithdrawal = approveWithdrawal;
-    
-    console.log('✅ Admin Functions loaded: rejectWithdrawal(), approveWithdrawal()');
-    
-    // ============================================================                    
+        // ✅ Global Expose
+        window.rejectWithdrawal = rejectWithdrawal;
+        window.approveWithdrawal = approveWithdrawal;
+        
+        console.log('✅ Admin Functions loaded (Note-enabled):');
+        console.log('   • rejectWithdrawal() — prompt করে কারণ নেবে');
+        console.log('   • approveWithdrawal() — prompt করে নোট নেবে');
+        console.log('✅ Admin Functions loaded: rejectWithdrawal(), approveWithdrawal()');
                     
-                    window.setupDirectWithdrawalForm = setupDirectWithdrawalForm;
-                    window.setupDirectDepositForm = setupDirectDepositForm;
-                    window.handleDirectWithdrawalSubmit = handleDirectWithdrawalSubmit;
-                    window.handleDirectDepositSubmit = handleDirectDepositSubmit;
+        window.setupDirectWithdrawalForm = setupDirectWithdrawalForm;
+        window.setupDirectDepositForm = setupDirectDepositForm;
+        window.handleDirectWithdrawalSubmit = handleDirectWithdrawalSubmit;
+        window.handleDirectDepositSubmit = handleDirectDepositSubmit;
                     
-                    console.log('✅ Direct Forms Setup Complete!');
+        console.log('✅ Direct Forms Setup Complete!');
                                         
           </script>
     </body>
