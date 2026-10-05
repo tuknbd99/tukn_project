@@ -3311,8 +3311,12 @@ let userFunds = {
     savingsProfit: 0,
     investmentProfit: 0,
     referralProfit: 0,
-    referralBonus: 0
+    referralBonus: 0,
+    // ✅ নতুন যোগ করুন
+    referralBonusTotal: 0,      // মোট আয় (আজীবন)
+    referralBonusWithdrawn: 0   // মোট UTTOlon
 };
+    
 let balanceCheckInterval = null;
 let hasNotification = false;
 let loanNotificationInterval = null;
@@ -4043,24 +4047,22 @@ async function refreshMemberDataFromSupabase() {
             return;
         }
         
-        if(data) {
-            console.log('📥 ডাটাবেস থেকে পাওয়া ডাটা:', data);
-            
-            // ✅ সব ফিল্ড আপডেট করুন
-            userFunds.monthlySavings = Number(data.balance) || 0;
-            userFunds.savingsProfit = Number(data.profit_balance_savings) || 0;
-            userFunds.investmentProfit = Number(data.profit_balance_investment) || 0;
-            userFunds.referralProfit = Number(data.profit_balance_referral) || 0;
-            userFunds.referralBonus = Number(data.referral_bonus) || 0;
-            
-            if(data.member_term !== undefined) currentUser.memberTerm = data.member_term;
-            if(data.status) currentUser.status = data.status;
-            if(data.approved_at) currentUser.approved_at = data.approved_at;
-            
-            // ✅ UI আপডেট
-            updateFundsDisplay();
-            console.log('✅ রিফ্রেশ সম্পূর্ণ! নতুন userFunds:', userFunds);
-        }
+       if(data) {
+    userFunds.monthlySavings = Number(data.balance) || 0;
+    userFunds.savingsProfit = Number(data.profit_balance_savings) || 0;
+    userFunds.investmentProfit = Number(data.profit_balance_investment) || 0;
+    userFunds.referralProfit = Number(data.profit_balance_referral) || 0;
+    
+    // ✅ DB-এর referral_bonus = উপলব্ধ (কারণ UTTOlon হলে কমে গেছে)
+    userFunds.referralBonus = Number(data.referral_bonus) || 0;
+           
+           // ✅ window._liveReferralBonus আপডেট করুন
+if (window._liveReferralBonus === undefined) {
+    window._liveReferralBonus = Number(data.referral_bonus) || 0;
+}  
+    updateFundsDisplay();
+}
+        
     } catch(e) { 
         console.error('❌ refreshMemberDataFromSupabase error:', e); 
     }
@@ -4218,9 +4220,6 @@ function animateBalanceUpdate(element, newValue) {
     }, 600);
 }
 
-// ============================================================
-// ব্যালেন্স কাউন্ট আপ এনিমেশন (ঐচ্ছিক - সংখ্যা ধীরে ধীরে বাড়বে)
-// ============================================================
 function animateNumber(element, startValue, endValue, duration = 800) {
     if (!element) return;
     
@@ -4231,15 +4230,14 @@ function animateNumber(element, startValue, endValue, duration = 800) {
         const elapsed = currentTime - startTime;
         const progress = Math.min(elapsed / duration, 1);
         
-        // ইজিং ফাংশন (easeOutQuart)
         const eased = 1 - Math.pow(1 - progress, 4);
         const currentValue = startValue + (diff * eased);
         
-        // ডিসপ্লে ফরম্যাট
+        // ✅ "টাকা" বাদ:
         if (Number.isInteger(endValue)) {
-            element.innerText = Math.round(currentValue).toLocaleString() + ' টাকা';
+            element.innerText = Math.round(currentValue).toLocaleString();
         } else {
-            element.innerText = currentValue.toFixed(2) + ' টাকা';
+            element.innerText = currentValue.toFixed(2);
         }
         
         if (progress < 1) {
@@ -4310,7 +4308,8 @@ function updateFundsDisplay(options = {}) {
     const savingsProfit = Number(userFunds.savingsProfit) || 0;
     const investmentProfit = Number(userFunds.investmentProfit) || 0;
     const referralProfit = Number(userFunds.referralProfit) || 0;
-    const referralBonus = Number(userFunds.referralBonus) || 0;
+    // ✅ উপলব্ধ ব্যালেন্স (UTTOlon বিয়োগ করা)
+    const referralBonus = window._liveReferralBonus || Number(userFunds.referralBonus) || 0;
     
     const totalDividend = savingsProfit + investmentProfit + referralProfit;
     const grandTotal = monthlySavings + savingsProfit + investmentProfit + referralProfit + referralBonus;
@@ -4324,52 +4323,42 @@ function updateFundsDisplay(options = {}) {
         return parseFloat(text.replace(/[^\d.]/g, '')) || 0;
     }
     
-    // ============================================================
-    // ৪. Helper: Smart Update — animate or direct
-    // ============================================================
     function smartUpdate(el, newValue, options = {}) {
-        if (!el) return;
+    if (!el) return;
+    
+    const { 
+        isInteger = true,
+        decimals = 2,
+        shouldAnimate = animate
+    } = options;
+    
+    const oldValue = getOldValue(el);
+    
+    if (Math.abs(oldValue - newValue) < 0.01) {
+        const expectedText = isInteger
+            ? newValue.toLocaleString()                 // ✅ "টাকা" বাদ
+            : newValue.toFixed(decimals);               // ✅ "টাকা" বাদ
         
-        const { 
-            isInteger = true,       // পূর্ণসংখ্যা?
-            decimals = 2,           // দশমিক সংখ্যা
-            shouldAnimate = animate // animation দরকার?
-        } = options;
-        
-        const oldValue = getOldValue(el);
-        
-        // মান না বদলালে চুপচাপ ফিরে যান
-        if (Math.abs(oldValue - newValue) < 0.01) {
-            // তবে text format ঠিক আছে কিনা চেক করুন
-            const expectedText = isInteger
-                ? newValue.toLocaleString() + ' টাকা'
-                : newValue.toFixed(decimals) + ' টাকা';
-            
-            if (el.innerText !== expectedText) {
-                el.innerText = expectedText;
-            }
-            return;
+        if (el.innerText !== expectedText) {
+            el.innerText = expectedText;
         }
-        
-        // ✅ Animation available কিনা চেক
-        const hasAnimation = typeof animateNumber === 'function' 
-                          && typeof animateBalanceUpdate === 'function';
-        
-        if (shouldAnimate && hasAnimation) {
-            // Animation দেখান
-            animateNumber(el, oldValue, newValue, 600);
-            
-            // Flash effect
-            setTimeout(() => {
-                animateBalanceUpdate(el, newValue);
-            }, 100);
-        } else {
-            // সরাসরি update
-            el.innerText = isInteger
-                ? newValue.toLocaleString() + ' টাকা'
-                : newValue.toFixed(decimals) + ' টাকা';
-        }
+        return;
     }
+    
+    const hasAnimation = typeof animateNumber === 'function' 
+                      && typeof animateBalanceUpdate === 'function';
+    
+    if (shouldAnimate && hasAnimation) {
+        animateNumber(el, oldValue, newValue, 600);
+        setTimeout(() => {
+            animateBalanceUpdate(el, newValue);
+        }, 100);
+    } else {
+        el.innerText = isInteger
+            ? newValue.toLocaleString()                 // ✅ "টাকা" বাদ
+            : newValue.toFixed(decimals);               // ✅ "টাকা" বাদ
+    }
+}
     
     // ============================================================
     // ৫. সব কার্ড Update করুন
@@ -6217,6 +6206,43 @@ async function saveWithdrawRequest(typeName, amount, method, receiverDetails, di
             showToast('❌ উত্তোলন রিকোয়েস্ট জমা দিতে ব্যর্থ: ' + error.message, 'error');
             return;
         }
+
+        // ✅✅✅ UTTOlon সফল হলে DB-এর referral_bonus কমান ✅✅✅
+if (typeName === 'রেফারেল বোনাস' && data && data[0]) {
+    try {
+        // বর্তমান মান নিন
+        const { data: memberData } = await client
+            .from('members')
+            .select('referral_bonus')
+            .eq('member_id', currentUser.id)
+            .single();
+        
+        if (memberData) {
+            const oldBonus = Number(memberData.referral_bonus) || 0;
+            const newBonus = Math.max(0, oldBonus - amount);
+            
+            await client
+                .from('members')
+                .update({ 
+                    referral_bonus: newBonus,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('member_id', currentUser.id);
+            
+            console.log(`✅ Referral bonus: ৳${oldBonus} → ৳${newBonus}`);
+            
+            // ✅ Local state আপডেট
+            userFunds.referralBonus = newBonus;
+            if (window._liveReferralBonus !== undefined) {
+                window._liveReferralBonus = Math.max(0, window._liveReferralBonus - amount);
+            }
+        }
+    } catch(e) {
+        console.error('❌ Referral bonus update error:', e);
+    }
+}
+// ✅✅✅ যোগ শেষ ✅✅✅
+        
         
         // ✅ সফল মেসেজ
         showToast(
@@ -9082,9 +9108,52 @@ async function loadReferralData() {
             console.log('✅ Dashboard NOT modifying referral_bonus (Database Trigger handles it)');
         }
         
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
-                // ═══════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════════
+        // ✅ STEP 10.5: UTTOlon History চেক করে উপলব্ধ ব্যালেন্স
+        // ═══════════════════════════════════════════════════════════
+        console.log('💰 UTTOlon History চেক করা হচ্ছে...');
+
+        const { data: allWithdrawals, error: wdError } = await client
+            .from('withdrawals')
+            .select('amount, status, type, requested_at')
+            .eq('member_id', currentUser.id)
+            .eq('type', 'রেফারেল বোনাস')
+            .in('status', ['pending', 'approved']);
+
+        if (wdError) {
+            console.error('❌ UTTOlon লোড error:', wdError);
+        }
+
+        // মোট UTTOlon (pending + approved)
+        const totalWithdrawn = (allWithdrawals || []).reduce(
+            (sum, w) => sum + (Number(w.amount) || 0), 0
+        );
+
+        // ✅ মোট আয় (লেভেল থেকে হিসাব) — কখনো কমবে না
+        const totalEarned = Math.round(totalCommission);
+
+        // ✅ উপলব্ধ ব্যালেন্স = মোট আয় − মোট UTTOlon
+        const availableBonus = Math.max(0, totalEarned - totalWithdrawn);
+
+        console.log(`📊 মোট আয় (লেভেল থেকে): ৳${totalEarned}`);
+        console.log(`📤 মোট UTTOlon হয়েছে: ৳${totalWithdrawn}`);
+        console.log(`💰 উপলব্ধ ব্যালেন্স: ৳${availableBonus}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+        // ✅ userFunds-এ সেভ করুন
+        userFunds.referralBonusTotal = totalEarned;
+        userFunds.referralBonusWithdrawn = totalWithdrawn;
+        userFunds.referralBonus = availableBonus;
+
+        // ✅ Globally সেভ করুন (অন্য ফাংশনে ব্যবহারের জন্য)
+        window._liveReferralBonus = availableBonus;       // উপলব্ধ (কার্ডে দেখাবে)
+        window._liveReferralTotal = totalEarned;          // মোট আয়
+        window._liveReferralCount = totalReferrals;
+        window._liveReferralWithdrawn = totalWithdrawn;   // মোট UTTOlon
+
+        // ═══════════════════════════════════════════════════════════
         // ✅ STEP 11: UI Update — লাইভ হিসাব (সংশোধিত)
         // ═══════════════════════════════════════════════════════════
         const totalReferralsEl = document.getElementById('totalReferrals');
@@ -9092,14 +9161,14 @@ async function loadReferralData() {
         const totalLevelsEl = document.getElementById('totalLevels');
         const activeReferralsEl = document.getElementById('activeReferrals');
         
-        // ✅ মোট রেফারেল — লাইভ হিসাব (কারণ DB-তে referral_count = 0)
+        // ✅ মোট রেফারেল — লাইভ হিসাব
         if (totalReferralsEl) {
-            totalReferralsEl.innerText = totalReferrals;   // ✅ 114
+            totalReferralsEl.innerText = totalReferrals;
         }
         
-        // ✅✅✅ মূল ফিক্স: মোট কমিশন — লাইভ হিসাব (৪,২৬০) ✅✅✅
+        // ✅ মোট কমিশন — মোট আয় (লেভেলের রেকর্ড, UTTOlon-এ কমবে না)
         if (totalCommissionEl) {
-            totalCommissionEl.innerText = Math.round(totalCommission).toLocaleString('bn-BD');
+            totalCommissionEl.innerText = totalEarned.toLocaleString('bn-BD');
         }
         
         // ✅ সর্বোচ্চ লেভেল
@@ -9109,31 +9178,19 @@ async function loadReferralData() {
         const activeReferrals = levelReferrals[1].filter(r =>
             r.status === 'active' || r.status === 'approved'
         ).length;
+        
         if (activeReferralsEl) activeReferralsEl.innerText = activeReferrals;
         
-        // ✅ referralBonusFund কার্ডে DB মান (আলাদা কার্ড)
-        const referralBonusCard = document.getElementById('referralBonusFund');
         if (referralBonusCard) {
-            referralBonusCard.innerText = (userFunds.referralBonus || 0).toLocaleString('bn-BD') + ' টাকা';
+            referralBonusCard.innerText = availableBonus.toLocaleString('bn-BD');   // ✅
         }
         
-        // ✅ referralProfitCard
-        const referralProfitCard = document.getElementById('referralProfitFund');
         if (referralProfitCard) {
-            referralProfitCard.innerText = (userFunds.referralProfit || 0).toLocaleString('bn-BD') + ' টাকা';
+            referralProfitCard.innerText = (userFunds.referralProfit || 0).toLocaleString('bn-BD');   // ✅
         }
         
         updateReferralLink();
         updateFundsDisplay();
-        
-        // ✅✅✅ LIVE VALUES SAVE (UTTOlon-এর জন্য) ✅✅✅
-        window._liveReferralBonus = Math.round(totalCommission);
-        window._liveReferralCount = totalReferrals;
-        console.log('💾 Live values saved:', {
-            bonus: window._liveReferralBonus,
-            count: window._liveReferralCount
-        });
-        // ✅✅✅ SAVE END ✅✅✅
         
         // ═══════════════════════════════════════════════════════════
         // STEP 12: সফলতার লগ
@@ -9141,7 +9198,9 @@ async function loadReferralData() {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🎯 রেফারেল ডাটা লোড সম্পূর্ণ');
         console.log(`   📊 মোট রেফারেল: ${totalReferrals}`);
-        console.log(`   💰 মোট কমিশন (live): ${Math.floor(totalCommission)}`);
+        console.log(`   💰 মোট আয় (লেভেল থেকে): ${totalEarned}`);
+        console.log(`   📤 মোট UTTOlon: ${totalWithdrawn}`);
+        console.log(`   💎 উপলব্ধ ব্যালেন্স: ${availableBonus}`);
         console.log(`   💎 DB Bonus: ${userFunds.referralBonus}`);
         console.log(`   🔒 Live Bonus (saved): ${window._liveReferralBonus}`);
         console.log(`   👤 Referrer: ${currentUser.name} (${currentUser.id})`);
@@ -9167,7 +9226,6 @@ async function loadReferralData() {
         isLoadingReferral = false;
     }
 }
-
 // ============================================================
 // 🛡️ resetReferralDisplay() — Referral UI Reset Helper
 // ============================================================
@@ -9178,7 +9236,7 @@ function resetReferralDisplay(message = 'কোনো রেফারেল ন�
         const container = document.getElementById(`level${i}List`);
         
         if(countEl) countEl.innerText = '0';
-        if(commissionEl) commissionEl.innerText = '০ টাকা';
+        if(commissionEl) commissionEl.innerText = '০';
         if(container) {
             container.innerHTML = `<p class="text-gray-500 text-center py-4">${message}</p>`;
         }
@@ -9214,7 +9272,7 @@ function updateLevelList(level, referrals, rate) {
         const joinDate = ref.created_at ? formatDateBD(ref.created_at) : '-';
         const monthlyAmount = ref.monthly_savings || 500;
         const commission = monthlyAmount * (rate / 100);
-        html += `
+             html += `
             <div class="bg-white p-3 rounded-lg border hover:shadow-md transition mb-2">
                 <div class="flex justify-between items-start flex-wrap gap-2">
                     <div>
@@ -9224,8 +9282,8 @@ function updateLevelList(level, referrals, rate) {
                         <p class="text-xs text-gray-400"><i class="fas fa-calendar-alt"></i> সদস্য: ${joinDate}</p>
                     </div>
                     <div class="text-right bg-amber-50 px-3 py-2 rounded-lg">
-                        <p class="text-sm font-semibold text-amber-700">💰 মাসিক সঞ্চয়: ${monthlyAmount.toLocaleString()} টাকা</p>
-                        <p class="text-xs font-semibold text-emerald-600">🎁 কমিশন: ${Math.floor(commission)} টাকা (${rate}%)</p>
+                        <p class="text-sm font-semibold text-amber-700">💰 মাসিক সঞ্চয়: ${monthlyAmount.toLocaleString()}</p>
+                        <p class="text-xs font-semibold text-emerald-600">🎁 কমিশন: ${Math.floor(commission)} (${rate}%)</p>
                     </div>
                 </div>
             </div>
