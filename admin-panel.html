@@ -5510,28 +5510,102 @@ const PERMISSION_PROFILES = {
     let transferMemberData = null;
     let currentApprovalFilter = 'all';    
 
-    // ===== Initialize Supabase =====
-    function initSupabaseClient() {
-        if (supabaseClient) return supabaseClient;
-        if (supabaseInitialized) return supabaseClient;
-        
-        try {
-            if (typeof supabase !== 'undefined' && supabase.createClient) {
-                supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-                    auth: {
-                        persistSession: true,
-                        autoRefreshToken: true,
-                        storageKey: 'tuknbd-auth-token'
-                    }
-                });
-                supabaseInitialized = true;
-                console.log("✅ Supabase client initialized");
-            }
-        } catch(e) { 
-            console.error("Supabase init error:", e); 
+   // ===== Initialize Supabase =====
+function initSupabaseClient() {
+    if (supabaseClient) return supabaseClient;
+    if (supabaseInitialized) return supabaseClient;
+    
+    try {
+        if (typeof supabase !== 'undefined' && supabase.createClient) {
+            supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+                auth: {
+                    persistSession: true,
+                    autoRefreshToken: true,
+                    storageKey: 'tuknbd-auth-token'
+                }
+            });
+            supabaseInitialized = true;
+            console.log("✅ Supabase client initialized");
         }
-        return supabaseClient;
+    } catch(e) { 
+        console.error("Supabase init error:", e); 
     }
+    return supabaseClient;
+}
+
+
+// ============================================================
+// ✅ smartSearchMember() — Universal Search Helper
+// ✅ member_id → mobile → name (priority order)
+// ✅ UNIQUE mobile constraint-এর কারণে ১০০% নিরাপদ
+// ✅ সব search function-এ ব্যবহার করা যাবে
+// ============================================================
+async function smartSearchMember(searchTerm) {
+    if (!searchTerm || searchTerm.trim() === '') {
+        return null;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        console.error('❌ Supabase client নেই');
+        return null;
+    }
+    
+    const term = searchTerm.trim();
+    
+    try {
+        console.log(`🔍 smartSearchMember: "${term}" খোঁজা হচ্ছে...`);
+        
+        // 🔍 চেষ্টা ১: member_id দিয়ে (প্রাইমারি — সবচেয়ে accurate)
+        const { data: byId, error: idError } = await client
+            .from('members')
+            .select('*')
+            .eq('member_id', term)
+            .maybeSingle();
+        
+        if (!idError && byId) {
+            console.log(`✅ smartSearchMember: member_id match — ${byId.full_name}`);
+            return { member: byId, matchedBy: 'member_id' };
+        }
+        
+        // 🔍 চেষ্টা ২: mobile দিয়ে (UNIQUE constraint-এর কারণে নিরাপদ)
+        const { data: byMobile, error: mobileError } = await client
+            .from('members')
+            .select('*')
+            .eq('mobile', term)
+            .maybeSingle();
+        
+        if (!mobileError && byMobile) {
+            console.log(`✅ smartSearchMember: mobile match — ${byMobile.full_name}`);
+            return { member: byMobile, matchedBy: 'mobile' };
+        }
+        
+        // 🔍 চেষ্টা ৩: name দিয়ে partial match (last resort)
+        const { data: byName, error: nameError } = await client
+            .from('members')
+            .select('*')
+            .ilike('full_name', `%${term}%`)
+            .limit(1)
+            .maybeSingle();
+        
+        if (!nameError && byName) {
+            console.log(`✅ smartSearchMember: name match — ${byName.full_name}`);
+            return { member: byName, matchedBy: 'name' };
+        }
+        
+        console.log(`❌ smartSearchMember: "${term}" — কিছু পাওয়া যায়নি`);
+        return null;
+        
+    } catch(e) {
+        console.error('❌ smartSearchMember error:', e);
+        return null;
+    }
+}
+
+// ✅ Global expose
+window.smartSearchMember = smartSearchMember;
+
+console.log('✅ smartSearchMember() loaded!');
 
      function formatAmount(amt) { 
         if (typeof amt !== 'number' || isNaN(amt)) return '0.00';
@@ -7937,8 +8011,9 @@ function loadAllData() {
     const transactionManager = new TransactionManager();
     console.log('✅ Permission Manager initialized');
 
-    // ============================================================
-// ✅ searchMemberForDeposit() — জমার জন্য সদস্য খুঁজুন
+// ============================================================
+// ✅ searchMemberForDeposit() — Updated with smartSearchMember()
+// ✅ member_id → mobile → name (সব support)
 // ============================================================
 async function searchMemberForDeposit() {
     const searchTerm = document.getElementById('depositMemberSearch')?.value?.trim();
@@ -7951,38 +8026,45 @@ async function searchMemberForDeposit() {
     const resultDiv = document.getElementById('depositMemberResult');
     if (!resultDiv) return;
     
-    resultDiv.innerHTML = `<div class="text-center py-3"><div class="loading-spinner mx-auto"></div><p class="text-gray-500 text-sm mt-2">খোঁজা হচ্ছে...</p></div>`;
-    
-    const client = initSupabaseClient();
-    if (!client) {
-        resultDiv.innerHTML = '<div class="text-red-500 p-3 text-center">❌ সংযোগ সমস্যা!</div>';
-        return;
-    }
+    resultDiv.innerHTML = `<div class="text-center py-3">
+        <div class="loading-spinner mx-auto"></div>
+        <p class="text-gray-500 text-sm mt-2">খোঁজা হচ্ছে...</p>
+    </div>`;
     
     try {
-        const { data: member, error } = await client
-            .from('members')
-            .select('*')
-            .or(`member_id.eq.${searchTerm},mobile.eq.${searchTerm}`)
-            .maybeSingle();
+        // ✅ smartSearchMember() ব্যবহার
+        const result = await smartSearchMember(searchTerm);
         
-        if (error) throw error;
-        
-        if (!member) {
-            resultDiv.innerHTML = `<div class="bg-red-50 border-2 border-red-200 p-4 rounded-lg text-center"><i class="fas fa-user-times text-red-500 text-3xl mb-2"></i><p class="text-red-600 font-semibold">❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!</p></div>`;
+        if (!result || !result.member) {
+            resultDiv.innerHTML = `<div class="bg-red-50 border-2 border-red-200 p-4 rounded-lg text-center">
+                <i class="fas fa-user-times text-red-500 text-3xl mb-2"></i>
+                <p class="text-red-600 font-semibold">❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!</p>
+            </div>`;
             document.getElementById('depositFormContainer').classList.add('hidden');
             return;
         }
         
-        // সদস্যের তথ্য দেখান
-        const totalProfit = (member.profit_balance_savings || 0) + (member.profit_balance_investment || 0) + (member.profit_balance_referral || 0);
+        const member = result.member;
+        const matchedBy = result.matchedBy;
+        
+        console.log(`✅ সদস্য পাওয়া গেছে (${matchedBy}) — ${member.full_name}`);
+        
+        // ✅ সদস্যের তথ্য দেখান
+        const totalProfit = (member.profit_balance_savings || 0) + 
+                           (member.profit_balance_investment || 0) + 
+                           (member.profit_balance_referral || 0);
         
         resultDiv.innerHTML = `
             <div class="bg-green-50 border-2 border-green-300 p-4 rounded-lg">
                 <div class="flex items-center gap-3 mb-3">
                     <div class="w-14 h-14 rounded-full bg-emerald-500 flex items-center justify-center text-white font-bold text-2xl">${member.full_name?.charAt(0) || '?'}</div>
                     <div class="flex-1">
-                        <p class="font-bold text-gray-800 text-lg">${member.full_name || '-'}</p>
+                        <div class="flex items-center gap-2 mb-1">
+                            <p class="font-bold text-gray-800 text-lg">${member.full_name || '-'}</p>
+                            <span class="text-xs bg-green-200 text-green-700 px-2 py-0.5 rounded-full">
+                                🔍 ${matchedBy}
+                            </span>
+                        </div>
                         <p class="text-sm text-gray-600">🆔 ${member.member_id} | 📱 ${member.mobile}</p>
                     </div>
                     <span class="px-3 py-1 rounded-full text-xs font-semibold ${member.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'}">${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}</span>
@@ -8013,8 +8095,9 @@ async function searchMemberForDeposit() {
     }
 }
 
- // ============================================================
-// ✅ searchMemberForWithdrawal() — উত্তোলনের জন্য সদস্য খুঁজুন
+// ============================================================
+// ✅ searchMemberForWithdrawal() — Updated with smartSearchMember()
+// ✅ member_id → mobile → name (সব support)
 // ✅ FIXED: _currentWithdrawalMember সেট করা হয়
 // ============================================================
 async function searchMemberForWithdrawal() {
@@ -8033,37 +8116,28 @@ async function searchMemberForWithdrawal() {
         <p class="text-gray-500 text-sm mt-2">খোঁজা হচ্ছে...</p>
     </div>`;
     
-    const client = initSupabaseClient();
-    if (!client) {
-        resultDiv.innerHTML = '<div class="text-red-500 p-3 text-center">❌ সংযোগ সমস্যা!</div>';
-        return;
-    }
-    
     try {
-        const { data: member, error } = await client
-            .from('members')
-            .select('*')
-            .or(`member_id.eq.${searchTerm},mobile.eq.${searchTerm}`)
-            .maybeSingle();
+        // ✅ smartSearchMember() ব্যবহার
+        const result = await smartSearchMember(searchTerm);
         
-        if (error) throw error;
-        
-        if (!member) {
+        if (!result || !result.member) {
             resultDiv.innerHTML = `<div class="bg-red-50 border-2 border-red-200 p-4 rounded-lg text-center">
                 <i class="fas fa-user-times text-red-500 text-3xl mb-2"></i>
                 <p class="text-red-600 font-semibold">❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!</p>
             </div>`;
             document.getElementById('withdrawalFormContainer').classList.add('hidden');
-            // ✅ Reset global variable
             window._currentWithdrawalMember = null;
             return;
         }
         
-        // ✅ ✅ ✅ CRITICAL FIX — Global variable সেট করুন ✅ ✅ ✅
+        const member = result.member;
+        const matchedBy = result.matchedBy;
+        
+        // ✅ CRITICAL FIX — Global variable সেট করুন
         window._currentWithdrawalMember = member;
         
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('✅ সদস্য লোড হয়েছে:', member.full_name);
+        console.log(`✅ সদস্য লোড হয়েছে (${matchedBy}):`, member.full_name);
         console.log('   💰 balance:', member.balance);
         console.log('   🎁 referral_bonus:', member.referral_bonus);
         console.log('   📈 profit_balance_savings:', member.profit_balance_savings);
@@ -8079,7 +8153,12 @@ async function searchMemberForWithdrawal() {
                 <div class="flex items-center gap-3 mb-3">
                     <div class="w-14 h-14 rounded-full bg-red-500 flex items-center justify-center text-white font-bold text-2xl">${member.full_name?.charAt(0) || '?'}</div>
                     <div class="flex-1">
-                        <p class="font-bold text-gray-800 text-lg">${member.full_name || '-'}</p>
+                        <div class="flex items-center gap-2 mb-1">
+                            <p class="font-bold text-gray-800 text-lg">${member.full_name || '-'}</p>
+                            <span class="text-xs bg-red-200 text-red-700 px-2 py-0.5 rounded-full">
+                                🔍 ${matchedBy}
+                            </span>
+                        </div>
                         <p class="text-sm text-gray-600">🆔 ${member.member_id} | 📱 ${member.mobile}</p>
                     </div>
                     <span class="px-3 py-1 rounded-full text-xs font-semibold ${member.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'}">
@@ -8144,7 +8223,6 @@ async function searchMemberForWithdrawal() {
     } catch(e) {
         console.error('❌ Search member for withdrawal error:', e);
         resultDiv.innerHTML = `<div class="text-red-500 p-3 text-center">❌ সমস্যা: ${e.message}</div>`;
-        // ✅ Reset global variable on error
         window._currentWithdrawalMember = null;
     }
 }
@@ -9290,22 +9368,79 @@ async function approveMember(id) {
         setTimeout(() => selectMemberForFullInfo(id), 300);
     }
 
-    // ============================================================
-    // ===== MEMBER DETAILS FUNCTIONS =====
-    // ============================================================
-    function searchMemberForFullInfo() {
-        const searchTerm = document.getElementById('fullInfoSearchInput')?.value?.trim() || '';
-        if (!searchTerm) { showToast('আইডি বা মোবাইল নম্বর দিন!', 'error'); return; }
-        const member = membersData.find(m => m.member_id === searchTerm || m.mobile === searchTerm);
-        const resultsDiv = document.getElementById('fullInfoSearchResults');
-        if (!member) { 
-            resultsDiv.innerHTML = `<div class="text-red-500 p-3 border rounded-lg bg-red-50"><i class="fas fa-exclamation-circle mr-2"></i>❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!</div>`;
-            resultsDiv.classList.remove('hidden'); 
-            return; 
-        }
-        resultsDiv.innerHTML = `<div class="p-3 border rounded-lg bg-green-50 cursor-pointer hover:bg-green-100 transition" onclick="selectMemberForFullInfo('${member.member_id}')"><div class="font-bold text-gray-800">${member.full_name || 'নাম নেই'}</div><div class="text-sm text-gray-600">🆔 আইডি: ${member.member_id} | 📱 মোবাইল: ${member.mobile || 'N/A'}</div><div class="text-xs text-gray-500 mt-1">📍 জেলা: ${member.present_district || 'N/A'}</div></div>`;
-        resultsDiv.classList.remove('hidden');
+   // ============================================================
+// ✅ searchMemberForFullInfo() — Updated with smartSearchMember()
+// ✅ Now async — member_id → mobile → name সব support
+// ============================================================
+async function searchMemberForFullInfo() {
+    const searchTerm = document.getElementById('fullInfoSearchInput')?.value?.trim() || '';
+    
+    if (!searchTerm) {
+        showToast('❌ আইডি বা মোবাইল নম্বর দিন!', 'error');
+        return;
     }
+    
+    const resultsDiv = document.getElementById('fullInfoSearchResults');
+    if (!resultsDiv) return;
+    
+    resultsDiv.innerHTML = `
+        <div class="text-center py-3">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 text-sm mt-2">খোঁজা হচ্ছে...</p>
+        </div>
+    `;
+    resultsDiv.classList.remove('hidden');
+    
+    try {
+        // ✅ smartSearchMember() ব্যবহার
+        const result = await smartSearchMember(searchTerm);
+        
+        if (!result || !result.member) {
+            resultsDiv.innerHTML = `
+                <div class="text-red-500 p-3 border rounded-lg bg-red-50">
+                    <i class="fas fa-exclamation-circle mr-2"></i>
+                    ❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!
+                </div>
+            `;
+            return;
+        }
+        
+        const member = result.member;
+        const matchedBy = result.matchedBy;
+        
+        console.log(`✅ searchMemberForFullInfo: ${member.full_name} (${matchedBy})`);
+        
+        resultsDiv.innerHTML = `
+            <div class="p-3 border rounded-lg bg-green-50 cursor-pointer hover:bg-green-100 transition"
+                 onclick="selectMemberForFullInfo('${member.member_id}')">
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
+                    <span class="font-bold text-gray-800">${member.full_name || 'নাম নেই'}</span>
+                    <span class="text-xs bg-green-200 text-green-700 px-2 py-0.5 rounded-full">
+                        🔍 ${matchedBy}
+                    </span>
+                    <span class="text-xs ${member.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'} px-2 py-0.5 rounded-full">
+                        ${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}
+                    </span>
+                </div>
+                <div class="text-sm text-gray-600">
+                    🆔 আইডি: ${member.member_id} | 📱 মোবাইল: ${member.mobile || 'N/A'}
+                </div>
+                <div class="text-xs text-gray-500 mt-1">📍 জেলা: ${member.present_district || 'N/A'}</div>
+                <div class="text-xs text-emerald-600 mt-1 font-semibold">
+                    👆 বিস্তারিত দেখতে ক্লিক করুন
+                </div>
+            </div>
+        `;
+        
+    } catch(e) {
+        console.error('❌ searchMemberForFullInfo error:', e);
+        resultsDiv.innerHTML = `
+            <div class="text-red-500 p-3 border rounded-lg bg-red-50">
+                ❌ সমস্যা: ${e.message || 'অজানা ত্রুটি'}
+            </div>
+        `;
+    }
+}
 
     function selectMemberForFullInfo(memberId) {
         const member = membersData.find(m => m.member_id === memberId);
@@ -15927,10 +16062,15 @@ async function loadRealDashboard() {
         } catch (error) { console.error('Chart update error:', error); }
     }
 
- async function searchMemberForTransfer() {
+// ============================================================
+// ✅ searchMemberForTransfer() — Updated with smartSearchMember()
+// ✅ member_id → mobile → name (সব support)
+// ============================================================
+async function searchMemberForTransfer() {
     const searchTerm = document.getElementById('transferSearch')?.value?.trim();
+    
     if (!searchTerm) {
-        showToast('সদস্য আইডি বা মোবাইল দিন!', 'error');
+        showToast('❌ সদস্য আইডি বা মোবাইল দিন!', 'error');
         return;
     }
     
@@ -15951,16 +16091,10 @@ async function loadRealDashboard() {
     }
     
     try {
-        // ✅ ১. সদস্য খুঁজুন
-        const { data: members, error: memberError } = await client
-            .from('members')
-            .select('*')
-            .or(`member_id.eq.${searchTerm},mobile.eq.${searchTerm}`)
-            .limit(1);
+        // ✅ smartSearchMember() ব্যবহার
+        const result = await smartSearchMember(searchTerm);
         
-        if (memberError) throw memberError;
-        
-        if (!members || members.length === 0) {
+        if (!result || !result.member) {
             resultDiv.innerHTML = `
                 <div class="text-center text-red-500 py-4">
                     <i class="fas fa-user-times text-3xl block mb-2"></i>
@@ -15969,21 +16103,23 @@ async function loadRealDashboard() {
             `;
             const transferForm = document.getElementById('transferForm');
             if (transferForm) transferForm.style.display = 'none';
-            transferMemberData = null;   // ✅ clear করুন
+            transferMemberData = null;
+            window._transferMemberData = null;
             return;
         }
         
-        const member = members[0];
+        const member = result.member;
+        const matchedBy = result.matchedBy;
         
-        // 🔥🔥🔥 মূল ঠিক করা অংশ — এখানে variable সেট করুন 🔥🔥🔥
+        // ✅ Global variable সেট করুন
         transferMemberData = member;
         window._transferMemberData = member;
         
-        console.log('✅ transferMemberData সেট হয়েছে:', transferMemberData);
-        console.log('   👤 নাম:', transferMemberData.full_name);
-        console.log('   🆔 আইডি:', transferMemberData.member_id);
+        console.log(`✅ transferMemberData সেট হয়েছে (${matchedBy}):`, member.full_name);
+        console.log(`   🆔 ${member.member_id}`);
+        console.log(`   📱 ${member.mobile}`);
         
-        // ✅ ২. সদস্যের বর্তমান ব্রাঞ্চ বের করুন
+        // ✅ সদস্যের বর্তমান ব্রাঞ্চ বের করুন
         let currentBranchName = 'ব্রাঞ্চে যুক্ত নয়';
         let currentBranchId = null;
         
@@ -16005,7 +16141,7 @@ async function loadRealDashboard() {
         window._transferFromBranchId = currentBranchId;
         console.log('🏢 বর্তমান ব্রাঞ্চ:', currentBranchName, `(ID: ${currentBranchId})`);
         
-        // ✅ ৩. সদস্যের তথ্য দেখান
+        // ✅ সদস্যের তথ্য দেখান
         resultDiv.innerHTML = `
             <div class="bg-green-50 border border-green-300 p-4 rounded-lg">
                 <div class="flex items-center gap-3 mb-3">
@@ -16013,20 +16149,23 @@ async function loadRealDashboard() {
                         ${member.full_name?.charAt(0) || '?'}
                     </div>
                     <div class="flex-1">
-                        <p class="font-bold text-gray-800 text-base">${member.full_name || '-'}</p>
+                        <div class="flex items-center gap-2 mb-1">
+                            <p class="font-bold text-gray-800 text-base">${member.full_name || '-'}</p>
+                            <span class="text-xs bg-green-200 text-green-700 px-2 py-0.5 rounded-full">
+                                🔍 ${matchedBy}
+                            </span>
+                        </div>
                         <p class="text-sm text-gray-600">🆔 ${member.member_id} | 📱 ${member.mobile || '-'}</p>
                         <p class="text-xs text-gray-500">📍 ${member.present_district || 'জেলা নেই'}</p>
                     </div>
-                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${
-                        member.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'
-                    }">
+                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${member.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'}">
                         ${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}
                     </span>
                 </div>
                 <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm border-t pt-3">
                     <div class="bg-white p-2 rounded">
                         <div class="text-xs text-gray-500">💰 ব্যালেন্স</div>
-                        <div class="font-bold text-emerald-600">${formatAmountWithText ? formatAmountWithText(member.balance || 0) : (member.balance || 0).toFixed(2) + ' টাকা'}</div>
+                        <div class="font-bold text-emerald-600">${typeof formatAmountWithText === 'function' ? formatAmountWithText(member.balance || 0) : (member.balance || 0).toFixed(2) + ' টাকা'}</div>
                     </div>
                     <div class="bg-white p-2 rounded">
                         <div class="text-xs text-gray-500">🎁 রেফারেল</div>
@@ -16040,11 +16179,11 @@ async function loadRealDashboard() {
             </div>
         `;
         
-        // ✅ ৪. বর্তমান ব্রাঞ্চ সেট করুন
+        // ✅ বর্তমান ব্রাঞ্চ সেট করুন
         const currentBranchInput = document.getElementById('currentBranchDisplay');
         if (currentBranchInput) currentBranchInput.value = currentBranchName;
         
-        // ✅ ৫. সব ব্রাঞ্চ লোড করে dropdown populate করুন
+        // ✅ সব ব্রাঞ্চ load করে dropdown populate করুন
         const { data: allBranches, error: branchError } = await client
             .from('branches')
             .select('id, branch_name, branch_code, status')
@@ -16090,7 +16229,7 @@ async function loadRealDashboard() {
             }
         }
         
-        // ✅ ৬. ফর্ম দেখান
+        // ✅ ফর্ম দেখান
         const transferForm = document.getElementById('transferForm');
         if (transferForm) transferForm.style.display = 'block';
         
@@ -16104,6 +16243,7 @@ async function loadRealDashboard() {
             </div>
         `;
         transferMemberData = null;
+        window._transferMemberData = null;
     }
 }
 
@@ -25823,7 +25963,8 @@ let adjustmentMemberData = null;
 let currentVoucherData = null;
 
 // ============================================================
-// ✅ searchMemberForAdjustment() — সদস্য খুঁজুন
+// ✅ searchMemberForAdjustment() — Updated with smartSearchMember()
+// ✅ member_id → mobile → name (সব support)
 // ============================================================
 async function searchMemberForAdjustment() {
     const searchTerm = document.getElementById('adjMemberSearch')?.value?.trim();
@@ -25836,50 +25977,78 @@ async function searchMemberForAdjustment() {
     const resultDiv = document.getElementById('adjMemberResult');
     if (!resultDiv) return;
     
-    resultDiv.innerHTML = `<div class="text-center py-3"><div class="loading-spinner mx-auto"></div><p class="text-gray-500 text-sm mt-2">খোঁজা হচ্ছে...</p></div>`;
-    
-    const client = initSupabaseClient();
-    if (!client) {
-        resultDiv.innerHTML = '<div class="text-red-500 p-3 text-center">❌ সংযোগ সমস্যা!</div>';
-        return;
-    }
+    resultDiv.innerHTML = `<div class="text-center py-3">
+        <div class="loading-spinner mx-auto"></div>
+        <p class="text-gray-500 text-sm mt-2">খোঁজা হচ্ছে...</p>
+    </div>`;
     
     try {
-        const { data: member, error } = await client
-            .from('members')
-            .select('*')
-            .or(`member_id.eq.${searchTerm},mobile.eq.${searchTerm}`)
-            .maybeSingle();
+        // ✅ smartSearchMember() ব্যবহার
+        const result = await smartSearchMember(searchTerm);
         
-        if (error) throw error;
-        
-        if (!member) {
-            resultDiv.innerHTML = `<div class="bg-red-50 border-2 border-red-200 p-4 rounded-lg text-center"><i class="fas fa-user-times text-red-500 text-3xl mb-2"></i><p class="text-red-600 font-semibold">❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!</p></div>`;
+        if (!result || !result.member) {
+            resultDiv.innerHTML = `<div class="bg-red-50 border-2 border-red-200 p-4 rounded-lg text-center">
+                <i class="fas fa-user-times text-red-500 text-3xl mb-2"></i>
+                <p class="text-red-600 font-semibold">❌ এই আইডি/মোবাইলে কোনো সদস্য নেই!</p>
+            </div>`;
             document.getElementById('adjustmentFormContainer').classList.add('hidden');
             return;
         }
         
-        adjustmentMemberData = member;
+        const member = result.member;
+        const matchedBy = result.matchedBy;
         
-        const totalProfit = (member.profit_balance_savings || 0) + (member.profit_balance_investment || 0) + (member.profit_balance_referral || 0);
+        // ✅ Global variable সেট করুন
+        adjustmentMemberData = member;
+        window.adjustmentMemberData = member;
+        
+        console.log(`✅ adjustmentMemberData সেট হয়েছে (${matchedBy}):`, member.full_name);
+        
+        const totalProfit = (member.profit_balance_savings || 0) + 
+                           (member.profit_balance_investment || 0) + 
+                           (member.profit_balance_referral || 0);
         
         resultDiv.innerHTML = `
             <div class="bg-green-50 border-2 border-green-300 p-4 rounded-lg">
                 <div class="flex items-center gap-3 mb-3">
-                    <div class="w-14 h-14 rounded-full bg-emerald-500 flex items-center justify-center text-white font-bold text-2xl">${member.full_name?.charAt(0) || '?'}</div>
+                    <div class="w-14 h-14 rounded-full bg-emerald-500 flex items-center justify-center text-white font-bold text-2xl">
+                        ${member.full_name?.charAt(0) || '?'}
+                    </div>
                     <div class="flex-1">
-                        <p class="font-bold text-gray-800 text-lg">${member.full_name || '-'}</p>
+                        <div class="flex items-center gap-2 mb-1">
+                            <p class="font-bold text-gray-800 text-lg">${member.full_name || '-'}</p>
+                            <span class="text-xs bg-green-200 text-green-700 px-2 py-0.5 rounded-full">
+                                🔍 ${matchedBy}
+                            </span>
+                        </div>
                         <p class="text-sm text-gray-600">🆔 ${member.member_id} | 📱 ${member.mobile}</p>
                         <p class="text-xs text-gray-500">📍 ${member.present_district || 'জেলা নেই'}</p>
                     </div>
-                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${member.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'}">${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}</span>
+                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${member.status === 'active' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'}">
+                        ${member.status === 'active' ? '✅ সক্রিয়' : '⏳ পেন্ডিং'}
+                    </span>
                 </div>
                 <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm border-t pt-3">
-                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">💰 মূলধন</div><div class="font-bold text-emerald-600">${formatAmount(member.balance || 0)}</div></div>
-                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">🎁 রেফারেল</div><div class="font-bold text-blue-600">${formatAmount(member.referral_bonus || 0)}</div></div>
-                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">📈 সঞ্চয় লাভ</div><div class="font-bold text-purple-600">${formatAmount(member.profit_balance_savings || 0)}</div></div>
-                    <div class="bg-white p-2 rounded-lg text-center"><div class="text-xs text-gray-500">📈 বিনিয়োগ লাভ</div><div class="font-bold text-pink-600">${formatAmount(member.profit_balance_investment || 0)}</div></div>
-                    <div class="bg-white p-2 rounded-lg text-center border-2 border-amber-300"><div class="text-xs text-gray-500">📊 মোট ফান্ড</div><div class="font-bold text-amber-700">${formatAmount((member.balance || 0) + (member.referral_bonus || 0) + totalProfit)}</div></div>
+                    <div class="bg-white p-2 rounded-lg text-center">
+                        <div class="text-xs text-gray-500">💰 মূলধন</div>
+                        <div class="font-bold text-emerald-600">${formatAmount(member.balance || 0)}</div>
+                    </div>
+                    <div class="bg-white p-2 rounded-lg text-center">
+                        <div class="text-xs text-gray-500">🎁 রেফারেল</div>
+                        <div class="font-bold text-blue-600">${formatAmount(member.referral_bonus || 0)}</div>
+                    </div>
+                    <div class="bg-white p-2 rounded-lg text-center">
+                        <div class="text-xs text-gray-500">📈 সঞ্চয় লাভ</div>
+                        <div class="font-bold text-purple-600">${formatAmount(member.profit_balance_savings || 0)}</div>
+                    </div>
+                    <div class="bg-white p-2 rounded-lg text-center">
+                        <div class="text-xs text-gray-500">📈 বিনিয়োগ লাভ</div>
+                        <div class="font-bold text-pink-600">${formatAmount(member.profit_balance_investment || 0)}</div>
+                    </div>
+                    <div class="bg-white p-2 rounded-lg text-center border-2 border-amber-300">
+                        <div class="text-xs text-gray-500">📊 মোট ফান্ড</div>
+                        <div class="font-bold text-amber-700">${formatAmount((member.balance || 0) + (member.referral_bonus || 0) + totalProfit)}</div>
+                    </div>
                 </div>
             </div>
         `;
@@ -25889,7 +26058,7 @@ async function searchMemberForAdjustment() {
         document.getElementById('adjMemberId').value = member.member_id;
         document.getElementById('adjCurrentBalance').value = formatAmountWithText(member.balance || 0);
         
-        // ✅ Reset
+        // ✅ Reset fields
         document.getElementById('adjFundType').value = '';
         document.getElementById('adjAmount').value = '';
         document.getElementById('adjReason').value = '';
@@ -25904,7 +26073,11 @@ async function searchMemberForAdjustment() {
         const manualContainer = document.getElementById('adjManualVoucherContainer');
         if (manualContainer) manualContainer.classList.add('hidden');
         const manualField = document.getElementById('adjManualVoucher');
-        if (manualField) { manualField.value = ''; manualField.dataset.valid = ''; manualField.style.borderColor = ''; }
+        if (manualField) { 
+            manualField.value = ''; 
+            manualField.dataset.valid = ''; 
+            manualField.style.borderColor = ''; 
+        }
         const statusDiv = document.getElementById('adjManualVoucherStatus');
         if (statusDiv) statusDiv.innerHTML = '';
         
