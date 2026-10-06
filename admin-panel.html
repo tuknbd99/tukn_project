@@ -7303,14 +7303,12 @@ function updateApprovalPreview(originalAmount) {
 
    
 // ============================================================
-// ✅ FINAL FIX: approveWithdrawalWithNote()
-// - শুধু withdrawals.status update করে
-// - Balance কমানোর কাজ DATABASE TRIGGER (auto_deduct_withdrawal) করবে
-// - কোনো .select() নেই (constraint check হবে না)
-// - Rollback-এ balance change নেই (কারণ JS balance ছোঁয় না)
+// ✅ PART 4: approveWithdrawalWithNote() — main_ledger sync
 // ============================================================
 async function approveWithdrawalWithNote(id, amount, memberId, type) {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('🔍 উত্তোলন অনুমোদন শুরু:', { id, amount, memberId, type });
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
     // ✅ নোট নিন
     let noteText = '';
@@ -7326,14 +7324,12 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
         noteText = note.trim() || '';
     }
     
-    // ✅ প্রাক-যাচাই: পর্যাপ্ত ব্যালেন্স আছে কিনা
     const client = initSupabaseClient();
     if (!client) {
         showToast('সংযোগ সমস্যা!', 'error');
         return;
     }
     
-    // ✅ Btn disable
     const btns = document.querySelectorAll(`[onclick*="approveWithdrawalWithNote('${id}'"]`);
     btns.forEach(btn => {
         btn.disabled = true;
@@ -7342,208 +7338,128 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
     
     try {
         // ============================================================
-        // ✅ ১. উত্তোলন ডেটা লোড
+        // ✅ STEP 1: উত্তোলন ডেটা লোড
         // ============================================================
-        const { data: withdrawal, error: withdrawalError } = await client
+        const { data: withdrawal, error } = await client
             .from('withdrawals')
             .select('*')
             .eq('id', id)
             .maybeSingle();
         
-        if (withdrawalError) throw withdrawalError;
+        if (error) throw error;
         if (!withdrawal) {
             showToast('❌ উত্তোলন পাওয়া যায়নি!', 'error');
             return;
         }
         
-        console.log('📋 উত্তোলন ডেটা:', withdrawal);
-        
-        // ✅ ইতিমধ্যে approved হলে স্কিপ করুন
         if (withdrawal.status === 'approved') {
-            showToast('ℹ️ এই উত্তোলন ইতিমধ্যে অনুমোদিত!', 'info');
-            await loadPendingWithdrawals();
+            showToast('ℹ️ ইতিমধ্যে অনুমোদিত!', 'info');
             return;
         }
         
+        if (withdrawal.status !== 'pending') {
+            showToast(`⚠️ ভুল স্ট্যাটাস: ${withdrawal.status}`, 'error');
+            return;
+        }
+        
+        console.log(`✅ উত্তোলন লোড: ৳${withdrawal.amount}`);
+        
         // ============================================================
-        // ✅ ২. সঠিক ফিল্ড নির্ধারণ (শুধু চেক করার জন্য, update-এর জন্য নয়)
+        // ✅ STEP 2: Fund type নির্ধারণ
         // ============================================================
-        let updateField = 'balance';
+        let account = 'savings';
         let typeDisplay = String(withdrawal.type || type || 'মূলধন').trim();
         typeDisplay = typeDisplay.replace(/ উত্তোলন/g, '').trim();
         
         if (typeDisplay.includes('রেফারেল বোনাস')) {
-            updateField = 'referral_bonus';
-        } else if (typeDisplay.includes('সঞ্চয় লভ্যাংশ') || typeDisplay.includes('সঞ্চয় লভ্যাংশ')) {
-            updateField = 'profit_balance_savings';
-        } else if (typeDisplay.includes('বিনিয়োগ লভ্যাংশ') || typeDisplay.includes('বিনিয়োগ লভ্যাংশ')) {
-            updateField = 'profit_balance_investment';
+            account = 'referral_bonus';
+        } else if (typeDisplay.includes('সঞ্চয় লভ্যাংশ') || typeDisplay.includes('সঞ্চয় লভ্যাংশ')) {
+            account = 'profit_savings';
+        } else if (typeDisplay.includes('বিনিয়োগ লভ্যাংশ') || typeDisplay.includes('বিনিয়োগ লভ্যাংশ')) {
+            account = 'profit_investment';
         } else if (typeDisplay.includes('রেফারেল লভ্যাংশ')) {
-            updateField = 'profit_balance_referral';
+            account = 'profit_referral';
         } else if (typeDisplay.includes('মূলধন')) {
-            updateField = 'balance';
-        } else if (typeDisplay.includes('সব লভ্যাংশ')) {
-            await approveAllProfitWithdrawal(id, amount, memberId, noteText);
-            return;
+            account = 'savings';
         }
         
-        console.log('📊 আপডেট ফিল্ড (শুধু চেকের জন্য):', updateField);
+        console.log(`✅ Fund type: ${account}`);
         
         // ============================================================
-        // ✅ ৩. সদস্যের ডেটা লোড (শুধু ব্যালেন্স যাচাইয়ের জন্য)
+        // ✅ STEP 3: main_ledger এ entry তৈরি (Trigger balance কমাবে)
         // ============================================================
-        const { data: member, error: memberError } = await client
-            .from('members')
-            .select('*')
-            .eq('member_id', memberId)
-            .maybeSingle();
+        await recordTransaction({
+            member_id: memberId,
+            member_name: withdrawal.member_name || 'Unknown',
+            account: account,
+            action: 'debit',
+            amount: Number(amount),
+            source: 'withdrawal',
+            description: `উত্তোলন অনুমোদিত — ${typeDisplay}${noteText ? ' | ' + noteText : ''}`,
+            voucher_no: withdrawal.voucher_no || null,
+            reference_id: String(withdrawal.id),
+            metadata: {
+                withdrawal_id: withdrawal.id,
+                payment_method: withdrawal.payment_method,
+                transaction_id: withdrawal.transaction_id,
+                approved_by: currentAdmin?.username
+            }
+        });
         
-        if (memberError) throw memberError;
-        if (!member) {
-            showToast('❌ সদস্য পাওয়া যায়নি!', 'error');
-            return;
-        }
-        
-        // ✅ NULL-safe বর্তমান মান
-        const rawValue = member[updateField];
-        const currentAmount = (rawValue === null || rawValue === undefined) ? 0 : Number(rawValue) || 0;
-        const withdrawAmount = Number(amount) || 0;
-        
-        const fieldLabels = {
-            'balance': 'মূলধন',
-            'referral_bonus': 'রেফারেল বোনাস',
-            'profit_balance_savings': 'সঞ্চয় লভ্যাংশ',
-            'profit_balance_investment': 'বিনিয়োগ লভ্যাংশ',
-            'profit_balance_referral': 'রেফারেল লভ্যাংশ'
-        };
-        const fieldLabel = fieldLabels[updateField] || updateField;
-        
-        console.log(`💰 ${fieldLabel}: ${currentAmount} | উত্তোলন: ${withdrawAmount}`);
+        console.log('✅ STEP 3: main_ledger এ entry তৈরি');
         
         // ============================================================
-        // ✅ ৪. পর্যাপ্ত ব্যালেন্স চেক
+        // ✅ STEP 4: Withdrawal status আপডেট
         // ============================================================
-        if (withdrawAmount <= 0) {
-            showToast('❌ উত্তোলনের পরিমাণ বৈধ নয়!', 'error');
-            return;
-        }
-        
-        if (currentAmount < withdrawAmount) {
-            showToast(
-                `❌ পর্যাপ্ত ${fieldLabel} নেই!\n\n` +
-                `📊 বর্তমান: ${formatAmount(currentAmount)} টাকা\n` +
-                `💰 প্রয়োজন: ${formatAmount(withdrawAmount)} টাকা\n` +
-                `📉 ঘাটতি: ${formatAmount(withdrawAmount - currentAmount)} টাকা`,
-                'error'
-            );
-            return;
-        }
-        
-        // ============================================================
-        // ✅ ৫. কনফার্মেশন
-        // ============================================================
-        const newAmount = currentAmount - withdrawAmount;
-        if (!confirm(
-            `✅ উত্তোলন অনুমোদন নিশ্চিত করুন\n\n` +
-            `👤 সদস্য: ${member.full_name}\n` +
-            `📋 ধরন: ${fieldLabel}\n` +
-            `📊 বর্তমান: ${formatAmount(currentAmount)} টাকা\n` +
-            `💰 উত্তোলন: ${formatAmount(withdrawAmount)} টাকা\n` +
-            `✨ নতুন: ${formatAmount(newAmount)} টাকা\n\n` +
-            `"OK" চাপুন নিশ্চিত করতে।`
-        )) return;
-        
-        // ============================================================
-        // ✅ ৬. শুধু withdrawals আপডেট করুন
-        // ✅ Database Trigger (auto_deduct_withdrawal) স্বয়ংক্রিয়ভাবে
-        //    members টেবিলের সঠিক ফিল্ড থেকে balance কমাবে
-        // ✅ কোনো .select() নেই (constraint check হবে না)
-        // ============================================================
-        const updateData = {
-            status: 'approved',
-            approved_at: new Date().toISOString(),
-            approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন'
-        };
-        
-        if (noteText && noteText.trim() !== '') {
-            updateData.note = noteText.trim();
-        }
-        
-        console.log('📝 উত্তোলন আপডেট ডেটা:', updateData);
-        console.log('🔄 Trigger balance কমাবে (auto_deduct_withdrawal)');
-        
-        // ✅ শুধু এটাই যথেষ্ট — .select() ছাড়া
-        const { error: updateWithdrawalError } = await client
+        const { error: updateError } = await client
             .from('withdrawals')
-            .update(updateData)
+            .update({
+                status: 'approved',
+                approved_at: new Date().toISOString(),
+                approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
+                note: noteText || null
+            })
             .eq('id', id);
         
-        if (updateWithdrawalError) {
-            console.error('❌ Withdrawal update error:', updateWithdrawalError);
-            throw updateWithdrawalError;
-        }
+        if (updateError) throw updateError;
         
-        console.log('✅ উত্তোলন আপডেট সফল!');
+        console.log('✅ STEP 4: Withdrawal status আপডেট');
         
         // ============================================================
-        // ✅ ৭. Trigger-এর কাজ শেষ হওয়ার জন্য সামান্য অপেক্ষা করুন
-        // ============================================================
-        await new Promise(resolve => setTimeout(resolve, 800));
-        
-        // ============================================================
-        // ✅ ৮. যাচাই করুন Trigger সঠিকভাবে balance কমিয়েছে
-        // ============================================================
-        const { data: memberAfter } = await client
-            .from('members')
-            .select('referral_bonus, balance, profit_balance_savings, profit_balance_investment, profit_balance_referral')
-            .eq('member_id', memberId)
-            .maybeSingle();
-        
-        const afterValue = (memberAfter && memberAfter[updateField] !== null) 
-            ? Number(memberAfter[updateField]) || 0 
-            : 0;
-        
-        console.log(`📊 Trigger-এর পর ${updateField}: ${afterValue}`);
-        
-        if (afterValue !== newAmount) {
-            console.warn(`⚠️ Balance mismatch! প্রত্যাশিত: ${newAmount}, পাওয়া: ${afterValue}`);
-        }
-        
-        // ============================================================
-        // ✅ ৯. UI রিফ্রেশ
+        // ✅ STEP 5: UI রিফ্রেশ
         // ============================================================
         pendingWithdrawalsData = pendingWithdrawalsData.filter(w => w.id != id);
         
         await loadPendingWithdrawals();
         await loadAllWithdrawals();
-        await updateAllBadges();
         await loadRealDashboard();
-        await loadMembers();
+        await updateAllBadges();
         
         // ============================================================
-        // ✅ ১০. সফল মেসেজ
+        // ✅ STEP 6: Broadcast
         // ============================================================
-        showToast(
-            `✅ ${formatAmount(withdrawAmount)} টাকা উত্তোলন অনুমোদিত!\n` +
-            `📋 ${fieldLabel}: ${formatAmount(currentAmount)} → ${formatAmount(afterValue)}` +
-            (noteText ? '\n📝 নোট: ' + noteText : ''),
-            'success'
-        );
-        
-        // ✅ BroadcastChannel — সদস্য ড্যাশবোর্ডে আপডেট পাঠান
         try {
             const bc = new BroadcastChannel('tuknbd_updates');
             bc.postMessage({
                 type: 'withdrawal_approved',
                 memberId: memberId,
-                amount: withdrawAmount,
-                field: updateField,
+                amount: amount,
                 timestamp: new Date().toISOString()
             });
-            setTimeout(() => {
-                try { bc.close(); } catch(e) {}
-            }, 1000);
+            setTimeout(() => { try { bc.close(); } catch(e) {} }, 1000);
         } catch(e) {}
+        
+        // ============================================================
+        // ✅ STEP 7: সফল মেসেজ
+        // ============================================================
+        showToast(
+            `✅ ৳${formatAmount(amount)} উত্তোলন অনুমোদিত!\n📒 Ledger-এ রেকর্ড হয়েছে`,
+            'success'
+        );
+        
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('✅ উত্তোলন অনুমোদন সম্পূর্ণ!');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
     } catch(e) {
         console.error('❌ Withdrawal approval error:', e);
@@ -7555,6 +7471,8 @@ async function approveWithdrawalWithNote(id, amount, memberId, type) {
         });
     }
 }
+
+window.approveWithdrawalWithNote = approveWithdrawalWithNote;
 
 
 // ============================================================
@@ -9722,11 +9640,7 @@ function renderPendingPaymentsList() {
 }
 
 // ============================================================
-// ✅ FINAL: approvePayment() — Optimized & Safe
-// ✅ member_id প্রাইমারি lookup (100% reliable — আপনার data-তে)
-// ✅ payments sum (authoritative — double-count প্রতিরোধ)
-// ✅ member_id দিয়ে update (safest)
-// ✅ Rollback on failure
+// ✅ PART 4: approvePayment() — main_ledger এর সাথে sync
 // ============================================================
 async function approvePayment(paymentId) {
     const id = parseInt(paymentId);
@@ -9761,9 +9675,73 @@ async function approvePayment(paymentId) {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
         // ============================================================
-        // ✅ STEP ১: Payment status আপডেট (idempotent — double-approve প্রতিরোধ)
+        // ✅ STEP 1: সদস্য খোঁজা (member_id → mobile)
         // ============================================================
-        const { data: statusUpdate, error: statusError } = await client
+        let member = null;
+        let matchMethod = '';
+        
+        if (payment.member_id && payment.member_id.trim() !== '') {
+            const { data: byId } = await client
+                .from('members')
+                .select('member_id, full_name, mobile, status')
+                .eq('member_id', payment.member_id.trim())
+                .maybeSingle();
+            if (byId) {
+                member = byId;
+                matchMethod = '🆔 member_id';
+            }
+        }
+        
+        if (!member && payment.mobile && payment.mobile.trim() !== '') {
+            const { data: byMobile } = await client
+                .from('members')
+                .select('member_id, full_name, mobile, status')
+                .eq('mobile', payment.mobile.trim())
+                .maybeSingle();
+            if (byMobile) {
+                member = byMobile;
+                matchMethod = '📱 mobile';
+            }
+        }
+        
+        if (!member) {
+            showToast('❌ সদস্য পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        if (member.status !== 'active' && member.status !== 'approved') {
+            showToast(`⚠️ সদস্য সক্রিয় নয়: ${member.status}`, 'error');
+            return;
+        }
+        
+        console.log(`✅ সদস্য: ${member.full_name} (${matchMethod})`);
+        
+        // ============================================================
+        // ✅ STEP 2: main_ledger এ entry তৈরি (Trigger বাকি সব করবে!)
+        // ============================================================
+        await recordTransaction({
+            member_id: member.member_id,
+            member_name: member.full_name,
+            account: 'savings',
+            action: 'credit',
+            amount: Number(payment.amount),
+            source: 'monthly_savings',
+            description: `পেমেন্ট অনুমোদিত — ${payment.month || ''} ${payment.year || ''} (${payment.payment_method || 'cash'})`,
+            reference_id: String(payment.id),
+            metadata: {
+                payment_id: payment.id,
+                payment_method: payment.payment_method,
+                transaction_id: payment.transaction_id,
+                approved_by: currentAdmin?.username
+            }
+        });
+        
+        console.log('✅ STEP 2: main_ledger এ entry তৈরি');
+        
+        // ============================================================
+        // ✅ STEP 3: Payment status আপডেট
+        // ============================================================
+        const { error: statusError } = await client
             .from('payments')
             .update({
                 status: 'approved',
@@ -9771,167 +9749,14 @@ async function approvePayment(paymentId) {
                 approved_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
             })
-            .eq('id', id)
-            .eq('status', 'pending')  // ✅ শুধু pending → approved
-            .select('id, member_id, amount, mobile, member_name');
+            .eq('id', id);
         
-        if (statusError) {
-            console.error('❌ Status update error:', statusError);
-            throw statusError;
-        }
+        if (statusError) throw statusError;
         
-        // ✅ যদি 0 row আপডেট হয় — ইতিমধ্যে approved
-        if (!statusUpdate || statusUpdate.length === 0) {
-            showToast('⚠️ এই পেমেন্ট ইতিমধ্যে অনুমোদিত হয়েছে!', 'warning');
-            await loadPendingPayments();
-            return;
-        }
-        
-        console.log('✅ STEP ১: Payment status আপডেট সম্পন্ন');
+        console.log('✅ STEP 3: Payment status আপডেট');
         
         // ============================================================
-        // ✅ STEP ২: সদস্য খোঁজা — member_id → mobile → name
-        // ============================================================
-        const paymentRecord = statusUpdate[0];
-        const paymentAmount = Number(paymentRecord.amount) || 0;
-        const memberIdFromPayment = paymentRecord.member_id;
-        const mobileFromPayment = paymentRecord.mobile || payment.mobile;
-        const nameFromPayment = paymentRecord.member_name || payment.member_name;
-        
-        let member = null;
-        let matchMethod = '';
-        
-        // 🔍 চেষ্টা ১: member_id (প্রাইমারি — আপনার data-তে 100% reliable)
-        if (memberIdFromPayment && memberIdFromPayment.trim() !== '') {
-            const { data: byId } = await client
-                .from('members')
-                .select('member_id, full_name, mobile, balance, status')
-                .eq('member_id', memberIdFromPayment)
-                .maybeSingle();
-            
-            if (byId) {
-                member = byId;
-                matchMethod = '🆔 member_id';
-                console.log(`✅ Match-1: member_id = ${byId.member_id}`);
-            }
-        }
-        
-        // 🔍 চেষ্টা ২: mobile (fallback — UNIQUE constraint-এর কারণে নিরাপদ)
-        if (!member && mobileFromPayment && mobileFromPayment.trim() !== '') {
-            const { data: byMobile } = await client
-                .from('members')
-                .select('member_id, full_name, mobile, balance, status')
-                .eq('mobile', mobileFromPayment)
-                .maybeSingle();
-            
-            if (byMobile) {
-                member = byMobile;
-                matchMethod = '📱 mobile (fallback)';
-                console.log(`✅ Match-2: mobile = ${byMobile.member_id}`);
-            }
-        }
-        
-        // 🔍 চেষ্টা ৩: name (শেষ fallback — partial match)
-        if (!member && nameFromPayment && nameFromPayment.trim() !== '') {
-            const { data: byName } = await client
-                .from('members')
-                .select('member_id, full_name, mobile, balance, status')
-                .ilike('full_name', `%${nameFromPayment.trim()}%`)
-                .limit(1)
-                .maybeSingle();
-            
-            if (byName) {
-                member = byName;
-                matchMethod = '📝 name (last fallback)';
-                console.log(`⚠️ Match-3: name = ${byName.member_id}`);
-            }
-        }
-        
-        // ❌ কিছু না পেলে Rollback
-        if (!member) {
-            console.error('❌ সদস্য পাওয়া যায়নি!');
-            
-            await client
-                .from('payments')
-                .update({ status: 'pending', approved_by: null, approved_at: null })
-                .eq('id', id);
-            
-            showToast(
-                `❌ সদস্য পাওয়া যায়নি!\n` +
-                `🆔 member_id: ${memberIdFromPayment || 'N/A'}\n` +
-                `📱 mobile: ${mobileFromPayment || 'N/A'}\n` +
-                `👤 name: ${nameFromPayment || 'N/A'}\n\n` +
-                `⚠️ Payment record অক্ষত আছে।`,
-                'error'
-            );
-            return;
-        }
-        
-        console.log('✅ STEP ২: সদস্য পাওয়া গেছে');
-        console.log(`   👤 ${member.full_name}`);
-        console.log(`   🆔 ${member.member_id}`);
-        console.log(`   📱 ${member.mobile}`);
-        console.log(`   🔍 Match: ${matchMethod}`);
-        
-        // ✅ সদস্য সক্রিয় কিনা চেক
-        if (member.status !== 'active' && member.status !== 'approved') {
-            // Rollback
-            await client
-                .from('payments')
-                .update({ status: 'pending', approved_by: null, approved_at: null })
-                .eq('id', id);
-            
-            showToast(`⚠️ সদস্য সক্রিয় নয়! Status: ${member.status}`, 'error');
-            return;
-        }
-        
-        // ============================================================
-        // ✅ STEP ৩: payments sum (authoritative — double-count নেই)
-        // ============================================================
-        const { data: allApprovedPayments, error: sumError } = await client
-            .from('payments')
-            .select('amount')
-            .eq('member_id', member.member_id)
-            .eq('status', 'approved');
-        
-        if (sumError) {
-            console.error('❌ Payments sum error:', sumError);
-            throw sumError;
-        }
-        
-        const totalApproved = (allApprovedPayments || [])
-            .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-        
-        console.log(`✅ STEP ৩: Total approved = ${totalApproved}`);
-        
-        // ============================================================
-        // ✅ STEP ৪: members.balance আপডেট (member_id দিয়ে — safest)
-        // ============================================================
-        const { error: balanceError } = await client
-            .from('members')
-            .update({ 
-                balance: totalApproved,
-                updated_at: new Date().toISOString()
-            })
-            .eq('member_id', member.member_id);
-        
-        if (balanceError) {
-            console.error('❌ Balance update error:', balanceError);
-            
-            // Rollback
-            await client
-                .from('payments')
-                .update({ status: 'pending', approved_by: null, approved_at: null })
-                .eq('id', id);
-            
-            showToast('❌ ব্যালেন্স আপডেট ব্যর্থ! Rollback করা হয়েছে।', 'error');
-            return;
-        }
-        
-        console.log('✅ STEP ৪: Balance আপডেট সম্পন্ন!');
-        
-        // ============================================================
-        // ✅ STEP ৫: UI রিফ্রেশ
+        // ✅ STEP 4: UI রিফ্রেশ
         // ============================================================
         pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
         
@@ -9939,11 +9764,9 @@ async function approvePayment(paymentId) {
         await loadRealDashboard();
         await updateAllBadges();
         await loadMembers();
-        renderMembersList();
-        renderPendingMembersList();
         
         // ============================================================
-        // ✅ STEP ৬: Broadcast — Member Dashboard-এ sync
+        // ✅ STEP 5: Broadcast
         // ============================================================
         try {
             const bc = new BroadcastChannel('tuknbd_updates');
@@ -9951,26 +9774,23 @@ async function approvePayment(paymentId) {
                 type: 'payment_approved',
                 memberId: member.member_id,
                 mobile: member.mobile,
-                amount: paymentAmount,
-                newBalance: totalApproved,
+                amount: payment.amount,
                 timestamp: new Date().toISOString()
             });
             setTimeout(() => { try { bc.close(); } catch(e) {} }, 1000);
-            console.log('📢 Member Dashboard-এ sync পাঠানো হয়েছে');
         } catch(e) {}
         
         // ============================================================
-        // ✅ STEP ৭: সফল মেসেজ
+        // ✅ STEP 6: সফল মেসেজ
         // ============================================================
         showToast(
-            `✅ ${member.full_name} (📱${member.mobile}) এর ${formatAmountWithText(paymentAmount)} পেমেন্ট অনুমোদিত!\n` +
-            `💰 নতুন ব্যালেন্স: ${formatAmountWithText(totalApproved)}\n` +
-            `🔍 Match: ${matchMethod}`,
+            `✅ ${member.full_name} এর ৳${formatAmount(payment.amount)} পেমেন্ট অনুমোদিত!\n` +
+            `📒 Ledger-এ রেকর্ড হয়েছে`,
             'success'
         );
         
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('✅ পেমেন্ট অনুমোদন সফলভাবে সম্পন্ন!');
+        console.log('✅ পেমেন্ট অনুমোদন সম্পূর্ণ!');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
     } catch(e) {
@@ -9983,6 +9803,8 @@ async function approvePayment(paymentId) {
         });
     }
 }
+
+window.approvePayment = approvePayment;
 
 // ============================================================
 // ✅ FIXED: rejectPayment()
