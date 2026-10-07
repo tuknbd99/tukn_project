@@ -5070,13 +5070,77 @@ body.dark-mode .all-clear-box p {
                 </select>
             </div>
             
-            <!-- Specific branch selection (hidden by default) -->
-            <div id="broadcastBranchList" class="hidden">
-                <label class="block text-sm font-medium text-gray-700 mb-1">ব্রাঞ্চ নির্বাচন করুন</label>
-                <div id="broadcastBranchCheckboxes" class="border rounded-lg p-3 max-h-40 overflow-y-auto bg-gray-50">
-                    <div class="text-center text-gray-400 text-sm">লোড হচ্ছে...</div>
+         <!-- ✅ Specific branch selection with Search & List view -->
+        <div id="broadcastBranchList" class="hidden">
+            
+            <!-- Header with Select All / None -->
+            <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+                <label class="text-sm font-bold text-gray-700 flex items-center gap-2">
+                    <i class="fas fa-store text-emerald-600"></i>
+                    ব্রাঞ্চ নির্বাচন করুন
+                </label>
+                <div class="flex gap-2">
+                    <button type="button" onclick="selectAllBroadcastBranches(true)" 
+                            class="text-xs px-3 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition font-medium">
+                        <i class="fas fa-check-double mr-1"></i> সব
+                    </button>
+                    <button type="button" onclick="selectAllBroadcastBranches(false)" 
+                            class="text-xs px-3 py-1 rounded-md bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition font-medium">
+                        <i class="fas fa-times mr-1"></i> কোনোটাই না
+                    </button>
                 </div>
             </div>
+            
+            <!-- ✅ Search Box -->
+            <div style="position:relative; margin-bottom:12px;">
+                <i class="fas fa-search" 
+                   style="position:absolute; left:14px; top:50%; transform:translateY(-50%); color:#9ca3af; font-size:14px; pointer-events:none;"></i>
+                <input type="text" 
+                       id="broadcastBranchSearch" 
+                       placeholder="🔍 ব্রাঞ্চের নাম বা কোড দিয়ে সার্চ করুন..."
+                       style="width:100%; padding:12px 40px 12px 42px; border:2px solid #e5e7eb; border-radius:10px; font-size:14px; outline:none; transition:all 0.2s; font-family:'Noto Sans Bengali',sans-serif;"
+                       oninput="filterBroadcastBranches(this.value)"
+                       onfocus="this.style.borderColor='#10b981'; this.style.boxShadow='0 0 0 3px rgba(16,185,129,0.1)';"
+                       onblur="this.style.borderColor='#e5e7eb'; this.style.boxShadow='none';">
+                <button type="button" 
+                        id="clearBranchSearch"
+                        onclick="clearBranchSearch()"
+                        style="display:none; position:absolute; right:12px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:#9ca3af; font-size:16px; padding:4px;"
+                        title="সার্চ ক্লিয়ার করুন">
+                    <i class="fas fa-times-circle"></i>
+                </button>
+            </div>
+            
+            <!-- ✅ Stats bar -->
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding:0 4px; font-size:11px; color:#6b7280;">
+                <span>
+                    <i class="fas fa-list text-gray-400"></i>
+                    দেখাচ্ছে: <strong id="visibleBranchCount">0</strong> টি
+                </span>
+                <span id="searchStatus" style="color:#059669; font-weight:600;"></span>
+            </div>
+            
+            <!-- ✅ Branch Table/List Container -->
+            <div style="border:2px solid #e5e7eb; border-radius:12px; overflow:hidden; background:white; max-height:320px; overflow-y:auto;" 
+                 id="broadcastBranchCheckboxes">
+                <div class="text-center text-gray-400 text-sm py-6">
+                    <div class="loading-spinner mx-auto mb-2"></div>
+                    লোড হচ্ছে...
+                </div>
+            </div>
+            
+            <!-- ✅ Selected count info -->
+            <div id="broadcastSelectedInfo" 
+                 style="margin-top:12px; padding:10px 14px; background:#ecfdf5; border:1px solid #6ee7b7; border-radius:8px; font-size:13px; color:#065f46; display:flex; justify-content:space-between; align-items:center;">
+                <span>
+                    <i class="fas fa-check-circle"></i>
+                    সিলেক্টেড: <strong id="selectedBranchCount">0</strong> টি ব্রাঞ্চ
+                </span>
+                <span style="font-size:11px; opacity:0.7;">
+                    মোট: <span id="totalBranchCount">0</span> টি
+                </span>
+            </div>
+        </div>
             
             <!-- Message textarea -->
             <div>
@@ -30335,13 +30399,23 @@ function closeBroadcastModal() {
     if (modal) modal.classList.remove('active');
 }
 
-// ✅ ব্রাঞ্চ লিস্ট লোড
+// ✅ ব্রাঞ্চ লিস্ট লোড (সুন্দর UI সহ)
 async function loadBroadcastBranches() {
     const container = document.getElementById('broadcastBranchCheckboxes');
     if (!container) return;
     
+    container.innerHTML = `
+        <div class="text-center text-gray-400 text-sm py-4">
+            <div class="loading-spinner mx-auto mb-2"></div>
+            লোড হচ্ছে...
+        </div>
+    `;
+    
     const client = initSupabaseClient();
-    if (!client) return;
+    if (!client) {
+        container.innerHTML = `<div class="text-red-500 text-sm py-3 text-center">❌ সংযোগ সমস্যা!</div>`;
+        return;
+    }
     
     try {
         const { data: branches, error } = await client
@@ -30351,7 +30425,7 @@ async function loadBroadcastBranches() {
         
         if (error) throw error;
         
-        // Dedupe
+        // Dedupe by branch_id
         const branchMap = {};
         (branches || []).forEach(b => {
             if (!branchMap[b.branch_id]) {
@@ -30362,26 +30436,194 @@ async function loadBroadcastBranches() {
         broadcastBranchesList = Object.values(branchMap);
         console.log(`📋 Broadcast targets: ${broadcastBranchesList.length} ব্রাঞ্চ`);
         
+        // Update total count
+        const totalEl = document.getElementById('totalBranchCount');
+        if (totalEl) totalEl.textContent = broadcastBranchesList.length;
+        
         if (broadcastBranchesList.length === 0) {
-            container.innerHTML = `<div class="text-center text-gray-400 text-sm py-3">কোনো ব্রাঞ্চ নেই</div>`;
+            container.innerHTML = `
+                <div class="text-center text-gray-400 text-sm py-6">
+                    <i class="fas fa-inbox text-3xl block mb-2 text-gray-300"></i>
+                    <p>কোনো ব্রাঞ্চ নেই</p>
+                </div>
+            `;
             return;
         }
         
-        container.innerHTML = broadcastBranchesList.map(b => `
-            <label class="flex items-center gap-2 py-1.5 px-2 hover:bg-white rounded cursor-pointer">
-                <input type="checkbox" class="broadcast-branch-cb" 
-                       value="${b.branch_id}" 
-                       data-name="${(b.branch_name || '').replace(/"/g, '&quot;')}"
-                       checked
-                       onchange="updateBroadcastCount()">
-                <span class="text-sm text-gray-700 flex-1">${b.branch_name || b.branch_id}</span>
-                ${b.branch_code ? `<span class="text-xs text-gray-400 font-mono">${b.branch_code}</span>` : ''}
-            </label>
-        `).join('');
+        // ✅ সুন্দর করে প্রতিটি ব্রাঞ্চ দেখান
+        container.innerHTML = broadcastBranchesList.map((b, index) => {
+            const branchName = b.branch_name || b.branch_id || 'ব্রাঞ্চ';
+            const branchCode = b.branch_code || '';
+            const initial = branchName.charAt(0).toUpperCase();
+            
+            return `
+                <label for="bcast-branch-${b.branch_id}" 
+                       style="
+                           display:flex;
+                           align-items:center;
+                           gap:12px;
+                           padding:12px 14px;
+                           margin-bottom:8px;
+                           background:white;
+                           border:2px solid #e5e7eb;
+                           border-radius:10px;
+                           cursor:pointer;
+                           transition:all 0.2s ease;
+                           user-select:none;
+                       "
+                       onmouseover="this.style.borderColor='#10b981'; this.style.background='#f0fdf4';"
+                       onmouseout="this.style.borderColor='#e5e7eb'; this.style.background='white';"
+                       class="broadcast-branch-label">
+                    
+                    <!-- Checkbox (বড় করে) -->
+                    <input type="checkbox" 
+                           id="bcast-branch-${b.branch_id}"
+                           class="broadcast-branch-cb" 
+                           value="${b.branch_id}" 
+                           data-name="${branchName.replace(/"/g, '&quot;')}"
+                           checked
+                           onchange="updateBroadcastCount(); updateSelectedBranchCount();"
+                           style="
+                               width:20px;
+                               height:20px;
+                               accent-color:#059669;
+                               cursor:pointer;
+                               flex-shrink:0;
+                           ">
+                    
+                    <!-- Branch avatar -->
+                    <div style="
+                        width:40px;
+                        height:40px;
+                        border-radius:10px;
+                        background:linear-gradient(135deg, #10b981, #059669);
+                        display:flex;
+                        align-items:center;
+                        justify-content:center;
+                        color:white;
+                        font-weight:700;
+                        font-size:16px;
+                        flex-shrink:0;
+                        box-shadow:0 2px 6px rgba(16,185,129,0.25);
+                    ">
+                        ${initial}
+                    </div>
+                    
+                    <!-- Branch info -->
+                    <div style="flex:1; min-width:0;">
+                        <p style="
+                            font-weight:600;
+                            font-size:14px;
+                            color:#1f2937;
+                            margin:0;
+                            white-space:nowrap;
+                            overflow:hidden;
+                            text-overflow:ellipsis;
+                        ">
+                            ${branchName}
+                        </p>
+                        ${branchCode ? `
+                            <p style="
+                                font-size:11px;
+                                color:#6b7280;
+                                margin:2px 0 0 0;
+                                font-family:monospace;
+                                letter-spacing:0.3px;
+                            ">
+                                📋 ${branchCode}
+                            </p>
+                        ` : ''}
+                    </div>
+                    
+                    <!-- Selected check mark -->
+                    <div class="check-mark" 
+                         style="
+                             width:24px;
+                             height:24px;
+                             border-radius:50%;
+                             background:#d1fae5;
+                             display:flex;
+                             align-items:center;
+                             justify-content:center;
+                             color:#059669;
+                             font-size:12px;
+                             flex-shrink:0;
+                             opacity:1;
+                             transition:opacity 0.2s;
+                         ">
+                        <i class="fas fa-check"></i>
+                    </div>
+                </label>
+            `;
+        }).join('');
+        
+        // ✅ প্রতিটি checkbox-এ listener যোগ করুন (check mark show/hide)
+        document.querySelectorAll('.broadcast-branch-cb').forEach(cb => {
+            cb.addEventListener('change', function() {
+                const label = this.closest('.broadcast-branch-label');
+                if (label) {
+                    const checkMark = label.querySelector('.check-mark');
+                    if (checkMark) {
+                        checkMark.style.opacity = this.checked ? '1' : '0.2';
+                        checkMark.style.background = this.checked ? '#d1fae5' : '#f3f4f6';
+                        checkMark.style.color = this.checked ? '#059669' : '#9ca3af';
+                    }
+                }
+            });
+        });
+        
+        // Update counts
+        updateSelectedBranchCount();
         
     } catch(e) {
         console.error('❌ Load broadcast branches error:', e);
-        container.innerHTML = `<div class="text-red-500 text-sm py-3">❌ ${e.message}</div>`;
+        container.innerHTML = `
+            <div class="text-red-500 text-sm py-3 text-center">
+                ❌ লোড করতে সমস্যা: ${e.message}
+            </div>
+        `;
+    }
+}
+
+// ✅ সব ব্রাঞ্চ সিলেক্ট/আনসিলেক্ট
+function selectAllBroadcastBranches(select) {
+    document.querySelectorAll('.broadcast-branch-cb').forEach(cb => {
+        cb.checked = select;
+        
+        // Update check mark
+        const label = cb.closest('.broadcast-branch-label');
+        if (label) {
+            const checkMark = label.querySelector('.check-mark');
+            if (checkMark) {
+                checkMark.style.opacity = select ? '1' : '0.2';
+                checkMark.style.background = select ? '#d1fae5' : '#f3f4f6';
+                checkMark.style.color = select ? '#059669' : '#9ca3af';
+            }
+        }
+    });
+    
+    updateBroadcastCount();
+    updateSelectedBranchCount();
+}
+
+// ✅ Selected count আপডেট
+function updateSelectedBranchCount() {
+    const count = document.querySelectorAll('.broadcast-branch-cb:checked').length;
+    const countEl = document.getElementById('selectedBranchCount');
+    if (countEl) countEl.textContent = count;
+    
+    // Info box color পরিবর্তন
+    const infoBox = document.getElementById('broadcastSelectedInfo');
+    if (infoBox) {
+        if (count === 0) {
+            infoBox.style.background = '#fef2f2';
+            infoBox.style.borderColor = '#fca5a5';
+            infoBox.style.color = '#991b1b';
+        } else {
+            infoBox.style.background = '#ecfdf5';
+            infoBox.style.borderColor = '#6ee7b7';
+            infoBox.style.color = '#065f46';
+        }
     }
 }
 
@@ -30402,6 +30644,9 @@ function updateBroadcastCount() {
     } else if (target === 'select') {
         if (branchListEl) branchListEl.classList.remove('hidden');
         count = document.querySelectorAll('.broadcast-branch-cb:checked').length;
+        
+        // Selected info আপডেট
+        updateSelectedBranchCount();
     }
     
     if (countEl) countEl.textContent = count;
@@ -30568,6 +30813,8 @@ function startAdminMessagesPolling() {
         window.sendBroadcastMessage = sendBroadcastMessage;
         window.loadBroadcastBranches = loadBroadcastBranches;
         window.updateBroadcastCount = updateBroadcastCount;
+        window.selectAllBroadcastBranches = selectAllBroadcastBranches;
+        window.updateSelectedBranchCount = updateSelectedBranchCount;
         
         // ✅ Edit/Delete functions
         window.editAdminMessage = editAdminMessage;
