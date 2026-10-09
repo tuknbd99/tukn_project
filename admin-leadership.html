@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Leadership Management | TUKNBD Admin</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -894,6 +897,9 @@
 </div>
 
 <script>
+// ============================================================
+// SUPABASE CONFIG
+// ============================================================
 var SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
 var SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
 var sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -902,7 +908,11 @@ var allLeaders = [];
 var allBranches = [];
 var selectedPhotoFile = null;
 var currentAdmin = null;
+var leadershipRealtimeChannel = null;
 
+// ============================================================
+// Toast Notification
+// ============================================================
 function showToast(message, type) {
     if (!type) type = 'success';
     var toast = document.createElement('div');
@@ -925,8 +935,13 @@ function showToast(message, type) {
     }, 3500);
 }
 
+// ============================================================
+// INIT — Page load
+// ============================================================
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('======================================');
     console.log('Loading admin-leadership.html...');
+    console.log('======================================');
     
     var isInIframe = window.self !== window.top;
     console.log('isInIframe:', isInIframe);
@@ -954,6 +969,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 role: 'super_admin',
                 full_name: 'Admin' 
             };
+            console.log('Default admin for iframe mode');
         }
     } catch(e) {
         console.error('Admin parse error:', e);
@@ -969,6 +985,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (backBtn) backBtn.style.display = 'none';
     }
     
+    // Load data
     loadBranches().then(function() {
         return loadLeaders();
     }).then(function() {
@@ -977,6 +994,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (loader) loader.style.display = 'none';
         if (content) content.style.display = 'block';
         console.log('Page ready!');
+        
+        // Setup realtime
+        setupRealtime();
     }).catch(function(e) {
         console.error('Init error:', e);
         var loader = document.getElementById('pageLoader');
@@ -986,6 +1006,36 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
+// ============================================================
+// REALTIME — Auto sync leadership changes
+// ============================================================
+function setupRealtime() {
+    if (leadershipRealtimeChannel) {
+        try { sb.removeChannel(leadershipRealtimeChannel); } catch(e) {}
+    }
+    
+    leadershipRealtimeChannel = sb
+        .channel('leadership-live')
+        .on(
+            'postgres_changes',
+            { 
+                event: '*', 
+                schema: 'public', 
+                table: 'leadership' 
+            },
+            function(payload) {
+                console.log('🔔 Realtime update:', payload.eventType);
+                loadLeaders();
+            }
+        )
+        .subscribe(function(status) {
+            console.log('📡 Realtime status:', status);
+        });
+}
+
+// ============================================================
+// Branches লোড
+// ============================================================
 async function loadBranches() {
     try {
         var result = await sb
@@ -1014,12 +1064,17 @@ async function loadBranches() {
         select.innerHTML = optionsHtml;
         document.getElementById('statBranches').textContent = allBranches.length;
         
+        console.log('✅ Branches loaded:', allBranches.length);
+        
     } catch(e) {
         console.error('Branch load error:', e);
         showToast('Failed to load branches', 'error');
     }
 }
 
+// ============================================================
+// Leaders লোড
+// ============================================================
 async function loadLeaders() {
     var container = document.getElementById('leadersContainer');
     if (!container) return;
@@ -1027,6 +1082,8 @@ async function loadLeaders() {
     container.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><div class="loading-spinner" style="border-color:#e5e7eb; border-top-color:#059669; width:40px; height:40px;"></div><p style="margin-top:15px; color:#6b7280;">Loading leaders...</p></div>';
     
     try {
+        console.log('🔍 Loading leaders from DB...');
+        
         var result = await sb
             .from('leadership')
             .select('*')
@@ -1035,13 +1092,16 @@ async function loadLeaders() {
         if (result.error) throw result.error;
         
         allLeaders = result.data || [];
+        
+        console.log('✅ Loaded ' + allLeaders.length + ' leaders from DB');
+        
         updateStats();
         renderLeaders();
         
     } catch(e) {
-        console.error('Leader load error:', e);
+        console.error('❌ Leader load error:', e);
         var errMsg = e.message || 'Unknown error';
-        container.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i><h3>Load Failed</h3><p>' + errMsg + '</p><p style="font-size:12px; color:#999; margin-top:10px;">Check if "leadership" table exists in Supabase</p></div>';
+        container.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i><h3>Load Failed</h3><p>' + errMsg + '</p></div>';
     }
 }
 
@@ -1058,6 +1118,9 @@ function updateStats() {
     document.getElementById('statInactive').textContent = inactive;
 }
 
+// ============================================================
+// Leaders রেন্ডার
+// ============================================================
 function renderLeaders() {
     var container = document.getElementById('leadersContainer');
     if (!container) return;
@@ -1118,6 +1181,9 @@ function renderLeaders() {
     container.innerHTML = html;
 }
 
+// ============================================================
+// Modal Functions
+// ============================================================
 function openLeaderModal() {
     document.getElementById('modalTitle').innerHTML = '<i class="fas fa-user-plus"></i><span>Add New Leader</span>';
     document.getElementById('leaderForm').reset();
@@ -1213,6 +1279,9 @@ function handlePhotoSelect(event) {
     showToast('Photo selected', 'info');
 }
 
+// ============================================================
+// Upload Photo to Supabase Storage
+// ============================================================
 async function uploadPhoto(file, memberId) {
     var ext = file.name.split('.').pop();
     var fileName = memberId + '-' + Date.now() + '.' + ext;
@@ -1233,6 +1302,9 @@ async function uploadPhoto(file, memberId) {
     return urlResult.data.publicUrl;
 }
 
+// ============================================================
+// Save Leader
+// ============================================================
 async function saveLeader(event) {
     if (event) event.preventDefault();
     
@@ -1318,6 +1390,16 @@ async function saveLeader(event) {
         closeLeaderModal();
         await loadLeaders();
         
+        // ✅ Notify parent
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    action: 'leadership-changed',
+                    type: isEdit ? 'UPDATE' : 'INSERT'
+                }, '*');
+            }
+        } catch(e) {}
+        
     } catch(e) {
         console.error('Save error:', e);
         showToast('Error: ' + (e.message || 'Unknown'), 'error');
@@ -1329,6 +1411,9 @@ async function saveLeader(event) {
     return false;
 }
 
+// ============================================================
+// Toggle
+// ============================================================
 async function toggleLeader(id) {
     var leader = null;
     for (var i = 0; i < allLeaders.length; i++) {
@@ -1357,6 +1442,9 @@ async function toggleLeader(id) {
     }
 }
 
+// ============================================================
+// Delete
+// ============================================================
 async function deleteLeader(id) {
     var leader = null;
     for (var i = 0; i < allLeaders.length; i++) {
@@ -1382,6 +1470,21 @@ async function deleteLeader(id) {
     }
 }
 
+// ============================================================
+// Parent থেকে Message Handler
+// ============================================================
+window.addEventListener('message', function(event) {
+    console.log('📩 Message from parent:', event.data);
+    
+    if (event.data && event.data.action === 'reload-leaders') {
+        console.log('🔄 Parent requested reload');
+        loadLeaders();
+    }
+});
+
+// ============================================================
+// Modal backdrop
+// ============================================================
 var modalEl = document.getElementById('leaderModal');
 if (modalEl) {
     modalEl.addEventListener('click', function(e) {
@@ -1393,6 +1496,9 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeLeaderModal();
 });
 
+// ============================================================
+// Global Expose
+// ============================================================
 window.openLeaderModal = openLeaderModal;
 window.closeLeaderModal = closeLeaderModal;
 window.editLeader = editLeader;
@@ -1401,8 +1507,9 @@ window.deleteLeader = deleteLeader;
 window.handlePhotoSelect = handlePhotoSelect;
 window.saveLeader = saveLeader;
 window.loadLeaders = loadLeaders;
+window.loadBranches = loadBranches;
 
-console.log('admin-leadership.html loaded successfully');
+console.log('✅ admin-leadership.html ready!');
 </script>
 
 </body>
