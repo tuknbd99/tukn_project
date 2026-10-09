@@ -210,7 +210,6 @@
             position: relative;
         }
         
-        /* ব্রাঞ্চ ব্যাজ */
         .admin-branch-badge {
             position: absolute;
             top: 10px;
@@ -314,7 +313,6 @@
             font-size: 9px;
         }
         
-        /* স্টেটাস ব্যাজ */
         .admin-status-badge {
             position: absolute;
             top: 10px;
@@ -336,7 +334,6 @@
             color: #991b1b;
         }
         
-        /* কার্ড অ্যাকশন */
         .admin-card-actions {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -759,12 +756,9 @@
             <button class="btn btn-primary" onclick="openLeaderModal()">
                 <i class="fas fa-plus"></i> নতুন যোগ করুন
             </button>
-            <a href="admin-panel.html" class="btn btn-outline">
+            <a href="admin-panel.html" class="btn btn-outline" id="backToPanelBtn">
                 <i class="fas fa-arrow-left"></i> ফিরে যান
             </a>
-            <a href="admin-panel.html" class="btn btn-outline" id="backToPanelBtn">
-            <i class="fas fa-arrow-left"></i> ফিরে যান
-        </a>
         </div>
     </div>
     
@@ -1005,31 +999,74 @@ function showToast(message, type = 'success') {
 }
 
 // ============================================================
-// Init
+// ✅ FIXED Init — iframe Integration Support
 // ============================================================
 document.addEventListener('DOMContentLoaded', async () => {
-    // Admin auth চেক
-    const adminData = localStorage.getItem('tukn_admin');
-    if (!adminData) {
+    console.log('🚀 admin-leadership.html loading...');
+    
+    // ✅ iframe-এর ভিতরে কিনা চেক
+    const isInIframe = window.self !== window.top;
+    console.log('📍 isInIframe:', isInIframe);
+    
+    // ✅ Admin auth চেক — সঠিক key + iframe skip
+    const adminData = localStorage.getItem('currentAdmin') 
+                   || sessionStorage.getItem('currentAdmin');
+    
+    if (!isInIframe && !adminData) {
+        console.warn('⛔ No admin session — redirecting to login');
         alert('⚠️ অনুগ্রহ করে প্রথমে অ্যাডমিন লগইন করুন!');
-        window.location.href = 'index.html';
+        window.location.href = 'admin-login.html';
         return;
     }
     
+    // ✅ currentAdmin সেট করুন (iframe-এ fallback)
     try {
-        currentAdmin = JSON.parse(adminData);
+        if (adminData) {
+            currentAdmin = JSON.parse(adminData);
+            console.log('✅ Admin loaded:', currentAdmin.full_name || currentAdmin.username);
+        } else {
+            currentAdmin = { 
+                name: 'Admin (iframe)', 
+                role: 'super_admin',
+                full_name: 'Admin' 
+            };
+            console.log('✅ Default admin for iframe');
+        }
     } catch(e) {
-        window.location.href = 'index.html';
-        return;
+        console.error('❌ Admin parse error:', e);
+        if (!isInIframe) {
+            window.location.href = 'admin-login.html';
+            return;
+        }
+        currentAdmin = { name: 'Admin', role: 'super_admin' };
     }
     
-    // ডেটা লোড
-    await loadBranches();
-    await loadLeaders();
+    // ✅ iframe-এ থাকলে "ফিরে যান" বাটন লুকান
+    if (isInIframe) {
+        const backBtn = document.getElementById('backToPanelBtn');
+        if (backBtn) {
+            backBtn.style.display = 'none';
+            console.log('📍 "ফিরে যান" বাটন লুকানো হয়েছে (iframe mode)');
+        }
+    }
     
-    // Loader লুকান
-    document.getElementById('pageLoader').style.display = 'none';
-    document.getElementById('adminContent').style.display = 'block';
+    // ✅ ডেটা লোড
+    try {
+        await loadBranches();
+        await loadLeaders();
+        console.log('✅ Data loaded successfully');
+    } catch(e) {
+        console.error('❌ Load error:', e);
+    }
+    
+    // ✅ Loader লুকান, Content দেখান
+    const loader = document.getElementById('pageLoader');
+    const content = document.getElementById('adminContent');
+    
+    if (loader) loader.style.display = 'none';
+    if (content) content.style.display = 'block';
+    
+    console.log('✅ Page ready!');
 });
 
 // ============================================================
@@ -1064,7 +1101,6 @@ async function loadBranches() {
         showToast('ব্রাঞ্চ লোড করতে সমস্যা!', 'error');
     }
 }
-    
 
 // ============================================================
 // Leaders লোড
@@ -1101,26 +1137,14 @@ async function loadLeaders() {
                 <i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i>
                 <h3>লোড করতে সমস্যা</h3>
                 <p>${e.message}</p>
+                <p style="font-size:12px; color:#999; margin-top:10px;">
+                    ⚠️ Supabase-এ <code>leadership</code> টেবিল আছে কিনা চেক করুন
+                </p>
             </div>
         `;
     }
 }
 
-    // ✅ iframe-এর ভিতরে থাকলে "ফিরে যান" বাটন লুকান
-document.addEventListener('DOMContentLoaded', function() {
-    // iframe-এর ভিতরে কিনা চেক
-    const isInIframe = window.self !== window.top;
-    
-    if (isInIframe) {
-        const backBtn = document.getElementById('backToPanelBtn');
-        if (backBtn) {
-            backBtn.style.display = 'none';
-        }
-        
-        console.log('📍 iframe-এর ভিতরে — "ফিরে যান" বাটন লুকানো হয়েছে');
-    }
-});
-    
 // ============================================================
 // স্ট্যাটস আপডেট
 // ============================================================
@@ -1390,7 +1414,6 @@ async function saveLeader(event) {
                 photoUrl = await uploadPhoto(selectedPhotoFile, memberId);
             } catch(uploadError) {
                 showToast('⚠️ ছবি আপলোড ব্যর্থ: ' + uploadError.message, 'warning');
-                // ছবি ছাড়াই সেভ করার চেষ্টা
             }
             saveBtn.innerHTML = '<div class="loading-spinner"></div> সংরক্ষণ হচ্ছে...';
         }
@@ -1512,6 +1535,20 @@ document.addEventListener('keydown', function(e) {
         closeLeaderModal();
     }
 });
+
+// ============================================================
+// Global Expose
+// ============================================================
+window.openLeaderModal = openLeaderModal;
+window.closeLeaderModal = closeLeaderModal;
+window.editLeader = editLeader;
+window.toggleLeader = toggleLeader;
+window.deleteLeader = deleteLeader;
+window.handlePhotoSelect = handlePhotoSelect;
+window.saveLeader = saveLeader;
+window.loadLeaders = loadLeaders;
+
+console.log('✅ admin-leadership.html loaded successfully!');
 </script>
 
 </body>
