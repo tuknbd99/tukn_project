@@ -27,8 +27,51 @@
         .role-admin { color: #3b82f6; }
         .form-group { margin-bottom: 18px; }
         .form-group label { display: block; font-weight: 600; font-size: 13px; color: #374151; margin-bottom: 5px; }
-        .form-group input { width: 100%; padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 12px; font-size: 15px; transition: all 0.3s; background: #f9fafb; }
+        .form-group input { width: 100%; padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 12px; font-size: 15px; transition: all 0.3s; background: #f9fafb; box-sizing: border-box; }
         .form-group input:focus { border-color: #059669; background: white; outline: none; box-shadow: 0 0 0 4px rgba(5,150,105,0.1); }
+        
+        /* ✅ পাসওয়ার্ড কন্টেইনার + চোখের আইকন */
+        .password-wrapper {
+            position: relative;
+            width: 100%;
+        }
+        .password-wrapper input {
+            width: 100%;
+            padding: 12px 50px 12px 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            font-size: 15px;
+            transition: all 0.3s;
+            background: #f9fafb;
+            box-sizing: border-box;
+        }
+        .password-wrapper input:focus {
+            border-color: #059669;
+            background: white;
+            outline: none;
+            box-shadow: 0 0 0 4px rgba(5,150,105,0.1);
+        }
+        .toggle-password-btn {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #9ca3af;
+            font-size: 16px;
+            padding: 8px;
+            transition: color 0.3s;
+            z-index: 3;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .toggle-password-btn:hover {
+            color: #059669;
+        }
+        
         .login-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #059669, #047857); color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 700; cursor: pointer; transition: all 0.3s; }
         .login-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(5,150,105,0.3); }
         .login-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
@@ -36,12 +79,24 @@
         .footer-text { text-align: center; margin-top: 20px; font-size: 12px; color: #9ca3af; }
         .footer-text a { color: #059669; text-decoration: none; }
         .loading-spinner { display: inline-block; width: 18px; height: 18px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 8px; }
-        @keyframes spin { to { rotate(360deg); } }
+        @keyframes spin { to { rotate: 360deg; } }
         .toast { position: fixed; bottom: 24px; right: 24px; padding: 14px 24px; border-radius: 10px; color: white; z-index: 99999; animation: slideIn 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.2); font-weight: 600; max-width: 400px; }
         .toast-success { background: #059669; }
         .toast-error { background: #dc2626; }
         .toast-info { background: #3b82f6; }
+        .toast-warning { background: #f59e0b; }
         @keyframes slideIn { from { opacity:0; transform: translateX(40px); } to { opacity:1; transform: translateX(0); } }
+        
+        /* ✅ Caps Lock warning */
+        .caps-warning {
+            font-size: 11px;
+            color: #f59e0b;
+            margin-top: 4px;
+            display: none;
+        }
+        .caps-warning.show {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -73,10 +128,21 @@
                 <label><i class="fas fa-user mr-2"></i>ইউজারনেম</label>
                 <input type="text" id="username" placeholder="ইউজারনেম দিন" required autocomplete="username">
             </div>
+            
+            <!-- ✅ পাসওয়ার্ড + চোখের আইকন -->
             <div class="form-group">
                 <label><i class="fas fa-lock mr-2"></i>পাসওয়ার্ড</label>
-                <input type="password" id="password" placeholder="পাসওয়ার্ড দিন" required autocomplete="current-password">
+                <div class="password-wrapper">
+                    <input type="password" id="password" placeholder="পাসওয়ার্ড দিন" required autocomplete="current-password">
+                    <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility()" title="পাসওয়ার্ড দেখুন">
+                        <i class="fas fa-eye" id="eyeIcon"></i>
+                    </button>
+                </div>
+                <div class="caps-warning" id="capsWarning">
+                    <i class="fas fa-exclamation-triangle mr-1"></i> Caps Lock চালু আছে!
+                </div>
             </div>
+            
             <button type="submit" class="login-btn" id="loginBtn"><i class="fas fa-sign-in-alt mr-2"></i>লগইন করুন</button>
         </form>
 
@@ -94,51 +160,26 @@
         let selectedRole = 'super_admin';
         let supabaseClient = null;
 
+        // ✅ ভুল লগইন attempts ট্র্যাক
+        let failedAttempts = 0;
+
         // ============================================================
-        // 🔥 সমস্ত ফিচারের পারমিশন লিস্ট (সুপার অ্যাডমিনের জন্য)
+        // 🔥 সমস্ত ফিচারের পারমিশন লিস্ট
         // ============================================================
         const ALL_PERMISSIONS = {
-            view_dashboard: true,
-            view_users: true,
-            create_users: true,
-            edit_users: true,
-            delete_users: true,
-            view_admins: true,
-            create_admins: true,
-            edit_admins: true,
-            delete_admins: true,
-            manage_admin_permissions: true,
-            view_content: true,
-            create_content: true,
-            edit_content: true,
-            delete_content: true,
-            publish_content: true,
-            view_settings: true,
-            edit_settings: true,
-            view_reports: true,
-            view_analytics: true,
-            export_data: true,
-            view_system: true,
-            system_backup: true,
-            system_restore: true,
-            send_notifications: true,
-            manage_notifications: true,
-            view_database: true,
-            manage_database: true,
-            view_books: true,
-            create_books: true,
-            edit_books: true,
-            delete_books: true,
-            view_orders: true,
-            approve_orders: true,
-            reject_orders: true,
-            complete_orders: true,
-            full_access: true,
-            all_permissions: true
+            view_dashboard: true, view_users: true, create_users: true, edit_users: true, delete_users: true,
+            view_admins: true, create_admins: true, edit_admins: true, delete_admins: true,
+            manage_admin_permissions: true, view_content: true, create_content: true, edit_content: true,
+            delete_content: true, publish_content: true, view_settings: true, edit_settings: true,
+            view_reports: true, view_analytics: true, export_data: true, view_system: true,
+            system_backup: true, system_restore: true, send_notifications: true, manage_notifications: true,
+            view_database: true, manage_database: true, view_books: true, create_books: true,
+            edit_books: true, delete_books: true, view_orders: true, approve_orders: true,
+            reject_orders: true, complete_orders: true, full_access: true, all_permissions: true
         };
 
         // ============================================================
-        // 🔥 SUPABASE ক্লায়েন্ট ইনিশিয়ালাইজ
+        // 🔥 SUPABASE ক্লায়েন্ট ইনিশিয়ালাইজ
         // ============================================================
         function initSupabase() {
             if (supabaseClient) return supabaseClient;
@@ -152,6 +193,44 @@
             } catch(e) {
                 console.error('❌ Supabase init error:', e);
                 return null;
+            }
+        }
+
+        // ============================================================
+        // ✅ চোখের আইকন টগল
+        // ============================================================
+        function togglePasswordVisibility() {
+            const passwordInput = document.getElementById('password');
+            const eyeIcon = document.getElementById('eyeIcon');
+            
+            if (!passwordInput || !eyeIcon) return;
+            
+            const currentType = passwordInput.getAttribute('type');
+            const newType = currentType === 'password' ? 'text' : 'password';
+            
+            passwordInput.setAttribute('type', newType);
+            
+            if (newType === 'password') {
+                eyeIcon.className = 'fas fa-eye';
+            } else {
+                eyeIcon.className = 'fas fa-eye-slash';
+            }
+            
+            console.log('👁️ Password type:', newType);
+        }
+
+        // ============================================================
+        // ✅ Caps Lock ডিটেকশন
+        // ============================================================
+        function detectCapsLock(e) {
+            const capsWarning = document.getElementById('capsWarning');
+            if (!capsWarning) return;
+            
+            const isCapsOn = e.getModifierState && e.getModifierState('CapsLock');
+            if (isCapsOn) {
+                capsWarning.classList.add('show');
+            } else {
+                capsWarning.classList.remove('show');
             }
         }
 
@@ -172,8 +251,12 @@
             const oldToasts = document.querySelectorAll('.toast');
             oldToasts.forEach(t => t.remove());
             const toast = document.createElement('div');
-            const bgClass = type === 'success' ? 'toast-success' : type === 'error' ? 'toast-error' : 'toast-info';
-            const icon = type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle';
+            const bgClass = type === 'success' ? 'toast-success' : 
+                            type === 'error' ? 'toast-error' : 
+                            type === 'warning' ? 'toast-warning' : 'toast-info';
+            const icon = type === 'success' ? 'fa-check-circle' : 
+                         type === 'error' ? 'fa-exclamation-circle' : 
+                         type === 'warning' ? 'fa-exclamation-triangle' : 'fa-info-circle';
             toast.className = `toast ${bgClass}`;
             toast.innerHTML = `<i class="fas ${icon} mr-2"></i> ${message}`;
             document.body.appendChild(toast);
@@ -218,7 +301,6 @@
                     return;
                 }
 
-                // 🔥 Supabase থেকে অ্যাডমিন চেক
                 const { data, error } = await client
                     .from('admins')
                     .select('*')
@@ -234,17 +316,38 @@
                     return;
                 }
 
+                // ✅ ভুল তথ্য — failed attempts বাড়ান
                 if (!data || data.length === 0) {
+                    failedAttempts++;
+                    console.log(`❌ Failed attempt #${failedAttempts}`);
+                    
                     errorText.textContent = '❌ ইউজারনেম বা পাসওয়ার্ড ভুল!';
                     errorMsg.style.display = 'block';
                     loginBtn.disabled = false;
                     loginBtn.innerHTML = '<i class="fas fa-sign-in-alt mr-2"></i>লগইন করুন';
+                    
+                    // ✅ 3 বার ভুল হলে auto-refresh
+                    if (failedAttempts >= 3) {
+                        showToast('⚠️ ৩ বার ভুল! ৫ সেকেন্ড পর পেজ রিফ্রেশ হবে...', 'warning');
+                        
+                        // 5 সেকেন্ড countdown
+                        let countdown = 5;
+                        const countdownToast = setInterval(() => {
+                            countdown--;
+                            if (countdown > 0) {
+                                showToast(`🔄 ${countdown} সেকেন্ড পর পেজ রিফ্রেশ হবে...`, 'warning');
+                            }
+                        }, 1000);
+                        
+                        setTimeout(() => {
+                            clearInterval(countdownToast);
+                            window.location.reload();
+                        }, 5000);
+                    }
                     return;
                 }
 
                 const admin = data[0];
-
-                // 🔥 রোল চেক
                 const isSuper = admin.role === 'super_admin';
 
                 if (selectedRole === 'super_admin' && !isSuper) {
@@ -263,9 +366,10 @@
                     return;
                 }
 
-                // ============================================================
-                // 🔥 সুপার অ্যাডমিনের জন্য সকল পারমিশন সেট করুন
-                // ============================================================
+                // ✅ সফল — failed attempts reset
+                failedAttempts = 0;
+                window._loginAttempts = 0;
+
                 let permissions = admin.permissions || {};
                 
                 if (isSuper) {
@@ -273,7 +377,6 @@
                     console.log('👑 সুপার অ্যাডমিন: সমস্ত পারমিশন সক্রিয় করা হয়েছে');
                 }
 
-                // ✅ লগইন সফল - লোকাল স্টোরেজে সংরক্ষণ
                 const adminData = {
                     id: admin.id,
                     username: admin.username,
@@ -284,24 +387,16 @@
                     login_time: new Date().toISOString()
                 };
 
-                // 🔥 লোকাল স্টোরেজ এবং সেশন স্টোরেজে সংরক্ষণ
                 localStorage.setItem('currentAdmin', JSON.stringify(adminData));
                 sessionStorage.setItem('currentAdmin', JSON.stringify(adminData));
 
-                // ============================================================
-                // 🔥 সফল লগইন টোস্ট
-                // ============================================================
                 const roleLabel = isSuper ? 'সুপার অ্যাডমিন' : 'অ্যাডমিন';
                 const permCount = Object.keys(permissions).filter(k => permissions[k] === true).length;
                 showToast(`✅ স্বাগতম ${adminData.full_name}! (${roleLabel} - ${permCount}টি পারমিশন)`, 'success');
 
-                // ============================================================
-                // 🔥 রিডাইরেক্ট - সবাই admin-panel.html এ যাবে (২ নং ফাইল নেই বলে)
-                // ============================================================
                 setTimeout(() => {
-                    // সুপার অ্যাডমিন এবং অ্যাডমিন উভয়েই admin-panel.html এ যাবে
-                    window.location.href = 'admin-panel.html';
-                }, 1000);
+                    window.location.replace('admin-panel.html');
+                }, 1200);
 
             } catch (err) {
                 console.error('❌ Login error:', err);
@@ -313,7 +408,7 @@
         }
 
         // ============================================================
-        // 🔥 পারমিশন চেক ফাংশন
+        // 🔥 পারমিশন চেক
         // ============================================================
         function hasPermission(permissionName) {
             try {
@@ -335,37 +430,57 @@
             
             initSupabase();
             
-            const existingAdmin = localStorage.getItem('currentAdmin') || sessionStorage.getItem('currentAdmin');
-            if (existingAdmin) {
-                try {
-                    const admin = JSON.parse(existingAdmin);
-                    if (admin.username) {
-                        console.log('ℹ️ ইতিমধ্যে লগইন করা আছে:', admin.username);
-                        // admin-panel.html এ রিডাইরেক্ট করুন
-                        setTimeout(() => {
-                            window.location.href = 'admin-panel.html';
-                        }, 500);
+            // ✅ Password field reset
+            const pwdField = document.getElementById('password');
+            const userField = document.getElementById('username');
+            const eyeIcon = document.getElementById('eyeIcon');
+            
+            if (userField) userField.value = '';
+            if (pwdField) {
+                pwdField.value = '';
+                pwdField.setAttribute('type', 'password');
+            }
+            if (eyeIcon) eyeIcon.className = 'fas fa-eye';
+            
+            // ✅ Caps Lock ডিটেকশন
+            if (pwdField) {
+                pwdField.addEventListener('keyup', detectCapsLock);
+                pwdField.addEventListener('keydown', detectCapsLock);
+            }
+            
+            // ✅ ESC কী — error message লুকানো
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    const errMsg = document.getElementById('errorMsg');
+                    if (errMsg) errMsg.style.display = 'none';
+                }
+            });
+        });
+
+        // ============================================================
+        // 🔥 কীবোর্ড সাপোর্ট (Enter)
+        // ============================================================
+        document.addEventListener('DOMContentLoaded', function() {
+            const pwdField = document.getElementById('password');
+            const userField = document.getElementById('username');
+            const form = document.getElementById('loginForm');
+            
+            if (pwdField && form) {
+                pwdField.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
                     }
-                } catch(e) {}
+                });
             }
-
-            document.getElementById('username').value = '';
-            document.getElementById('password').value = '';
-            document.getElementById('password').placeholder = 'পাসওয়ার্ড দিন';
-        });
-
-        // ============================================================
-        // 🔥 কীবোর্ড সাপোর্ট
-        // ============================================================
-        document.getElementById('password').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                document.getElementById('loginForm').dispatchEvent(new Event('submit'));
-            }
-        });
-
-        document.getElementById('username').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                document.getElementById('password').focus();
+            
+            if (userField && pwdField) {
+                userField.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        pwdField.focus();
+                    }
+                });
             }
         });
 
@@ -377,6 +492,7 @@
         window.initSupabase = initSupabase;
         window.showToast = showToast;
         window.hasPermission = hasPermission;
+        window.togglePasswordVisibility = togglePasswordVisibility;
 
         console.log('✅ অ্যাডমিন লগইন পেজ রেডি!');
         console.log('📌 সুপার অ্যাডমিন → admin-panel.html (সব পারমিশন সহ)');
