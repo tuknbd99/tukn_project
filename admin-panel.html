@@ -7652,18 +7652,40 @@ function showTab(tabName) {
                 if (typeof loadNoticesList === 'function') loadNoticesList();
                 break;
             case 'leadership':
-            console.log('🎯 Opening leadership tab...');
-            const iframeEl = document.getElementById('leadershipIframe');
-            if (iframeEl) {
-                // ✅ ALWAYS force fresh load with timestamp
-                const ts = Date.now();
-                iframeEl.src = 'about:blank';
-                setTimeout(() => {
-                    iframeEl.src = 'admin-leadership.html?t=' + ts;
-                    console.log('✅ Leadership iframe loaded with timestamp:', ts);
-                }, 100);
+    console.log('🎯 Opening leadership tab...');
+    
+    var leadershipIframe = document.getElementById('leadershipIframe');
+    if (leadershipIframe) {
+        // Always force fresh load with cache bypass
+        var ts = Date.now();
+        var currentSrc = leadershipIframe.src;
+        
+        // Only reload if not already loaded recently
+        if (!currentSrc || 
+            currentSrc === '' || 
+            currentSrc.includes('about:blank') ||
+            currentSrc.indexOf('admin-leadership.html') === -1) {
+            
+            leadershipIframe.src = 'about:blank';
+            setTimeout(function() {
+                leadershipIframe.src = 'admin-leadership.html?t=' + ts;
+                console.log('✅ Leadership iframe loaded:', ts);
+            }, 100);
+        } else {
+            // Already loaded — just refresh data
+            try {
+                if (leadershipIframe.contentWindow && 
+                    leadershipIframe.contentWindow.loadLeaders) {
+                    leadershipIframe.contentWindow.loadLeaders();
+                    console.log('✅ Iframe data refreshed');
+                }
+            } catch(e) {
+                console.log('Cannot access iframe, reloading...');
+                leadershipIframe.src = 'admin-leadership.html?t=' + ts;
             }
-            break;
+        }
+    }
+    break;
             case 'about':
                 if (typeof loadAboutContent === 'function') loadAboutContent();
                 break;
@@ -31034,6 +31056,125 @@ function startAdminMessagesPolling() {
         
         console.log('✅ Admin Messages System loaded!');
         console.log('✅ Direct Forms Setup Complete!');
+
+    // ============================================================
+// 🎯 LEADERSHIP INTEGRATION — Parent Side
+// ============================================================
+
+// ✅ STEP 1: Force refresh function
+async function forceRefreshLeadership() {
+    console.log('🔥 Force refreshing leadership iframe...');
+    
+    var iframe = document.getElementById('leadershipIframe');
+    if (!iframe) {
+        if (typeof showToast === 'function') {
+            showToast('❌ Leadership iframe পাওয়া যায়নি', 'error');
+        }
+        return;
+    }
+    
+    // ✅ Reload with cache bypass
+    iframe.src = 'about:blank';
+    setTimeout(function() {
+        iframe.src = 'admin-leadership.html?t=' + Date.now() + '&r=' + Math.random().toString(36).substring(7);
+        console.log('✅ Leadership iframe reloaded');
+    }, 150);
+    
+    if (typeof showToast === 'function') {
+        showToast('🔄 রিফ্রেশ করা হয়েছে', 'info');
+    }
+}
+
+window.forceRefreshLeadership = forceRefreshLeadership;
+
+// ============================================================
+// ✅ STEP 2: Realtime setup for leadership changes
+// ============================================================
+var leadershipRealtimeChannel = null;
+
+function setupLeadershipRealtime() {
+    var client = (typeof initSupabaseClient === 'function') 
+        ? initSupabaseClient() 
+        : (window.supabaseClient || null);
+    
+    if (!client) {
+        console.warn('⚠️ Supabase client not ready for realtime');
+        return;
+    }
+    
+    // Cleanup old channel
+    if (leadershipRealtimeChannel) {
+        try { 
+            client.removeChannel(leadershipRealtimeChannel); 
+        } catch(e) {}
+        leadershipRealtimeChannel = null;
+    }
+    
+    // Subscribe to changes
+    leadershipRealtimeChannel = client
+        .channel('leadership-parent-sync')
+        .on(
+            'postgres_changes',
+            { 
+                event: '*', 
+                schema: 'public', 
+                table: 'leadership' 
+            },
+            function(payload) {
+                console.log('🔔 Leadership realtime:', payload.eventType);
+                
+                // Reload iframe via postMessage
+                var iframe = document.getElementById('leadershipIframe');
+                if (iframe && iframe.contentWindow) {
+                    try {
+                        iframe.contentWindow.postMessage(
+                            { action: 'reload-leaders' },
+                            '*'
+                        );
+                        console.log('📤 Message sent to iframe');
+                    } catch(e) {
+                        console.warn('PostMessage failed:', e);
+                    }
+                }
+            }
+        )
+        .subscribe(function(status) {
+            console.log('📡 Leadership realtime:', status);
+        });
+}
+
+window.setupLeadershipRealtime = setupLeadershipRealtime;
+
+// ✅ Start realtime after page ready
+setTimeout(function() {
+    setupLeadershipRealtime();
+}, 3000);
+
+// ============================================================
+// ✅ STEP 3: Listen for messages from iframe
+// ============================================================
+window.addEventListener('message', function(event) {
+    if (event.data && event.data.action === 'leadership-changed') {
+        console.log('📩 Iframe says leadership changed:', event.data.type);
+        
+        // Refresh related data
+        if (typeof loadRealDashboard === 'function') loadRealDashboard();
+        if (typeof updateAllBadges === 'function') updateAllBadges();
+    }
+});
+
+// ============================================================
+// ✅ STEP 4: Backup refresh button handler
+// ============================================================
+function loadLeadershipInIframe() {
+    if (typeof forceRefreshLeadership === 'function') {
+        forceRefreshLeadership();
+    }
+}
+
+window.loadLeadershipInIframe = loadLeadershipInIframe;
+
+console.log('✅ Leadership parent-side integration loaded');
         
         </script>
     </body>
