@@ -13269,192 +13269,210 @@ async function showDueMemberInvoice(memberId) {
 }
 
 // ============================================================
-// 2️⃣ Render Invoice HTML
+// 📄 Show Due Member Invoice — With Loan Integration
 // ============================================================
-function renderDueInvoiceHTML(data) {
-    const { 
-        member, expectedTotal, paidTotal, dueAmount, 
-        dueMonths, monthlySavings, monthsSinceJoin, 
-        branchInfo, generatedAt, payments 
-    } = data;
+async function showDueMemberInvoice(memberId) {
+    console.log('📄 showDueMemberInvoice:', memberId);
     
-    const fmt = (n) => {
-        const num = Number(n) || 0;
-        return num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    };
+    const client = initSupabaseClient();
+    if (!client) { showToast('❌ সংযোগ সমস্যা!', 'error'); return; }
     
-    const fmtDate = (d) => {
-        if (!d) return '-';
+    const modal = document.getElementById('dueInvoiceModal');
+    const content = document.getElementById('dueInvoiceContent');
+    
+    if (!modal || !content) { showToast('❌ মডাল পাওয়া যায়নি!', 'error'); return; }
+    
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    modal.style.display = 'flex';
+    
+    content.innerHTML = `
+        <div style="text-align:center; padding:40px; color:#9ca3af;">
+            <div class="loading-spinner" style="margin:0 auto 12px;"></div>
+            <p>ইনভয়েস লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    try {
+        // ✅ 1. Load member
+        const { data: member, error: mError } = await client
+            .from('members')
+            .select('*')
+            .eq('member_id', memberId)
+            .single();
+        
+        if (mError || !member) throw new Error('সদস্য পাওয়া যায়নি');
+        
+        // ✅ 2. Load payments
+        const { data: payments } = await client
+            .from('payments')
+            .select('amount, month, year, submitted_at, payment_method')
+            .eq('member_id', memberId)
+            .eq('status', 'approved')
+            .order('submitted_at', { ascending: false });
+        
+        // ✅ 3. 🆕 Load active loans
+        const { data: loans, error: lError } = await client
+            .from('loan_applications')
+            .select('*')
+            .eq('member_id', memberId)
+            .eq('status', 'approved')
+            .order('approved_at', { ascending: false });
+        
+        if (lError) {
+            console.warn('⚠️ Loan load warning:', lError);
+        }
+        
+        // ✅ 4. Calculate savings due
+        const monthlySavings = Number(member.monthly_savings) || 500;
+        const joinDate = new Date(member.created_at || Date.now());
+        const now = new Date();
+        const monthsSinceJoin = Math.max(1,
+            (now.getFullYear() - joinDate.getFullYear()) * 12 +
+            (now.getMonth() - joinDate.getMonth()) + 1
+        );
+        
+        const expectedTotal = monthsSinceJoin * monthlySavings;
+        const paidTotal = (payments || []).reduce(
+            (sum, p) => sum + (Number(p.amount) || 0), 0
+        );
+        const dueAmount = Math.max(0, expectedTotal - paidTotal);
+        const dueMonths = monthlySavings > 0 ? Math.ceil(dueAmount / monthlySavings) : 0;
+        
+        // ✅ 5. 🆕 Process loans with payment info
+        const activeLoans = [];
+        let loanSummary = {
+            totalAmount: 0,
+            totalPaid: 0,
+            totalRemaining: 0,
+            totalEmi: 0,
+            overdueCount: 0
+        };
+        
+        if (loans && loans.length > 0) {
+            for (const loan of loans) {
+                // Get loan payments
+                const { data: loanPayments } = await client
+                    .from('loan_payments')
+                    .select('total_amount, emi_amount, status, payment_date, installment_no')
+                    .eq('loan_id', loan.id)
+                    .eq('status', 'approved');
+                
+                const paidAmount = (loanPayments || []).reduce(
+                    (sum, p) => sum + (Number(p.total_amount) || Number(p.emi_amount) || 0), 0
+                );
+                
+                const totalAmount = Number(loan.total_amount) || Number(loan.amount) || 0;
+                const remainingAmount = Math.max(0, totalAmount - paidAmount);
+                const emiAmount = Number(loan.emi_amount) || 0;
+                const durationMonths = Number(loan.duration_months) || 12;
+                const totalInstallments = durationMonths;
+                
+                // Calculate paid installments
+                const paidInstallments = (loanPayments || []).length;
+                const remainingInstallments = Math.max(0, totalInstallments - paidInstallments);
+                
+                // Calculate next EMI date
+                let nextEmiDate = null;
+                let overdueCount = 0;
+                
+                if (remainingAmount > 0 && emiAmount > 0) {
+                    const startDate = new Date(loan.approved_at || loan.submitted_at || Date.now());
+                    // Next EMI = start + paid count months
+                    const nextEmi = new Date(startDate);
+                    nextEmi.setMonth(nextEmi.getMonth() + paidInstallments + 1);
+                    nextEmiDate = nextEmi.toISOString();
+                    
+                    // Check overdue
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    
+                    // Count how many EMIs should have been paid
+                    const monthsPassed = Math.floor(
+                        (today - startDate) / (1000 * 60 * 60 * 24 * 30)
+                    );
+                    const expectedInstallments = Math.min(monthsPassed, totalInstallments);
+                    overdueCount = Math.max(0, expectedInstallments - paidInstallments);
+                }
+                
+                activeLoans.push({
+                    loan_id: loan.id,
+                    loan_type: loan.loan_type || 'সাধারণ লোন',
+                    amount: Number(loan.amount) || 0,
+                    total_amount: totalAmount,
+                    paid_amount: paidAmount,
+                    remaining_amount: remainingAmount,
+                    emi_amount: emiAmount,
+                    duration_months: durationMonths,
+                    total_installments: totalInstallments,
+                    paid_installments: paidInstallments,
+                    remaining_installments: remainingInstallments,
+                    next_emi_date: nextEmiDate,
+                    overdue_count: overdueCount,
+                    start_date: loan.approved_at || loan.submitted_at,
+                    status: loan.status
+                });
+                
+                loanSummary.totalAmount += totalAmount;
+                loanSummary.totalPaid += paidAmount;
+                loanSummary.totalRemaining += remainingAmount;
+                loanSummary.totalEmi += emiAmount;
+                loanSummary.overdueCount += overdueCount;
+            }
+        }
+        
+        // ✅ 6. Get branch info
+        let branchInfo = '';
         try {
-            return new Date(d).toLocaleDateString('bn-BD', {
-                year: 'numeric', month: 'long', day: 'numeric'
-            });
-        } catch(e) { return '-'; }
-    };
-    
-    const generateDate = new Date(generatedAt).toLocaleString('bn-BD', {
-        year: 'numeric', month: 'long', day: 'numeric',
-        hour: '2-digit', minute: '2-digit'
-    });
-    
-    const isFullyPaid = dueAmount <= 0;
-    const invoiceNo = `INV-${member.member_id || 'M'}-${Date.now().toString().slice(-6)}`;
-    
-    // Recent payments table
-    let paymentsHTML = '';
-    if (payments && payments.length > 0) {
-        const recentPayments = payments.slice(0, 10);
-        paymentsHTML = `
-            <div style="margin-top:20px;">
-                <h4 style="font-size:13px; font-weight:700; color:#1f2937; margin:0 0 10px; text-transform:uppercase;">
-                    📋 সাম্প্রতিক পেমেন্ট (সর্বশেষ ১০টি)
-                </h4>
-                <div style="overflow-x:auto; border:1px solid #e5e7eb; border-radius:8px;">
-                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
-                        <thead style="background:#f9fafb;">
-                            <tr>
-                                <th style="padding:8px 10px; text-align:left; border-bottom:1px solid #e5e7eb;">তারিখ</th>
-                                <th style="padding:8px 10px; text-align:left; border-bottom:1px solid #e5e7eb;">মাস</th>
-                                <th style="padding:8px 10px; text-align:right; border-bottom:1px solid #e5e7eb;">পরিমাণ</th>
-                                <th style="padding:8px 10px; text-align:center; border-bottom:1px solid #e5e7eb;">পদ্ধতি</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${recentPayments.map(p => `
-                                <tr>
-                                    <td style="padding:8px 10px; border-bottom:1px solid #f3f4f6;">${fmtDate(p.submitted_at)}</td>
-                                    <td style="padding:8px 10px; border-bottom:1px solid #f3f4f6;">${p.month || ''} ${p.year || ''}</td>
-                                    <td style="padding:8px 10px; border-bottom:1px solid #f3f4f6; text-align:right; color:#059669; font-weight:600;">
-                                        ৳ ${fmt(p.amount)}
-                                    </td>
-                                    <td style="padding:8px 10px; border-bottom:1px solid #f3f4f6; text-align:center; font-size:11px;">
-                                        ${p.payment_method || 'cash'}
-                                    </td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                </div>
+            const { data: bm } = await client
+                .from('branch_members')
+                .select('branches(branch_name, branch_code)')
+                .eq('member_id', memberId)
+                .eq('status', 'active')
+                .maybeSingle();
+            
+            if (bm?.branches?.branch_name) {
+                branchInfo = bm.branches.branch_name;
+                if (bm.branches.branch_code) {
+                    branchInfo += ` (${bm.branches.branch_code})`;
+                }
+            }
+        } catch(e) {}
+        
+        // ✅ 7. Store + render
+        window.currentDueInvoiceData = {
+            member,
+            payments: payments || [],
+            expectedTotal,
+            paidTotal,
+            dueAmount,
+            dueMonths,
+            monthlySavings,
+            monthsSinceJoin,
+            branchInfo,
+            generatedAt: new Date().toISOString(),
+            activeLoans,      // 🆕
+            loanSummary       // 🆕
+        };
+        
+        content.innerHTML = renderDueInvoiceHTML(window.currentDueInvoiceData);
+        
+        console.log('✅ Invoice rendered with loans:', activeLoans.length);
+        
+    } catch(e) {
+        console.error('❌ Invoice error:', e);
+        content.innerHTML = `
+            <div style="text-align:center; padding:40px; color:#dc2626;">
+                <i class="fas fa-exclamation-circle" style="font-size:48px;"></i>
+                <h3 style="margin:16px 0 8px;">ইনভয়েস লোড করা যায়নি</h3>
+                <p style="color:#6b7280; margin-bottom:16px;">${e.message}</p>
+                <button onclick="showDueMemberInvoice('${memberId}')" 
+                        style="padding:10px 24px; background:#059669; color:white; border:none; border-radius:8px; font-weight:600; cursor:pointer;">
+                    🔄 আবার চেষ্টা করুন
+                </button>
             </div>
         `;
     }
-    
-    return `
-        <div id="dueInvoicePrintArea" style="background:white; padding:24px; font-family:'Noto Sans Bengali', sans-serif; color:#1f2937; max-width:900px; margin:0 auto;">
-            
-            <!-- Header -->
-            <div style="text-align:center; border-bottom:3px solid #059669; padding-bottom:16px; margin-bottom:20px;">
-                <h1 style="font-size:22px; font-weight:800; color:#059669; margin:0 0 4px;">
-                    ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ
-                </h1>
-                <p style="font-size:13px; color:#6b7280; margin:0;">
-                    সঞ্চয় বকেয়া ইনভয়েস / Savings Due Invoice
-                </p>
-                ${branchInfo ? `<p style="font-size:12px; color:#9ca3af; margin:4px 0 0;">শাখা: ${branchInfo}</p>` : ''}
-            </div>
-            
-            <!-- Invoice Info -->
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:20px; padding:12px; background:#f9fafb; border-radius:8px; border:1px solid #e5e7eb; flex-wrap:wrap; gap:12px;">
-                <div>
-                    <p style="font-size:10px; color:#6b7280; margin:0; text-transform:uppercase; letter-spacing:0.5px;">ইনভয়েস নম্বর</p>
-                    <p style="font-size:14px; font-weight:700; color:#059669; margin:4px 0 0; font-family:monospace;">${invoiceNo}</p>
-                </div>
-                <div style="text-align:right;">
-                    <p style="font-size:10px; color:#6b7280; margin:0; text-transform:uppercase; letter-spacing:0.5px;">ইস্যু তারিখ</p>
-                    <p style="font-size:13px; font-weight:600; margin:4px 0 0;">${generateDate}</p>
-                </div>
-            </div>
-            
-            <!-- Member Info -->
-            <div style="background:linear-gradient(135deg, #f0fdf4, #ecfdf5); padding:16px; border-radius:8px; margin-bottom:20px; border:1px solid #86efac;">
-                <h3 style="font-size:13px; font-weight:700; color:#065f46; margin:0 0 12px; text-transform:uppercase; letter-spacing:0.5px;">
-                    👤 সদস্যের তথ্য
-                </h3>
-                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px 20px; font-size:13px;">
-                    <div><strong>নাম:</strong> <span style="color:#065f46; font-weight:600;">${member.full_name || '-'}</span></div>
-                    <div><strong>সদস্য আইডি:</strong> <span style="font-family:monospace; color:#065f46; font-weight:600;">${member.member_id || '-'}</span></div>
-                    <div><strong>মোবাইল:</strong> ${member.mobile || '-'}</div>
-                    <div><strong>জেলা:</strong> ${member.present_district || '-'}</div>
-                    <div><strong>যোগদানের তারিখ:</strong> ${fmtDate(member.created_at)}</div>
-                    <div><strong>মাসিক সঞ্চয়:</strong> <span style="color:#059669; font-weight:700;">৳ ${fmt(monthlySavings)}</span></div>
-                </div>
-            </div>
-            
-            <!-- Financial Summary -->
-            <div style="margin-bottom:20px;">
-                <h3 style="font-size:13px; font-weight:700; color:#1f2937; margin:0 0 12px; text-transform:uppercase; letter-spacing:0.5px;">
-                    💰 আর্থিক সারসংক্ষেপ
-                </h3>
-                <table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid #e5e7eb; border-radius:8px; overflow:hidden;">
-                    <tr style="background:#f9fafb;">
-                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb;">সদস্য থাকার মেয়াদ</td>
-                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">
-                            ${monthsSinceJoin} মাস
-                        </td>
-                    </tr>
-                    <tr>
-                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb;">প্রত্যাশিত মোট সঞ্চয়</td>
-                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600; color:#2563eb;">
-                            ৳ ${fmt(expectedTotal)}
-                        </td>
-                    </tr>
-                    <tr style="background:#f9fafb;">
-                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb;">পরিশোধিত</td>
-                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600; color:#059669;">
-                            ৳ ${fmt(paidTotal)}
-                        </td>
-                    </tr>
-                    <tr style="background:${isFullyPaid ? '#ecfdf5' : '#fef2f2'};">
-                        <td style="padding:16px 14px; border-top:2px solid ${isFullyPaid ? '#059669' : '#dc2626'};">
-                            <strong style="font-size:14px; color:${isFullyPaid ? '#065f46' : '#991b1b'};">
-                                ${isFullyPaid ? '✅ মোট বকেয়া' : '⚠️ মোট বকেয়া'}
-                            </strong>
-                        </td>
-                        <td style="padding:16px 14px; border-top:2px solid ${isFullyPaid ? '#059669' : '#dc2626'}; text-align:right;">
-                            <strong style="font-size:20px; color:${isFullyPaid ? '#059669' : '#dc2626'};">
-                                ৳ ${fmt(dueAmount)}
-                            </strong>
-                            ${!isFullyPaid ? `
-                                <p style="font-size:11px; color:#991b1b; margin:4px 0 0;">
-                                    (${dueMonths} মাসের সঞ্চয় বাকি)
-                                </p>
-                            ` : `
-                                <p style="font-size:11px; color:#059669; margin:4px 0 0;">
-                                    ✅ সব সঞ্চয় পরিশোধিত
-                                </p>
-                            `}
-                        </td>
-                    </tr>
-                </table>
-            </div>
-            
-            <!-- Recent Payments -->
-            ${paymentsHTML}
-            
-            <!-- Notice -->
-            <div style="background:#fef3c7; border-left:4px solid #f59e0b; padding:12px 16px; border-radius:6px; margin-top:20px;">
-                <p style="font-size:12px; color:#92400e; margin:0; line-height:1.6;">
-                    <strong>📌 নোট:</strong> ${isFullyPaid 
-                        ? 'আপনার কোনো সঞ্চয় বকেয়া নেই। ধন্যবাদ।' 
-                        : `আপনার বকেয়া সঞ্চয় দ্রুত পরিশোধ করার জন্য অনুরোধ করা হচ্ছে। যেকোনো প্রশ্নে সংগঠনের অফিসে যোগাযোগ করুন।`}
-                </p>
-            </div>
-            
-            <!-- Footer -->
-            <div style="margin-top:30px; padding-top:16px; border-top:2px solid #e5e7eb; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:16px;">
-                <div style="font-size:11px; color:#6b7280;">
-                    <p style="margin:0;">ইস্যু: ${generateDate}</p>
-                    <p style="margin:4px 0 0;">TUKNBD Admin Panel</p>
-                </div>
-                <div style="text-align:center;">
-                    <div style="width:180px; border-top:1px solid #333; padding-top:6px; margin-top:30px;">
-                        <p style="font-size:11px; color:#6b7280; margin:0;">অনুমোদিত স্বাক্ষর</p>
-                    </div>
-                </div>
-            </div>
-            
-        </div>
-    `;
 }
 
 // ============================================================
@@ -13554,37 +13572,98 @@ function downloadDueInvoicePDF() {
 }
 
 // ============================================================
-// 6️⃣ Share on WhatsApp
+// 📱 SHARE WhatsApp — With Loan Info
 // ============================================================
 function shareDueInvoiceWhatsApp() {
     const data = window.currentDueInvoiceData;
-    if (!data) {
-        showToast('❌ ইনভয়েস পাওয়া যায়নি', 'error');
-        return;
-    }
+    if (!data) { showToast('❌ ইনভয়েস পাওয়া যায়নি', 'error'); return; }
     
-    const { member, dueAmount, monthsSinceJoin, monthlySavings } = data;
+    const { 
+        member, dueAmount, dueMonths, monthlySavings, monthsSinceJoin,
+        activeLoans, loanSummary 
+    } = data;
     
     const fmt = (n) => (Number(n) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const bnNum = (n) => {
+        const bnDigits = ['০','১','২','৩','৪','৫','৬','৭','৮','৯'];
+        return String(n).replace(/\d/g, d => bnDigits[d]);
+    };
     
-    const message = `আসসালামু আলাইকুম ${member.full_name},
+    const hasLoans = activeLoans && activeLoans.length > 0;
+    const hasSavingsDue = dueAmount > 0;
+    
+    // Build loan message part
+    let loanMessagePart = '';
+    if (hasLoans) {
+        loanMessagePart = `
+━━━━━━━━━━━━━━━━━━━━
+🏦 লোন সংক্রান্ত তথ্য
+━━━━━━━━━━━━━━━━━━━━
+💰 মোট লোন: ৳ ${bnNum(fmt(loanSummary.totalAmount))}
+✅ পরিশোধিত: ৳ ${bnNum(fmt(loanSummary.totalPaid))}
+⚠️ মোট বাকি: ৳ ${bnNum(fmt(loanSummary.totalRemaining))}
+📅 মাসিক কিস্তি: ৳ ${bnNum(fmt(loanSummary.totalEmi))}
 
-📋 সঞ্চয় বকেয়া নোটিশ
+📋 বিস্তারিত লোন:
+${activeLoans.map(loan => 
+    `   • ${loan.loan_type}: ৳ ${bnNum(fmt(loan.amount))} (বাকি: ৳ ${bnNum(fmt(loan.remaining_amount))})`
+).join('\n')}
+${loanSummary.overdueCount > 0 ? `\n⚠️ ${bnNum(loanSummary.overdueCount)}টি কিস্তি বিলম্বিত!` : ''}
+`;
+    }
+    
+    // Build intro message
+    let intro = '';
+    if (hasSavingsDue && hasLoans) {
+        intro = `আপনার অবগতির জন্য জানানো যাচ্ছে যে, আপনার ${bnNum(dueMonths)} মাসের সঞ্চয় বকেয়া এবং লোন বাকি রয়েছে। অনুগ্রহ করে দ্রুত পরিশোধের চেষ্টা করুন। আপনার বিস্তারিত তথ্য নিচে দেওয়া হলো:`;
+    } else if (hasSavingsDue) {
+        intro = `আপনার অবগতির জন্য জানানো যাচ্ছে যে, আপনার ${bnNum(dueMonths)} মাসের সঞ্চয় বকেয়া রয়েছে। অনুগ্রহ করে দ্রুত পরিশোধের চেষ্টা করুন। আপনার বিস্তারিত তথ্য নিচে দেওয়া হলো:`;
+    } else if (hasLoans) {
+        intro = `আপনার অবগতির জন্য জানানো যাচ্ছে যে, আপনার লোন বাকি রয়েছে। অনুগ্রহ করে দ্রুত পরিশোধের চেষ্টা করুন। আপনার বিস্তারিত তথ্য নিচে দেওয়া হলো:`;
+    } else {
+        intro = `আপনার কোনো বকেয়া নেই। আপনার নিয়মিত সঞ্চয়ের জন্য ধন্যবাদ। আপনার বিস্তারিত তথ্য নিচে দেওয়া হলো:`;
+    }
+    
+    const message = 
+`আসসালামু আলাইকুম ওয়া রাহমাতুল্লাহ।
 
+প্রিয় ${member.full_name},
+
+${intro}
+
+━━━━━━━━━━━━━━━━━━━━
+📋 সদস্যের তথ্য
+━━━━━━━━━━━━━━━━━━━━
 🆔 সদস্য আইডি: ${member.member_id}
-💰 মাসিক সঞ্চয়: ৳ ${fmt(monthlySavings)}
-📅 মেয়াদ: ${monthsSinceJoin} মাস
-⚠️ মোট বকেয়া: ৳ ${fmt(dueAmount)}
+📱 মোবাইল: ${member.mobile || 'N/A'}
+📍 জেলা: ${member.present_district || 'N/A'}
 
-অনুগ্রহ করে দ্রুত আপনার বকেয়া সঞ্চয় পরিশোধ করুন।
+━━━━━━━━━━━━━━━━━━━━
+💰 সঞ্চয় বিবরণ
+━━━━━━━━━━━━━━━━━━━━
+📅 সদস্য থাকার মেয়াদ: ${bnNum(monthsSinceJoin)} মাস
+💵 মাসিক সঞ্চয়: ৳ ${bnNum(fmt(monthlySavings))}
+${hasSavingsDue ? `⚠️ সঞ্চয় বকেয়া: ৳ ${bnNum(fmt(dueAmount))}` : '✅ সঞ্চয় সম্পূর্ণ পরিশোধিত'}
+${loanMessagePart}
+━━━━━━━━━━━━━━━━━━━━
 
-ধন্যবাদ,
-ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ`;
+আপনার সহযোগিতার জন্য আন্তরিক ধন্যবাদ।
+
+🌙 ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ
+
+📞 যোগাযোগের জন্য:
+অফিস: 01518912499
+ইমেইল: tukknbd99@gmail.com`;
     
     const phone = (member.mobile || '').replace(/\D/g, '');
-    const url = phone 
-        ? `https://wa.me/88${phone}?text=${encodeURIComponent(message)}`
-        : `https://wa.me/?text=${encodeURIComponent(message)}`;
+    let url = '';
+    
+    if (phone) {
+        const fullPhone = phone.startsWith('88') ? phone : `88${phone}`;
+        url = `https://wa.me/${fullPhone}?text=${encodeURIComponent(message)}`;
+    } else {
+        url = `https://wa.me/?text=${encodeURIComponent(message)}`;
+    }
     
     window.open(url, '_blank');
     showToast('✅ WhatsApp খোলা হয়েছে', 'success');
