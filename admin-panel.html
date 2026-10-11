@@ -13120,154 +13120,413 @@ if (loan.status === 'pending') {
         showToast('✅ রিপোর্ট এক্সপোর্ট সম্পূর্ণ!');
     }
 
-// ============================================================
-// ===== DUE INVOICE SYSTEM — Complete Version =====
-// ✅ Full invoice with due calculation
-// ✅ Print, PDF download, WhatsApp share
-// ✅ Professional Bengali formatting
-// ============================================================
-
 // Store current invoice data for print/PDF
 window.currentDueInvoiceData = null;
 
 // ============================================================
-// 1️⃣ Show Due Member Invoice
+// 🎨 RENDER DUE INVOICE HTML — MUST BE ABOVE showDueMemberInvoice
 // ============================================================
-async function showDueMemberInvoice(memberId) {
-    console.log('📄 showDueMemberInvoice:', memberId);
-    
-    const client = initSupabaseClient();
-    if (!client) {
-        showToast('❌ সংযোগ সমস্যা!', 'error');
-        return;
-    }
-    
-    const modal = document.getElementById('dueInvoiceModal');
-    const content = document.getElementById('dueInvoiceContent');
-    
-    if (!modal || !content) {
-        showToast('❌ মডাল পাওয়া যায়নি!', 'error');
-        return;
-    }
-    
-    // Show modal + loading
-    modal.classList.remove('hidden');
-    modal.classList.add('flex');
-    modal.style.display = 'flex';
-    
-    content.innerHTML = `
-        <div style="text-align:center; padding:40px; color:#9ca3af;">
-            <div class="loading-spinner" style="margin:0 auto 12px;"></div>
-            <p>ইনভয়েস লোড হচ্ছে...</p>
-        </div>
-    `;
-    
+function renderDueInvoiceHTML(data) {
     try {
-        // ✅ 1. Load member
-        const { data: member, error: mError } = await client
-            .from('members')
-            .select('*')
-            .eq('member_id', memberId)
-            .single();
+        const { 
+            member, expectedTotal, paidTotal, dueAmount, 
+            dueMonths, monthlySavings, monthsSinceJoin, 
+            branchInfo, generatedAt, payments,
+            activeLoans, loanSummary
+        } = data || {};
         
-        if (mError || !member) {
-            content.innerHTML = `
-                <div style="text-align:center; padding:40px; color:#dc2626;">
-                    <i class="fas fa-user-times" style="font-size:48px;"></i>
-                    <h3 style="margin:16px 0 8px;">সদস্য পাওয়া যায়নি</h3>
-                    <p style="color:#6b7280;">Member ID: ${memberId}</p>
-                </div>
-            `;
-            return;
-        }
-        
-        console.log('✅ Member loaded:', member.full_name);
-        
-        // ✅ 2. Load all approved payments
-        const { data: payments, error: pError } = await client
-            .from('payments')
-            .select('amount, month, year, submitted_at, payment_method')
-            .eq('member_id', memberId)
-            .eq('status', 'approved')
-            .order('submitted_at', { ascending: false });
-        
-        if (pError) {
-            console.warn('⚠️ Payments warning:', pError);
-        }
-        
-        // ✅ 3. Calculate due
-        const monthlySavings = Number(member.monthly_savings) || 500;
-        const joinDate = new Date(member.created_at || Date.now());
-        const now = new Date();
-        
-        // Months since joining
-        const monthsSinceJoin = Math.max(1,
-            (now.getFullYear() - joinDate.getFullYear()) * 12 +
-            (now.getMonth() - joinDate.getMonth()) + 1
-        );
-        
-        const expectedTotal = monthsSinceJoin * monthlySavings;
-        const paidTotal = (payments || []).reduce(
-            (sum, p) => sum + (Number(p.amount) || 0), 0
-        );
-        const dueAmount = Math.max(0, expectedTotal - paidTotal);
-        const dueMonths = monthlySavings > 0 
-            ? Math.ceil(dueAmount / monthlySavings) 
-            : 0;
-        
-        // ✅ 4. Get branch info
-        let branchInfo = '';
+        // ✅ Admin info
+        let adminName = 'System Admin';
+        let adminRole = 'অ্যাডমিন';
         try {
-            const { data: bm } = await client
-                .from('branch_members')
-                .select('branches(branch_name, branch_code)')
-                .eq('member_id', memberId)
-                .eq('status', 'active')
-                .maybeSingle();
-            
-            if (bm?.branches?.branch_name) {
-                branchInfo = bm.branches.branch_name;
-                if (bm.branches.branch_code) {
-                    branchInfo += ` (${bm.branches.branch_code})`;
-                }
+            const adminStr = localStorage.getItem('currentAdmin') || sessionStorage.getItem('currentAdmin');
+            if (adminStr) {
+                const admin = JSON.parse(adminStr);
+                adminName = admin.full_name || admin.name || admin.username || 'System Admin';
+                adminRole = admin.role === 'super_admin' ? 'সুপার অ্যাডমিন' : (admin.role || 'অ্যাডমিন');
             }
         } catch(e) {}
         
-        // ✅ 5. Store data
-        window.currentDueInvoiceData = {
-            member,
-            payments: payments || [],
-            expectedTotal,
-            paidTotal,
-            dueAmount,
-            dueMonths,
-            monthlySavings,
-            monthsSinceJoin,
-            branchInfo,
-            generatedAt: new Date().toISOString()
+        // ✅ 8-digit invoice number
+        const now = new Date();
+        const dateStr = now.getFullYear().toString().slice(-2) +
+                       String(now.getMonth() + 1).padStart(2, '0') +
+                       String(now.getDate()).padStart(2, '0');
+        const random = String(Math.floor(Math.random() * 100)).padStart(2, '0');
+        const invoiceNo = `${dateStr}${random}`;
+        
+        // ✅ Formatters
+        const fmt = (n) => {
+            const num = Number(n) || 0;
+            return num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         };
         
-        // ✅ 6. Render invoice
-        content.innerHTML = renderDueInvoiceHTML(window.currentDueInvoiceData);
+        const bnNum = (n) => {
+            const bn = ['০','১','২','৩','৪','৫','৬','৭','৮','৯'];
+            return String(n).replace(/\d/g, d => bn[d]);
+        };
         
-        console.log('✅ Invoice rendered');
+        const fmtDate = (d) => {
+            if (!d) return '-';
+            try {
+                return new Date(d).toLocaleDateString('bn-BD', {
+                    year: 'numeric', month: 'long', day: 'numeric'
+                });
+            } catch(e) { return '-'; }
+        };
         
+        const fmtShort = (d) => {
+            if (!d) return '-';
+            try {
+                return new Date(d).toLocaleDateString('bn-BD', {
+                    year: 'numeric', month: 'short', day: 'numeric'
+                });
+            } catch(e) { return '-'; }
+        };
+        
+        const generateDate = new Date(generatedAt || Date.now()).toLocaleString('bn-BD', {
+            year: 'numeric', month: 'long', day: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+        
+        const generateDateShort = new Date(generatedAt || Date.now()).toLocaleDateString('bn-BD', {
+            year: 'numeric', month: 'short', day: 'numeric'
+        });
+        
+        const isFullyPaid = dueAmount <= 0;
+        const hasLoans = activeLoans && activeLoans.length > 0;
+        
+        // ============================================================
+        // Payments History
+        // ============================================================
+        let paymentsHTML = '';
+        if (payments && payments.length > 0) {
+            const recent = payments.slice(0, 6);
+            paymentsHTML = `
+                <div style="margin-bottom:24px;">
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                        <div style="width:4px; height:18px; background:#059669; border-radius:2px;"></div>
+                        <h4 style="font-size:13px; font-weight:700; color:#1f2937; margin:0; text-transform:uppercase;">📋 সাম্প্রতিক সঞ্চয় পেমেন্ট</h4>
+                    </div>
+                    <div style="overflow-x:auto; border:1px solid #e5e7eb; border-radius:10px;">
+                        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                            <thead style="background:linear-gradient(135deg, #f0fdf4, #ecfdf5);">
+                                <tr>
+                                    <th style="padding:10px 12px; text-align:left; border-bottom:2px solid #86efac; color:#065f46; font-weight:700; font-size:11px; text-transform:uppercase;">তারিখ</th>
+                                    <th style="padding:10px 12px; text-align:left; border-bottom:2px solid #86efac; color:#065f46; font-weight:700; font-size:11px; text-transform:uppercase;">মাস</th>
+                                    <th style="padding:10px 12px; text-align:right; border-bottom:2px solid #86efac; color:#065f46; font-weight:700; font-size:11px; text-transform:uppercase;">পরিমাণ</th>
+                                    <th style="padding:10px 12px; text-align:center; border-bottom:2px solid #86efac; color:#065f46; font-weight:700; font-size:11px; text-transform:uppercase;">পদ্ধতি</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${recent.map((p, i) => `
+                                    <tr style="${i % 2 === 0 ? 'background:#fafafa;' : 'background:white;'}">
+                                        <td style="padding:9px 12px; border-bottom:1px solid #f3f4f6; color:#6b7280;">${fmtShort(p.submitted_at)}</td>
+                                        <td style="padding:9px 12px; border-bottom:1px solid #f3f4f6; color:#6b7280;">${p.month || ''} ${p.year || ''}</td>
+                                        <td style="padding:9px 12px; border-bottom:1px solid #f3f4f6; text-align:right; color:#059669; font-weight:700;">৳ ${fmt(p.amount)}</td>
+                                        <td style="padding:9px 12px; border-bottom:1px solid #f3f4f6; text-align:center;">
+                                            <span style="display:inline-block; padding:2px 8px; background:#dbeafe; color:#1e40af; border-radius:12px; font-size:10px; font-weight:600;">${p.payment_method || 'cash'}</span>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    ${payments.length > 6 ? `<p style="text-align:center; font-size:10px; color:#9ca3af; margin-top:6px; font-style:italic;">... আরও ${payments.length - 6}টি পেমেন্ট</p>` : ''}
+                </div>
+            `;
+        }
+        
+        // ============================================================
+        // Loan Section (Only if has loans)
+        // ============================================================
+        let loanSectionHTML = '';
+        if (hasLoans) {
+            let totalAmount = 0, totalPaid = 0, totalRemaining = 0, totalEmi = 0, overdueCount = 0;
+            
+            activeLoans.forEach(loan => {
+                totalAmount += Number(loan.amount) || 0;
+                totalPaid += Number(loan.paid_amount) || 0;
+                totalRemaining += Number(loan.remaining_amount) || 0;
+                totalEmi += Number(loan.emi_amount) || 0;
+                overdueCount += Number(loan.overdue_count) || 0;
+            });
+            
+            const loansHTML = activeLoans.map(loan => {
+                const paidPercent = loan.amount > 0 
+                    ? Math.min(100, (loan.paid_amount / loan.amount) * 100) 
+                    : 0;
+                const statusColor = loan.overdue_count > 0 ? '#dc2626' : '#059669';
+                const statusBg = loan.overdue_count > 0 
+                    ? 'linear-gradient(135deg, #fef2f2, #fee2e2)' 
+                    : 'linear-gradient(135deg, #ecfdf5, #d1fae5)';
+                
+                return `
+                    <div style="border:1px solid #e5e7eb; border-radius:10px; padding:14px; margin-bottom:12px; background:white;">
+                        <!-- Header -->
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px; padding-bottom:10px; border-bottom:1px dashed #e5e7eb;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <div style="width:32px; height:32px; background:linear-gradient(135deg, #3b82f6, #2563eb); border-radius:8px; display:flex; align-items:center; justify-content:center; color:white; font-size:14px;">🏦</div>
+                                <div>
+                                    <p style="font-size:13px; font-weight:700; color:#1f2937; margin:0;">${loan.loan_type || 'লোন'}</p>
+                                    <p style="font-size:10px; color:#6b7280; margin:2px 0 0; font-family:monospace;">ID: #${loan.loan_id}</p>
+                                </div>
+                            </div>
+                            ${loan.overdue_count > 0 ? `<span style="padding:3px 10px; background:#fee2e2; color:#991b1b; border-radius:12px; font-size:10px; font-weight:700;">⚠️ ${bnNum(loan.overdue_count)} কিস্তি বিলম্বিত</span>` : ''}
+                        </div>
+                        
+                        <!-- Stats Grid -->
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px; margin-bottom:12px;">
+                            <div style="text-align:center; padding:8px; background:#f9fafb; border-radius:8px;">
+                                <p style="font-size:9px; color:#6b7280; margin:0; text-transform:uppercase;">মূল লোন</p>
+                                <p style="font-size:14px; font-weight:800; color:#2563eb; margin:3px 0 0;">৳ ${fmt(loan.amount)}</p>
+                            </div>
+                            <div style="text-align:center; padding:8px; background:#f9fafb; border-radius:8px;">
+                                <p style="font-size:9px; color:#6b7280; margin:0; text-transform:uppercase;">পরিশোধিত</p>
+                                <p style="font-size:14px; font-weight:800; color:#059669; margin:3px 0 0;">৳ ${fmt(loan.paid_amount)}</p>
+                            </div>
+                            <div style="text-align:center; padding:8px; background:${statusBg}; border-radius:8px;">
+                                <p style="font-size:9px; color:#6b7280; margin:0; text-transform:uppercase;">বাকি</p>
+                                <p style="font-size:14px; font-weight:800; color:${statusColor}; margin:3px 0 0;">৳ ${fmt(loan.remaining_amount)}</p>
+                            </div>
+                            <div style="text-align:center; padding:8px; background:#f9fafb; border-radius:8px;">
+                                <p style="font-size:9px; color:#6b7280; margin:0; text-transform:uppercase;">মাসিক কিস্তি</p>
+                                <p style="font-size:14px; font-weight:800; color:#7c3aed; margin:3px 0 0;">৳ ${fmt(loan.emi_amount)}</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Progress Bar -->
+                        <div style="margin-bottom:12px;">
+                            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                                <span style="font-size:10px; color:#6b7280;">পরিশোধের অগ্রগতি</span>
+                                <span style="font-size:11px; font-weight:700; color:${statusColor};">${bnNum(paidPercent.toFixed(0))}%</span>
+                            </div>
+                            <div style="height:8px; background:#f3f4f6; border-radius:4px; overflow:hidden;">
+                                <div style="height:100%; width:${paidPercent}%; background:linear-gradient(90deg, ${statusColor}, ${statusColor}dd); border-radius:4px;"></div>
+                            </div>
+                        </div>
+                        
+                        <!-- EMI Details -->
+                        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; padding:10px; background:#eff6ff; border-radius:8px; border-left:3px solid #3b82f6;">
+                            <div>
+                                <p style="font-size:9px; color:#1e40af; margin:0; text-transform:uppercase;">মোট কিস্তি</p>
+                                <p style="font-size:12px; font-weight:700; color:#1e40af; margin:2px 0 0;">${bnNum(loan.total_installments || 0)} টি</p>
+                            </div>
+                            <div>
+                                <p style="font-size:9px; color:#1e40af; margin:0; text-transform:uppercase;">পরিশোধিত</p>
+                                <p style="font-size:12px; font-weight:700; color:#059669; margin:2px 0 0;">${bnNum(loan.paid_installments || 0)} টি</p>
+                            </div>
+                            <div>
+                                <p style="font-size:9px; color:#1e40af; margin:0; text-transform:uppercase;">বাকি</p>
+                                <p style="font-size:12px; font-weight:700; color:${statusColor}; margin:2px 0 0;">${bnNum(loan.remaining_installments || 0)} টি</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Next EMI -->
+                        ${loan.next_emi_date ? `
+                            <div style="margin-top:10px; padding:8px 12px; background:#fef3c7; border-radius:6px; border-left:3px solid #f59e0b; display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-size:11px; color:#92400e; font-weight:600;">📅 পরবর্তী কিস্তি: ${fmtShort(loan.next_emi_date)}</span>
+                                <span style="font-size:12px; color:#92400e; font-weight:800;">৳ ${fmt(loan.emi_amount)}</span>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+            
+            loanSectionHTML = `
+                <div style="margin-top:32px; padding-top:24px; border-top:3px double #3b82f6;">
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+                        <div style="width:40px; height:40px; background:linear-gradient(135deg, #3b82f6, #2563eb); border-radius:10px; display:flex; align-items:center; justify-content:center; color:white; font-size:20px;">🏦</div>
+                        <div>
+                            <h3 style="font-size:16px; font-weight:800; color:#1e40af; margin:0; text-transform:uppercase;">লোন সংক্রান্ত তথ্য</h3>
+                            <p style="font-size:11px; color:#6b7280; margin:2px 0 0;">${bnNum(activeLoans.length)}টি সক্রিয় লোন</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Summary Bar -->
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px; padding:14px; background:linear-gradient(135deg, #eff6ff, #dbeafe); border-radius:10px; border-left:4px solid #3b82f6; margin-bottom:20px;">
+                        <div style="text-align:center;">
+                            <p style="font-size:9px; color:#1e40af; margin:0; text-transform:uppercase; font-weight:700;">মোট লোন</p>
+                            <p style="font-size:16px; font-weight:900; color:#2563eb; margin:3px 0 0;">৳ ${fmt(totalAmount)}</p>
+                        </div>
+                        <div style="text-align:center;">
+                            <p style="font-size:9px; color:#1e40af; margin:0; text-transform:uppercase; font-weight:700;">পরিশোধিত</p>
+                            <p style="font-size:16px; font-weight:900; color:#059669; margin:3px 0 0;">৳ ${fmt(totalPaid)}</p>
+                        </div>
+                        <div style="text-align:center;">
+                            <p style="font-size:9px; color:#1e40af; margin:0; text-transform:uppercase; font-weight:700;">মোট বাকি</p>
+                            <p style="font-size:16px; font-weight:900; color:${overdueCount > 0 ? '#dc2626' : '#059669'}; margin:3px 0 0;">৳ ${fmt(totalRemaining)}</p>
+                        </div>
+                        <div style="text-align:center;">
+                            <p style="font-size:9px; color:#1e40af; margin:0; text-transform:uppercase; font-weight:700;">মাসিক কিস্তি</p>
+                            <p style="font-size:16px; font-weight:900; color:#7c3aed; margin:3px 0 0;">৳ ${fmt(totalEmi)}</p>
+                        </div>
+                    </div>
+                    
+                    ${loansHTML}
+                    
+                    ${overdueCount > 0 ? `
+                        <div style="background:linear-gradient(135deg, #fef2f2, #fee2e2); border-left:4px solid #dc2626; padding:12px 16px; border-radius:8px; margin-top:12px;">
+                            <p style="font-size:12px; color:#991b1b; margin:0; line-height:1.6;">
+                                <strong>⚠️ সতর্কতা:</strong> আপনার মোট <strong>${bnNum(overdueCount)}টি</strong> কিস্তি বিলম্বিত রয়েছে। অনুগ্রহ করে দ্রুত পরিশোধ করুন।
+                            </p>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+        
+        // ============================================================
+        // Main Invoice
+        // ============================================================
+        return `
+            <div id="dueInvoicePrintArea" style="background:white; padding:32px; font-family:'Noto Sans Bengali', sans-serif; color:#1f2937; max-width:850px; margin:0 auto; position:relative; overflow:hidden;">
+                
+                <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%) rotate(-30deg); font-size:120px; font-weight:900; color:#059669; opacity:0.03; z-index:0; pointer-events:none; white-space:nowrap; letter-spacing:20px;">TUKNBD</div>
+                
+                <div style="position:relative; z-index:1;">
+                    
+                    <!-- Header -->
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:20px; border-bottom:3px double #059669; margin-bottom:24px; flex-wrap:wrap; gap:16px;">
+                        <div style="display:flex; align-items:center; gap:16px;">
+                            <div style="width:64px; height:64px; background:linear-gradient(135deg, #059669, #10b981); border-radius:12px; display:flex; align-items:center; justify-content:center; color:white; font-size:28px; flex-shrink:0;">🕌</div>
+                            <div>
+                                <h1 style="font-size:20px; font-weight:800; color:#059669; margin:0 0 4px; line-height:1.2;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h1>
+                                <p style="font-size:11px; color:#6b7280; margin:0; letter-spacing:1px; text-transform:uppercase;">Twlaba-Ulama Kalyan Network Bangladesh</p>
+                                ${branchInfo ? `<p style="font-size:11px; color:#059669; margin:4px 0 0; font-weight:600;"><i>শাখা: ${branchInfo}</i></p>` : ''}
+                            </div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="display:inline-block; background:linear-gradient(135deg, #ecfdf5, #d1fae5); padding:8px 16px; border-radius:8px; border:1px solid #86efac;">
+                                <p style="font-size:10px; color:#065f46; margin:0; text-transform:uppercase; letter-spacing:1px; font-weight:700;">${hasLoans ? 'সঞ্চয় ও লোন বকেয়া' : 'সঞ্চয় বকেয়া ইনভয়েস'}</p>
+                                <p style="font-size:9px; color:#059669; margin:2px 0 0; letter-spacing:0.5px;">${hasLoans ? 'Savings & Loan Due Invoice' : 'Savings Due Invoice'}</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Invoice Info -->
+                    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-bottom:24px; padding:16px; background:linear-gradient(135deg, #f9fafb, #f3f4f6); border-radius:10px; border-left:4px solid #059669;">
+                        <div>
+                            <p style="font-size:10px; color:#6b7280; margin:0; text-transform:uppercase; font-weight:700;">ইনভয়েস নম্বর</p>
+                            <p style="font-size:16px; font-weight:800; color:#059669; margin:4px 0 0; font-family:monospace; letter-spacing:1.5px;">${invoiceNo}</p>
+                        </div>
+                        <div>
+                            <p style="font-size:10px; color:#6b7280; margin:0; text-transform:uppercase; font-weight:700;">ইস্যু তারিখ</p>
+                            <p style="font-size:13px; font-weight:600; color:#1f2937; margin:4px 0 0;">${generateDateShort}</p>
+                        </div>
+                        <div>
+                            <p style="font-size:10px; color:#6b7280; margin:0; text-transform:uppercase; font-weight:700;">ইস্যুকারী অ্যাডমিন</p>
+                            <p style="font-size:13px; font-weight:700; color:#1f2937; margin:4px 0 0;">${adminName}</p>
+                            <p style="font-size:10px; color:#6b7280; margin:2px 0 0;">${adminRole}</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Salutation -->
+                    <div style="background:linear-gradient(135deg, #ecfdf5, #f0fdf4); padding:14px 18px; border-radius:10px; border-left:4px solid #10b981; margin-bottom:20px;">
+                        <p style="font-size:13px; color:#065f46; margin:0; line-height:1.7;">
+                            <strong style="font-size:14px;">প্রিয় ${member?.full_name || 'সদস্য'},</strong><br>
+                            আসসালামু আলাইকুম। আপনার ${isFullyPaid ? 'সঞ্চয়' : 'সঞ্চয় ও লোন'} সংক্রান্ত তথ্য নিচে দেওয়া হলো।
+                        </p>
+                    </div>
+                    
+                    <!-- Member Info -->
+                    <div style="margin-bottom:24px;">
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                            <div style="width:4px; height:18px; background:#059669; border-radius:2px;"></div>
+                            <h3 style="font-size:13px; font-weight:700; color:#1f2937; margin:0; text-transform:uppercase;">👤 সদস্যের তথ্য</h3>
+                        </div>
+                        <div style="background:white; padding:16px; border-radius:10px; border:1px solid #e5e7eb; display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px 24px; font-size:13px;">
+                            <div><span style="font-size:10px; color:#6b7280; text-transform:uppercase; font-weight:600;">নাম</span><p style="margin:3px 0 0; font-weight:700; color:#059669; font-size:14px;">${member?.full_name || '-'}</p></div>
+                            <div><span style="font-size:10px; color:#6b7280; text-transform:uppercase; font-weight:600;">সদস্য আইডি</span><p style="margin:3px 0 0; font-weight:700; font-family:monospace; color:#1f2937;">${member?.member_id || '-'}</p></div>
+                            <div><span style="font-size:10px; color:#6b7280; text-transform:uppercase; font-weight:600;">মোবাইল</span><p style="margin:3px 0 0; font-weight:600; color:#1f2937;">${member?.mobile || '-'}</p></div>
+                            <div><span style="font-size:10px; color:#6b7280; text-transform:uppercase; font-weight:600;">জেলা</span><p style="margin:3px 0 0; font-weight:600; color:#1f2937;">${member?.present_district || '-'}</p></div>
+                            <div><span style="font-size:10px; color:#6b7280; text-transform:uppercase; font-weight:600;">যোগদানের তারিখ</span><p style="margin:3px 0 0; font-weight:600; color:#1f2937;">${fmtDate(member?.created_at)}</p></div>
+                            <div><span style="font-size:10px; color:#6b7280; text-transform:uppercase; font-weight:600;">মাসিক সঞ্চয়</span><p style="margin:3px 0 0; font-weight:700; color:#059669; font-size:14px;">৳ ${fmt(monthlySavings)}</p></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Savings Summary -->
+                    <div style="margin-bottom:24px;">
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                            <div style="width:4px; height:18px; background:#059669; border-radius:2px;"></div>
+                            <h3 style="font-size:13px; font-weight:700; color:#1f2937; margin:0; text-transform:uppercase;">💰 সঞ্চয় সংক্রান্ত তথ্য</h3>
+                        </div>
+                        <div style="border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
+                            <div style="display:grid; grid-template-columns:2fr 1fr; padding:12px 16px; background:#f9fafb; border-bottom:1px solid #e5e7eb; font-size:13px;">
+                                <span style="color:#6b7280;">সদস্য থাকার মেয়াদ</span>
+                                <span style="text-align:right; font-weight:700;">${bnNum(monthsSinceJoin)} মাস</span>
+                            </div>
+                            <div style="display:grid; grid-template-columns:2fr 1fr; padding:12px 16px; background:white; border-bottom:1px solid #e5e7eb; font-size:13px;">
+                                <span style="color:#6b7280;">প্রত্যাশিত মোট সঞ্চয়</span>
+                                <span style="text-align:right; font-weight:700; color:#2563eb; font-size:14px;">৳ ${fmt(expectedTotal)}</span>
+                            </div>
+                            <div style="display:grid; grid-template-columns:2fr 1fr; padding:12px 16px; background:#f9fafb; border-bottom:1px solid #e5e7eb; font-size:13px;">
+                                <span style="color:#6b7280;">পরিশোধিত</span>
+                                <span style="text-align:right; font-weight:700; color:#059669; font-size:14px;">৳ ${fmt(paidTotal)}</span>
+                            </div>
+                            <div style="display:grid; grid-template-columns:2fr 1fr; padding:18px 16px; background:${isFullyPaid ? 'linear-gradient(135deg, #ecfdf5, #d1fae5)' : 'linear-gradient(135deg, #fef2f2, #fee2e2)'}; border-top:3px solid ${isFullyPaid ? '#059669' : '#dc2626'};">
+                                <span style="font-weight:800; font-size:14px; color:${isFullyPaid ? '#065f46' : '#991b1b'};">${isFullyPaid ? '✅' : '⚠️'} মোট সঞ্চয় বকেয়া</span>
+                                <span style="text-align:right;">
+                                    <strong style="font-size:24px; color:${isFullyPaid ? '#059669' : '#dc2626'}; font-weight:900;">৳ ${fmt(dueAmount)}</strong>
+                                    ${!isFullyPaid ? `<p style="font-size:10px; color:#991b1b; margin:4px 0 0; font-weight:600;">(${bnNum(dueMonths)} মাসের সঞ্চয় বাকি)</p>` : `<p style="font-size:10px; color:#059669; margin:4px 0 0; font-weight:600;">✅ সম্পূর্ণ পরিশোধিত</p>`}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    ${paymentsHTML}
+                    ${loanSectionHTML}
+                    
+                    <!-- Notice -->
+                    <div style="background:linear-gradient(135deg, #fef3c7, #fde68a); border-left:4px solid #f59e0b; padding:14px 18px; border-radius:10px; margin-top:24px;">
+                        <p style="font-size:12px; color:#92400e; margin:0; line-height:1.7;">
+                            <strong style="font-size:13px;">📌 নোট:</strong>
+                            ${!isFullyPaid && hasLoans 
+                                ? `আপনার <strong>৳ ${fmt(dueAmount)}</strong> সঞ্চয় বকেয়া এবং <strong>৳ ${fmt(loanSummary?.totalRemaining || 0)}</strong> লোন বাকি রয়েছে। দ্রুত পরিশোধ করুন।`
+                                : !isFullyPaid 
+                                    ? `আপনার <strong>${bnNum(dueMonths)} মাসের</strong> সঞ্চয় বকেয়া রয়েছে (৳ ${fmt(dueAmount)})।`
+                                    : hasLoans 
+                                        ? `সঞ্চয় সম্পূর্ণ পরিশোধিত। কিন্তু <strong>৳ ${fmt(loanSummary?.totalRemaining || 0)}</strong> লোন বাকি।`
+                                        : 'আপনার কোনো বকেয়া নেই। ধন্যবাদ।'}
+                        </p>
+                    </div>
+                    
+                    <!-- Footer / Signature -->
+                    <div style="margin-top:40px; padding-top:20px; border-top:2px solid #e5e7eb; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:20px;">
+                        <div style="font-size:10px; color:#9ca3af; line-height:1.8;">
+                            <p style="margin:0;">ইস্যু: ${generateDate}</p>
+                            <p style="margin:4px 0 0;">System: TUKNBD Admin Panel</p>
+                            <p style="margin:4px 0 0;">Invoice ID: ${invoiceNo}</p>
+                        </div>
+                        <div style="text-align:center; min-width:220px;">
+                            <div style="padding:10px 20px 6px; font-family:'Brush Script MT', cursive; font-size:22px; color:#059669; transform:rotate(-3deg); font-weight:600;">${adminName}</div>
+                            <div style="border-top:2px solid #059669; padding-top:6px; margin-top:4px;">
+                                <p style="font-size:11px; font-weight:700; color:#059669; margin:0;">অনুমোদিত স্বাক্ষর</p>
+                                <p style="font-size:10px; color:#6b7280; margin:3px 0 0;">${adminRole} | ${adminName}</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="text-align:center; margin-top:24px; padding-top:12px; border-top:1px dashed #e5e7eb;">
+                        <p style="font-size:9px; color:#9ca3af; margin:0; letter-spacing:0.5px; text-transform:uppercase;">
+                            This is a system-generated invoice | ${generateDate}
+                        </p>
+                    </div>
+                </div>
+            </div>
+        `;
     } catch(e) {
-        console.error('❌ Invoice error:', e);
-        content.innerHTML = `
-            <div style="text-align:center; padding:40px; color:#dc2626;">
-                <i class="fas fa-exclamation-circle" style="font-size:48px;"></i>
-                <h3 style="margin:16px 0 8px;">ইনভয়েস লোড করা যায়নি</h3>
-                <p style="color:#6b7280; margin-bottom:16px;">${e.message || 'অজানা ত্রুটি'}</p>
-                <button onclick="showDueMemberInvoice('${memberId}')" 
-                        style="padding:10px 24px; background:#059669; color:white; border:none; border-radius:8px; font-weight:600; cursor:pointer;">
-                    🔄 আবার চেষ্টা করুন
-                </button>
+        console.error('❌ renderDueInvoiceHTML error:', e);
+        return `
+            <div style="padding:24px; text-align:center; color:#dc2626;">
+                <h3>ইনভয়েস রেন্ডার করতে সমস্যা</h3>
+                <p>${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="location.reload()" style="margin-top:12px; padding:8px 16px; background:#059669; color:white; border:none; border-radius:6px; cursor:pointer;">রিলোড করুন</button>
             </div>
         `;
     }
 }
-
+    
 // ============================================================
 // 📄 Show Due Member Invoice — With Loan Integration
 // ============================================================
