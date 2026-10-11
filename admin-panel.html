@@ -11164,7 +11164,7 @@ async function updateAllBadges() {
 }
 
 // ============================================================
-// ✅ FIXED: loadPendingPayments() - সব পেমেন্ট লোড করুন
+// ✅ loadPendingPayments() — Numeric ID → Formatted ID Match
 // ============================================================
 async function loadPendingPayments() {
     const loadingDiv = document.getElementById('paymentLoading');
@@ -11179,18 +11179,10 @@ async function loadPendingPayments() {
     }
     
     try {
-        // ✅ সক্রিয় সদস্যদের আইডি বের করুন (শুধু ভ্যালিডেশনের জন্য)
-        const { data: activeMembers, error: memberError } = await client
-            .from('members')
-            .select('member_id, status')
-            .in('status', ['active', 'approved']);
+        console.log('🔍 loadPendingPayments() START');
         
-        if (memberError) throw memberError;
-        
-        const activeMemberIds = (activeMembers || []).map(m => m.member_id);
-        
-        // ✅ সব পেন্ডিং পেমেন্ট লোড করুন
-        const { data, error } = await client
+        // ✅ STEP 1: সব pending payment লোড (কোনো filter ছাড়া)
+        const { data: payments, error } = await client
             .from('payments')
             .select('*')
             .eq('status', 'pending')
@@ -11198,10 +11190,76 @@ async function loadPendingPayments() {
         
         if (error) throw error;
         
-        // ✅ শুধু সক্রিয় সদস্যদের পেমেন্ট ফিল্টার করুন (ডিসপ্লের জন্য)
-        pendingPaymentsData = (data || []).filter(p => activeMemberIds.includes(p.member_id));
+        console.log(`📥 ${payments?.length || 0} টি পেন্ডিং পেমেন্ট পাওয়া গেছে`);
         
-        console.log('✅ পেমেন্ট লোড সম্পূর্ণ:', pendingPaymentsData.length);
+        if (!payments || payments.length === 0) {
+            pendingPaymentsData = [];
+            console.log('✅ কোনো পেন্ডিং পেমেন্ট নেই');
+            if (loadingDiv) loadingDiv.style.display = 'none';
+            if (table) table.style.display = 'block';
+            renderPendingPaymentsList();
+            await updateAllBadges();
+            return;
+        }
+        
+        // ✅ STEP 2: Numeric IDs বের করুন
+        const numericIds = payments
+            .map(p => parseInt(p.member_id, 10))
+            .filter(id => !isNaN(id));
+        
+        console.log('🔢 Numeric IDs:', numericIds);
+        
+        // ✅ STEP 3: Members লোড (numeric id দিয়ে)
+        const { data: members, error: memberError } = await client
+            .from('members')
+            .select('id, member_id, full_name, mobile, present_district, status')
+            .in('id', numericIds);
+        
+        if (memberError) {
+            console.warn('⚠️ Member load warning:', memberError);
+        }
+        
+        console.log(`👥 ${members?.length || 0} টি member পাওয়া গেছে`);
+        
+        // ✅ STEP 4: Member Map তৈরি (numeric id → member data)
+        const memberMap = {};
+        (members || []).forEach(m => {
+            memberMap[String(m.id)] = m;
+        });
+        
+        // ✅ STEP 5: Payment + Member Merge
+        pendingPaymentsData = payments.map(p => {
+            const numericId = String(p.member_id || '').trim();
+            const member = memberMap[numericId];
+            
+            if (member) {
+                return {
+                    ...p,
+                    _realMemberId: member.member_id,
+                    _realFullName: member.full_name,
+                    _realMobile: member.mobile,
+                    _realDistrict: member.present_district,
+                    _realMemberStatus: member.status,
+                    _numericId: member.id,
+                    _matched: true
+                };
+            } else {
+                return {
+                    ...p,
+                    _realMemberId: p.member_id,
+                    _realFullName: p.member_name || 'অজানা',
+                    _realMobile: '',
+                    _matched: false
+                };
+            }
+        });
+        
+        const matchedCount = pendingPaymentsData.filter(p => p._matched).length;
+        console.log(`✅ ${matchedCount}/${pendingPaymentsData.length} টি payment match হয়েছে`);
+        
+        pendingPaymentsData.forEach(p => {
+            console.log(`   ${p._matched ? '✅' : '⚠️'} #${p.id}: "${p.member_id}" → "${p._realMemberId}" (${p._realFullName})`);
+        });
         
         if (loadingDiv) loadingDiv.style.display = 'none';
         if (table) table.style.display = 'block';
@@ -11209,9 +11267,11 @@ async function loadPendingPayments() {
         renderPendingPaymentsList();
         await updateAllBadges();
         
+        console.log('✅ loadPendingPayments() END');
+        
     } catch(e) {
         console.error('❌ Load error:', e);
-        if (loadingDiv) loadingDiv.innerHTML = '<div class="text-red-500 py-8">❌ পেমেন্ট লোড করতে সমস্যা!</div>';
+        if (loadingDiv) loadingDiv.innerHTML = `<div class="text-red-500 py-8">❌ পেমেন্ট লোড করতে সমস্যা: ${e.message}</div>`;
     }
 }
 
