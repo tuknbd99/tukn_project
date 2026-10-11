@@ -5410,18 +5410,41 @@ body.dark-mode .all-clear-box p {
 </div>
 
 <!-- ===== DUE INVOICE MODAL ===== -->
-<div id="dueInvoiceModal" class="fixed inset-0 bg-black/70 z-50 hidden items-center justify-center p-4 overflow-y-auto" onclick="closeDueInvoiceModalOnOverlay(event)">
-    <div class="bg-white rounded-2xl max-w-5xl w-full max-h-[95vh] overflow-y-auto p-0 relative" onclick="event.stopPropagation()">
-        <div class="sticky top-0 bg-white border-b p-4 flex justify-between items-center z-10 no-print">
-            <h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-file-invoice mr-2"></i>সঞ্চয় বকেয়া ইনভয়েস</h3>
-            <div class="flex gap-2">
-                <button onclick="printDueInvoice()" class="btn btn-purple btn-sm no-print"><i class="fas fa-print mr-1"></i> প্রিন্ট</button>
-                <button onclick="downloadDueInvoicePDF()" class="btn btn-success btn-sm no-print"><i class="fas fa-file-pdf mr-1"></i> পিডিএফ</button>
-                <button onclick="shareDueInvoiceWhatsApp()" class="btn btn-info btn-sm no-print"><i class="fab fa-whatsapp mr-1"></i> শেয়ার</button>
-                <button onclick="closeDueInvoiceModal()" class="text-gray-500 hover:text-red-500 text-2xl no-print">&times;</button>
+<div id="dueInvoiceModal" 
+     style="position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; display:none; align-items:center; justify-content:center; padding:16px; overflow-y:auto;"
+     onclick="if(event.target===this) closeDueInvoiceModal()">
+    <div style="background:white; border-radius:16px; max-width:900px; width:100%; max-height:95vh; overflow-y:auto; padding:0; position:relative; box-shadow:0 25px 60px rgba(0,0,0,0.4);"
+         onclick="event.stopPropagation()">
+        
+        <!-- Header -->
+        <div class="no-print" style="position:sticky; top:0; background:white; border-bottom:1px solid #e5e7eb; padding:16px 20px; z-index:10; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; border-radius:16px 16px 0 0;">
+            <h3 style="font-size:18px; font-weight:700; color:#059669; margin:0;">
+                <i class="fas fa-file-invoice"></i> বকেয়া ইনভয়েস
+            </h3>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button onclick="printDueInvoice()" 
+                        style="padding:8px 16px; background:#7c3aed; color:white; border:none; border-radius:8px; font-weight:600; cursor:pointer; font-size:13px;">
+                    <i class="fas fa-print"></i> প্রিন্ট
+                </button>
+                <button onclick="downloadDueInvoicePDF()" 
+                        style="padding:8px 16px; background:#059669; color:white; border:none; border-radius:8px; font-weight:600; cursor:pointer; font-size:13px;">
+                    <i class="fas fa-file-pdf"></i> PDF
+                </button>
+                <button onclick="closeDueInvoiceModal()" 
+                        style="padding:8px 12px; background:#e5e7eb; color:#374151; border:none; border-radius:8px; font-weight:600; cursor:pointer; font-size:16px;">
+                    &times;
+                </button>
             </div>
         </div>
-        <div id="dueInvoiceContent" class="p-4"></div>
+        
+        <!-- Content -->
+        <div id="dueInvoiceContent" style="padding:24px; font-family:'Noto Sans Bengali', sans-serif;">
+            <div style="text-align:center; padding:40px; color:#9ca3af;">
+                <i class="fas fa-spinner fa-spin" style="font-size:32px;"></i>
+                <p style="margin-top:12px;">ইনভয়েস লোড হচ্ছে...</p>
+            </div>
+        </div>
+        
     </div>
 </div>
 
@@ -13097,51 +13120,489 @@ if (loan.status === 'pending') {
         showToast('✅ রিপোর্ট এক্সপোর্ট সম্পূর্ণ!');
     }
 
-    // ============================================================
-    // ===== DUE INVOICE =====
-    // ============================================================
-    async function showDueMemberInvoice(memberId) {
-        const client = initSupabaseClient();
-        if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-        const modal = document.getElementById('dueInvoiceModal');
-        if (!modal) { showToast('মডাল পাওয়া যায়নি!', 'error'); return; }
-        const content = document.getElementById('dueInvoiceContent');
-        content.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">ইনভয়েস লোড হচ্ছে...</p></div>';
-        modal.classList.remove('hidden');
-        modal.classList.add('flex');
-        try {
-            const { data: member } = await client.from('members').select('*').eq('member_id', memberId).single();
-            if (!member) {
-                content.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সদস্য পাওয়া যায়নি!</div>';
-                return;
-            }
+// ============================================================
+// ===== DUE INVOICE SYSTEM — Complete Version =====
+// ✅ Full invoice with due calculation
+// ✅ Print, PDF download, WhatsApp share
+// ✅ Professional Bengali formatting
+// ============================================================
+
+// Store current invoice data for print/PDF
+window.currentDueInvoiceData = null;
+
+// ============================================================
+// 1️⃣ Show Due Member Invoice
+// ============================================================
+async function showDueMemberInvoice(memberId) {
+    console.log('📄 showDueMemberInvoice:', memberId);
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const modal = document.getElementById('dueInvoiceModal');
+    const content = document.getElementById('dueInvoiceContent');
+    
+    if (!modal || !content) {
+        showToast('❌ মডাল পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    // Show modal + loading
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    modal.style.display = 'flex';
+    
+    content.innerHTML = `
+        <div style="text-align:center; padding:40px; color:#9ca3af;">
+            <div class="loading-spinner" style="margin:0 auto 12px;"></div>
+            <p>ইনভয়েস লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    try {
+        // ✅ 1. Load member
+        const { data: member, error: mError } = await client
+            .from('members')
+            .select('*')
+            .eq('member_id', memberId)
+            .single();
+        
+        if (mError || !member) {
             content.innerHTML = `
-                <div class="bg-white p-4 rounded-lg">
-                    <h4 class="font-bold text-emerald-700">সঞ্চয় বকেয়া ইনভয়েস</h4>
-                    <p><strong>সদস্য:</strong> ${member.full_name}</p>
-                    <p><strong>আইডি:</strong> ${member.member_id}</p>
-                    <p><strong>বকেয়া:</strong> ${formatAmountWithText(member.balance || 0)}</p>
-                    <button onclick="closeDueInvoiceModal()" class="btn btn-success mt-3">বন্ধ</button>
+                <div style="text-align:center; padding:40px; color:#dc2626;">
+                    <i class="fas fa-user-times" style="font-size:48px;"></i>
+                    <h3 style="margin:16px 0 8px;">সদস্য পাওয়া যায়নি</h3>
+                    <p style="color:#6b7280;">Member ID: ${memberId}</p>
                 </div>
             `;
-        } catch(e) {
-            content.innerHTML = '<div class="text-red-500 p-4 text-center">❌ ইনভয়েস লোড করতে সমস্যা!</div>';
+            return;
         }
+        
+        console.log('✅ Member loaded:', member.full_name);
+        
+        // ✅ 2. Load all approved payments
+        const { data: payments, error: pError } = await client
+            .from('payments')
+            .select('amount, month, year, submitted_at, payment_method')
+            .eq('member_id', memberId)
+            .eq('status', 'approved')
+            .order('submitted_at', { ascending: false });
+        
+        if (pError) {
+            console.warn('⚠️ Payments warning:', pError);
+        }
+        
+        // ✅ 3. Calculate due
+        const monthlySavings = Number(member.monthly_savings) || 500;
+        const joinDate = new Date(member.created_at || Date.now());
+        const now = new Date();
+        
+        // Months since joining
+        const monthsSinceJoin = Math.max(1,
+            (now.getFullYear() - joinDate.getFullYear()) * 12 +
+            (now.getMonth() - joinDate.getMonth()) + 1
+        );
+        
+        const expectedTotal = monthsSinceJoin * monthlySavings;
+        const paidTotal = (payments || []).reduce(
+            (sum, p) => sum + (Number(p.amount) || 0), 0
+        );
+        const dueAmount = Math.max(0, expectedTotal - paidTotal);
+        const dueMonths = monthlySavings > 0 
+            ? Math.ceil(dueAmount / monthlySavings) 
+            : 0;
+        
+        // ✅ 4. Get branch info
+        let branchInfo = '';
+        try {
+            const { data: bm } = await client
+                .from('branch_members')
+                .select('branches(branch_name, branch_code)')
+                .eq('member_id', memberId)
+                .eq('status', 'active')
+                .maybeSingle();
+            
+            if (bm?.branches?.branch_name) {
+                branchInfo = bm.branches.branch_name;
+                if (bm.branches.branch_code) {
+                    branchInfo += ` (${bm.branches.branch_code})`;
+                }
+            }
+        } catch(e) {}
+        
+        // ✅ 5. Store data
+        window.currentDueInvoiceData = {
+            member,
+            payments: payments || [],
+            expectedTotal,
+            paidTotal,
+            dueAmount,
+            dueMonths,
+            monthlySavings,
+            monthsSinceJoin,
+            branchInfo,
+            generatedAt: new Date().toISOString()
+        };
+        
+        // ✅ 6. Render invoice
+        content.innerHTML = renderDueInvoiceHTML(window.currentDueInvoiceData);
+        
+        console.log('✅ Invoice rendered');
+        
+    } catch(e) {
+        console.error('❌ Invoice error:', e);
+        content.innerHTML = `
+            <div style="text-align:center; padding:40px; color:#dc2626;">
+                <i class="fas fa-exclamation-circle" style="font-size:48px;"></i>
+                <h3 style="margin:16px 0 8px;">ইনভয়েস লোড করা যায়নি</h3>
+                <p style="color:#6b7280; margin-bottom:16px;">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="showDueMemberInvoice('${memberId}')" 
+                        style="padding:10px 24px; background:#059669; color:white; border:none; border-radius:8px; font-weight:600; cursor:pointer;">
+                    🔄 আবার চেষ্টা করুন
+                </button>
+            </div>
+        `;
     }
+}
 
-    function closeDueInvoiceModal() {
-        const modal = document.getElementById('dueInvoiceModal');
-        if (modal) { modal.classList.add('hidden'); modal.classList.remove('flex'); }
+// ============================================================
+// 2️⃣ Render Invoice HTML
+// ============================================================
+function renderDueInvoiceHTML(data) {
+    const { 
+        member, expectedTotal, paidTotal, dueAmount, 
+        dueMonths, monthlySavings, monthsSinceJoin, 
+        branchInfo, generatedAt, payments 
+    } = data;
+    
+    const fmt = (n) => {
+        const num = Number(n) || 0;
+        return num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    };
+    
+    const fmtDate = (d) => {
+        if (!d) return '-';
+        try {
+            return new Date(d).toLocaleDateString('bn-BD', {
+                year: 'numeric', month: 'long', day: 'numeric'
+            });
+        } catch(e) { return '-'; }
+    };
+    
+    const generateDate = new Date(generatedAt).toLocaleString('bn-BD', {
+        year: 'numeric', month: 'long', day: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+    });
+    
+    const isFullyPaid = dueAmount <= 0;
+    const invoiceNo = `INV-${member.member_id || 'M'}-${Date.now().toString().slice(-6)}`;
+    
+    // Recent payments table
+    let paymentsHTML = '';
+    if (payments && payments.length > 0) {
+        const recentPayments = payments.slice(0, 10);
+        paymentsHTML = `
+            <div style="margin-top:20px;">
+                <h4 style="font-size:13px; font-weight:700; color:#1f2937; margin:0 0 10px; text-transform:uppercase;">
+                    📋 সাম্প্রতিক পেমেন্ট (সর্বশেষ ১০টি)
+                </h4>
+                <div style="overflow-x:auto; border:1px solid #e5e7eb; border-radius:8px;">
+                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead style="background:#f9fafb;">
+                            <tr>
+                                <th style="padding:8px 10px; text-align:left; border-bottom:1px solid #e5e7eb;">তারিখ</th>
+                                <th style="padding:8px 10px; text-align:left; border-bottom:1px solid #e5e7eb;">মাস</th>
+                                <th style="padding:8px 10px; text-align:right; border-bottom:1px solid #e5e7eb;">পরিমাণ</th>
+                                <th style="padding:8px 10px; text-align:center; border-bottom:1px solid #e5e7eb;">পদ্ধতি</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${recentPayments.map(p => `
+                                <tr>
+                                    <td style="padding:8px 10px; border-bottom:1px solid #f3f4f6;">${fmtDate(p.submitted_at)}</td>
+                                    <td style="padding:8px 10px; border-bottom:1px solid #f3f4f6;">${p.month || ''} ${p.year || ''}</td>
+                                    <td style="padding:8px 10px; border-bottom:1px solid #f3f4f6; text-align:right; color:#059669; font-weight:600;">
+                                        ৳ ${fmt(p.amount)}
+                                    </td>
+                                    <td style="padding:8px 10px; border-bottom:1px solid #f3f4f6; text-align:center; font-size:11px;">
+                                        ${p.payment_method || 'cash'}
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
     }
+    
+    return `
+        <div id="dueInvoicePrintArea" style="background:white; padding:24px; font-family:'Noto Sans Bengali', sans-serif; color:#1f2937; max-width:900px; margin:0 auto;">
+            
+            <!-- Header -->
+            <div style="text-align:center; border-bottom:3px solid #059669; padding-bottom:16px; margin-bottom:20px;">
+                <h1 style="font-size:22px; font-weight:800; color:#059669; margin:0 0 4px;">
+                    ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ
+                </h1>
+                <p style="font-size:13px; color:#6b7280; margin:0;">
+                    সঞ্চয় বকেয়া ইনভয়েস / Savings Due Invoice
+                </p>
+                ${branchInfo ? `<p style="font-size:12px; color:#9ca3af; margin:4px 0 0;">শাখা: ${branchInfo}</p>` : ''}
+            </div>
+            
+            <!-- Invoice Info -->
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:20px; padding:12px; background:#f9fafb; border-radius:8px; border:1px solid #e5e7eb; flex-wrap:wrap; gap:12px;">
+                <div>
+                    <p style="font-size:10px; color:#6b7280; margin:0; text-transform:uppercase; letter-spacing:0.5px;">ইনভয়েস নম্বর</p>
+                    <p style="font-size:14px; font-weight:700; color:#059669; margin:4px 0 0; font-family:monospace;">${invoiceNo}</p>
+                </div>
+                <div style="text-align:right;">
+                    <p style="font-size:10px; color:#6b7280; margin:0; text-transform:uppercase; letter-spacing:0.5px;">ইস্যু তারিখ</p>
+                    <p style="font-size:13px; font-weight:600; margin:4px 0 0;">${generateDate}</p>
+                </div>
+            </div>
+            
+            <!-- Member Info -->
+            <div style="background:linear-gradient(135deg, #f0fdf4, #ecfdf5); padding:16px; border-radius:8px; margin-bottom:20px; border:1px solid #86efac;">
+                <h3 style="font-size:13px; font-weight:700; color:#065f46; margin:0 0 12px; text-transform:uppercase; letter-spacing:0.5px;">
+                    👤 সদস্যের তথ্য
+                </h3>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px 20px; font-size:13px;">
+                    <div><strong>নাম:</strong> <span style="color:#065f46; font-weight:600;">${member.full_name || '-'}</span></div>
+                    <div><strong>সদস্য আইডি:</strong> <span style="font-family:monospace; color:#065f46; font-weight:600;">${member.member_id || '-'}</span></div>
+                    <div><strong>মোবাইল:</strong> ${member.mobile || '-'}</div>
+                    <div><strong>জেলা:</strong> ${member.present_district || '-'}</div>
+                    <div><strong>যোগদানের তারিখ:</strong> ${fmtDate(member.created_at)}</div>
+                    <div><strong>মাসিক সঞ্চয়:</strong> <span style="color:#059669; font-weight:700;">৳ ${fmt(monthlySavings)}</span></div>
+                </div>
+            </div>
+            
+            <!-- Financial Summary -->
+            <div style="margin-bottom:20px;">
+                <h3 style="font-size:13px; font-weight:700; color:#1f2937; margin:0 0 12px; text-transform:uppercase; letter-spacing:0.5px;">
+                    💰 আর্থিক সারসংক্ষেপ
+                </h3>
+                <table style="width:100%; border-collapse:collapse; font-size:13px; border:1px solid #e5e7eb; border-radius:8px; overflow:hidden;">
+                    <tr style="background:#f9fafb;">
+                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb;">সদস্য থাকার মেয়াদ</td>
+                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600;">
+                            ${monthsSinceJoin} মাস
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb;">প্রত্যাশিত মোট সঞ্চয়</td>
+                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600; color:#2563eb;">
+                            ৳ ${fmt(expectedTotal)}
+                        </td>
+                    </tr>
+                    <tr style="background:#f9fafb;">
+                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb;">পরিশোধিত</td>
+                        <td style="padding:12px 14px; border-bottom:1px solid #e5e7eb; text-align:right; font-weight:600; color:#059669;">
+                            ৳ ${fmt(paidTotal)}
+                        </td>
+                    </tr>
+                    <tr style="background:${isFullyPaid ? '#ecfdf5' : '#fef2f2'};">
+                        <td style="padding:16px 14px; border-top:2px solid ${isFullyPaid ? '#059669' : '#dc2626'};">
+                            <strong style="font-size:14px; color:${isFullyPaid ? '#065f46' : '#991b1b'};">
+                                ${isFullyPaid ? '✅ মোট বকেয়া' : '⚠️ মোট বকেয়া'}
+                            </strong>
+                        </td>
+                        <td style="padding:16px 14px; border-top:2px solid ${isFullyPaid ? '#059669' : '#dc2626'}; text-align:right;">
+                            <strong style="font-size:20px; color:${isFullyPaid ? '#059669' : '#dc2626'};">
+                                ৳ ${fmt(dueAmount)}
+                            </strong>
+                            ${!isFullyPaid ? `
+                                <p style="font-size:11px; color:#991b1b; margin:4px 0 0;">
+                                    (${dueMonths} মাসের সঞ্চয় বাকি)
+                                </p>
+                            ` : `
+                                <p style="font-size:11px; color:#059669; margin:4px 0 0;">
+                                    ✅ সব সঞ্চয় পরিশোধিত
+                                </p>
+                            `}
+                        </td>
+                    </tr>
+                </table>
+            </div>
+            
+            <!-- Recent Payments -->
+            ${paymentsHTML}
+            
+            <!-- Notice -->
+            <div style="background:#fef3c7; border-left:4px solid #f59e0b; padding:12px 16px; border-radius:6px; margin-top:20px;">
+                <p style="font-size:12px; color:#92400e; margin:0; line-height:1.6;">
+                    <strong>📌 নোট:</strong> ${isFullyPaid 
+                        ? 'আপনার কোনো সঞ্চয় বকেয়া নেই। ধন্যবাদ।' 
+                        : `আপনার বকেয়া সঞ্চয় দ্রুত পরিশোধ করার জন্য অনুরোধ করা হচ্ছে। যেকোনো প্রশ্নে সংগঠনের অফিসে যোগাযোগ করুন।`}
+                </p>
+            </div>
+            
+            <!-- Footer -->
+            <div style="margin-top:30px; padding-top:16px; border-top:2px solid #e5e7eb; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:16px;">
+                <div style="font-size:11px; color:#6b7280;">
+                    <p style="margin:0;">ইস্যু: ${generateDate}</p>
+                    <p style="margin:4px 0 0;">TUKNBD Admin Panel</p>
+                </div>
+                <div style="text-align:center;">
+                    <div style="width:180px; border-top:1px solid #333; padding-top:6px; margin-top:30px;">
+                        <p style="font-size:11px; color:#6b7280; margin:0;">অনুমোদিত স্বাক্ষর</p>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+    `;
+}
 
-    function closeDueInvoiceModalOnOverlay(event) {
-        if (event.target === event.currentTarget) closeDueInvoiceModal();
+// ============================================================
+// 3️⃣ Close Modal
+// ============================================================
+function closeDueInvoiceModal() {
+    const modal = document.getElementById('dueInvoiceModal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        modal.style.display = 'none';
     }
+    window.currentDueInvoiceData = null;
+}
 
-    function printDueInvoice() { showToast('প্রিন্ট ফিচার শীঘ্রই আসছে', 'info'); }
-    function downloadDueInvoicePDF() { showToast('PDF ডাউনলোড ফিচার শীঘ্রই আসছে', 'info'); }
-    function shareDueInvoiceWhatsApp() { showToast('শেয়ার ফিচার শীঘ্রই আসছে', 'info'); }
+function closeDueInvoiceModalOnOverlay(event) {
+    if (event.target === event.currentTarget) closeDueInvoiceModal();
+}
 
+// ============================================================
+// 4️⃣ Print Invoice
+// ============================================================
+function printDueInvoice() {
+    const printArea = document.getElementById('dueInvoicePrintArea');
+    if (!printArea) {
+        showToast('❌ প্রিন্ট করার জন্য কোনো ইনভয়েস নেই', 'error');
+        return;
+    }
+    
+    const printWindow = window.open('', '_blank', 'width=800,height=900');
+    if (!printWindow) {
+        showToast('❌ পপ-আপ ব্লক হয়েছে। দয়া করে allow করুন।', 'error');
+        return;
+    }
+    
+    printWindow.document.write(`
+        <!DOCTYPE html>
+        <html lang="bn">
+        <head>
+            <meta charset="UTF-8">
+            <title>বকেয়া ইনভয়েস | TUKNBD</title>
+            <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+            <style>
+                * { font-family: 'Noto Sans Bengali', sans-serif; box-sizing: border-box; margin: 0; padding: 0; }
+                body { padding: 20px; background: white; }
+                @media print {
+                    body { padding: 0; }
+                    @page { size: A4 portrait; margin: 10mm; }
+                }
+            </style>
+        </head>
+        <body>
+            ${printArea.outerHTML}
+            <script>
+                window.onload = function() {
+                    setTimeout(function() { window.print(); }, 400);
+                };
+            <\/script>
+        </body>
+        </html>
+    `);
+    printWindow.document.close();
+    showToast('✅ প্রিন্ট ডায়ালগ খোলা হয়েছে', 'success');
+}
+
+// ============================================================
+// 5️⃣ Download PDF
+// ============================================================
+function downloadDueInvoicePDF() {
+    const printArea = document.getElementById('dueInvoicePrintArea');
+    if (!printArea) {
+        showToast('❌ PDF ডাউনলোডের জন্য কোনো ইনভয়েস নেই', 'error');
+        return;
+    }
+    
+    if (typeof html2pdf === 'undefined') {
+        showToast('❌ PDF library লোড হয়নি', 'error');
+        return;
+    }
+    
+    const memberId = window.currentDueInvoiceData?.member?.member_id || 'invoice';
+    const timestamp = new Date().toISOString().slice(0, 10);
+    
+    showToast('⏳ PDF তৈরি হচ্ছে...', 'info');
+    
+    const opt = {
+        margin: [10, 10, 10, 10],
+        filename: `due_invoice_${memberId}_${timestamp}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, letterRendering: true },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+    
+    html2pdf().set(opt).from(printArea).save()
+        .then(() => showToast('✅ PDF ডাউনলোড সম্পূর্ণ', 'success'))
+        .catch(e => showToast('❌ PDF ডাউনলোড ব্যর্থ', 'error'));
+}
+
+// ============================================================
+// 6️⃣ Share on WhatsApp
+// ============================================================
+function shareDueInvoiceWhatsApp() {
+    const data = window.currentDueInvoiceData;
+    if (!data) {
+        showToast('❌ ইনভয়েস পাওয়া যায়নি', 'error');
+        return;
+    }
+    
+    const { member, dueAmount, monthsSinceJoin, monthlySavings } = data;
+    
+    const fmt = (n) => (Number(n) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    
+    const message = `আসসালামু আলাইকুম ${member.full_name},
+
+📋 সঞ্চয় বকেয়া নোটিশ
+
+🆔 সদস্য আইডি: ${member.member_id}
+💰 মাসিক সঞ্চয়: ৳ ${fmt(monthlySavings)}
+📅 মেয়াদ: ${monthsSinceJoin} মাস
+⚠️ মোট বকেয়া: ৳ ${fmt(dueAmount)}
+
+অনুগ্রহ করে দ্রুত আপনার বকেয়া সঞ্চয় পরিশোধ করুন।
+
+ধন্যবাদ,
+ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ`;
+    
+    const phone = (member.mobile || '').replace(/\D/g, '');
+    const url = phone 
+        ? `https://wa.me/88${phone}?text=${encodeURIComponent(message)}`
+        : `https://wa.me/?text=${encodeURIComponent(message)}`;
+    
+    window.open(url, '_blank');
+    showToast('✅ WhatsApp খোলা হয়েছে', 'success');
+}
+
+// ============================================================
+// 7️⃣ Global expose
+// ============================================================
+window.showDueMemberInvoice = showDueMemberInvoice;
+window.renderDueInvoiceHTML = renderDueInvoiceHTML;
+window.closeDueInvoiceModal = closeDueInvoiceModal;
+window.closeDueInvoiceModalOnOverlay = closeDueInvoiceModalOnOverlay;
+window.printDueInvoice = printDueInvoice;
+window.downloadDueInvoicePDF = downloadDueInvoicePDF;
+window.shareDueInvoiceWhatsApp = shareDueInvoiceWhatsApp;
+
+console.log('✅ Due Invoice System loaded');
+    
     // ============================================================
     // ===== REPRESENTATIVE FUNCTIONS =====
     // ============================================================
@@ -31152,123 +31613,430 @@ function startAdminMessagesPolling() {
         console.log('✅ Direct Forms Setup Complete!');
 
     // ============================================================
-// 🎯 LEADERSHIP INTEGRATION — Parent Side
-// ============================================================
-
-// ✅ STEP 1: Force refresh function
-async function forceRefreshLeadership() {
-    console.log('🔥 Force refreshing leadership iframe...');
+    // 🎯 LEADERSHIP INTEGRATION — Parent Side
+    // ============================================================
     
-    var iframe = document.getElementById('leadershipIframe');
-    if (!iframe) {
-        if (typeof showToast === 'function') {
-            showToast('❌ Leadership iframe পাওয়া যায়নি', 'error');
+    // ✅ STEP 1: Force refresh function
+    async function forceRefreshLeadership() {
+        console.log('🔥 Force refreshing leadership iframe...');
+        
+        var iframe = document.getElementById('leadershipIframe');
+        if (!iframe) {
+            if (typeof showToast === 'function') {
+                showToast('❌ Leadership iframe পাওয়া যায়নি', 'error');
+            }
+            return;
         }
-        return;
+        
+        // ✅ Reload with cache bypass
+        iframe.src = 'about:blank';
+        setTimeout(function() {
+            iframe.src = 'admin-leadership.html?t=' + Date.now() + '&r=' + Math.random().toString(36).substring(7);
+            console.log('✅ Leadership iframe reloaded');
+        }, 150);
+        
+        if (typeof showToast === 'function') {
+            showToast('🔄 রিফ্রেশ করা হয়েছে', 'info');
+        }
     }
     
-    // ✅ Reload with cache bypass
-    iframe.src = 'about:blank';
-    setTimeout(function() {
-        iframe.src = 'admin-leadership.html?t=' + Date.now() + '&r=' + Math.random().toString(36).substring(7);
-        console.log('✅ Leadership iframe reloaded');
-    }, 150);
+    window.forceRefreshLeadership = forceRefreshLeadership;
     
-    if (typeof showToast === 'function') {
-        showToast('🔄 রিফ্রেশ করা হয়েছে', 'info');
-    }
-}
-
-window.forceRefreshLeadership = forceRefreshLeadership;
-
-// ============================================================
-// ✅ STEP 2: Realtime setup for leadership changes
-// ============================================================
-var leadershipRealtimeChannel = null;
-
-function setupLeadershipRealtime() {
-    var client = (typeof initSupabaseClient === 'function') 
-        ? initSupabaseClient() 
-        : (window.supabaseClient || null);
+    // ============================================================
+    // ✅ STEP 2: Realtime setup for leadership changes
+    // ============================================================
+    var leadershipRealtimeChannel = null;
     
-    if (!client) {
-        console.warn('⚠️ Supabase client not ready for realtime');
-        return;
-    }
-    
-    // Cleanup old channel
-    if (leadershipRealtimeChannel) {
-        try { 
-            client.removeChannel(leadershipRealtimeChannel); 
-        } catch(e) {}
-        leadershipRealtimeChannel = null;
-    }
-    
-    // Subscribe to changes
-    leadershipRealtimeChannel = client
-        .channel('leadership-parent-sync')
-        .on(
-            'postgres_changes',
-            { 
-                event: '*', 
-                schema: 'public', 
-                table: 'leadership' 
-            },
-            function(payload) {
-                console.log('🔔 Leadership realtime:', payload.eventType);
-                
-                // Reload iframe via postMessage
-                var iframe = document.getElementById('leadershipIframe');
-                if (iframe && iframe.contentWindow) {
-                    try {
-                        iframe.contentWindow.postMessage(
-                            { action: 'reload-leaders' },
-                            '*'
-                        );
-                        console.log('📤 Message sent to iframe');
-                    } catch(e) {
-                        console.warn('PostMessage failed:', e);
+    function setupLeadershipRealtime() {
+        var client = (typeof initSupabaseClient === 'function') 
+            ? initSupabaseClient() 
+            : (window.supabaseClient || null);
+        
+        if (!client) {
+            console.warn('⚠️ Supabase client not ready for realtime');
+            return;
+        }
+        
+        // Cleanup old channel
+        if (leadershipRealtimeChannel) {
+            try { 
+                client.removeChannel(leadershipRealtimeChannel); 
+            } catch(e) {}
+            leadershipRealtimeChannel = null;
+        }
+        
+        // Subscribe to changes
+        leadershipRealtimeChannel = client
+            .channel('leadership-parent-sync')
+            .on(
+                'postgres_changes',
+                { 
+                    event: '*', 
+                    schema: 'public', 
+                    table: 'leadership' 
+                },
+                function(payload) {
+                    console.log('🔔 Leadership realtime:', payload.eventType);
+                    
+                    // Reload iframe via postMessage
+                    var iframe = document.getElementById('leadershipIframe');
+                    if (iframe && iframe.contentWindow) {
+                        try {
+                            iframe.contentWindow.postMessage(
+                                { action: 'reload-leaders' },
+                                '*'
+                            );
+                            console.log('📤 Message sent to iframe');
+                        } catch(e) {
+                            console.warn('PostMessage failed:', e);
+                        }
                     }
                 }
-            }
-        )
-        .subscribe(function(status) {
-            console.log('📡 Leadership realtime:', status);
-        });
-}
+            )
+            .subscribe(function(status) {
+                console.log('📡 Leadership realtime:', status);
+            });
+    }
+    
+    window.setupLeadershipRealtime = setupLeadershipRealtime;
+    
+    // ✅ Start realtime after page ready
+    setTimeout(function() {
+        setupLeadershipRealtime();
+    }, 3000);
+    
+    // ============================================================
+    // ✅ STEP 3: Listen for messages from iframe
+    // ============================================================
+    window.addEventListener('message', function(event) {
+        if (event.data && event.data.action === 'leadership-changed') {
+            console.log('📩 Iframe says leadership changed:', event.data.type);
+            
+            // Refresh related data
+            if (typeof loadRealDashboard === 'function') loadRealDashboard();
+            if (typeof updateAllBadges === 'function') updateAllBadges();
+        }
+    });
+    
+    // ============================================================
+    // ✅ STEP 4: Backup refresh button handler
+    // ============================================================
+    function loadLeadershipInIframe() {
+        if (typeof forceRefreshLeadership === 'function') {
+            forceRefreshLeadership();
+        }
+    }
+    
+    window.loadLeadershipInIframe = loadLeadershipInIframe;
+    
+    console.log('✅ Leadership parent-side integration loaded');
 
-window.setupLeadershipRealtime = setupLeadershipRealtime;
-
-// ✅ Start realtime after page ready
-setTimeout(function() {
-    setupLeadershipRealtime();
-}, 3000);
-
+    // ============================================================
+// ⏰ AUTO LOGOUT — 30 Minutes Inactivity
+// ✅ Activity: mouse, keyboard, touch, scroll, click
+// ✅ Warning: 2 minutes before logout
+// ✅ Cross-tab sync
 // ============================================================
-// ✅ STEP 3: Listen for messages from iframe
-// ============================================================
-window.addEventListener('message', function(event) {
-    if (event.data && event.data.action === 'leadership-changed') {
-        console.log('📩 Iframe says leadership changed:', event.data.type);
+
+(function() {
+    'use strict';
+    
+    const INACTIVITY_LIMIT = 30 * 60 * 1000;  // 30 minutes in ms
+    const WARNING_TIME = 28 * 60 * 1000;       // 28 minutes (2 min warning)
+    
+    let inactivityTimer = null;
+    let warningTimer = null;
+    let warningShown = false;
+    let lastActivity = Date.now();
+    
+    // ✅ Reset timer
+    function resetInactivityTimer() {
+        // Clear old timers
+        if (inactivityTimer) clearTimeout(inactivityTimer);
+        if (warningTimer) clearTimeout(warningTimer);
         
-        // Refresh related data
-        if (typeof loadRealDashboard === 'function') loadRealDashboard();
-        if (typeof updateAllBadges === 'function') updateAllBadges();
+        // ✅ Only reset if admin logged in
+        if (!localStorage.getItem('currentAdmin')) return;
+        
+        lastActivity = Date.now();
+        warningShown = false;
+        localStorage.setItem('lastActivity', lastActivity.toString());
+        
+        // ✅ Warning timer (28 minutes)
+        warningTimer = setTimeout(() => {
+            if (!localStorage.getItem('currentAdmin')) return;
+            showInactivityWarning();
+            warningShown = true;
+        }, WARNING_TIME);
+        
+        // ✅ Logout timer (30 minutes)
+        inactivityTimer = setTimeout(() => {
+            performAutoLogout();
+        }, INACTIVITY_LIMIT);
     }
-});
-
-// ============================================================
-// ✅ STEP 4: Backup refresh button handler
-// ============================================================
-function loadLeadershipInIframe() {
-    if (typeof forceRefreshLeadership === 'function') {
-        forceRefreshLeadership();
+    
+    // ✅ Show warning modal
+    function showInactivityWarning() {
+        console.log('⚠️ Inactivity warning shown');
+        
+        // Remove old warning if exists
+        document.querySelectorAll('.inactivity-warning').forEach(el => el.remove());
+        
+        const warning = document.createElement('div');
+        warning.className = 'inactivity-warning';
+        warning.innerHTML = `
+            <div style="
+                position: fixed;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.6);
+                backdrop-filter: blur(4px);
+                z-index: 999999;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+                animation: fadeIn 0.3s ease;
+            ">
+                <div style="
+                    background: white;
+                    border-radius: 20px;
+                    padding: 36px 32px;
+                    max-width: 480px;
+                    width: 100%;
+                    text-align: center;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+                    border: 3px solid #f59e0b;
+                ">
+                    <div style="
+                        width: 80px;
+                        height: 80px;
+                        margin: 0 auto 20px;
+                        background: linear-gradient(135deg, #fef3c7, #fde68a);
+                        border-radius: 50%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-size: 40px;
+                        border: 3px solid #f59e0b;
+                    ">
+                        ⏰
+                    </div>
+                    
+                    <h3 style="
+                        font-size: 22px;
+                        font-weight: 800;
+                        color: #92400e;
+                        margin-bottom: 12px;
+                    ">
+                        আপনি কি এখনো আছেন?
+                    </h3>
+                    
+                    <p style="
+                        font-size: 15px;
+                        color: #78716c;
+                        margin-bottom: 24px;
+                        line-height: 1.6;
+                    ">
+                        ২ মিনিট নিষ্ক্রিয় থাকলে স্বয়ংক্রিয়ভাবে লগআউট হয়ে যাবে।
+                    </p>
+                    
+                    <div style="
+                        background: #fef3c7;
+                        padding: 12px;
+                        border-radius: 10px;
+                        margin-bottom: 20px;
+                        border: 1px solid #fcd34d;
+                    ">
+                        <p style="
+                            font-size: 32px;
+                            font-weight: 900;
+                            color: #d97706;
+                            margin: 0;
+                            font-family: monospace;
+                        " id="countdownTimer">120</p>
+                        <p style="
+                            font-size: 12px;
+                            color: #92400e;
+                            margin: 4px 0 0;
+                        ">সেকেন্ড বাকি</p>
+                    </div>
+                    
+                    <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+                        <button onclick="window._stayLoggedIn()" style="
+                            padding: 14px 28px;
+                            background: linear-gradient(135deg, #059669, #047857);
+                            color: white;
+                            border: none;
+                            border-radius: 10px;
+                            font-size: 15px;
+                            font-weight: 700;
+                            cursor: pointer;
+                            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+                            min-width: 140px;
+                        ">
+                            ✅ আমি আছি
+                        </button>
+                        <button onclick="window._logoutNow()" style="
+                            padding: 14px 28px;
+                            background: linear-gradient(135deg, #dc2626, #b91c1c);
+                            color: white;
+                            border: none;
+                            border-radius: 10px;
+                            font-size: 15px;
+                            font-weight: 700;
+                            cursor: pointer;
+                            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+                            min-width: 140px;
+                        ">
+                            🚪 লগআউট
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(warning);
+        
+        // ✅ Countdown timer
+        let secondsLeft = 120;
+        const countdownEl = document.getElementById('countdownTimer');
+        const countdownInterval = setInterval(() => {
+            secondsLeft--;
+            if (countdownEl) countdownEl.textContent = secondsLeft;
+            
+            if (secondsLeft <= 0) {
+                clearInterval(countdownInterval);
+            }
+        }, 1000);
+        
+        warning.dataset.intervalId = countdownInterval;
     }
-}
-
-window.loadLeadershipInIframe = loadLeadershipInIframe;
-
-console.log('✅ Leadership parent-side integration loaded');
+    
+    // ✅ Remove warning
+    function removeInactivityWarning() {
+        document.querySelectorAll('.inactivity-warning').forEach(el => {
+            if (el.dataset.intervalId) {
+                clearInterval(parseInt(el.dataset.intervalId));
+            }
+            el.remove();
+        });
+    }
+    
+    // ✅ Perform auto logout
+    function performAutoLogout() {
+        console.log('🚪 Auto logout — 30 minutes inactivity');
+        
+        // Clear session
+        localStorage.removeItem('currentAdmin');
+        localStorage.removeItem('currentBranchAdmin');
+        localStorage.removeItem('lastActivity');
+        sessionStorage.removeItem('currentAdmin');
+        sessionStorage.removeItem('currentBranchAdmin');
+        
+        // Clear global
+        window.currentAdmin = null;
+        if (typeof currentAdmin !== 'undefined') currentAdmin = null;
+        
+        // Show toast
+        if (typeof showToast === 'function') {
+            showToast('⏰ ৩০ মিনিট নিষ্ক্রিয় থাকার কারণে লগআউট হয়েছে', 'warning');
+        }
+        
+        // Redirect to login
+        setTimeout(() => {
+            window.location.href = 'admin-login.html?reason=inactivity';
+        }, 1000);
+    }
+    
+    // ✅ User activity handler
+    let activityThrottle = null;
+    function handleActivity() {
+        // Throttle to prevent too many resets
+        if (activityThrottle) return;
+        activityThrottle = setTimeout(() => {
+            activityThrottle = null;
+        }, 1000);
+        
+        // Reset timer if not already reset recently
+        const now = Date.now();
+        if (now - lastActivity > 5000) {  // Only reset if 5s passed
+            resetInactivityTimer();
+            
+            // Remove warning if shown
+            if (warningShown) {
+                removeInactivityWarning();
+                warningShown = false;
+            }
+        }
+    }
+    
+    // ✅ Global functions for buttons
+    window._stayLoggedIn = function() {
+        console.log('✅ User clicked "I am here"');
+        removeInactivityWarning();
+        resetInactivityTimer();
+        if (typeof showToast === 'function') {
+            showToast('✅ সেশন চালু আছে', 'success');
+        }
+    };
+    
+    window._logoutNow = function() {
+        console.log('🚪 User clicked logout');
+        removeInactivityWarning();
+        if (typeof adminLogout === 'function') {
+            adminLogout();
+        } else {
+            performAutoLogout();
+        }
+    };
+    
+    // ✅ Start tracking
+    function startTracking() {
+        // ✅ Only if logged in
+        if (!localStorage.getItem('currentAdmin')) {
+            console.log('⚠️ No admin session — tracking disabled');
+            return;
+        }
+        
+        console.log('⏰ Inactivity tracking started (30 min limit)');
+        
+        // Activity events
+        const events = [
+            'mousedown', 'mousemove', 'keydown', 'scroll', 
+            'touchstart', 'touchmove', 'click', 'wheel'
+        ];
+        
+        events.forEach(event => {
+            document.addEventListener(event, handleActivity, { passive: true });
+        });
+        
+        // ✅ Cross-tab activity sync
+        window.addEventListener('storage', (e) => {
+            if (e.key === 'lastActivity' && e.newValue) {
+                const otherTabActivity = parseInt(e.newValue);
+                if (Math.abs(otherTabActivity - lastActivity) > 5000) {
+                    // Another tab was active — reset our timer too
+                    lastActivity = otherTabActivity;
+                    resetInactivityTimer();
+                }
+            }
+        });
+        
+        // ✅ Initial timer
+        resetInactivityTimer();
+    }
+    
+    // ✅ Start when DOM ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(startTracking, 1500);
+        });
+    } else {
+        setTimeout(startTracking, 1500);
+    }
+    
+    console.log('✅ Auto Logout System loaded (30 min inactivity)');
+})();
         
         </script>
     </body>
