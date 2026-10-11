@@ -11639,6 +11639,7 @@ async function rejectPayment(paymentId) {
 
 // ============================================================
 // ✅ UPDATED: showPaymentDetails() — সদস্য বিস্তারিত + পূর্বের পেমেন্ট
+// ✅ ডুপ্লিকেট চেক সহ (limit ছাড়া)
 // ============================================================
 async function showPaymentDetails(paymentId) {
     const id = typeof paymentId === 'string' ? parseInt(paymentId) : paymentId;
@@ -11740,11 +11741,44 @@ async function showPaymentDetails(paymentId) {
             const { data: history } = await client
                 .from('payments')
                 .select('id, amount, month, year, status, payment_method, submitted_at, approved_at, transaction_id')
-                .eq('member_id', String(member.id))  // ✅ Numeric id দিয়ে
+                .eq('member_id', String(member.id))
                 .order('submitted_at', { ascending: false })
                 .limit(10);
             
             memberHistory = history || [];
+        }
+        
+        // ============================================================
+        // ✅ ৩.৫ ডুপ্লিকেট চেকের জন্য আলাদা query (limit ছাড়া)
+        // ============================================================
+        let duplicateData = { approved: [], pending: [] };
+        
+        if (member && payment.month && payment.year) {
+            const currentMonth = String(payment.month).trim();
+            const currentYear = String(payment.year).trim();
+            
+            // ✅ এই মাসে same member এর সব payment আনুন (limit ছাড়া)
+            const { data: sameMonthPayments } = await client
+                .from('payments')
+                .select('id, amount, month, year, status, submitted_at, approved_at')
+                .eq('member_id', String(member.id))
+                .eq('month', currentMonth)
+                .eq('year', currentYear)
+                .neq('id', payment.id);
+            
+            // ✅ approved এবং pending আলাদা করুন
+            if (sameMonthPayments) {
+                duplicateData.approved = sameMonthPayments.filter(p => p.status === 'approved');
+                duplicateData.pending = sameMonthPayments.filter(p => p.status === 'pending');
+            }
+            
+            console.log('🔍 Duplicate check:', {
+                month: currentMonth,
+                year: currentYear,
+                approvedDuplicates: duplicateData.approved.length,
+                pendingDuplicates: duplicateData.pending.length,
+                details: sameMonthPayments
+            });
         }
         
         // ============================================================
@@ -11755,7 +11789,7 @@ async function showPaymentDetails(paymentId) {
             const { data: loans } = await client
                 .from('loan_applications')
                 .select('id, amount, loan_type, status, total_amount, emi_amount, duration_months, submitted_at')
-                .eq('member_id', member.member_id)  // ✅ formatted id
+                .eq('member_id', member.member_id)
                 .order('submitted_at', { ascending: false })
                 .limit(5);
             
@@ -11840,6 +11874,80 @@ async function showPaymentDetails(paymentId) {
                         </div>
                         ${currentStatusBadge}
                     </div>
+
+                    ${(() => {
+                        // ✅ Duplicate Data ব্যবহার করুন (এখন limit ছাড়া data আছে)
+                        const dupApproved = duplicateData?.approved || [];
+                        const dupPending = duplicateData?.pending || [];
+                        
+                        if (dupApproved.length === 0 && dupPending.length === 0) return '';
+                        
+                        // ✅ Approved Duplicate Warning
+                        const approvedWarning = dupApproved.length > 0 ? `
+                            <div class="mb-2 p-3 bg-red-100 border-2 border-red-500 rounded-lg">
+                                <div class="flex items-start gap-2">
+                                    <i class="fas fa-exclamation-triangle text-red-600 text-xl mt-0.5 animate-pulse"></i>
+                                    <div class="flex-1">
+                                        <p class="text-sm font-bold text-red-800">
+                                            ❌ ডুপ্লিকেট! এই মাসের (${payment.month} ${payment.year}) জন্য 
+                                            ইতিমধ্যে <strong>${dupApproved.length}টি payment approved</strong> হয়েছে!
+                                        </p>
+                                        <div class="mt-2 space-y-1">
+                                            ${dupApproved.map(d => `
+                                                <div class="flex justify-between items-center bg-white p-2 rounded text-xs border border-red-200">
+                                                    <span class="text-gray-600">
+                                                        📅 ${d.submitted_at 
+                                                            ? new Date(d.submitted_at).toLocaleDateString('bn-BD', { 
+                                                                day: '2-digit', month: 'short', year: 'numeric' 
+                                                              }) 
+                                                            : '-'}
+                                                    </span>
+                                                    <span class="font-bold text-red-700">৳${formatAmount(d.amount)}</span>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                        <p class="text-xs text-red-600 mt-2 font-semibold">
+                                            ⚠️ মোট: ৳${formatAmount(dupApproved.reduce((s, d) => s + Number(d.amount || 0), 0))}
+                                            — আবার approve করলে balance বেড়ে যাবে (ডুপ্লিকেট)!
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        ` : '';
+                        
+                        // ✅ Pending Duplicate Warning
+                        const pendingWarning = dupPending.length > 0 ? `
+                            <div class="mb-2 p-3 bg-amber-100 border-2 border-amber-500 rounded-lg">
+                                <div class="flex items-start gap-2">
+                                    <i class="fas fa-clock text-amber-600 text-xl mt-0.5"></i>
+                                    <div class="flex-1">
+                                        <p class="text-sm font-bold text-amber-800">
+                                            ⏳ এই মাসে <strong>${dupPending.length}টি pending payment</strong> আছে!
+                                        </p>
+                                        <div class="mt-2 space-y-1">
+                                            ${dupPending.map(d => `
+                                                <div class="flex justify-between items-center bg-white p-2 rounded text-xs border border-amber-200">
+                                                    <span class="text-gray-600">
+                                                        📅 ${d.submitted_at 
+                                                            ? new Date(d.submitted_at).toLocaleDateString('bn-BD', { 
+                                                                day: '2-digit', month: 'short', year: 'numeric' 
+                                                              }) 
+                                                            : '-'}
+                                                    </span>
+                                                    <span class="font-bold text-amber-700">৳${formatAmount(d.amount)}</span>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                        <p class="text-xs text-amber-600 mt-2 font-semibold">
+                                            ⚠️ একই মাসে একাধিক payment! আগে পুরনোগুলো handle করুন।
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        ` : '';
+                        
+                        return approvedWarning + pendingWarning;
+                    })()}
                     
                     <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
                         <div class="bg-white p-2 rounded-lg text-center">
@@ -12165,158 +12273,6 @@ async function showPaymentDetails(paymentId) {
         `;
     }
 }
-
-// ============================================================
-// ✅ Supabase থেকে পেমেন্ট লোড করুন
-// ============================================================
-async function loadPaymentFromSupabase(paymentId) {
-    const client = initSupabaseClient();
-    if (!client) {
-        showToast('❌ সংযোগ সমস্যা!', 'error');
-        return;
-    }
-    
-    try {
-        const { data: payment, error } = await client
-            .from('payments')
-            .select('*')
-            .eq('id', paymentId)
-            .single();
-        
-        if (error || !payment) {
-            console.error('❌ পেমেন্ট লোড error:', error);
-            showToast('❌ পেমেন্ট তথ্য পাওয়া যায়নি!', 'error');
-            return;
-        }
-        
-        console.log('✅ পেমেন্ট লোড সম্পূর্ণ:', payment);
-        showPaymentDetailsModal(payment);
-        
-    } catch(e) {
-        console.error('❌ loadPaymentFromSupabase error:', e);
-        showToast('❌ পেমেন্ট তথ্য লোড করতে সমস্যা!', 'error');
-    }
-}
-
-// ============================================================
-// ✅ পেমেন্ট ডিটেইল মডাল দেখান
-// ============================================================
-function showPaymentDetailsModal(payment) {
-    const modal = document.getElementById('paymentDetailsModal');
-    if (!modal) {
-        console.error('❌ paymentDetailsModal এলিমেন্ট পাওয়া যায়নি!');
-        showToast('❌ মডাল পাওয়া যায়নি!', 'error');
-        return;
-    }
-    
-    const content = document.getElementById('paymentDetailsContent');
-    if (!content) {
-        console.error('❌ paymentDetailsContent এলিমেন্ট পাওয়া যায়নি!');
-        showToast('❌ কন্টেন্ট এলিমেন্ট পাওয়া যায়নি!', 'error');
-        return;
-    }
-    
-    // ✅ পেমেন্ট মেথডের রঙ নির্ধারণ
-    const methodColor = payment.payment_method === 'bKash' ? 'bg-green-100 text-green-700' :
-                       payment.payment_method === 'Nagad' ? 'bg-orange-100 text-orange-700' :
-                       payment.payment_method === 'Rocket' ? 'bg-purple-100 text-purple-700' :
-                       payment.payment_method === 'bank' ? 'bg-indigo-100 text-indigo-700' :
-                       'bg-blue-100 text-blue-700';
-    
-    // ✅ পেমেন্ট স্ট্যাটাস নির্ধারণ
-    let statusBadge = '';
-    if (payment.status === 'pending') {
-        statusBadge = '<span class="px-2 py-1 rounded-full text-xs bg-amber-100 text-amber-700">⏳ যাচাইকরণে</span>';
-    } else if (payment.status === 'approved') {
-        statusBadge = '<span class="px-2 py-1 rounded-full text-xs bg-green-100 text-green-700">✅ অনুমোদিত</span>';
-    } else if (payment.status === 'rejected') {
-        statusBadge = '<span class="px-2 py-1 rounded-full text-xs bg-red-100 text-red-700">❌ বাতিল</span>';
-    } else {
-        statusBadge = `<span class="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-700">${payment.status || 'অজানা'}</span>`;
-    }
-    
-    // ✅ HTML তৈরি করুন
-    content.innerHTML = `
-        <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg border mb-4">
-            <h4 class="font-bold text-emerald-700 text-lg mb-3"><i class="fas fa-receipt mr-2"></i>সঞ্চয় পেমেন্ট বিস্তারিত</h4>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">পেমেন্ট আইডি</span>
-                    <p class="font-semibold text-gray-800">#${payment.id}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">সদস্য</span>
-                    <p class="font-semibold text-gray-800">${payment.member_name || '-'}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">সদস্য আইডি</span>
-                    <p class="font-semibold text-gray-800">${payment.member_id || '-'}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">মাস</span>
-                    <p class="font-semibold text-gray-800">${payment.month || ''} ${payment.year || ''}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">পরিমাণ</span>
-                    <p class="font-bold text-emerald-600 text-lg">${formatAmountWithText ? formatAmountWithText(payment.amount) : (payment.amount || 0).toFixed(2) + ' টাকা'}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">পেমেন্ট পদ্ধতি</span>
-                    <p><span class="px-2 py-1 rounded-full text-xs ${methodColor}">${payment.payment_method || 'cash'}</span></p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">লেনদেন আইডি</span>
-                    <p class="font-semibold font-mono text-xs break-all">${payment.transaction_id || '-'}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">তারিখ</span>
-                    <p class="font-semibold text-gray-800">${payment.submitted_at ? new Date(payment.submitted_at).toLocaleString('bn-BD') : '-'}</p>
-                </div>
-                <div class="bg-white p-3 rounded-lg shadow-sm">
-                    <span class="text-gray-500">স্ট্যাটাস</span>
-                    <p>${statusBadge}</p>
-                </div>
-                ${payment.sender_mobile ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">সেন্ডার মোবাইল</span><p class="font-semibold text-gray-800">${payment.sender_mobile}</p></div>` : ''}
-                ${payment.bank_name ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">ব্যাংকের নাম</span><p class="font-semibold text-gray-800">${payment.bank_name}</p></div>` : ''}
-                ${payment.account_number ? `<div class="bg-white p-3 rounded-lg shadow-sm"><span class="text-gray-500">একাউন্ট নম্বর</span><p class="font-semibold text-gray-800">${payment.account_number}</p></div>` : ''}
-                ${payment.note ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">নোট</span><p class="font-semibold text-gray-800">${payment.note}</p></div>` : ''}
-                ${payment.reject_reason ? `<div class="bg-white p-3 rounded-lg shadow-sm col-span-2"><span class="text-gray-500">বাতিলের কারণ</span><p class="font-semibold text-red-600">${payment.reject_reason}</p></div>` : ''}
-            </div>
-        </div>
-        <div class="flex gap-2 justify-center no-print">
-            ${payment.status === 'pending' ? `
-                <button onclick="approvePayment('${payment.id}')" class="btn btn-success flex-1 py-2">
-                    <i class="fas fa-check mr-1"></i> অনুমোদন দিন
-                </button>
-                <button onclick="rejectPayment('${payment.id}')" class="btn btn-danger flex-1 py-2">
-                    <i class="fas fa-times mr-1"></i> বাতিল করুন
-                </button>
-            ` : ''}
-            <button onclick="closePaymentDetailsModal()" class="btn btn-warning flex-1 py-2">
-                <i class="fas fa-times mr-1"></i> বন্ধ করুন
-            </button>
-        </div>
-    `;
-    
-    // ✅ মডাল দেখান
-    modal.classList.remove('hidden');
-    modal.classList.add('flex');
-    console.log('✅ পেমেন্ট ডিটেইল মডাল খোলা হয়েছে');
-}
-
-// ============================================================
-// ✅ closePaymentDetailsModal() - বন্ধ করুন
-// ============================================================
-function closePaymentDetailsModal() {
-    const modal = document.getElementById('paymentDetailsModal');
-    if (modal) {
-        modal.classList.add('hidden');
-        modal.classList.remove('flex');
-        modal.style.display = 'none';
-        console.log('✅ পেমেন্ট ডিটেইল মডাল বন্ধ করা হয়েছে');
-    }
-}
-
     // ============================================================
     // ===== LOAD REJECTED PAYMENTS =====
     // ============================================================
