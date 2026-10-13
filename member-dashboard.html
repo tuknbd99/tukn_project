@@ -1508,7 +1508,14 @@ body.dark-mode .quick-action-btn .quick-action-label {
     <!-- 🏠 TAB ১: হোম                                              -->
     <!-- ═══════════════════════════════════════════════════════════ -->
     <div class="tab-content active" id="tab-home">
-        
+  
+    <!-- 🆕 Lock-in Status Banner Container -->
+    <div id="lockInStatusBanner" class="hidden mb-4"></div>
+    
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- 🎯 PHASE 1: MAIN BALANCE CARD (সবচেয়ে উপরে)            -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div class="main-balance-card">
         <!-- 🎯 PHASE 1: MAIN BALANCE CARD -->
         <div class="main-balance-card">
             <div class="balance-label">
@@ -3981,7 +3988,7 @@ if (isNaN(computedMemberTerm) || computedMemberTerm < 0) {
     console.log('✅ member_term from sessionStorage:', computedMemberTerm);
 }
     
-    currentUser = {
+        currentUser = {
         id: parsed.member_id || parsed.id,
         name: parsed.full_name || parsed.name,
         mobile: parsed.mobile,
@@ -4001,7 +4008,12 @@ if (isNaN(computedMemberTerm) || computedMemberTerm < 0) {
         profileImage: parsed.profile_image || 'images/logo.png',
         presentAddress: parsed.present_address || '',
         permanentAddress: parsed.permanent_address || '',
-        approved_at: approvedAt
+        approved_at: approvedAt,
+        
+        // 🆕 Lock-in Tracking Fields (কারেন্ট সদস্যের জন্য)
+        lockin_agreed: parsed.lockin_agreed || false,
+        lockin_agreed_at: parsed.lockin_agreed_at || null,
+        lockin_end_date: parsed.lockin_end_date || null
     };
     
     // ✅ Global scope-এ expose
@@ -4070,6 +4082,124 @@ function safeSetDisplay(id, display) {
     return false;
 }
 
+// ============================================================
+// 🆕 Lock-in Status Banner Update Function
+// Home Tab-এ কারেন্ট সদস্যদের Lock-in অবস্থা দেখায়
+// ============================================================
+function updateLockInBanner() {
+    const banner = document.getElementById('lockInStatusBanner');
+    if (!banner) {
+        console.warn('⚠️ lockInStatusBanner element পাওয়া যায়নি');
+        return;
+    }
+    
+    const isCurrentMember = parseInt(currentUser.memberTerm) === 0;
+    
+    // কারেন্ট সদস্য না হলে banner লুকান
+    if (!isCurrentMember) {
+        banner.classList.add('hidden');
+        banner.innerHTML = '';
+        return;
+    }
+    
+    // Lock-in end date বের করুন
+    let lockInEndDate = null;
+    
+    if (currentUser.lockin_end_date) {
+        lockInEndDate = new Date(currentUser.lockin_end_date);
+    } else {
+        let joinDate = null;
+        if (currentUser.approved_at && 
+            currentUser.approved_at !== 'null' && 
+            currentUser.approved_at !== 'undefined') {
+            joinDate = new Date(currentUser.approved_at);
+        } else if (currentUser.joinDate) {
+            joinDate = new Date(currentUser.joinDate);
+        }
+        
+        if (joinDate && !isNaN(joinDate.getTime())) {
+            lockInEndDate = new Date(joinDate);
+            lockInEndDate.setMonth(joinDate.getMonth() + 3);
+        }
+    }
+    
+    if (!lockInEndDate || isNaN(lockInEndDate.getTime())) {
+        banner.classList.add('hidden');
+        return;
+    }
+    
+    const now = new Date();
+    
+    if (now < lockInEndDate) {
+        // ⏳ Lock-in চলছে
+        const diffMs = lockInEndDate - now;
+        const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+        const diffMonths = Math.floor(diffDays / 30);
+        const remainingDays = diffDays % 30;
+        const unlockDate = lockInEndDate.toLocaleDateString('bn-BD', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+        
+        let timeLeft = '';
+        if (diffMonths > 0) timeLeft += `${diffMonths} মাস `;
+        if (remainingDays > 0) timeLeft += `${remainingDays} দিন`;
+        if (!timeLeft) timeLeft = 'শেষ পর্যায়ে';
+        
+        banner.classList.remove('hidden');
+        banner.innerHTML = `
+            <div class="bg-gradient-to-r from-red-50 to-amber-50 border-2 border-red-300 rounded-xl p-4 shadow-sm">
+                <div class="flex items-start gap-3">
+                    <div class="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-lock text-red-600"></i>
+                    </div>
+                    <div class="flex-1">
+                        <p class="font-bold text-red-700 text-sm">
+                            🔒 ৩ মাসের Lock-in Period চলছে
+                        </p>
+                        <p class="text-xs text-red-600 mt-1">
+                            মূলধন উত্তোলন চালু হবে: <strong>${unlockDate}</strong>
+                        </p>
+                        <p class="text-xs text-amber-700 mt-1">
+                            ⏳ বাকি: <strong>${timeLeft}</strong>
+                        </p>
+                    </div>
+                    <button onclick="openWithdrawModal('capital')" 
+                            class="text-xs bg-white border border-red-300 text-red-600 px-3 py-1 rounded-lg hover:bg-red-50 transition whitespace-nowrap">
+                        বিস্তারিত
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        console.log('🔒 Lock-in banner shown:', timeLeft, 'বাকি');
+        
+    } else {
+        // ✅ Lock-in সম্পূর্ণ
+        banner.classList.remove('hidden');
+        banner.innerHTML = `
+            <div class="bg-gradient-to-r from-emerald-50 to-green-50 border-2 border-emerald-300 rounded-xl p-3 shadow-sm">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-unlock text-emerald-600 text-sm"></i>
+                    </div>
+                    <div class="flex-1">
+                        <p class="font-bold text-emerald-700 text-sm">
+                            ✅ Lock-in Period সম্পূর্ণ!
+                        </p>
+                        <p class="text-xs text-emerald-600">
+                            এখন আপনি সম্পূর্ণ মূলধন উত্তোলন করতে পারবেন।
+                        </p>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        console.log('✅ Lock-in completed');
+    }
+}
+    
 // ============================================================
 // ✅ updateUI() — সম্পূর্ণ Safe Version
 // ============================================================
@@ -4396,10 +4526,14 @@ async function updateUI() {
             } catch(e) {}
         }
     }, 120000);
+
+        // 🆕 Lock-in Status Banner Update
+    try {
+        updateLockInBanner();
+    } catch(e) {
+        console.warn('⚠️ Lock-in banner সমস্যা:', e);
+    }
     
-    // ============================================================
-    // ✅ সব কাজ সম্পূর্ণ
-    // ============================================================
     console.log('✅ updateUI() সম্পূর্ণ — সব ডেটা লোড সম্পূর্ণ');
 }
 
@@ -4997,14 +5131,14 @@ async function refreshMemberDataFromSupabase() {
     console.log('🔄 ডাটাবেস থেকে তাজা ডাটা ফেচ করা হচ্ছে...');
     let client = await initSupabase();
     if(!client) {
-        console.log('❌ Supabase client পাওয়া যায়নি!');
+        console.log('❌ Supabase client পাওয়া যায়নি!');
         return;
     }
     
     try {
         const { data, error } = await client
             .from('members')
-            .select('balance, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, member_term, approved_at, status')
+            .select('balance, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, member_term, approved_at, status, lockin_agreed, lockin_agreed_at, lockin_end_date')
             .eq('member_id', currentUser.id)
             .single();
             
@@ -5013,21 +5147,34 @@ async function refreshMemberDataFromSupabase() {
             return;
         }
         
-       if(data) {
-    userFunds.monthlySavings = Number(data.balance) || 0;
-    userFunds.savingsProfit = Number(data.profit_balance_savings) || 0;
-    userFunds.investmentProfit = Number(data.profit_balance_investment) || 0;
-    userFunds.referralProfit = Number(data.profit_balance_referral) || 0;
-    
-    // ✅ DB-এর referral_bonus = উপলব্ধ (কারণ UTTOlon হলে কমে গেছে)
-    userFunds.referralBonus = Number(data.referral_bonus) || 0;
-           
-           // ✅ window._liveReferralBonus আপডেট করুন
-if (window._liveReferralBonus === undefined) {
-    window._liveReferralBonus = Number(data.referral_bonus) || 0;
-}  
-    updateFundsDisplay();
-}
+        if(data) {
+            userFunds.monthlySavings = Number(data.balance) || 0;
+            userFunds.savingsProfit = Number(data.profit_balance_savings) || 0;
+            userFunds.investmentProfit = Number(data.profit_balance_investment) || 0;
+            userFunds.referralProfit = Number(data.profit_balance_referral) || 0;
+            
+            // ✅ DB-এর referral_bonus = উপলব্ধ
+            userFunds.referralBonus = Number(data.referral_bonus) || 0;
+            
+            // 🆕 Lock-in Data Sync (currentUser object-এ)
+            if (currentUser) {
+                currentUser.lockin_agreed = data.lockin_agreed || false;
+                currentUser.lockin_agreed_at = data.lockin_agreed_at || null;
+                currentUser.lockin_end_date = data.lockin_end_date || null;
+                
+                console.log('🔒 Lock-in Data Synced:', {
+                    agreed: currentUser.lockin_agreed,
+                    end_date: currentUser.lockin_end_date
+                });
+            }
+            
+            // ✅ window._liveReferralBonus আপডেট করুন
+            if (window._liveReferralBonus === undefined) {
+                window._liveReferralBonus = Number(data.referral_bonus) || 0;
+            }
+            
+            updateFundsDisplay();
+        }
         
     } catch(e) { 
         console.error('❌ refreshMemberDataFromSupabase error:', e); 
@@ -6611,15 +6758,14 @@ function deselectAllMonths() {
 
     
 // ============================================================
-// উত্তোলন মডাল খোলা - মেয়াদী সদস্য চেক সহ
-// ✅ সংশোধিত: রেফারেল বোনাসে লাইভ মান (৪,২৬০) ব্যবহৃত হবে
+// ✅ openWithdrawModal() — ৩ মাসের Lock-in সহ (সম্পূর্ণ)
+// কারেন্ট সদস্যদের প্রথম ৩ মাস মূলধন উত্তোলন ব্লক
 // ============================================================
 function openWithdrawModal(type) {
     let title = '', balance = 0, fieldLabel = '';
     
     if(type === 'bonus') { 
         title = 'রেফারেল বোনাস উত্তোলন'; 
-        // ✅✅✅ মূল ফিক্স: লাইভ মান আগে, না হলে DB মান ✅✅✅
         balance = window._liveReferralBonus || userFunds.referralBonus || 0;
         fieldLabel = 'রেফারেল বোনাস';
     }
@@ -6649,16 +6795,148 @@ function openWithdrawModal(type) {
         fieldLabel = '';
     }
     
-    // ✅ মেয়াদী সদস্য চেক (শুধুমাত্র মূলধন উত্তোলনের জন্য)
-    let isTermMember = parseInt(currentUser.memberTerm) > 0;
+    // ============================================================
+    // 🆕 কারেন্ট সদস্য Lock-in Period Check
+    // ============================================================
+    let isCurrentMember = parseInt(currentUser.memberTerm) === 0;
     let isCapitalWithdrawal = (type === 'capital');
-    let isBlocked = false;
-    let expiryMessage = '';
+    let isLockInBlocked = false;
+    let lockInMessage = '';
+    
+    if (isCurrentMember && isCapitalWithdrawal) {
+        let lockInEndDate = null;
+        
+        // DB থেকে lockin_end_date নিন
+        if (currentUser.lockin_end_date) {
+            lockInEndDate = new Date(currentUser.lockin_end_date);
+        } else {
+            // Fallback: join_date + 3 months
+            let joinDate = null;
+            if (currentUser.approved_at && 
+                currentUser.approved_at !== 'null' && 
+                currentUser.approved_at !== 'undefined') {
+                joinDate = new Date(currentUser.approved_at);
+            } else if (currentUser.joinDate) {
+                joinDate = new Date(currentUser.joinDate);
+            }
+            
+            if (joinDate && !isNaN(joinDate.getTime())) {
+                lockInEndDate = new Date(joinDate);
+                lockInEndDate.setMonth(joinDate.getMonth() + 3);
+            }
+        }
+        
+        if (lockInEndDate && !isNaN(lockInEndDate.getTime())) {
+            const now = new Date();
+            
+            if (now < lockInEndDate) {
+                isLockInBlocked = true;
+                
+                // কত দিন বাকি হিসাব
+                const diffMs = lockInEndDate - now;
+                const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+                const diffMonths = Math.floor(diffDays / 30);
+                const remainingDays = diffDays % 30;
+                
+                const unlockDate = lockInEndDate.toLocaleDateString('bn-BD', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                });
+                
+                // Join date
+                let joinDateDisplay = 'যোগদানের তারিখ পাওয়া যায়নি';
+                if (currentUser.lockin_agreed_at) {
+                    joinDateDisplay = new Date(currentUser.lockin_agreed_at).toLocaleDateString('bn-BD', {
+                        year: 'numeric', month: 'long', day: 'numeric'
+                    });
+                } else if (currentUser.approved_at) {
+                    joinDateDisplay = new Date(currentUser.approved_at).toLocaleDateString('bn-BD', {
+                        year: 'numeric', month: 'long', day: 'numeric'
+                    });
+                } else if (currentUser.joinDate) {
+                    joinDateDisplay = new Date(currentUser.joinDate).toLocaleDateString('bn-BD', {
+                        year: 'numeric', month: 'long', day: 'numeric'
+                    });
+                }
+                
+                // সময় বাকি
+                let timeLeftText = '';
+                if (diffMonths > 0) timeLeftText += `${diffMonths} মাস `;
+                if (remainingDays > 0) timeLeftText += `${remainingDays} দিন`;
+                if (!timeLeftText) timeLeftText = 'শেষ পর্যায়ে';
+                
+                lockInMessage = `
+                    <div class="bg-red-50 border-2 border-red-300 p-4 rounded-lg mb-3">
+                        <div class="flex items-start gap-3">
+                            <div class="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                                <i class="fas fa-lock text-red-600 text-xl"></i>
+                            </div>
+                            <div class="flex-1">
+                                <p class="text-red-700 font-bold text-base mb-1">
+                                    🔒 ৩ মাসের Lock-in Period চলছে!
+                                </p>
+                                <p class="text-red-600 text-sm">
+                                    কারেন্ট সদস্য হিসেবে যোগদানের পর প্রথম ৩ মাস 
+                                    <strong>মূলধন উত্তোলন</strong> করা যাবে না।
+                                </p>
+                                
+                                <div class="bg-white rounded-lg p-3 mt-3 border border-red-200">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <span class="text-xs text-gray-600">📅 যোগদানের তারিখ:</span>
+                                        <span class="text-xs font-semibold text-gray-800">
+                                            ${joinDateDisplay}
+                                        </span>
+                                    </div>
+                                    <div class="flex justify-between items-center mb-2">
+                                        <span class="text-xs text-gray-600">🔓 উত্তোলন চালু হবে:</span>
+                                        <span class="text-xs font-semibold text-emerald-700">
+                                            ${unlockDate}
+                                        </span>
+                                    </div>
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-xs text-gray-600">⏳ বাকি আছে:</span>
+                                        <span class="text-xs font-bold text-red-700">
+                                            ${timeLeftText}
+                                        </span>
+                                    </div>
+                                </div>
+                                
+                                <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-2 mt-3">
+                                    <p class="text-xs text-emerald-700">
+                                        <i class="fas fa-info-circle mr-1"></i>
+                                        <strong>আপনি এখন যা করতে পারেন:</strong><br>
+                                        ✅ সঞ্চয় লভ্যাংশ উত্তোলন<br>
+                                        ✅ বিনিয়োগ লভ্যাংশ উত্তোলন<br>
+                                        ✅ রেফারেল বোনাস উত্তোলন<br>
+                                        ✅ রেফারেল লভ্যাংশ উত্তোলন
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                console.log('🔒 Lock-in active:', {
+                    unlockDate: lockInEndDate.toISOString(),
+                    daysRemaining: diffDays
+                });
+            } else {
+                console.log('✅ Lock-in period completed. Capital withdrawal allowed.');
+            }
+        }
+    }
+    
+    // ============================================================
+    // মেয়াদী সদস্য চেক (আগের মতোই)
+    // ============================================================
+    let isTermMember = parseInt(currentUser.memberTerm) > 0;
+    let isTermBlocked = false;
+    let termExpiryMessage = '';
     
     if (isTermMember && isCapitalWithdrawal) {
-        isBlocked = true;
+        isTermBlocked = true;
         
-        // মেয়াদ শেষের কাউন্টডাউন তৈরি করুন
         let startDate = null;
         if (currentUser.approved_at && currentUser.approved_at !== 'null' && currentUser.approved_at !== 'undefined') {
             startDate = new Date(currentUser.approved_at);
@@ -6693,29 +6971,17 @@ function openWithdrawModal(type) {
                 if (months < 0) months = 0;
                 if (days < 0) days = 0;
                 
-                const diffMs = expiryDate - now;
-                const totalSeconds = Math.floor(diffMs / 1000);
-                const hours = Math.floor((totalSeconds % 86400) / 3600);
-                const minutes = Math.floor((totalSeconds % 3600) / 60);
-                const seconds = totalSeconds % 60;
-                
                 let parts = [];
                 if (years > 0) parts.push(`${years} বছর`);
                 if (months > 0) parts.push(`${months} মাস`);
                 if (days > 0) parts.push(`${days} দিন`);
-                if (hours > 0) parts.push(`${hours} ঘন্টা`);
-                if (minutes > 0) parts.push(`${minutes} মিনিট`);
-                if (seconds > 0) parts.push(`${seconds} সেকেন্ড`);
-                
                 timeLeft = parts.join(', ');
             } else {
                 timeLeft = 'মেয়াদ শেষ হয়েছে';
             }
-        } else {
-            timeLeft = 'তারিখ পাওয়া যায়নি';
         }
         
-        expiryMessage = `
+        termExpiryMessage = `
             <div class="bg-red-50 border border-red-200 p-4 rounded-lg mb-3">
                 <div class="flex items-start gap-2">
                     <i class="fas fa-exclamation-circle text-red-600 text-xl mt-1"></i>
@@ -6728,7 +6994,6 @@ function openWithdrawModal(type) {
                                 মেয়াদ শেষ হতে বাকি: 
                                 <span class="font-bold text-amber-800">${timeLeft}</span>
                             </p>
-                            <p class="text-xs text-amber-600 mt-1">মেয়াদ শেষের পর মূলধন উত্তোলন করতে পারবেন।</p>
                         </div>
                         <div class="mt-2 text-xs text-green-600 bg-green-50 p-2 rounded">
                             <i class="fas fa-info-circle mr-1"></i>
@@ -6744,10 +7009,36 @@ function openWithdrawModal(type) {
     
     let contentHTML = '';
     
-    if (isBlocked) {
-        // ✅ মেয়াদী সদস্যের জন্য ব্লক করা মডাল
+    if (isLockInBlocked) {
+        // ✅ কারেন্ট সদস্য Lock-in Block
         contentHTML = `
-            ${expiryMessage}
+            ${lockInMessage}
+            
+            <div class="bg-gray-50 p-3 rounded-lg mb-3">
+                <p class="text-sm text-gray-600">আপনার বর্তমান <strong>${fieldLabel}</strong> ব্যালেন্স:</p>
+                <p class="text-2xl font-bold text-emerald-600">${balance.toFixed(2)} টাকা</p>
+            </div>
+            
+            <div class="bg-red-50 p-3 rounded-lg mb-3 border border-red-200">
+                <p class="text-red-600 text-sm font-semibold">
+                    <i class="fas fa-lock mr-2"></i>
+                    ❌ মূলধন উত্তোলন ব্লক করা হয়েছে
+                </p>
+                <p class="text-xs text-red-500 mt-1">
+                    Lock-in period শেষ হওয়ার পর আবার চেষ্টা করুন।
+                </p>
+            </div>
+            
+            <button onclick="closeWithdrawModal()" 
+                    class="w-full bg-gray-500 text-white py-2 rounded-lg hover:bg-gray-600 transition font-semibold">
+                <i class="fas fa-times mr-1"></i> বন্ধ করুন
+            </button>
+        `;
+    }
+    else if (isTermBlocked) {
+        // ✅ মেয়াদী সদস্য Block
+        contentHTML = `
+            ${termExpiryMessage}
             <div class="bg-gray-50 p-3 rounded-lg mb-3">
                 <p class="text-sm text-gray-600">আপনার বর্তমান <strong>${fieldLabel}</strong> ব্যালেন্স:</p>
                 <p class="text-2xl font-bold text-emerald-600">${balance.toFixed(2)} টাকা</p>
@@ -6757,13 +7048,17 @@ function openWithdrawModal(type) {
                     <i class="fas fa-lock mr-2"></i>
                     ❌ মূলধন উত্তোলন ব্লক করা হয়েছে
                 </p>
-                <p class="text-xs text-red-500 mt-1">মেয়াদ শেষ হওয়ার পর আবার চেষ্টা করুন।</p>
+                <p class="text-xs text-red-500 mt-1">
+                    মেয়াদ শেষ হওয়ার পর আবার চেষ্টা করুন।
+                </p>
             </div>
-            <button onclick="closeWithdrawModal()" class="w-full bg-gray-500 text-white py-2 rounded-lg hover:bg-gray-600 transition">
+            <button onclick="closeWithdrawModal()" 
+                    class="w-full bg-gray-500 text-white py-2 rounded-lg hover:bg-gray-600 transition font-semibold">
                 <i class="fas fa-times mr-1"></i> বন্ধ করুন
             </button>
         `;
-    } else {
+    }
+    else {
         // ✅ স্বাভাবিক উত্তোলন মডাল
         contentHTML = `
             <div class="bg-emerald-50 p-3 rounded-lg mb-3">
@@ -6808,7 +7103,9 @@ function openWithdrawModal(type) {
             
             <div id="withdrawCashField" class="hidden" style="display:none;">
                 <div class="bg-yellow-50 border border-yellow-200 p-3 rounded-lg mb-3">
-                    <p class="text-yellow-700 text-sm font-semibold"><i class="fas fa-user-check mr-1"></i> ক্যাশ উত্তোলনের জন্য গ্রহীতার তথ্য দিন</p>
+                    <p class="text-yellow-700 text-sm font-semibold">
+                        <i class="fas fa-user-check mr-1"></i> ক্যাশ উত্তোলনের জন্য গ্রহীতার তথ্য দিন
+                    </p>
                 </div>
                 <div class="mb-3">
                     <label class="block text-gray-700 font-semibold mb-1">গ্রহীতার নাম <span class="text-red-500">*</span></label>
@@ -6826,11 +7123,14 @@ function openWithdrawModal(type) {
             
             <div class="mb-3">
                 <label class="block text-gray-700 font-semibold mb-1">উত্তোলনের পরিমাণ <span class="text-red-500">*</span></label>
-                <input type="number" id="withdrawAmount" placeholder="টাকার পরিমাণ" class="w-full p-2 border rounded-lg" max="${balance}" step="1">
+                <input type="number" id="withdrawAmount" placeholder="টাকার পরিমাণ" 
+                       class="w-full p-2 border rounded-lg" max="${balance}" step="1">
                 <p class="text-xs text-gray-500 mt-1">সর্বোচ্চ উত্তোলন: ${balance.toFixed(2)} টাকা</p>
             </div>
             
-            <button onclick="submitWithdraw('${type}')" class="w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition font-semibold" ${balance === 0 ? 'disabled' : ''}>
+            <button onclick="submitWithdraw('${type}')" 
+                    class="w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition font-semibold" 
+                    ${balance === 0 ? 'disabled' : ''}>
                 <i class="fas fa-check mr-1"></i> উত্তোলন করুন
             </button>
         `;
@@ -6933,15 +7233,74 @@ function openWithdrawAllModal() {
 }
 
 // ============================================================
-// উত্তোলন সাবমিট - মেয়াদী সদস্য চেক সহ (পূর্ণাঙ্গ)
+// ✅ submitWithdraw() — Lock-in Safety Check সহ (সম্পূর্ণ)
 // ============================================================
 function submitWithdraw(type) {
-    // ✅ মেয়াদী সদস্য চেক (শুধুমাত্র মূলধন উত্তোলনের জন্য)
-    let isTermMember = parseInt(currentUser.memberTerm) > 0;
-    let isCapitalWithdrawal = (type === 'capital');
     
-    if (isTermMember && isCapitalWithdrawal) {
-        // মেয়াদ শেষের কাউন্টডাউন তৈরি করুন
+    // ============================================================
+    // 🆕 Safety Check — কারেন্ট সদস্য Lock-in Period
+    // ============================================================
+    const isCurrentMember = parseInt(currentUser.memberTerm) === 0;
+    const isCapitalWithdrawal = (type === 'capital');
+    
+    if (isCurrentMember && isCapitalWithdrawal) {
+        let lockInEndDate = null;
+        
+        if (currentUser.lockin_end_date) {
+            lockInEndDate = new Date(currentUser.lockin_end_date);
+        } else {
+            let joinDate = null;
+            if (currentUser.approved_at && 
+                currentUser.approved_at !== 'null' && 
+                currentUser.approved_at !== 'undefined') {
+                joinDate = new Date(currentUser.approved_at);
+            } else if (currentUser.joinDate) {
+                joinDate = new Date(currentUser.joinDate);
+            }
+            
+            if (joinDate && !isNaN(joinDate.getTime())) {
+                lockInEndDate = new Date(joinDate);
+                lockInEndDate.setMonth(joinDate.getMonth() + 3);
+            }
+        }
+        
+        if (lockInEndDate && !isNaN(lockInEndDate.getTime())) {
+            const now = new Date();
+            
+            if (now < lockInEndDate) {
+                const diffMs = lockInEndDate - now;
+                const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+                const diffMonths = Math.floor(diffDays / 30);
+                const remainingDays = diffDays % 30;
+                const unlockDate = lockInEndDate.toLocaleDateString('bn-BD', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                });
+                
+                let timeLeft = '';
+                if (diffMonths > 0) timeLeft += `${diffMonths} মাস `;
+                if (remainingDays > 0) timeLeft += `${remainingDays} দিন`;
+                if (!timeLeft) timeLeft = 'শেষ পর্যায়ে';
+                
+                showToast(
+                    `🔒 দুঃখিত! আপনি এখনো ৩ মাসের Lock-in period এ আছেন।\n\n` +
+                    `📅 উত্তোলন চালু হবে: ${unlockDate}\n` +
+                    `⏳ বাকি আছে: ${timeLeft}`,
+                    'error'
+                );
+                return;
+            }
+        }
+    }
+    
+    // ============================================================
+    // মেয়াদী সদস্য Safety Check
+    // ============================================================
+    let isTermMember = parseInt(currentUser.memberTerm) > 0;
+    let isCapitalWithdrawalTerm = (type === 'capital');
+    
+    if (isTermMember && isCapitalWithdrawalTerm) {
         let startDate = null;
         if (currentUser.approved_at && currentUser.approved_at !== 'null' && currentUser.approved_at !== 'undefined') {
             startDate = new Date(currentUser.approved_at);
@@ -6976,42 +7335,32 @@ function submitWithdraw(type) {
                 if (months < 0) months = 0;
                 if (days < 0) days = 0;
                 
-                const diffMs = expiryDate - now;
-                const totalSeconds = Math.floor(diffMs / 1000);
-                const hours = Math.floor((totalSeconds % 86400) / 3600);
-                const minutes = Math.floor((totalSeconds % 3600) / 60);
-                const seconds = totalSeconds % 60;
-                
                 let parts = [];
                 if (years > 0) parts.push(`${years} বছর`);
                 if (months > 0) parts.push(`${months} মাস`);
                 if (days > 0) parts.push(`${days} দিন`);
-                if (hours > 0) parts.push(`${hours} ঘন্টা`);
-                if (minutes > 0) parts.push(`${minutes} মিনিট`);
-                if (seconds > 0) parts.push(`${seconds} সেকেন্ড`);
-                
                 timeLeft = parts.join(', ');
             } else {
-                timeLeft = 'মেয়াদ শেষ হয়েছে';
+                timeLeft = 'মেয়াদ শেষ হয়েছে';
             }
-        } else {
-            timeLeft = 'তারিখ পাওয়া যায়নি';
         }
         
         showToast(`
-❌ আপনি একজন মেয়াদী সদস্য!
+❌ আপনি একজন মেয়াদী সদস্য!
 
-⏳ মেয়াদ শেষ হতে বাকি: ${timeLeft}
+⏳ মেয়াদ শেষ হতে বাকি: ${timeLeft}
 
-⚠️ মেয়াদ শেষ হওয়ার আগে মূলধন উত্তোলন করতে পারবেন না।
+⚠️ মেয়াদ শেষ হওয়ার আগে মূলধন উত্তোলন করতে পারবেন না।
 
-✅ আপনি লভ্যাংশ ও বোনাস উত্তোলন করতে পারবেন।`,
+✅ তবে আপনি লভ্যাংশ ও বোনাস উত্তোলন করতে পারবেন।`,
             'error'
         );
         return;
     }
     
+    // ============================================================
     // ১. উত্তোলনের মাধ্যম ও পরিমাণ নিন
+    // ============================================================
     const method = document.getElementById('withdrawMethod')?.value;
     const amount = parseFloat(document.getElementById('withdrawAmount')?.value || 0);
     
@@ -7024,7 +7373,9 @@ function submitWithdraw(type) {
         return; 
     }
     
+    // ============================================================
     // ২. সর্বোচ্চ ব্যালেন্স নির্ধারণ
+    // ============================================================
     let maxBalance = 0;
     let typeName = '';
 
@@ -7034,11 +7385,11 @@ function submitWithdraw(type) {
     }
     else if(type === 'savingsProfit') { 
         maxBalance = userFunds.savingsProfit || 0; 
-        typeName = 'সঞ্চয় লভ্যাংশ';
+        typeName = 'সঞ্চয় লভ্যাংশ';
     }
     else if(type === 'investmentProfit') { 
         maxBalance = userFunds.investmentProfit || 0; 
-        typeName = 'বিনিয়োগ লভ্যাংশ';
+        typeName = 'বিনিয়োগ লভ্যাংশ';
     }
     else if(type === 'referralProfit') { 
         maxBalance = userFunds.referralProfit || 0; 
@@ -7053,13 +7404,17 @@ function submitWithdraw(type) {
         typeName = 'সব লভ্যাংশ';
     }
     
+    // ============================================================
     // ৩. ব্যালেন্স চেক
+    // ============================================================
     if(amount > maxBalance) {
         showToast(`আপনার ব্যালেন্স ${maxBalance.toFixed(2)} টাকা, আপনি ${amount.toFixed(2)} টাকা উত্তোলন করতে পারবেন না!`, 'error');
         return;
     }
     
+    // ============================================================
     // ৪. গ্রহীতার তথ্য সংগ্রহ
+    // ============================================================
     let receiverInfo = '';
     let receiverDetails = {};
     
@@ -7100,10 +7455,11 @@ function submitWithdraw(type) {
         receiverDetails = { mobile, method };
     }
     
-   // ৫. কনফার্মেশন — ✅ FIX: typeName পাঠানো হচ্ছে
+    // ============================================================
+    // ৫. কনফার্মেশন
+    // ============================================================
     if(confirm(`আপনি কি ${amount.toFixed(2)} টাকা ${typeName} থেকে উত্তোলন করতে চান?\n\nগ্রহীতা: ${receiverInfo}`)) {
         saveWithdrawRequest(typeName, amount, method, receiverDetails, typeName);
-        // ✅ showToast এবং closeWithdrawModal() saveWithdrawRequest() এর ভিতরে আছে
     }
 }
 
@@ -13901,6 +14257,10 @@ async function emergencyStopAndFix() {
             window.setStatementRange = setStatementRange;
             
             console.log('✅ setStatementRange() loaded!');
+        // 🆕 Lock-in Function Expose
+        window.updateLockInBanner = updateLockInBanner;
+        
+        console.log('✅ Lock-in functions exposed');
             
         </script>
     </body>
