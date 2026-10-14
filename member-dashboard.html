@@ -10471,14 +10471,53 @@ function filterBonusHistory(filterType) {
     console.log(`   Filtered: ${filteredLogs.length} logs`);
 }
 
-    
-// ============================================================
-// ✅ loadReferralData() — Database is Single Source of Truth
 // ═══════════════════════════════════════════════════════════
-// ✅ Display-only: Database থেকে bonus/count পড়ে দেখায়
-// ✅ সাথে bonus log লোড করে — কে কত দিয়েছে
-// ❌ কোনো Live Calculation নেই
-// ============================================================
+// ✅ findBonusesForMember() — Mobile → Name → ID Priority
+// ═══════════════════════════════════════════════════════════
+function findBonusesForMember(member) {
+    if (!member) return [];
+    
+    const map = window._bonusMap || { byMobile: {}, byName: {}, byId: {} };
+    
+    // Priority 1: Mobile
+    const mobile = String(member.mobile || '').replace(/\D/g, '');
+    if (mobile && map.byMobile && map.byMobile[mobile]) {
+        return map.byMobile[mobile];
+    }
+    
+    // Priority 2: Name
+    const nameKey = String(member.full_name || '').trim().toLowerCase();
+    if (nameKey && map.byName && map.byName[nameKey]) {
+        return map.byName[nameKey];
+    }
+    
+    // Priority 3: ID (multiple formats)
+    const rawId = String(member.member_id || '').trim();
+    if (rawId && map.byId) {
+        const idKeys = [
+            rawId,
+            rawId.replace(/\s+/g, '').replace(/-/g, '').toUpperCase(),
+            rawId.replace(/\s+/g, '-'),
+            rawId.replace(/-/g, ' '),
+            rawId.replace(/-/g, ''),
+            rawId.replace(/\s+/g, '')
+        ];
+        
+        for (const k of idKeys) {
+            if (map.byId[k] && map.byId[k].length > 0) {
+                return map.byId[k];
+            }
+        }
+    }
+    
+    return [];
+}
+    
+// ═══════════════════════════════════════════════════════════
+// ✅ loadReferralData() — COMPLETE FIXED VERSION
+// ✅ Members + Payments + Bonus Log একসাথে Load
+// ✅ statistics Cards সঠিকভাবে Update
+// ═══════════════════════════════════════════════════════════
 async function loadReferralData() {
     if (!currentUser || isLoadingReferral) return;
     
@@ -10500,17 +10539,14 @@ async function loadReferralData() {
     }
     
     try {
-        // ═══════════════════════════════════════════════════════════
-        // STEP 1: সব সদস্য লোড (Tree Structure-এর জন্য)
-        // ═══════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════
+        // STEP 1: সব সদস্য লোড
+        // ═══════════════════════════════════════════════════════
         const { data: allMembers, error } = await client
             .from('members')
             .select('member_id, full_name, mobile, email, monthly_savings, referred_by, refer_code, status, created_at');
         
-        if (error) {
-            console.error('❌ Supabase error:', error);
-            throw error;
-        }
+        if (error) throw error;
         
         if (!allMembers || allMembers.length === 0) {
             console.log('📭 কোনো সদস্য পাওয়া যায়নি');
@@ -10521,17 +10557,39 @@ async function loadReferralData() {
         
         console.log(`✅ মোট ${allMembers.length} জন সদস্য লোড হয়েছে`);
         
-        // ═══════════════════════════════════════════════════════════
-        // STEP 2: Commission Rates (Display Only — UI-এর জন্য)
-        // ═══════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════
+        // STEP 2: Approved Payments লোড (First Payment)
+        // ═══════════════════════════════════════════════════════
+        const memberIds = allMembers.map(m => m.member_id).filter(Boolean);
+        
+        const { data: allPayments } = await client
+            .from('payments')
+            .select('member_id, amount, approved_at')
+            .in('member_id', memberIds)
+            .eq('status', 'approved')
+            .order('approved_at', { ascending: true });
+        
+        // First Payment Map
+        const firstPaymentMap = {};
+        (allPayments || []).forEach(p => {
+            if (!firstPaymentMap[p.member_id]) {
+                firstPaymentMap[p.member_id] = Number(p.amount) || 0;
+            }
+        });
+        
+        console.log(`✅ ${Object.keys(firstPaymentMap).length} জনের Payment পাওয়া গেছে`);
+        
+        // ═══════════════════════════════════════════════════════
+        // STEP 3: Commission Rates
+        // ═══════════════════════════════════════════════════════
         const commissionRates = {
             1: 0.15, 2: 0.10, 3: 0.05, 4: 0.05, 5: 0.05,
             6: 0.05, 7: 0.05, 8: 0.05, 9: 0.05, 10: 0.05
         };
         
-        // ═══════════════════════════════════════════════════════════
-        // STEP 3: refer_code normalization
-        // ═══════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════
+        // STEP 4: Normalize Members + First Payment যোগ
+        // ═══════════════════════════════════════════════════════
         const normalizedMembers = allMembers.map(member => {
             let refCode = member.refer_code;
             let refBy = member.referred_by;
@@ -10548,13 +10606,14 @@ async function loadReferralData() {
             return {
                 ...member,
                 refer_code_normalized: refCode,
-                referred_by_normalized: refBy
+                referred_by_normalized: refBy,
+                _firstPayment: firstPaymentMap[member.member_id] || null
             };
         });
         
-        // ═══════════════════════════════════════════════════════════
-        // STEP 4: নিজের refer_code বের করুন
-        // ═══════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════
+        // STEP 5: নিজের refer_code
+        // ═══════════════════════════════════════════════════════
         let myReferCode = currentUser.referId || currentUser.refer_code;
         
         if (myReferCode && typeof myReferCode === 'string') {
@@ -10565,33 +10624,19 @@ async function loadReferralData() {
         console.log('🔑 আমার রেফারেল কোড:', myReferCode);
         
         if (!myReferCode) {
-            try {
-                const { data: memberData } = await client
-                    .from('members')
-                    .select('refer_code')
-                    .eq('member_id', currentUser.id)
-                    .single();
-                
-                if (memberData && memberData.refer_code) {
-                    myReferCode = memberData.refer_code;
-                    currentUser.referId = myReferCode;
-                    currentUser.refer_code = myReferCode;
-                }
-            } catch (e) {
-                console.error('❌ রেফারেল কোড fetch error:', e);
-            }
-        }
-        
-        if (!myReferCode) {
-            console.log('❌ কোনো রেফারেল কোড নেই');
             resetReferralDisplay('আপনার কোনো রেফারেল কোড নেই');
             isLoadingReferral = false;
             return;
         }
         
-        // ═══════════════════════════════════════════════════════════
-        // STEP 5: Security Baseline (Self-Referral Prevention)
-        // ═══════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════
+        // STEP 6: Level-wise Referrals তৈরি
+        // ═══════════════════════════════════════════════════════
+        const levelReferrals = {
+            1: [], 2: [], 3: [], 4: [], 5: [],
+            6: [], 7: [], 8: [], 9: [], 10: []
+        };
+        
         const myInfo = {
             member_id: String(currentUser.id || '').trim(),
             mobile: (currentUser.mobile || '').trim(),
@@ -10599,41 +10644,20 @@ async function loadReferralData() {
             refer_code: String(myReferCode || '').trim()
         };
         
-        console.log('🛡️ Security Baseline:', myInfo);
-        
         function isSelfReferral(m) {
             if (!m) return true;
-            
-            if (String(m.member_id || '') === myInfo.member_id && myInfo.member_id !== '') {
-                return true;
-            }
-            
-            if (m.refer_code_normalized &&
-                m.refer_code_normalized === myInfo.refer_code &&
-                myInfo.refer_code !== '') {
-                return true;
-            }
-            
+            if (String(m.member_id || '') === myInfo.member_id && myInfo.member_id !== '') return true;
+            if (m.refer_code_normalized && m.refer_code_normalized === myInfo.refer_code && myInfo.refer_code !== '') return true;
             const mMobile = (m.mobile || '').trim();
-            if (mMobile && myInfo.mobile && mMobile === myInfo.mobile) {
-                return true;
-            }
-            
+            if (mMobile && myInfo.mobile && mMobile === myInfo.mobile) return true;
             return false;
         }
-        
-        // ═══════════════════════════════════════════════════════════
-        // STEP 6: Level 1 Referrals
-        // ═══════════════════════════════════════════════════════════
-        const levelReferrals = {
-            1: [], 2: [], 3: [], 4: [], 5: [],
-            6: [], 7: [], 8: [], 9: [], 10: []
-        };
         
         const visited = new Set();
         visited.add(myReferCode);
         visited.add(myInfo.member_id);
         
+        // Level 1
         levelReferrals[1] = normalizedMembers.filter(m => {
             if (m.referred_by_normalized !== myReferCode) return false;
             if (isSelfReferral(m)) return false;
@@ -10647,9 +10671,7 @@ async function loadReferralData() {
         
         console.log(`📊 Level 1: ${levelReferrals[1].length} জন`);
         
-        // ═══════════════════════════════════════════════════════════
-        // STEP 7: Level 2-10 Chain Referrals
-        // ═══════════════════════════════════════════════════════════
+        // Level 2-10
         let currentLevelMembers = [...levelReferrals[1]];
         
         for (let level = 2; level <= 10; level++) {
@@ -10682,201 +10704,154 @@ async function loadReferralData() {
             console.log(`📊 Level ${level}: ${nextLevelMembers.length} জন`);
         }
         
-        // ═══════════════════════════════════════════════════════════
-        // 🆕 STEP 8: Referral Bonus Log লোড করুন
-        // ═══════════════════════════════════════════════════════════
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('🎁 Loading Bonus Log');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        
-        const { data: bonusLogs, error: bonusError } = await client
+        // ═══════════════════════════════════════════════════════
+        // STEP 7: Referral Bonus Log লোড
+        // ═══════════════════════════════════════════════════════
+        const { data: bonusLogs } = await client
             .from('referral_bonus_log')
             .select('*')
             .eq('member_id', currentUser.id)
             .order('created_at', { ascending: false });
         
-        if (bonusError) {
-            console.error('❌ Bonus log error:', bonusError);
-        }
+        console.log(`📋 Total bonus logs: ${bonusLogs?.length || 0}`);
         
-        const totalBonusLogs = bonusLogs?.length || 0;
-        console.log(`📋 Total bonus logs: ${totalBonusLogs}`);
-        
-        // ═══════════════════════════════════════════════════════════
-        // 🆕 STEP 9: Bonus log থেকে প্রতিটা member-এর তথ্য বের করুন
-        // ═══════════════════════════════════════════════════════════
-        // Structure: { 'from_member_id': [log1, log2, ...] }
-        const bonusesByFromMember = {};
-        
-        if (bonusLogs && bonusLogs.length > 0) {
-            bonusLogs.forEach(log => {
-                const fromId = log.from_member_id;
-                if (!bonusesByFromMember[fromId]) {
-                    bonusesByFromMember[fromId] = [];
-                }
-                bonusesByFromMember[fromId].push(log);
-            });
-        }
-        
-        console.log(`🎯 Bonus groups: ${Object.keys(bonusesByFromMember).length}`);
-        
-        // ═══════════════════════════════════════════════════════════
-        // 🆕 STEP 10: Level-এ মোট বোনাস হিসাব (Display Only)
-        // ═══════════════════════════════════════════════════════════
-        const levelBonuses = {
-            1: 0, 2: 0, 3: 0, 4: 0, 5: 0,
-            6: 0, 7: 0, 8: 0, 9: 0, 10: 0
+        // ═══════════════════════════════════════════════════════
+        // STEP 8: Bonus Map তৈরি (Mobile + Name + ID)
+        // ═══════════════════════════════════════════════════════
+        window._bonusMap = {
+            byMobile: {},
+            byName: {},
+            byId: {}
         };
         
-        if (bonusLogs && bonusLogs.length > 0) {
-            bonusLogs.forEach(log => {
-                const lvl = log.level || 1;
-                if (levelBonuses[lvl] !== undefined) {
-                    levelBonuses[lvl] += Number(log.amount) || 0;
-                }
-            });
-        }
+        (bonusLogs || []).forEach(log => {
+            const mobileKey = String(log.from_member_mobile || '').replace(/\D/g, '');
+            const nameKey = String(log.from_member_name || '').trim().toLowerCase();
+            const rawId = String(log.from_member_id || '').trim();
+            
+            if (mobileKey) {
+                if (!window._bonusMap.byMobile[mobileKey]) window._bonusMap.byMobile[mobileKey] = [];
+                window._bonusMap.byMobile[mobileKey].push(log);
+            }
+            if (nameKey) {
+                if (!window._bonusMap.byName[nameKey]) window._bonusMap.byName[nameKey] = [];
+                window._bonusMap.byName[nameKey].push(log);
+            }
+            if (rawId && rawId !== 'UNKNOWN') {
+                const idKeys = [
+                    rawId,
+                    rawId.replace(/\s+/g, '').replace(/-/g, '').toUpperCase(),
+                    rawId.replace(/\s+/g, '-'),
+                    rawId.replace(/-/g, ' '),
+                    rawId.replace(/-/g, ''),
+                    rawId.replace(/\s+/g, '')
+                ];
+                idKeys.forEach(k => {
+                    if (!k) return;
+                    if (!window._bonusMap.byId[k]) window._bonusMap.byId[k] = [];
+                    if (!window._bonusMap.byId[k].find(l => l.id === log.id)) {
+                        window._bonusMap.byId[k].push(log);
+                    }
+                });
+            }
+        });
         
-        // ═══════════════════════════════════════════════════════════
-        // STEP 11: Total Referrals Count
-        // ═══════════════════════════════════════════════════════════
-        let totalReferrals = 0;
+        // ═══════════════════════════════════════════════════════
+        // STEP 9: Level-Wise Bonus Statistics
+        // ═══════════════════════════════════════════════════════
+        const levelStats = {
+            1: { members: 0, withBonus: 0, totalBonus: 0 },
+            2: { members: 0, withBonus: 0, totalBonus: 0 },
+            3: { members: 0, withBonus: 0, totalBonus: 0 },
+            4: { members: 0, withBonus: 0, totalBonus: 0 },
+            5: { members: 0, withBonus: 0, totalBonus: 0 },
+            6: { members: 0, withBonus: 0, totalBonus: 0 },
+            7: { members: 0, withBonus: 0, totalBonus: 0 },
+            8: { members: 0, withBonus: 0, totalBonus: 0 },
+            9: { members: 0, withBonus: 0, totalBonus: 0 },
+            10: { members: 0, withBonus: 0, totalBonus: 0 }
+        };
+        
+        let totalAllReferrals = 0;
+        let maxActiveLevel = 0;
         
         for (let level = 1; level <= 10; level++) {
-            const levelCount = levelReferrals[level].length;
-            totalReferrals += levelCount;
+            const refs = levelReferrals[level];
+            const rate = commissionRates[level] * 100;
             
-            // UI: Count দেখান
+            levelStats[level].members = refs.length;
+            totalAllReferrals += refs.length;
+            
+            if (refs.length > 0) maxActiveLevel = level;
+            
+            // Bonus Calculate
+            refs.forEach(ref => {
+                const bonusesFromThis = findBonusesForMember(ref);
+                if (bonusesFromThis.length > 0) {
+                    const sum = bonusesFromThis.reduce((s, l) => s + Number(l.amount), 0);
+                    levelStats[level].totalBonus += sum;
+                    levelStats[level].withBonus++;
+                } else if (ref._firstPayment) {
+                    const expected = Math.round(ref._firstPayment * (rate / 100));
+                    levelStats[level].totalBonus += expected;
+                    levelStats[level].withBonus++;
+                }
+            });
+            
+            // Count Update
             const countEl = document.getElementById(`level${level}Count`);
-            if (countEl) countEl.innerText = bnToEn(levelCount);
+            if (countEl) countEl.innerText = bnToEn(refs.length);
             
-            // UI: Level-এর Commission দেখান (Database থেকে)
+            // Commission Update
             const commissionEl = document.getElementById(`level${level}Commission`);
             if (commissionEl) {
-                const levelBonusTotal = levelBonuses[level];
-                if (levelBonusTotal > 0) {
-                    commissionEl.innerText = `৳${bnToEn(levelBonusTotal.toLocaleString('en-US'))}`;
-                    commissionEl.className = 'text-emerald-700 font-semibold ml-2';
-                } else {
-                    commissionEl.innerText = '৳০';
-                    commissionEl.className = 'text-gray-400 font-semibold ml-2';
-                }
+                commissionEl.innerText = `৳${bnToEn(levelStats[level].totalBonus.toLocaleString('en-US'))}`;
+                commissionEl.className = levelStats[level].totalBonus > 0 
+                    ? 'text-emerald-700 font-semibold ml-2' 
+                    : 'text-gray-400 font-semibold ml-2';
             }
             
-            // ✅ Level List Update — bonus info সহ
-            updateLevelList(level, levelReferrals[level], commissionRates[level] * 100, bonusesByFromMember);
+            // Level List Render
+            updateLevelList(level, refs, rate);
         }
         
-        // ═══════════════════════════════════════════════════════════
-        // STEP 12: Database থেকে আসল Data লোড
-        // ═══════════════════════════════════════════════════════════
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('💰 Loading DB Referral Data');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        
-        const { data: currentMember, error: fetchError } = await client
+        // ═══════════════════════════════════════════════════════
+        // STEP 10: Statistics Cards Update
+        // ═══════════════════════════════════════════════════════
+        const { data: currentMember } = await client
             .from('members')
             .select('referral_bonus, referral_count')
             .eq('member_id', currentUser.id)
             .single();
         
-        if (fetchError) {
-            console.error('❌ Failed to fetch referral_bonus:', fetchError);
-        }
-        
-        const dbBonus = Number(currentMember?.referral_bonus) || 0;
-        const dbCount = Number(currentMember?.referral_count) || 0;
-        
-        console.log(`💰 DB Referral Bonus: ৳${dbBonus}`);
-        console.log(`📊 DB Referral Count: ${dbCount}`);
-        console.log(`📊 Tree Referrals: ${totalReferrals}`);
-        console.log(`📋 Bonus Logs: ${totalBonusLogs}`);
-        console.log('✅ Database is Source of Truth');
-        
-        // ═══════════════════════════════════════════════════════════
-        // STEP 13: Withdrawal History (উপলব্ধ ব্যালেন্স)
-        // ═══════════════════════════════════════════════════════════
-        const { data: allWithdrawals, error: wdError } = await client
-            .from('withdrawals')
-            .select('amount, status, type, requested_at')
-            .eq('member_id', currentUser.id)
-            .eq('type', 'রেফারেল বোনাস')
-            .in('status', ['pending', 'approved']);
-        
-        if (wdError) {
-            console.error('❌ UTTOlon লোড error:', wdError);
-        }
-        
-        const totalWithdrawn = (allWithdrawals || []).reduce(
-            (sum, w) => sum + (Number(w.amount) || 0), 0
-        );
-        
-        const availableBonus = dbBonus;
-        
-        console.log(`📊 DB Bonus: ৳${dbBonus}`);
-        console.log(`📤 Withdrawn: ৳${totalWithdrawn}`);
-        console.log(`💰 Available: ৳${availableBonus}`);
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        
-        // ✅ userFunds-এ সেভ
-        userFunds.referralBonus = availableBonus;
-        userFunds.referralCount = dbCount;
-        userFunds.referralBonusTotal = dbBonus;
-        userFunds.referralBonusWithdrawn = totalWithdrawn;
-        
-        // ✅ Global save
-        window._liveReferralBonus = availableBonus;
-        window._liveReferralTotal = dbBonus;
-        window._liveReferralCount = dbCount;
-        
-        // ═══════════════════════════════════════════════════════════
-        // STEP 14: UI Update — Summary Cards
-        // ═══════════════════════════════════════════════════════════
-        const totalReferralsEl = document.getElementById('totalReferrals');
-        const totalCommissionEl = document.getElementById('totalCommission');
-        const totalLevelsEl = document.getElementById('totalLevels');
-        const activeReferralsEl = document.getElementById('activeReferrals');
-        
-        // মোট রেফারেল — DB থেকে
-        if (totalReferralsEl) {
-            totalReferralsEl.innerText = bnToEn(dbCount);
-        }
-        
-        // মোট কমিশন — DB থেকে
-        if (totalCommissionEl) {
-            totalCommissionEl.innerText = bnToEn(dbBonus.toLocaleString('en-US'));
-        }
-        
-        // সর্বোচ্চ লেভেল
-        if (totalLevelsEl) totalLevelsEl.innerText = '10';
-        
-        // সক্রিয় রেফারেল — Level 1
-        const activeReferrals = levelReferrals[1].filter(r =>
+        const totalCommission = Number(currentMember?.referral_bonus) || 0;
+        const activeRefs = levelReferrals[1].filter(r => 
             r.status === 'active' || r.status === 'approved'
         ).length;
-        if (activeReferralsEl) activeReferralsEl.innerText = bnToEn(activeReferrals);
         
-        // ═══════════════════════════════════════════════════════════
-        // STEP 15: Referral Bonus Cards
-        // ═══════════════════════════════════════════════════════════
-        const referralBonusCard = document.getElementById('referralBonusFund');
-        const referralProfitCard = document.getElementById('referralProfitFund');
+        const totalRefEl = document.getElementById('totalReferrals');
+        const totalComEl = document.getElementById('totalCommission');
+        const maxLvlEl = document.getElementById('totalLevels');
+        const actRefEl = document.getElementById('activeReferrals');
         
-        if (referralBonusCard) {
-            referralBonusCard.innerText = bnToEn(availableBonus.toLocaleString('en-US'));
-        }
+        if (totalRefEl) totalRefEl.innerText = bnToEn(totalAllReferrals);
+        if (totalComEl) totalComEl.innerText = bnToEn(totalCommission.toLocaleString('en-US'));
+        if (maxLvlEl) maxLvlEl.innerText = bnToEn(maxActiveLevel);
+        if (actRefEl) actRefEl.innerText = bnToEn(activeRefs);
         
-        if (referralProfitCard) {
-            referralProfitCard.innerText = bnToEn((userFunds.referralProfit || 0).toLocaleString('en-US'));
-        }
+        // userFunds Update
+        userFunds.referralBonus = totalCommission;
+        userFunds.referralCount = Number(currentMember?.referral_count) || 0;
+        window._liveReferralBonus = totalCommission;
+        window._liveReferralCount = Number(currentMember?.referral_count) || 0;
         
-        // ═══════════════════════════════════════════════════════════
-        // STEP 16: Extra Updates
-        // ═══════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════
+        // STEP 11: Referral Link Update
+        // ═══════════════════════════════════════════════════════
         updateReferralLink();
         updateFundsDisplay();
         
-        // 🆕 Bonus History Section Update (যদি থাকে)
+        // Bonus History Section Update
         if (typeof updateBonusHistorySection === 'function') {
             try {
                 updateBonusHistorySection(bonusLogs || []);
@@ -10885,7 +10860,7 @@ async function loadReferralData() {
             }
         }
         
-        // 🆕 Referral Bonus Summary Card Update (Home Tab)
+        // Referral Bonus Summary Card Update
         if (typeof updateReferralBonusSummary === 'function') {
             try {
                 updateReferralBonusSummary();
@@ -10895,15 +10870,14 @@ async function loadReferralData() {
         }
         
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('✅ Referral Data Loaded Successfully');
-        console.log(`   DB Bonus: ৳${dbBonus}`);
-        console.log(`   DB Count: ${dbCount}`);
-        console.log(`   Available: ৳${availableBonus}`);
-        console.log(`   Bonus Logs: ${totalBonusLogs}`);
+        console.log('✅ Referral Data Loaded');
+        console.log(`   Total Referrals: ${totalAllReferrals}`);
+        console.log(`   Max Level: ${maxActiveLevel}`);
+        console.log(`   Total Bonus: ৳${totalCommission}`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
     } catch (error) {
-        console.error('❌ রেফারেল error:', error);
+        console.error('❌ Referral error:', error);
         
         for (let i = 1; i <= 10; i++) {
             const container = document.getElementById(`level${i}List`);
@@ -10948,15 +10922,11 @@ function resetReferralDisplay(message = 'কোনো রেফারেল ন�
     updateFundsDisplay();
 }
 
-// ============================================================
-// ✅ updateLevelList() — Bonus History + Percent সহ
 // ═══════════════════════════════════════════════════════════
-// @param {number} level — Level number (1-10)
-// @param {array} referrals — এই Level-এর সদস্যদের list
-// @param {number} rate — Commission rate (percentage)
-// @param {object} bonusesByFromMember — { fromMemberId: [bonus logs] }
-// ============================================================
-function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
+// ✅ updateLevelList() — FIXED VERSION
+// ✅ Real Log + Expected Bonus + No Payment
+// ═══════════════════════════════════════════════════════════
+function updateLevelList(level, referrals, rate) {
     const container = document.getElementById(`level${level}List`);
     if (!container) return;
     
@@ -10977,11 +10947,11 @@ function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
         6: 'indigo', 7: 'red', 8: 'teal', 9: 'orange', 10: 'cyan'
     };
     const color = colors[level] || 'gray';
-    
-    // Level-এর Commission Rate
     const levelRate = rate;
     
     let html = '';
+    let totalBonusThisLevel = 0;
+    let membersWithBonus = 0;
     
     // ═══════════════════════════════════════════════════════════
     // প্রতিটা Referral-এর জন্য Card তৈরি
@@ -10991,58 +10961,53 @@ function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
         const monthlyAmount = ref.monthly_savings || 500;
         
         // ═══════════════════════════════════════════════════════════
-        // 🎁 Bonus Info — এই member থেকে কত বোনাস এসেছে
+        // 🎁 Bonus Info — ৩টি Case Handle করব
         // ═══════════════════════════════════════════════════════════
-        const bonusesFromThis = bonusesByFromMember[ref.member_id] || [];
-        const hasBonus = bonusesFromThis.length > 0;
+        
+        // ✅ Case 1: Real Log আছে?
+        const bonusesFromThis = findBonusesForMember(ref);
+        const hasRealLog = bonusesFromThis.length > 0;
+        
+        // ✅ Case 2: First Payment Approved?
+        const hasPayment = ref._firstPayment && ref._firstPayment > 0;
         
         let bonusInfoHtml = '';
-        let totalFromThisMember = 0;
         
-        if (hasBonus) {
-            // ✅ বোনাস পেয়েছেন
-            totalFromThisMember = bonusesFromThis.reduce(
+        if (hasRealLog) {
+            // ═════════════════════════════════════════════════════
+            // ✅ Case 1: Real Log → প্রাপ্ত বোনাস (সবুজ)
+            // ═════════════════════════════════════════════════════
+            const totalFromThisMember = bonusesFromThis.reduce(
                 (sum, b) => sum + (Number(b.amount) || 0), 0
             );
-            
-            // সর্বশেষ বোনাস
             const latestBonus = bonusesFromThis[0];
             const bonusDate = latestBonus.created_at 
                 ? formatDateBD(latestBonus.created_at) 
                 : '-';
-            
-            // এই বোনাসের percentile
             const bonusPercent = latestBonus.commission_rate || levelRate;
+            const sourceAmount = latestBonus.savings_amount || ref._firstPayment || 0;
             
-            // Source details
-            const sourceAmount = latestBonus.savings_amount || 0;
+            totalBonusThisLevel += totalFromThisMember;
+            membersWithBonus++;
             
             bonusInfoHtml = `
                 <div class="bg-gradient-to-r from-emerald-50 to-green-50 border-2 border-emerald-300 rounded-lg p-3 mt-3">
-                    
-                    <!-- Header -->
                     <div class="flex items-center justify-between gap-2 mb-2">
                         <div class="flex items-center gap-2">
                             <div class="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
                                 <i class="fas fa-check text-white text-xs"></i>
                             </div>
-                            <p class="text-xs font-bold text-emerald-800">
-                                ✅ প্রাপ্ত বোনাস
-                            </p>
+                            <p class="text-xs font-bold text-emerald-800">✅ প্রাপ্ত বোনাস</p>
                         </div>
-                        
-                        <!-- Percent Badge -->
                         <span class="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
                             ${bnToEn(bonusPercent)}%
                         </span>
                     </div>
                     
-                    <!-- Amount -->
                     <p class="text-lg font-extrabold text-emerald-700 ml-8">
                         ৳${bnToEn(totalFromThisMember.toLocaleString('en-US'))}
                     </p>
                     
-                    <!-- Calculation Breakdown -->
                     <div class="ml-8 mt-2 bg-white/60 rounded-lg p-2 border border-emerald-200">
                         <p class="text-[10px] text-emerald-700">
                             <i class="fas fa-calculator mr-1"></i>
@@ -11053,7 +11018,6 @@ function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
                         </p>
                     </div>
                     
-                    <!-- Details -->
                     <div class="ml-8 mt-2 space-y-0.5">
                         <p class="text-[10px] text-emerald-600">
                             <i class="fas fa-calendar-alt mr-1"></i>
@@ -11063,16 +11027,64 @@ function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
                             <i class="fas fa-layer-group mr-1"></i>
                             Level ${level} কমিশন (${bnToEn(bonusPercent)}%)
                         </p>
-                        <p class="text-[10px] text-emerald-600">
-                            <i class="fas fa-gift mr-1"></i>
-                            প্রথম Payment থেকে
+                    </div>
+                </div>
+            `;
+            
+        } else if (hasPayment) {
+            // ═════════════════════════════════════════════════════
+            // 📊 Case 2: Payment Approved → Expected Bonus (নীল)
+            // ═════════════════════════════════════════════════════
+            const expectedBonus = Math.round(ref._firstPayment * (levelRate / 100));
+            
+            totalBonusThisLevel += expectedBonus;
+            membersWithBonus++;
+            
+            bonusInfoHtml = `
+                <div class="bg-gradient-to-r from-blue-50 to-cyan-50 border-2 border-blue-300 rounded-lg p-3 mt-3">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <div class="flex items-center gap-2">
+                            <div class="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
+                                <i class="fas fa-chart-line text-white text-xs"></i>
+                            </div>
+                            <p class="text-xs font-bold text-blue-800">📊 প্রাপ্ত বোনাস</p>
+                        </div>
+                        <span class="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                            ${bnToEn(levelRate)}%
+                        </span>
+                    </div>
+                    
+                    <p class="text-lg font-extrabold text-blue-700 ml-8">
+                        ৳${bnToEn(expectedBonus.toLocaleString('en-US'))}
+                    </p>
+                    
+                    <div class="ml-8 mt-2 bg-white/60 rounded-lg p-2 border border-blue-200">
+                        <p class="text-[10px] text-blue-700">
+                            <i class="fas fa-calculator mr-1"></i>
+                            <strong>হিসাব:</strong> 
+                            ৳${bnToEn(ref._firstPayment.toLocaleString('en-US'))} × 
+                            ${bnToEn(levelRate)}% = 
+                            ৳${bnToEn(expectedBonus.toLocaleString('en-US'))}
                         </p>
                     </div>
                     
+                    <div class="ml-8 mt-2 space-y-0.5">
+                        <p class="text-[10px] text-blue-600">
+                            <i class="fas fa-check-circle mr-1"></i>
+                            প্রথম Payment Approved ✓
+                        </p>
+                        <p class="text-[10px] text-blue-600">
+                            <i class="fas fa-layer-group mr-1"></i>
+                            Level ${level} কমিশন (${bnToEn(levelRate)}%)
+                        </p>
+                    </div>
                 </div>
             `;
+            
         } else {
-            // ⏳ অপেক্ষায় / এখনো পায়নি
+            // ═════════════════════════════════════════════════════
+            // ⏳ Case 3: No Payment → এখনো পায়নি (হলুদ)
+            // ═════════════════════════════════════════════════════
             bonusInfoHtml = `
                 <div class="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200 rounded-lg p-3 mt-3">
                     <div class="flex items-start justify-between gap-2">
@@ -11081,22 +11093,15 @@ function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
                                 <i class="fas fa-clock text-white text-xs"></i>
                             </div>
                             <div class="flex-1">
-                                <p class="text-xs font-bold text-amber-800">
-                                    ⏳ এখনো বোনাস পায়নি
-                                </p>
-                                <p class="text-[10px] text-amber-600 mt-0.5">
-                                    প্রথম Payment Approve হলে পাবে
-                                </p>
+                                <p class="text-xs font-bold text-amber-800">⏳ এখনো বোনাস পায়নি</p>
+                                <p class="text-[10px] text-amber-600 mt-0.5">প্রথম Payment Approve হলে পাবে</p>
                             </div>
                         </div>
-                        
-                        <!-- Expected Percent -->
                         <span class="bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0">
                             ${bnToEn(levelRate)}% আশা
                         </span>
                     </div>
                     
-                    <!-- Expected Calculation -->
                     <div class="ml-8 mt-2 bg-white/60 rounded-lg p-2 border border-amber-200">
                         <p class="text-[10px] text-amber-700">
                             <i class="fas fa-info-circle mr-1"></i>
@@ -11116,10 +11121,8 @@ function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
         html += `
     <div class="bg-white p-4 rounded-xl border-2 border-${color}-100 hover:border-${color}-300 hover:shadow-md transition mb-3">
         
-        <!-- Member Info Header -->
         <div class="flex items-start justify-between gap-3">
             <div class="flex-1 min-w-0">
-                <!-- Name -->
                 <div class="flex items-center gap-2 flex-wrap mb-2">
                     <p class="font-bold text-gray-800 text-base truncate">
                         ${ref.full_name || 'নাম নেই'}
@@ -11129,7 +11132,6 @@ function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
                     </span>
                 </div>
                 
-                <!-- Details -->
                 <div class="space-y-1">
                     <p class="text-xs text-gray-600 flex items-center gap-1">
                         <i class="fas fa-mobile-alt text-gray-400 w-4"></i>
@@ -11146,7 +11148,6 @@ function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
                 </div>
             </div>
             
-            <!-- Monthly Savings Badge -->
             <div class="text-right flex-shrink-0">
                 <div class="bg-${color}-50 px-3 py-2 rounded-lg border border-${color}-200">
                     <p class="text-[9px] text-gray-500 mb-0.5">মাসিক সঞ্চয়</p>
@@ -11163,7 +11164,6 @@ function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
             </div>
         </div>
         
-        <!-- 🎁 Bonus Info -->
         ${bonusInfoHtml}
         
     </div>
@@ -11174,19 +11174,10 @@ function updateLevelList(level, referrals, rate, bonusesByFromMember = {}) {
     // Level Summary Footer
     // ═══════════════════════════════════════════════════════════
     const totalMembers = referrals.length;
-    const totalBonusThisLevel = referrals.reduce((sum, ref) => {
-        const bonuses = bonusesByFromMember[ref.member_id] || [];
-        return sum + bonuses.reduce((s, b) => s + (Number(b.amount) || 0), 0);
-    }, 0);
-    const membersWithBonus = referrals.filter(ref => {
-        const bonuses = bonusesByFromMember[ref.member_id] || [];
-        return bonuses.length > 0;
-    }).length;
     
     html += `
         <div class="bg-gradient-to-r from-${color}-50 to-white border-2 border-${color}-200 rounded-xl p-3 mt-3">
             
-            <!-- Level Rate Header -->
             <div class="text-center mb-2 pb-2 border-b border-${color}-200">
                 <span class="text-[10px] text-gray-500">Level ${level} — </span>
                 <span class="bg-${color}-600 text-white text-xs font-bold px-3 py-0.5 rounded-full">
