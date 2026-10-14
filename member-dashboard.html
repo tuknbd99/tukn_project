@@ -6442,9 +6442,8 @@ function togglePaymentFields() {
 }
 
 // ============================================================
-// কারেন্ট/মেয়াদহীন সদস্যদের জন্য পেমেন্ট মডাল খোলা
-// ============================================================
-
+// ✅ openCurrentMemberPaymentModal() — First Deposit Minimum Check
+// ═══════════════════════════════════════════════════════════
 async function openCurrentMemberPaymentModal() {
     const modal = document.getElementById('paymentModal');
     if (!modal) {
@@ -6452,7 +6451,7 @@ async function openCurrentMemberPaymentModal() {
         return;
     }
     
-    // ✅ মাসের ফিল্ড লুকান (এলিমেন্ট থাকলে)
+    // মাসের ফিল্ড লুকান
     const monthSection = document.getElementById('monthSection');
     const monthsContainer = document.getElementById('monthsContainer');
     const monthSelectButtons = document.getElementById('monthSelectButtons');
@@ -6461,7 +6460,7 @@ async function openCurrentMemberPaymentModal() {
     if (monthsContainer) monthsContainer.style.display = 'none';
     if (monthSelectButtons) monthSelectButtons.style.display = 'none';
     
-    // ✅ লিমিট মুছে ফেলুন (ইচ্ছেমতো টাকা ইনপুট)
+    // লিমিট দেখান
     const amountSection = document.getElementById('amountInputSection');
     const customAmountInput = document.getElementById('customAmountInput');
     const perMonthSavings = document.getElementById('perMonthSavings');
@@ -6470,14 +6469,125 @@ async function openCurrentMemberPaymentModal() {
     if (customAmountInput) {
         customAmountInput.style.display = 'block';
         customAmountInput.value = '';
+        customAmountInput.min = '100';
     }
     if (perMonthSavings) perMonthSavings.style.display = 'none';
     
-    // ✅ মোট জমার পরিমাণ রিসেট করুন
-    const totalDisplay = document.getElementById('totalAmountDisplay');
-    if (totalDisplay) totalDisplay.innerHTML = '০ টাকা';
+    // ============================================================
+    // 🆕 প্রথম জমার পরিমাণ চেক করুন
+    // ============================================================
+    const client = await initSupabase();
+    if (!client) {
+        showToast('❌ DB সংযোগ নেই', 'error');
+        return;
+    }
     
-    // ✅ সাল নির্বাচন দেখান
+    // Check if this is the first payment
+    const { data: approvedPayments } = await client
+        .from('payments')
+        .select('id')
+        .eq('member_id', currentUser.id)
+        .eq('status', 'approved');
+    
+    const isFirstPayment = !approvedPayments || approvedPayments.length === 0;
+    
+    // Get current_initial_deposit from member data
+    const { data: memberData } = await client
+        .from('members')
+        .select('current_initial_deposit')
+        .eq('member_id', currentUser.id)
+        .single();
+    
+    const initialDeposit = Number(memberData?.current_initial_deposit) || 100;
+    
+    // ============================================================
+    // UI Update — First Payment হলে Minimum Amount দেখান
+    // ============================================================
+    if (isFirstPayment) {
+        // প্রথম জমার জন্য minimum set করুন
+        if (customAmountInput) {
+            customAmountInput.min = initialDeposit;
+            customAmountInput.placeholder = `কমপক্ষে ৳${initialDeposit.toLocaleString()}`;
+        }
+        
+        // Display message
+        const totalDisplay = document.getElementById('totalAmountDisplay');
+        if (totalDisplay) {
+            totalDisplay.innerHTML = `
+                <div class="text-center">
+                    <p class="text-xs text-red-600 font-bold mb-1">🎁 প্রথম জমা</p>
+                    <p class="text-2xl font-bold text-emerald-600">৳ ০</p>
+                    <p class="text-xs text-red-500 mt-1">
+                        কমপক্ষে <strong>৳${initialDeposit.toLocaleString()}</strong> দিতে হবে
+                    </p>
+                </div>
+            `;
+        }
+        
+        // Show info banner
+        const amountInputSection = document.getElementById('amountInputSection');
+        if (amountInputSection) {
+            // Add banner if not exists
+            let banner = document.getElementById('firstPaymentBanner');
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'firstPaymentBanner';
+                banner.className = 'bg-red-50 border-2 border-red-300 rounded-lg p-3 mb-3';
+                banner.innerHTML = `
+                    <div class="flex items-start gap-2">
+                        <i class="fas fa-exclamation-triangle text-red-600 text-lg mt-0.5"></i>
+                        <div>
+                            <p class="text-sm font-bold text-red-700">
+                                ⚠️ প্রথম জমার নিয়ম
+                            </p>
+                            <p class="text-xs text-red-600 mt-1">
+                                আপনি সাইনআপের সময় প্রথম জমার পরিমাণ হিসেবে 
+                                <strong>৳${initialDeposit.toLocaleString()}</strong> দিয়েছিলেন। 
+                                প্রথম জমায় কমপক্ষে এই পরিমাণ দিতে হবে।
+                            </p>
+                        </div>
+                    </div>
+                `;
+                amountInputSection.parentNode.insertBefore(banner, amountInputSection);
+            } else {
+                banner.innerHTML = `
+                    <div class="flex items-start gap-2">
+                        <i class="fas fa-exclamation-triangle text-red-600 text-lg mt-0.5"></i>
+                        <div>
+                            <p class="text-sm font-bold text-red-700">
+                                ⚠️ প্রথম জমার নিয়ম
+                            </p>
+                            <p class="text-xs text-red-600 mt-1">
+                                কমপক্ষে <strong>৳${initialDeposit.toLocaleString()}</strong> দিতে হবে
+                            </p>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        
+        console.log('🎁 First Payment — Min: ৳' + initialDeposit);
+        
+    } else {
+        // পরবর্তী জমা — কোনো লিমিট নেই
+        if (customAmountInput) {
+            customAmountInput.min = '1';
+            customAmountInput.placeholder = 'যেকোনো পরিমাণ টাকা লিখুন';
+        }
+        
+        // Remove first payment banner
+        const banner = document.getElementById('firstPaymentBanner');
+        if (banner) banner.remove();
+        
+        const totalDisplay = document.getElementById('totalAmountDisplay');
+        if (totalDisplay) {
+            totalDisplay.innerHTML = '০ টাকা';
+        }
+        
+        console.log('💰 পরবর্তী জমা — কোনো লিমিট নেই');
+    }
+    
+    // সাল নির্বাচন
     const yearSelect = document.getElementById('paymentYear');
     if (yearSelect) {
         yearSelect.innerHTML = '<option value="">সাল নির্বাচন করুন</option>';
@@ -6488,44 +6598,67 @@ async function openCurrentMemberPaymentModal() {
         yearSelect.value = currentYear;
     }
     
-    // ✅ পেমেন্ট মাধ্যম রিসেট করুন
+    // পেমেন্ট মাধ্যম রিসেট
     const paymentMethod = document.getElementById('paymentMethod');
     if (paymentMethod) paymentMethod.value = '';
     
-    // ✅ ইনপুট পরিবর্তনে টোটাল আপডেট করুন
+    // ইনপুট পরিবর্তনে টোটাল আপডেট
     if (customAmountInput) {
         customAmountInput.oninput = function() {
             const amount = parseFloat(this.value) || 0;
             const totalDisplay = document.getElementById('totalAmountDisplay');
-            if (totalDisplay) totalDisplay.innerHTML = amount.toLocaleString() + ' টাকা';
+            if (totalDisplay) {
+                if (isFirstPayment && amount > 0 && amount < initialDeposit) {
+                    // Warning if less than minimum
+                    totalDisplay.innerHTML = `
+                        <div class="text-center">
+                            <p class="text-xs text-red-600 font-bold mb-1">🎁 প্রথম জমা</p>
+                            <p class="text-2xl font-bold text-red-600">৳ ${amount.toLocaleString()}</p>
+                            <p class="text-xs text-red-500 mt-1">
+                                ❌ কমপক্ষে ৳${initialDeposit.toLocaleString()} দিতে হবে
+                            </p>
+                        </div>
+                    `;
+                } else {
+                    totalDisplay.innerHTML = `
+                        <div class="text-center">
+                            <p class="text-xs text-gray-500 mb-1">জমার পরিমাণ</p>
+                            <p class="text-2xl font-bold text-emerald-600">৳ ${amount.toLocaleString()}</p>
+                        </div>
+                    `;
+                }
+            }
         };
     }
     
-    // ✅ পেমেন্ট বাটন আপডেট — নতুন ID নেই, querySelector দিয়ে
+    // পেমেন্ট বাটন আপডেট
     const submitBtn = document.querySelector('#paymentModal button[onclick*="submitPayment"]');
     if (submitBtn) {
         submitBtn.onclick = submitCurrentMemberPayment;
-        submitBtn.innerHTML = '<i class="fas fa-check mr-1"></i> জমা দিন (সীমাহীন)';
+        submitBtn.innerHTML = isFirstPayment 
+            ? `<i class="fas fa-check mr-1"></i> প্রথম জমা দিন (কমপক্ষে ৳${initialDeposit.toLocaleString()})`
+            : '<i class="fas fa-check mr-1"></i> জমা দিন (সীমাহীন)';
     }
     
-    // ✅ মডাল শিরোনাম আপডেট করুন
+    // মডাল শিরোনাম
     const titleEl = document.querySelector('#paymentModal .text-xl.font-bold');
     if (titleEl) {
-        titleEl.innerHTML = '<i class="fas fa-credit-card mr-2"></i>সঞ্চয় জমা দিন (♾️ সীমাহীন)';
+        titleEl.innerHTML = isFirstPayment 
+            ? '<i class="fas fa-gift mr-2"></i>প্রথম জমা দিন'
+            : '<i class="fas fa-credit-card mr-2"></i>পরবর্তী জমা';
     }
     
-    // ✅ মডাল খুলুন
+    // মডাল খুলুন
     modal.classList.remove('hidden');
     modal.classList.add('flex');
     togglePaymentFields();
     
-    console.log('✅ কারেন্ট/মেয়াদহীন সদস্যের পেমেন্ট মডাল খোলা হয়েছে');
+    console.log('✅ কারেন্ট সদস্যের পেমেন্ট মডাল খোলা হয়েছে');
 }
 
 // ============================================================
-// কারেন্ট/মেয়াদহীন সদস্যদের পেমেন্ট সাবমিট
-// ============================================================
-
+// ✅ submitCurrentMemberPayment() — First Deposit Validation
+// ═══════════════════════════════════════════════════════════
 async function submitCurrentMemberPayment() {
     const paymentMethod = document.getElementById('paymentMethod').value;
     const senderMobile = document.getElementById('senderMobile').value;
@@ -6533,7 +6666,48 @@ async function submitCurrentMemberPayment() {
     const year = document.getElementById('paymentYear').value;
     const customAmount = parseFloat(document.getElementById('customAmountInput').value);
     
-    // ✅ ভ্যালিডেশন
+    // ============================================================
+    // 🆕 First Payment Validation
+    // ============================================================
+    const client = await initSupabase();
+    if (!client) {
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    // Check if first payment
+    const { data: approvedPayments } = await client
+        .from('payments')
+        .select('id')
+        .eq('member_id', currentUser.id)
+        .eq('status', 'approved');
+    
+    const isFirstPayment = !approvedPayments || approvedPayments.length === 0;
+    
+    if (isFirstPayment) {
+        // Get minimum amount
+        const { data: memberData } = await client
+            .from('members')
+            .select('current_initial_deposit')
+            .eq('member_id', currentUser.id)
+            .single();
+        
+        const minimumAmount = Number(memberData?.current_initial_deposit) || 100;
+        
+        // Validate
+        if (!customAmount || customAmount < minimumAmount) {
+            showToast(
+                `❌ প্রথম জমায় কমপক্ষে ৳${minimumAmount.toLocaleString()} টাকা দিতে হবে!\n` +
+                `আপনি দিতে চেয়েছেন ৳${customAmount || 0}`,
+                'error'
+            );
+            return;
+        }
+    }
+    
+    // ============================================================
+    // Regular Validation
+    // ============================================================
     if (!paymentMethod) {
         showToast('পেমেন্ট মাধ্যম নির্বাচন করুন!', 'error');
         return;
@@ -6546,21 +6720,16 @@ async function submitCurrentMemberPayment() {
         showToast('সঠিক টাকার পরিমাণ দিন!', 'error');
         return;
     }
-    if ((paymentMethod === 'bKash' || paymentMethod === 'Nagad' || paymentMethod === 'Rocket') && (!senderMobile || !transactionId)) {
+    if ((paymentMethod === 'bKash' || paymentMethod === 'Nagad' || paymentMethod === 'Rocket') 
+        && (!senderMobile || !transactionId)) {
         showToast('যে নম্বর থেকে টাকা পাঠিয়েছেন এবং ট্রানজেকশন আইডি দিন!', 'error');
         return;
     }
     
-    const client = await initSupabase();
-    if (!client) {
-        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
-        return;
-    }
-    
-    // ✅ বাটন আপডেট — নতুন ID নেই, querySelector দিয়ে
+    // Button state
     const btn = document.querySelector('#paymentModal button[onclick*="submitPayment"]');
     if (!btn) {
-        showToast('❌ সাবমিট বাটন খুঁজে পাওয়া যায়নি!', 'error');
+        showToast('❌ সাবমিট বাটন পাওয়া যায়নি!', 'error');
         return;
     }
     const originalText = btn.innerHTML;
@@ -6568,29 +6737,22 @@ async function submitCurrentMemberPayment() {
     btn.innerHTML = '<span class="loading-spinner"></span> জমা হচ্ছে...';
     
     try {
-        // ✅ বাংলাদেশ সময় জেনারেট করুন
         const now = getCurrentBangladeshTime();
         const submittedAt = now.toISOString();
         const banglaDate = now.toLocaleDateString('bn-BD', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
+            year: 'numeric', month: 'long', day: 'numeric'
         });
         const banglaTime = now.toLocaleTimeString('bn-BD', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: true
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
         
         const slipNumber = `TUK${String(Date.now()).slice(-6)}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
         
-        // ✅ পেমেন্ট ডাটা তৈরি করুন (মাস ছাড়া)
         const paymentData = {
             member_id: currentUser.id,
             member_name: currentUser.name,
             mobile: currentUser.mobile,
-            month: 'কারেন্ট জমা',
+            month: isFirstPayment ? 'প্রথম জমা' : 'কারেন্ট জমা',
             year: year,
             amount: customAmount,
             payment_method: paymentMethod,
@@ -6600,12 +6762,11 @@ async function submitCurrentMemberPayment() {
             submitted_at: submittedAt,
             voucher_slip_no: slipNumber,
             member_type: 'current',
-            note: `কারেন্ট সদস্য জমা - ${banglaDate} ${banglaTime}`
+            is_first_payment: isFirstPayment,
+            note: `${isFirstPayment ? 'প্রথম জমা' : 'কারেন্ট সদস্য জমা'} - ${banglaDate} ${banglaTime}`
         };
         
-        // ============================================================
-        // ✅ ব্যাংক বা ক্যাশের ক্ষেত্রে অতিরিক্ত ডাটা
-        // ============================================================
+        // Bank/Cash extra fields
         if (paymentMethod === 'bank') {
             paymentData.bank_name = document.getElementById('bankName')?.value || null;
             paymentData.branch_name = document.getElementById('branchName')?.value || null;
@@ -6618,55 +6779,44 @@ async function submitCurrentMemberPayment() {
             paymentData.receiver_mobile = document.getElementById('receiverMobile')?.value || null;
         }
         
-        console.log('📤 পেমেন্ট ডাটা:', paymentData);
-        console.log('🕐 বাংলাদেশ সময়:', banglaDate, banglaTime);
+        console.log('📤 Payment Data:', paymentData);
         
-        // ============================================================
-        // ✅ Database-এ insert
-        // ============================================================
-        const { data, error } = await client
+        // Insert
+        const { error } = await client
             .from('payments')
             .insert([paymentData])
             .select();
         
         if (error) {
-            console.error('❌ পেমেন্ট error:', error);
+            console.error('❌ Payment error:', error);
             showToast('❌ পেমেন্ট জমা দিতে ব্যর্থ: ' + error.message, 'error');
             return;
         }
         
-        // ============================================================
-        // ✅ সফল মেসেজ
-        // ============================================================
+        // Success
         showToast(
-            `✅ ${customAmount.toLocaleString()} টাকা জমার অনুরোধ সফল!\n` +
-            `⏳ অ্যাডমিন অনুমোদনের জন্য অপেক্ষা করুন।`, 
+            `✅ ৳${customAmount.toLocaleString()} টাকা ${isFirstPayment ? 'প্রথম জমা' : 'জমা'} সফল!\n` +
+            `⏳ Admin Approve-এর জন্য অপেক্ষা করুন।`, 
             'success'
         );
         
         closePaymentModal();
         
-        // ============================================================
-        // ✅ ফিল্ড রিসেট
-        // ============================================================
+        // Reset fields
         document.getElementById('senderMobile').value = '';
         document.getElementById('transactionId').value = '';
         document.getElementById('paymentYear').value = '';
         document.getElementById('customAmountInput').value = '';
         document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
         
-        // ============================================================
-        // ✅ ডাটা রিফ্রেশ
-        // ============================================================
+        // Refresh
         await loadPaymentHistory();
         await loadUserFunds();
         await refreshMemberDataFromSupabase();
         await checkDueNotifications();
         
-        console.log('✅ পেমেন্ট সম্পূর্ণ!');
-        
     } catch (e) {
-        console.error('❌ পেমেন্ট এরর:', e);
+        console.error('❌ Payment error:', e);
         showToast('পেমেন্ট জমা দিতে ব্যর্থ: ' + e.message, 'error');
     } finally {
         if (btn) {
