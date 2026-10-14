@@ -6279,244 +6279,673 @@ const PERMISSION_REGISTRY = {
             }
         };
             
-            // ============================================================
-            // 🕐 BANGLADESH TIME SYSTEM v3.0 — ADMIN PANEL
-            // ═══════════════════════════════════════════════════════════
-            // ✅ Database-এ সবসময় UTC-তে save হবে
-            // ✅ Display-এর সময় Bangladesh Time-এ (Asia/Dhaka) convert হবে
-            // ✅ Timezone ছাড়া string-ও безопасно handle হবে
-            // ============================================================
-            
-            /**
-             * ✅ Safe Date Parser
-             * Timezone info ছেলে string-এ UTC (Z) add করে
-             */
-            function parseDateSafe(dateInput) {
-                if (!dateInput) return null;
-                
-                try {
-                    if (dateInput instanceof Date) {
-                        return isNaN(dateInput.getTime()) ? null : dateInput;
-                    }
-                    
-                    if (typeof dateInput === 'number') {
-                        const d = new Date(dateInput);
-                        return isNaN(d.getTime()) ? null : d;
-                    }
-                    
-                    let str = String(dateInput).trim();
-                    if (!str || str === 'null' || str === 'undefined') return null;
-                    
-                    // Space → T
-                    if (str.includes(' ') && !str.includes('T')) {
-                        str = str.replace(' ', 'T');
-                    }
-                    
-                    // Timezone info চেক
-                    const hasTimezone = 
-                        str.endsWith('Z') || 
-                        /[+-]\d{2}:?\d{2}$/.test(str);
-                    
-                    if (!hasTimezone) {
-                        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(str)) {
-                            str += 'Z';
-                        } else if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-                            str += 'T00:00:00Z';
-                        }
-                    }
-                    
-                    const d = new Date(str);
-                    return isNaN(d.getTime()) ? null : d;
-                    
-                } catch(e) {
-                    console.warn('⚠️ parseDateSafe error:', e);
-                    return null;
-                }
+// ═══════════════════════════════════════════════════════════════════
+// 🕐 BANGLADESH TIME SYSTEM v4.0 — COMPLETE & FINAL
+// ═══════════════════════════════════════════════════════════════════
+// ✅ Database-এ সবসময় UTC-তে save হবে (TIMESTAMPTZ)
+// ✅ Display-এর সময় Bangladesh Time (Asia/Dhaka) এ convert হবে
+// ✅ Timezone ছাড়া string-ও নিরাপদে handle হবে
+// ✅ Invalid input-ও নিরাপদে handle হবে
+// ✅ সব ফাংশন পূর্ণাঙ্গ ও স্বয়ংসম্পূর্ণ
+// ═══════════════════════════════════════════════════════════════════
+
+
+// ─────────────────────────────────────────────────────────────────
+// 🔧 CORE PARSER — সব ফাংশনের ভিত্তি
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ Safe Date Parser
+ * যেকোনো input (Date, String, Number) নিরাপদে Date object এ convert করে
+ * Timezone না থাকলে UTC হিসেবে ধরে
+ * 
+ * @param {Date|string|number} dateInput
+ * @returns {Date|null}
+ */
+function parseDateSafe(dateInput) {
+    if (dateInput === null || dateInput === undefined) return null;
+    if (dateInput === '') return null;
+    
+    try {
+        // ✅ ১. Date object হলে
+        if (dateInput instanceof Date) {
+            return isNaN(dateInput.getTime()) ? null : dateInput;
+        }
+        
+        // ✅ ২. Number হলে (Unix timestamp)
+        if (typeof dateInput === 'number') {
+            const d = new Date(dateInput);
+            return isNaN(d.getTime()) ? null : d;
+        }
+        
+        // ✅ ৩. String হলে
+        let str = String(dateInput).trim();
+        
+        // Invalid strings
+        if (!str || str === 'null' || str === 'undefined' || str === 'NaN') {
+            return null;
+        }
+        
+        // ✅ Space → T (HTML5 date format)
+        if (str.includes(' ') && !str.includes('T')) {
+            str = str.replace(' ', 'T');
+        }
+        
+        // ✅ Timezone info চেক
+        const hasTimezone = 
+            str.endsWith('Z') || 
+            /[+-]\d{2}:?\d{2}$/.test(str);
+        
+        // ✅ Timezone না থাকলে UTC add
+        if (!hasTimezone) {
+            if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(str)) {
+                str += 'Z';
+            } else if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+                str += 'T00:00:00Z';
             }
-            
-            /**
-             * ✅ ১. Current UTC Time — Database-এ save করার জন্য
-             * ⚠️ নাম getBangladeshTime হলেও এটা UTC return করে
-             * কারণ PostgreSQL TIMESTAMPTZ সবসময় UTC-তে store করে
-             */
-            function getBangladeshTime() {
-                return new Date().toISOString();
-            }
-            
-            /**
-             * ✅ ২. বর্তমান বাংলাদেশ তারিখ ও সময় (Display + DB)
-             */
-            function getCurrentBDDateTime() {
-                const now = new Date();
-                return {
-                    utc: now.toISOString(),
-                    iso: now.toISOString(),
-                    date: now.toLocaleDateString('bn-BD', {
-                        timeZone: 'Asia/Dhaka',
-                        year: 'numeric', month: 'long', day: 'numeric'
-                    }),
-                    time: now.toLocaleTimeString('bn-BD', {
-                        timeZone: 'Asia/Dhaka',
-                        hour: '2-digit', minute: '2-digit', second: '2-digit',
-                        hour12: true
-                    }),
-                    full: now.toLocaleString('bn-BD', {
-                        timeZone: 'Asia/Dhaka',
-                        year: 'numeric', month: 'long', day: 'numeric',
-                        hour: '2-digit', minute: '2-digit', second: '2-digit',
-                        hour12: true
-                    })
-                };
-            }
-            
-            /**
-             * ✅ ৩. তারিখ — Bangladesh Time (যেমন: "১৪ অক্টোবর, ২০২৬")
-             */
-            function formatDateBD(isoString) {
-                const date = parseDateSafe(isoString);
-                if (!date) return '-';
-                
-                try {
-                    return date.toLocaleDateString('bn-BD', {
-                        timeZone: 'Asia/Dhaka',
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric'
-                    });
-                } catch(e) { return '-'; }
-            }
-            
-            /**
-             * ✅ ৪. সময় — Bangladesh Time
-             */
-            function formatTimeBD(isoString) {
-                const date = parseDateSafe(isoString);
-                if (!date) return '-';
-                
-                try {
-                    return date.toLocaleTimeString('bn-BD', {
-                        timeZone: 'Asia/Dhaka',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit',
-                        hour12: true
-                    });
-                } catch(e) { return '-'; }
-            }
-            
-            /**
-             * ✅ ৫. তারিখ + সময় — Bangladesh Time (সবচেয়ে বেশি ব্যবহৃত)
-             */
-            function formatDateTimeBD(isoString) {
-                const date = parseDateSafe(isoString);
-                if (!date) return '-';
-                
-                try {
-                    return date.toLocaleString('bn-BD', {
-                        timeZone: 'Asia/Dhaka',
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: true
-                    });
-                } catch(e) { return '-'; }
-            }
-            
-            /**
-             * ✅ ৬. সম্পূর্ণ ফরম্যাট (second সহ)
-             */
-            function formatDateTimeFullBD(isoString) {
-                const date = parseDateSafe(isoString);
-                if (!date) return '-';
-                
-                try {
-                    return date.toLocaleString('bn-BD', {
-                        timeZone: 'Asia/Dhaka',
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit',
-                        hour12: true
-                    });
-                } catch(e) { return '-'; }
-            }
-            
-            /**
-             * ✅ ৭. সংক্ষিপ্ত ফরম্যাট (Short)
-             * @param {boolean} includeYear — year দেখাবে কিনা
-             */
-            function formatShortBD(isoString, includeYear = false) {
-                const date = parseDateSafe(isoString);
-                if (!date) return '-';
-                
-                try {
-                    const options = {
-                        timeZone: 'Asia/Dhaka',
-                        day: 'numeric',
-                        month: 'short',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: true
-                    };
-                    
-                    if (includeYear) options.year = 'numeric';
-                    
-                    return date.toLocaleString('bn-BD', options);
-                } catch(e) { return '-'; }
-            }
-            
-            /**
-             * ✅ ৮. শুধু Date — عدد format (১৪/১০/২০২৬)
-             */
-            function formatDateNumericBD(isoString) {
-                const date = parseDateSafe(isoString);
-                if (!date) return '-';
-                
-                try {
-                    return date.toLocaleDateString('bn-BD', {
-                        timeZone: 'Asia/Dhaka',
-                        day: '2-digit',
-                        month: '2-digit',
-                        year: 'numeric'
-                    });
-                } catch(e) { return '-'; }
-            }
-            
-            /**
-             * ✅ ৯. Universal Formatter
-             */
-            function formatBDTime(isoString, format = 'datetime') {
-                if (!isoString) return '-';
-                
-                switch (format) {
-                    case 'date':        return formatDateBD(isoString);
-                    case 'date-numeric': return formatDateNumericBD(isoString);
-                    case 'time':        return formatTimeBD(isoString);
-                    case 'datetime':    return formatDateTimeBD(isoString);
-                    case 'full':        return formatDateTimeFullBD(isoString);
-                    case 'short':       return formatShortBD(isoString);
-                    case 'short-year':  return formatShortBD(isoString, true);
-                    default:            return formatDateTimeBD(isoString);
-                }
-            }
-            
-            // ✅ Global Expose
-            window.parseDateSafe = parseDateSafe;
-            window.getBangladeshTime = getBangladeshTime;
-            window.getCurrentBDDateTime = getCurrentBDDateTime;
-            window.formatDateBD = formatDateBD;
-            window.formatTimeBD = formatTimeBD;
-            window.formatDateTimeBD = formatDateTimeBD;
-            window.formatDateTimeFullBD = formatDateTimeFullBD;
-            window.formatShortBD = formatShortBD;
-            window.formatDateNumericBD = formatDateNumericBD;
-            window.formatBDTime = formatBDTime;
-            
-            console.log('✅ Bangladesh Time System v3.0 (Admin Panel) loaded!');
+        }
+        
+        const d = new Date(str);
+        return isNaN(d.getTime()) ? null : d;
+        
+    } catch(e) {
+        console.warn('⚠️ parseDateSafe error:', e);
+        return null;
+    }
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// 📅 DB SAVE — Database-এ কী save করবেন
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ Database-এ Save করার জন্য UTC Time
+ * PostgreSQL TIMESTAMPTZ সবসময় UTC-তে store করে
+ * 
+ * @returns {string} ISO format UTC (যেমন: "2026-10-14T08:30:00.000Z")
+ */
+function getDatabaseTime() {
+    return new Date().toISOString();
+}
+
+/**
+ * ✅ ব্যাকওয়ার্ড compatible alias
+ */
+function getBangladeshTime() {
+    return new Date().toISOString();
+}
+
+/**
+ * ✅ Admin Panel-এ ব্যবহৃত নাম
+ */
+function getCurrentBangladeshTime() {
+    return new Date().toISOString();
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// ⏰ CURRENT TIME — বর্তমান সময় (Display)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ বর্তমান বাংলাদেশ তারিখ ও সময় — সব format-এ
+ * 
+ * @returns {Object} { utc, iso, date, time, full, numeric, short }
+ */
+function getCurrentBDDateTime() {
+    const now = new Date();
+    
+    return {
+        // 🌍 Database-এ save করার জন্য
+        utc: now.toISOString(),
+        iso: now.toISOString(),
+        
+        // 📅 শুধু তারিখ (বাংলা: "১৪ অক্টোবর, ২০২৬")
+        date: now.toLocaleDateString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric'
+        }),
+        
+        // ⏰ শুধু সময় (বাংলা: "০২:৩০:০০ PM")
+        time: now.toLocaleTimeString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit',
+            hour12: true
+        }),
+        
+        // 📆 তারিখ + সময় (বাংলা: "১৪ অক্টোবর, ২০২৬, ০২:৩০ PM")
+        full: now.toLocaleString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            year: 'numeric', month: 'long', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hour12: true
+        }),
+        
+        // 🔢 সংখ্যা format (বাংলা: "১৪/১০/২০২৬")
+        numeric: now.toLocaleDateString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            day: '2-digit', month: '2-digit', year: 'numeric'
+        }),
+        
+        // 📋 সংক্ষিপ্ত (বাংলা: "১৪ অক্টো, ০২:৩০ PM")
+        short: now.toLocaleString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            day: 'numeric', month: 'short',
+            hour: '2-digit', minute: '2-digit',
+            hour12: true
+        })
+    };
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// 📅 DATE FORMATTERS — তারিখ ফরম্যাট
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ ১. শুধু তারিখ — দীর্ঘ ফরম্যাট
+ * উদাহরণ: "১৪ অক্টোবর, ২০২৬"
+ * 
+ * @param {string} isoString — DB-এর UTC time
+ * @returns {string}
+ */
+function formatDateBD(isoString) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        return date.toLocaleDateString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+/**
+ * ✅ ২. শুধু তারিখ — সংখ্যা format
+ * উদাহরণ: "১৪/১০/২০২৬"
+ * 
+ * @param {string} isoString
+ * @returns {string}
+ */
+function formatDateNumericBD(isoString) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        return date.toLocaleDateString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric'
+        });
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+/**
+ * ✅ ৩. শুধু তারিখ — 2-digit year
+ * উদাহরণ: "১৪/১০/২৬"
+ * 
+ * @param {string} isoString
+ * @returns {string}
+ */
+function formatDateShortNumericBD(isoString) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        return date.toLocaleDateString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            day: '2-digit',
+            month: '2-digit',
+            year: '2-digit'
+        });
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// ⏰ TIME FORMATTERS — সময় ফরম্যাট
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ ৪. শুধু সময় — সেকেন্ড সহ
+ * উদাহরণ: "০২:৩০:৪৫ PM"
+ * 
+ * @param {string} isoString
+ * @returns {string}
+ */
+function formatTimeBD(isoString) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        return date.toLocaleTimeString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+        });
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+/**
+ * ✅ ৫. শুধু সময় — সেকেন্ড ছাড়া
+ * উদাহরণ: "০২:৩০ PM"
+ * 
+ * @param {string} isoString
+ * @returns {string}
+ */
+function formatTimeShortBD(isoString) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        return date.toLocaleTimeString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        });
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// 📆 DATETIME FORMATTERS — তারিখ + সময়
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ ৬. তারিখ + সময় — স্ট্যান্ডার্ড (সবচেয়ে বেশি ব্যবহৃত)
+ * উদাহরণ: "১৪ অক্টোবর, ২০২৬, ০২:৩০ PM"
+ * 
+ * @param {string} isoString
+ * @returns {string}
+ */
+function formatDateTimeBD(isoString) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        return date.toLocaleString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        });
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+/**
+ * ✅ ৭. তারিখ + সময় — সম্পূর্ণ (সেকেন্ড সহ)
+ * উদাহরণ: "১৪ অক্টোবর, ২০২৬, ০২:৩০:৪৫ PM"
+ * 
+ * @param {string} isoString
+ * @returns {string}
+ */
+function formatDateTimeFullBD(isoString) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        return date.toLocaleString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+        });
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+/**
+ * ✅ ৮. তারিখ + সময় — সংক্ষিপ্ত
+ * উদাহরণ: "১৪ অক্টো, ০২:৩০ PM"
+ * উদাহরণ (year সহ): "১৪ অক্টো ২০২৬, ০২:৩০ PM"
+ * 
+ * @param {string} isoString
+ * @param {boolean} includeYear — true হলে year দেখাবে
+ * @returns {string}
+ */
+function formatShortBD(isoString, includeYear = false) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        const options = {
+            timeZone: 'Asia/Dhaka',
+            day: 'numeric',
+            month: 'short',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        };
+        
+        if (includeYear) {
+            options.year = 'numeric';
+        }
+        
+        return date.toLocaleString('bn-BD', options);
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+/**
+ * ✅ ৯. তারিখ + সময় — সংখ্যা format
+ * উদাহরণ: "১৪/১০/২০২৬, ০২:৩০ PM"
+ * 
+ * @param {string} isoString
+ * @returns {string}
+ */
+function formatDateTimeNumericBD(isoString) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        return date.toLocaleString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        });
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+/**
+ * ✅ ১০. তারিখ + সময় — 2-digit year সহ সংক্ষিপ্ত
+ * উদাহরণ: "১৪ অক্টো ২৬, ০২:৩০ PM"
+ * 
+ * @param {string} isoString
+ * @returns {string}
+ */
+function formatShortYearBD(isoString) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        return date.toLocaleString('bn-BD', {
+            timeZone: 'Asia/Dhaka',
+            day: '2-digit',
+            month: 'short',
+            year: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        });
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// 🎯 UNIVERSAL FORMATTER — সব কাজের জন্য একটি function
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ Universal Date Formatter
+ * সব format এক জায়গায়
+ * 
+ * @param {string} isoString — DB-এর UTC time
+ * @param {string} format — নিচের যেকোনো একটি:
+ *   'date'          → ১৪ অক্টোবর, ২০২৬
+ *   'date-numeric'  → ১৪/১০/২০২৬
+ *   'date-short'    → ১৪/১০/২৬
+ *   'time'          → ০২:৩০:৪৫ PM
+ *   'time-short'    → ০২:৩০ PM
+ *   'datetime'      → ১৪ অক্টোবর, ২০২৬, ০২:৩০ PM (ডিফল্ট)
+ *   'full'          → ১৪ অক্টোবর, ২০২৬, ০২:৩০:৪৫ PM
+ *   'short'         → ১৪ অক্টো, ০২:৩০ PM
+ *   'short-year'    → ১৪ অক্টো ২০২৬, ০২:৩০ PM
+ *   'short-2digit'  → ১৪ অক্টো ২৬, ০২:৩০ PM
+ *   'numeric'       → ১৪/১০/২০২৬, ০২:৩০ PM
+ * 
+ * @returns {string}
+ */
+function formatBDTime(isoString, format = 'datetime') {
+    if (!isoString) return '-';
+    
+    switch (format) {
+        case 'date':           return formatDateBD(isoString);
+        case 'date-numeric':   return formatDateNumericBD(isoString);
+        case 'date-short':     return formatDateShortNumericBD(isoString);
+        case 'time':           return formatTimeBD(isoString);
+        case 'time-short':     return formatTimeShortBD(isoString);
+        case 'datetime':       return formatDateTimeBD(isoString);
+        case 'full':           return formatDateTimeFullBD(isoString);
+        case 'short':          return formatShortBD(isoString, false);
+        case 'short-year':     return formatShortBD(isoString, true);
+        case 'short-2digit':   return formatShortYearBD(isoString);
+        case 'numeric':        return formatDateTimeNumericBD(isoString);
+        default:               return formatDateTimeBD(isoString);
+    }
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// 🌅 GREETING — সময় অনুযায়ী শুভেচ্ছা
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ বর্তমান বাংলাদেশ সময় অনুযায়ী শুভেচ্ছা
+ * 
+ * @returns {string} "সুপ্রভাত!" | "শুভ অপরাহ্ন!" | "শুভ সন্ধ্যা!"
+ */
+function getGreeting() {
+    const now = new Date();
+    
+    // ✅ Bangladesh hour (0-23)
+    const bdHour = parseInt(now.toLocaleString('en-US', {
+        timeZone: 'Asia/Dhaka',
+        hour: '2-digit',
+        hour12: false
+    }));
+    
+    if (bdHour < 12) return 'সুপ্রভাত!';
+    if (bdHour < 18) return 'শুভ অপরাহ্ন!';
+    return 'শুভ সন্ধ্যা!';
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// 🔔 DIGITAL CLOCK — প্রতি সেকেন্ডে আপডেট
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ ডিজিটাল ক্লক আপডেট (প্রতি সেকেন্ডে কল করুন)
+ * 
+ * @param {string} elementId — clock element এর id (ডিফল্ট: 'digitalClock')
+ */
+function updateDigitalClock(elementId = 'digitalClock') {
+    const clockEl = document.getElementById(elementId);
+    if (!clockEl) return;
+    
+    const now = new Date();
+    
+    // ✅ Bangladesh time string
+    const bdTimeString = now.toLocaleString('en-US', {
+        timeZone: 'Asia/Dhaka',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+    });
+    
+    clockEl.textContent = bdTimeString;
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// ⏳ RELATIVE TIME — "৫ মিনিট আগে", "২ ঘন্টা আগে"
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ Relative Time — কতক্ষণ আগে
+ * উদাহরণ: "এইমাত্র", "৫ মিনিট আগে", "২ ঘন্টা আগে", "৩ দিন আগে"
+ * 
+ * @param {string} isoString
+ * @returns {string}
+ */
+function formatRelativeTimeBD(isoString) {
+    const date = parseDateSafe(isoString);
+    if (!date) return '-';
+    
+    try {
+        const now = new Date();
+        const diffMs = now - date;
+        const diffSec = Math.floor(diffMs / 1000);
+        const diffMin = Math.floor(diffSec / 60);
+        const diffHour = Math.floor(diffMin / 60);
+        const diffDay = Math.floor(diffHour / 24);
+        const diffMonth = Math.floor(diffDay / 30);
+        const diffYear = Math.floor(diffDay / 365);
+        
+        if (diffSec < 60) return 'এইমাত্র';
+        if (diffMin < 60) return `${diffMin} মিনিট আগে`;
+        if (diffHour < 24) return `${diffHour} ঘন্টা আগে`;
+        if (diffDay < 30) return `${diffDay} দিন আগে`;
+        if (diffMonth < 12) return `${diffMonth} মাস আগে`;
+        return `${diffYear} বছর আগে`;
+        
+    } catch(e) { 
+        return '-'; 
+    }
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// 📅 DATE RANGE — তারিখ সীমা (Statement-এ ব্যবহৃত)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * ✅ Date Range তৈরি — Statement filter-এর জন্য
+ * Bangladesh Time (UTC+6) অনুযায়ী
+ * 
+ * @param {string} fromDate — "2026-10-01"
+ * @param {string} toDate — "2026-10-14"
+ * @returns {Object} { from, to } — ISO string with timezone
+ */
+function getBangladeshDateRange(fromDate, toDate) {
+    return {
+        from: fromDate ? `${fromDate}T00:00:00+06:00` : null,
+        to: toDate ? `${toDate}T23:59:59+06:00` : null
+    };
+}
+
+/**
+ * ✅ আজকের তারিখ (Bangladesh Time)
+ * @returns {string} "2026-10-14"
+ */
+function getTodayBD() {
+    const now = new Date();
+    const bdDateStr = now.toLocaleString('en-CA', {
+        timeZone: 'Asia/Dhaka',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).split(',')[0];
+    return bdDateStr;
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+// 🌐 GLOBAL EXPOSE — সব function globally available
+// ─────────────────────────────────────────────────────────────────
+
+// 🔧 Core
+window.parseDateSafe = parseDateSafe;
+
+// 📅 DB Save
+window.getDatabaseTime = getDatabaseTime;
+window.getBangladeshTime = getBangladeshTime;
+window.getCurrentBangladeshTime = getCurrentBangladeshTime;
+
+// ⏰ Current Time
+window.getCurrentBDDateTime = getCurrentBDDateTime;
+
+// 📅 Date Formatters
+window.formatDateBD = formatDateBD;
+window.formatDateNumericBD = formatDateNumericBD;
+window.formatDateShortNumericBD = formatDateShortNumericBD;
+
+// ⏰ Time Formatters
+window.formatTimeBD = formatTimeBD;
+window.formatTimeShortBD = formatTimeShortBD;
+
+// 📆 DateTime Formatters
+window.formatDateTimeBD = formatDateTimeBD;
+window.formatDateTimeFullBD = formatDateTimeFullBD;
+window.formatShortBD = formatShortBD;
+window.formatDateTimeNumericBD = formatDateTimeNumericBD;
+window.formatShortYearBD = formatShortYearBD;
+
+// 🎯 Universal
+window.formatBDTime = formatBDTime;
+
+// 🌅 Greeting
+window.getGreeting = getGreeting;
+
+// 🔔 Digital Clock
+window.updateDigitalClock = updateDigitalClock;
+
+// ⏳ Relative Time
+window.formatRelativeTimeBD = formatRelativeTimeBD;
+
+// 📅 Date Range
+window.getBangladeshDateRange = getBangladeshDateRange;
+window.getTodayBD = getTodayBD;
+
+
+// ═══════════════════════════════════════════════════════════════════
+// ✅ LOADED
+// ═══════════════════════════════════════════════════════════════════
+console.log('✅ Bangladesh Time System v4.0 loaded successfully!');
+console.log('📋 Available functions:');
+console.log('   • parseDateSafe()          - Safe date parser');
+console.log('   • getDatabaseTime()        - UTC for DB save');
+console.log('   • getCurrentBDDateTime()   - Current BD time object');
+console.log('   • formatDateBD()           - ১৪ অক্টোবর, ২০২৬');
+console.log('   • formatDateTimeBD()       - ১৪ অক্টোবর, ২০২৬, ০২:৩০ PM');
+console.log('   • formatDateTimeFullBD()   - ১৪ অক্টোবর, ২০২৬, ০২:৩০:৪৫ PM');
+console.log('   • formatShortBD()          - ১৪ অক্টো, ০২:৩০ PM');
+console.log('   • formatBDTime()           - Universal formatter');
+console.log('   • getGreeting()            - সুপ্রভাত/শুভ অপরাহ্ন/শুভ সন্ধ্যা');
+console.log('   • updateDigitalClock()     - Digital clock updater');
+console.log('   • formatRelativeTimeBD()   - ৫ মিনিট আগে');
   
             let supabaseClient = null;
             let supabaseInitialized = false;
