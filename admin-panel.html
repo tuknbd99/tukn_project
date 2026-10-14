@@ -6134,8 +6134,11 @@ body.dark-mode .all-clear-box p {
 <!-- ===== JAVASCRIPT - COMPLETE ===== -->
 <!-- ============================================================ -->
 <script>
+
+    
     // ============================================================
     // ✅ SINGLE SUPABASE CLIENT
+    
     // ============================================================
     // const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
     // const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
@@ -6411,6 +6414,556 @@ console.log('✅ Bangladesh Time System loaded!');
             }
             return supabaseClient;
         }
+
+    // ============================================================
+// 🔍 findMemberByAnyField() — Multi-field Member Lookup
+// ✅ Priority-based search (member_id → mobile → name → refer_code)
+// ✅ Safe for partial data
+// ============================================================
+async function findMemberByAnyField(searchParams) {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('🔍 Member Lookup Started');
+    console.log('📋 Search Params:', searchParams);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    
+    const client = initSupabaseClient();  // ✅ আপনার admin panel-এর client
+    if (!client) {
+        return { found: false, error: 'DB connection failed' };
+    }
+    
+    // ✅ Params normalize
+    const memberId = String(searchParams.member_id || '').trim();
+    const mobile = String(searchParams.mobile || '').trim();
+    const fullName = String(searchParams.full_name || '').trim();
+    const referCode = String(searchParams.refer_code || '').trim();
+    
+    // ✅ Priority 1: member_id + mobile (সবচেয়ে নির্ভুল)
+    if (memberId && mobile) {
+        console.log('🎯 Priority 1: member_id + mobile');
+        const { data, error } = await client
+            .from('members')
+            .select('*')
+            .eq('member_id', memberId)
+            .eq('mobile', mobile)
+            .maybeSingle();
+        
+        if (data && !error) {
+            console.log('✅ Found:', data.full_name);
+            return { found: true, member: data, method: 'member_id + mobile' };
+        }
+    }
+    
+    // ✅ Priority 2: mobile + full_name
+    if (mobile && fullName) {
+        console.log('🎯 Priority 2: mobile + full_name');
+        const { data, error } = await client
+            .from('members')
+            .select('*')
+            .eq('mobile', mobile)
+            .ilike('full_name', fullName)
+            .maybeSingle();
+        
+        if (data && !error) {
+            console.log('✅ Found:', data.full_name);
+            return { found: true, member: data, method: 'mobile + full_name' };
+        }
+    }
+    
+    // ✅ Priority 3: member_id + full_name
+    if (memberId && fullName) {
+        console.log('🎯 Priority 3: member_id + full_name');
+        const { data, error } = await client
+            .from('members')
+            .select('*')
+            .eq('member_id', memberId)
+            .ilike('full_name', fullName)
+            .maybeSingle();
+        
+        if (data && !error) {
+            console.log('✅ Found:', data.full_name);
+            return { found: true, member: data, method: 'member_id + full_name' };
+        }
+    }
+    
+    // ✅ Priority 4: mobile only
+    if (mobile) {
+        console.log('🎯 Priority 4: mobile only');
+        const { data, error } = await client
+            .from('members')
+            .select('*')
+            .eq('mobile', mobile)
+            .maybeSingle();
+        
+        if (data && !error) {
+            console.log('✅ Found:', data.full_name);
+            return { found: true, member: data, method: 'mobile only' };
+        }
+    }
+    
+    // ✅ Priority 5: member_id only
+    if (memberId) {
+        console.log('🎯 Priority 5: member_id only');
+        const { data, error } = await client
+            .from('members')
+            .select('*')
+            .eq('member_id', memberId)
+            .maybeSingle();
+        
+        if (data && !error) {
+            console.log('✅ Found:', data.full_name);
+            return { found: true, member: data, method: 'member_id only' };
+        }
+    }
+    
+    // ✅ Priority 6: refer_code only
+    if (referCode) {
+        console.log('🎯 Priority 6: refer_code');
+        const { data, error } = await client
+            .from('members')
+            .select('*')
+            .eq('refer_code', referCode)
+            .maybeSingle();
+        
+        if (data && !error) {
+            console.log('✅ Found:', data.full_name);
+            return { found: true, member: data, method: 'refer_code' };
+        }
+    }
+    
+    console.log('❌ No member found');
+    return { found: false, method: 'none' };
+}
+
+    // ============================================================
+// 🔍 checkIfFirstPayment() — প্রথম Approved Payment কিনা?
+// ✅ Duplicate Bonus Protection-এর first step
+// ============================================================
+async function checkIfFirstPayment(memberId, currentPaymentId) {
+    const client = initSupabaseClient();
+    if (!client) {
+        return { isFirst: false, error: 'DB error' };
+    }
+    
+    try {
+        const { data: previousPayments, error } = await client
+            .from('payments')
+            .select('id, amount, approved_at')
+            .eq('member_id', memberId)
+            .eq('status', 'approved')
+            .neq('id', currentPaymentId)
+            .order('approved_at', { ascending: true });
+        
+        if (error) {
+            console.error('❌ Payment count error:', error);
+            return { isFirst: false, error: error.message };
+        }
+        
+        const previousCount = previousPayments?.length || 0;
+        const isFirst = previousCount === 0;
+        
+        console.log('🔍 First Payment Check:');
+        console.log('   Member:', memberId);
+        console.log('   Current Payment:', currentPaymentId);
+        console.log('   Previous Approved:', previousCount);
+        console.log('   Is First:', isFirst ? '✅ YES' : '❌ NO');
+        
+        return {
+            isFirst,
+            previousCount,
+            previousPayments: previousPayments || []
+        };
+        
+    } catch (e) {
+        console.error('❌ checkIfFirstPayment error:', e);
+        return { isFirst: false, error: e.message };
+    }
+}
+
+    // ============================================================
+// 🎁 processAllLevelBonuses() — All Level Bonus Distribution
+// ✅ Rule: শুধু প্রথম Approved Payment-এ সব Level-এ Bonus
+// ✅ Rate: L1=15%, L2=10%, L3-10=5%
+// ✅ Loop detection + Duplicate protection
+// ✅ referral_bonus_log টেবিলে log করে
+// ============================================================
+async function processAllLevelBonuses(paymentData) {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('🎁 All Level Bonus Processing');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        return { success: false, error: 'DB connection failed', bonuses: [] };
+    }
+    
+    try {
+        const memberId = paymentData.member_id;
+        const paymentId = paymentData.id;
+        const paymentAmount = Number(paymentData.amount) || 0;
+        
+        console.log('📋 Payment:', { memberId, paymentId, amount: paymentAmount });
+        
+        if (paymentAmount <= 0) {
+            return { success: false, error: 'Amount is 0', bonuses: [] };
+        }
+        
+        // ✅ STEP 1: First Payment Check
+        const firstCheck = await checkIfFirstPayment(memberId, paymentId);
+        
+        if (!firstCheck.isFirst) {
+            console.log('❌ NOT First Payment — No bonuses');
+            return {
+                success: true,
+                isFirstPayment: false,
+                totalBonusPaid: 0,
+                bonuses: [],
+                message: 'Not first payment'
+            };
+        }
+        
+        console.log('✅ This IS first payment — process all levels');
+        
+        // ✅ STEP 2: Commission Rates
+        const commissionRates = {
+            1: 15.00, 2: 10.00, 3: 5.00, 4: 5.00, 5: 5.00,
+            6: 5.00, 7: 5.00, 8: 5.00, 9: 5.00, 10: 5.00
+        };
+        
+        // ✅ STEP 3: Member ডেটা
+        const { data: member, error: memberError } = await client
+            .from('members')
+            .select('member_id, full_name, refer_code, referred_by')
+            .eq('member_id', memberId)
+            .single();
+        
+        if (memberError || !member) {
+            console.error('❌ Member not found:', memberError);
+            return { success: false, error: 'Member not found', bonuses: [] };
+        }
+        
+        console.log(`👤 Member: ${member.full_name}`);
+        console.log(`   referred_by: ${member.referred_by}`);
+        
+        // ✅ STEP 4: Referral Chain
+        console.log('');
+        console.log('🔗 Building Referral Chain...');
+        
+        const referralChain = [];
+        let currentReferCode = member.referred_by;
+        let currentLevel = 1;
+        const visitedCodes = new Set([member.refer_code, member.member_id]);
+        
+        while (currentReferCode && currentLevel <= 10) {
+            console.log(`   Level ${currentLevel}: searching refer_code = ${currentReferCode}`);
+            
+            const { data: referrer, error: refError } = await client
+                .from('members')
+                .select('member_id, full_name, refer_code, referred_by, status, referral_bonus, referral_count')
+                .eq('refer_code', currentReferCode)
+                .maybeSingle();
+            
+            if (refError || !referrer) {
+                console.log(`      ❌ Not found — chain ends`);
+                break;
+            }
+            
+            // ✅ Loop check
+            if (visitedCodes.has(referrer.member_id) || visitedCodes.has(referrer.refer_code)) {
+                console.log(`      🚨 Loop detected — chain ends`);
+                break;
+            }
+            
+            // ✅ Approved check
+            if (referrer.status !== 'active' && referrer.status !== 'approved') {
+                console.log(`      ⚠️ ${referrer.full_name} not approved — skip`);
+                visitedCodes.add(referrer.member_id);
+                currentReferCode = referrer.referred_by;
+                currentLevel++;
+                continue;
+            }
+            
+            const rate = commissionRates[currentLevel] || 5.00;
+            
+            referralChain.push({
+                level: currentLevel,
+                referrer: referrer,
+                rate: rate
+            });
+            
+            console.log(`      ✅ Found: ${referrer.full_name} (L${currentLevel}, ${rate}%)`);
+            
+            visitedCodes.add(referrer.member_id);
+            currentReferCode = referrer.referred_by;
+            currentLevel++;
+        }
+        
+        console.log('');
+        console.log(`📊 Chain: ${referralChain.length} levels`);
+        
+        // ✅ STEP 5: No Referrers
+        if (referralChain.length === 0) {
+            return {
+                success: true,
+                isFirstPayment: true,
+                totalBonusPaid: 0,
+                bonuses: [],
+                message: 'No referrers'
+            };
+        }
+        
+        // ✅ STEP 6: Duplicate Check
+        const { data: existingBonuses } = await client
+            .from('referral_bonus_log')
+            .select('id')
+            .eq('from_member_id', memberId);
+        
+        if (existingBonuses && existingBonuses.length > 0) {
+            console.log('❌ Bonuses already given');
+            return {
+                success: true,
+                isFirstPayment: true,
+                totalBonusPaid: 0,
+                bonuses: [],
+                message: 'Bonuses already given',
+                existing: true
+            };
+        }
+        
+        // ✅ STEP 7: Month Key
+        const now = new Date();
+        const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        
+        // ✅ STEP 8: Process Each Level
+        const results = [];
+        let totalBonusPaid = 0;
+        
+        for (const item of referralChain) {
+            const { level, referrer, rate } = item;
+            
+            console.log(`━━━ Level ${level} — ${referrer.full_name} ━━━`);
+            
+            const bonusAmount = Math.round(paymentAmount * (rate / 100) * 100) / 100;
+            
+            if (bonusAmount <= 0) continue;
+            
+            // ✅ Log Entry
+            const logData = {
+                member_id: referrer.member_id,
+                from_member_id: memberId,
+                level: level,
+                amount: bonusAmount,
+                commission_rate: rate,
+                payment_id: paymentId,
+                month_key: currentMonthKey,
+                savings_amount: paymentAmount,
+                note: `${member.full_name} এর প্রথম Payment ৳${paymentAmount} থেকে Level ${level} (${rate}%)`,
+                created_at: new Date().toISOString()
+            };
+            
+            const { error: logError } = await client
+                .from('referral_bonus_log')
+                .insert([logData]);
+            
+            if (logError) {
+                if (logError.code === '23505') {
+                    console.log(`   ⚠️ Duplicate — skip`);
+                    continue;
+                }
+                console.error(`   ❌ Log error:`, logError);
+                results.push({
+                    level, referrer: referrer.full_name,
+                    amount: bonusAmount, success: false,
+                    error: logError.message
+                });
+                continue;
+            }
+            
+            // ✅ Update Referrer Balance
+            const currentBonus = Number(referrer.referral_bonus) || 0;
+            const newBonus = currentBonus + bonusAmount;
+            const newCount = (Number(referrer.referral_count) || 0) + 1;
+            
+            const { error: updateError } = await client
+                .from('members')
+                .update({
+                    referral_bonus: newBonus,
+                    referral_count: newCount,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('member_id', referrer.member_id);
+            
+            if (updateError) {
+                console.error(`   ❌ Update error:`, updateError);
+                results.push({
+                    level, referrer: referrer.full_name,
+                    amount: bonusAmount, success: false,
+                    error: updateError.message
+                });
+                continue;
+            }
+            
+            console.log(`   ✅ Success — New Balance: ৳${newBonus}`);
+            
+            results.push({
+                level,
+                referrer: referrer.full_name,
+                referrerId: referrer.member_id,
+                rate: rate,
+                amount: bonusAmount,
+                oldBalance: currentBonus,
+                newBalance: newBonus,
+                success: true
+            });
+            
+            totalBonusPaid += bonusAmount;
+            
+            // ✅ Rate limit protection
+            await new Promise(resolve => setTimeout(resolve, 150));
+        }
+        
+        console.log('');
+        console.log('🎉 All Level Bonuses Processed!');
+        console.log(`   Total: ৳${totalBonusPaid}`);
+        
+        return {
+            success: true,
+            isFirstPayment: true,
+            totalLevels: referralChain.length,
+            totalBonusPaid: totalBonusPaid,
+            bonuses: results
+        };
+        
+    } catch (e) {
+        console.error('❌ processAllLevelBonuses error:', e);
+        return { success: false, error: e.message, bonuses: [] };
+    }
+}
+
+    // ============================================================
+// 🔄 retryMissingReferralBonuses() — পুরনো Approved Payment Fix
+// ✅ যেসব payment আগে approve হয়েছে কিন্তু bonus দেওয়া হয়নি
+// ✅ 2020-01-01 থেকে সব approved payment চেক করবে
+// ⚠️ FIXED: result.totalBonusPaid ব্যবহার (result.bonusPaid নয়)
+// ============================================================
+async function retryMissingReferralBonuses(cutoffDate = null) {
+    const client = initSupabaseClient();
+    if (!client) {
+        console.error('❌ Supabase client নেই');
+        return { error: 'DB connection failed' };
+    }
+    
+    try {
+        const cutoff = cutoffDate ? new Date(cutoffDate) : new Date('2020-01-01');
+        cutoff.setHours(0, 0, 0, 0);
+        
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('🔄 Retry Missing Referral Bonuses');
+        console.log(`📅 Cutoff Date: ${cutoff.toLocaleDateString('bn-BD')}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        // ✅ STEP 1: সব approved payment লোড
+        const { data: approvedPayments, error } = await client
+            .from('payments')
+            .select('*')
+            .eq('status', 'approved')
+            .gte('approved_at', cutoff.toISOString())
+            .order('approved_at', { ascending: true });
+        
+        if (error) throw error;
+        
+        if (!approvedPayments || approvedPayments.length === 0) {
+            console.log('ℹ️ কোনো Approved Payment নেই');
+            return { checked: 0, processed: 0, skipped: 0, noBonus: 0, errors: 0 };
+        }
+        
+        console.log(`📋 Total Approved Payments: ${approvedPayments.length}`);
+        console.log('');
+        
+        let processed = 0;    // নতুন bonus দেওয়া হয়েছে
+        let skipped = 0;      // আগে থেকেই bonus দেওয়া আছে
+        let noBonus = 0;      // referrer নেই বা first payment নয়
+        let errors = 0;       // error হয়েছে
+        
+        for (let i = 0; i < approvedPayments.length; i++) {
+            const payment = approvedPayments[i];
+            const progress = `[${i + 1}/${approvedPayments.length}]`;
+            
+            // ✅ Skip if already has bonus log
+            const { data: existing } = await client
+                .from('referral_bonus_log')
+                .select('id')
+                .eq('from_member_id', payment.member_id)
+                .limit(1);
+            
+            if (existing && existing.length > 0) {
+                skipped++;
+                if (skipped % 10 === 0) {
+                    console.log(`${progress} ⏭️ Skipped (already has bonus): ${skipped} total`);
+                }
+                continue;
+            }
+            
+            // ✅ Member এর referred_by আছে কিনা?
+            const { data: member } = await client
+                .from('members')
+                .select('member_id, full_name, referred_by, refer_code')
+                .eq('member_id', payment.member_id)
+                .maybeSingle();
+            
+            if (!member?.referred_by) {
+                noBonus++;
+                continue;
+            }
+            
+            console.log(`${progress} 🎁 Processing: ${payment.member_id} (৳${payment.amount})`);
+            
+            // ✅ processAllLevelBonuses() কল
+            const result = await processAllLevelBonuses(payment);
+            
+            // ✅ FIXED: totalBonusPaid ব্যবহার
+            if (result.success && result.totalBonusPaid > 0) {
+                processed++;
+                console.log(`${progress} ✅ Bonus Paid: ৳${result.totalBonusPaid}`);
+            } else if (result.error) {
+                errors++;
+                console.log(`${progress} ❌ Error: ${result.error}`);
+            } else {
+                noBonus++;
+                console.log(`${progress} ℹ️ No Bonus: ${result.message || 'not eligible'}`);
+            }
+            
+            // ✅ Rate limit protection (200ms delay)
+            await new Promise(r => setTimeout(r, 200));
+        }
+        
+        // ✅ Final Report
+        console.log('');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📊 RETRY COMPLETE REPORT');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`📋 Total Checked:    ${approvedPayments.length}`);
+        console.log(`✅ New Bonus Given:  ${processed}`);
+        console.log(`⏭️  Already Given:   ${skipped}`);
+        console.log(`ℹ️  No Bonus (n/a):   ${noBonus}`);
+        console.log(`❌ Errors:           ${errors}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        const report = {
+            checked: approvedPayments.length,
+            processed,
+            skipped,
+            noBonus,
+            errors,
+            success: errors === 0
+        };
+        
+        return report;
+        
+    } catch(e) {
+        console.error('❌ retryMissingReferralBonuses error:', e);
+        return { error: e.message };
+    }
+}
 
 
         // ============================================================
@@ -9263,37 +9816,6 @@ async function approveAllProfitWithdrawal(id, amount, memberId, noteText) {
     }
 }
 
-    async function rejectWithdrawal(id) {
-        const reason = prompt('বাতিলের কারণ লিখুন:');
-        if (!reason) return;
-        
-        const client = initSupabaseClient();
-        if (!client) {
-            showToast('সংযোগ সমস্যা!', 'error');
-            return;
-        }
-        
-        try {
-            await client
-                .from('withdrawals')
-                .update({
-                    status: 'rejected',
-                    rejection_reason: reason,
-                    rejected_by: currentAdmin?.username || 'সুপার অ্যাডমিন',
-                    rejected_at: getBangladeshTime()
-                })
-                .eq('id', id);
-            
-            pendingWithdrawalsData = pendingWithdrawalsData.filter(w => w.id != id);
-            loadPendingWithdrawals();
-            await updateAllBadges();
-            showToast('❌ উত্তোলন বাতিল করা হয়েছে!', 'warning');
-        } catch(e) {
-            console.error('Reject error:', e);
-            showToast('❌ বাতিল করতে সমস্যা!', 'error');
-        }
-    }
-
 // ============================================================
 // ===== LOAD ALL DATA =====
 // ============================================================
@@ -11419,7 +11941,10 @@ function renderPendingPaymentsList() {
 }
 
 // ============================================================
-// ✅ PART 4: approvePayment() — main_ledger এর সাথে sync
+// ✅ PART 4: approvePayment() — Complete Workflow with Referral Bonus
+// ✅ main_ledger এ entry → Trigger balance update করে
+// ✅ Referral bonus বিতরণ (শুধু প্রথম payment-এ)
+// ✅ Loop detection + Duplicate protection
 // ============================================================
 async function approvePayment(paymentId) {
     const id = parseInt(paymentId);
@@ -11462,7 +11987,7 @@ async function approvePayment(paymentId) {
         if (payment.member_id && payment.member_id.trim() !== '') {
             const { data: byId } = await client
                 .from('members')
-                .select('member_id, full_name, mobile, status')
+                .select('member_id, full_name, mobile, status, referral_bonus, referral_count')
                 .eq('member_id', payment.member_id.trim())
                 .maybeSingle();
             if (byId) {
@@ -11474,7 +11999,7 @@ async function approvePayment(paymentId) {
         if (!member && payment.mobile && payment.mobile.trim() !== '') {
             const { data: byMobile } = await client
                 .from('members')
-                .select('member_id, full_name, mobile, status')
+                .select('member_id, full_name, mobile, status, referral_bonus, referral_count')
                 .eq('mobile', payment.mobile.trim())
                 .maybeSingle();
             if (byMobile) {
@@ -11496,7 +12021,7 @@ async function approvePayment(paymentId) {
         console.log(`✅ সদস্য: ${member.full_name} (${matchMethod})`);
         
         // ============================================================
-        // ✅ STEP 2: main_ledger এ entry তৈরি (Trigger বাকি সব করবে!)
+        // ✅ STEP 2: main_ledger এ entry তৈরি (Trigger balance বাড়াবে)
         // ============================================================
         await recordTransaction({
             member_id: member.member_id,
@@ -11535,7 +12060,45 @@ async function approvePayment(paymentId) {
         console.log('✅ STEP 3: Payment status আপডেট');
         
         // ============================================================
-        // ✅ STEP 4: UI রিফ্রেশ
+        // ✅ STEP 4: Referral Bonus Distribution (NEW!)
+        // ✅ প্রথম Approved Payment হলে সব Level-এ Bonus বিতরণ
+        // ============================================================
+        let bonusResult = null;
+        try {
+            console.log('🎁 Referral bonus চেক করা হচ্ছে...');
+            
+            bonusResult = await processAllLevelBonuses({
+                id: payment.id,
+                member_id: member.member_id,
+                member_name: member.full_name,
+                mobile: member.mobile,
+                amount: payment.amount,
+                month: payment.month,
+                year: payment.year,
+                payment_method: payment.payment_method,
+                transaction_id: payment.transaction_id
+            });
+            
+            if (bonusResult.isFirstPayment && bonusResult.totalBonusPaid > 0) {
+                console.log(`🎁 Referral Bonus বিতরণ: ৳${bonusResult.totalBonusPaid}`);
+                bonusResult.bonuses?.forEach(b => {
+                    if (b.success) {
+                        console.log(`   ✅ L${b.level} → ${b.referrer}: ৳${b.amount}`);
+                    }
+                });
+            } else if (bonusResult.message) {
+                console.log(`ℹ️ Bonus note: ${bonusResult.message}`);
+            }
+        } catch(bonusError) {
+            console.warn('⚠️ Referral bonus warning (payment approve হয়েছে):', bonusError);
+            // ✅ Bonus fail হলেও payment approve থাকবে
+        }
+        // ============================================================
+        // 🆕 End Referral Bonus
+        // ============================================================
+        
+        // ============================================================
+        // ✅ STEP 5: UI রিফ্রেশ
         // ============================================================
         pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
         
@@ -11545,7 +12108,7 @@ async function approvePayment(paymentId) {
         await loadMembers();
         
         // ============================================================
-        // ✅ STEP 5: Broadcast
+        // ✅ STEP 6: Broadcast (Cross-tab sync)
         // ============================================================
         try {
             const bc = new BroadcastChannel('tuknbd_updates');
@@ -11560,13 +12123,16 @@ async function approvePayment(paymentId) {
         } catch(e) {}
         
         // ============================================================
-        // ✅ STEP 6: সফল মেসেজ
+        // ✅ STEP 7: সফল মেসেজ (Bonus info সহ)
         // ============================================================
-        showToast(
-            `✅ ${member.full_name} এর ৳${formatAmount(payment.amount)} পেমেন্ট অনুমোদিত!\n` +
-            `📒 Ledger-এ রেকর্ড হয়েছে`,
-            'success'
-        );
+        let successMsg = `✅ ${member.full_name} এর ৳${formatAmount(payment.amount)} পেমেন্ট অনুমোদিত!\n` +
+                         `📒 Ledger-এ রেকর্ড হয়েছে`;
+        
+        if (bonusResult?.isFirstPayment && bonusResult.totalBonusPaid > 0) {
+            successMsg += `\n🎁 রেফারেল বোনাস: ৳${bonusResult.totalBonusPaid}`;
+        }
+        
+        showToast(successMsg, 'success');
         
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('✅ পেমেন্ট অনুমোদন সম্পূর্ণ!');
@@ -33464,74 +34030,92 @@ function startAdminMessagesPolling() {
             }
         }
     }
+                    
+                    // ✅ Global functions for buttons
+                    window._stayLoggedIn = function() {
+                        console.log('✅ User clicked "I am here"');
+                        removeInactivityWarning();
+                        resetInactivityTimer();
+                        if (typeof showToast === 'function') {
+                            showToast('✅ সেশন চালু আছে', 'success');
+                        }
+                    };
+                    
+                    window._logoutNow = function() {
+                        console.log('🚪 User clicked logout');
+                        removeInactivityWarning();
+                        if (typeof adminLogout === 'function') {
+                            adminLogout();
+                        } else {
+                            performAutoLogout();
+                        }
+                    };
+                    
+                    // ✅ Start tracking
+                    function startTracking() {
+                        // ✅ Only if logged in
+                        if (!localStorage.getItem('currentAdmin')) {
+                            console.log('⚠️ No admin session — tracking disabled');
+                            return;
+                        }
+                        
+                        console.log('⏰ Inactivity tracking started (30 min limit)');
+                        
+                        // Activity events
+                        const events = [
+                            'mousedown', 'mousemove', 'keydown', 'scroll', 
+                            'touchstart', 'touchmove', 'click', 'wheel'
+                        ];
+                        
+                        events.forEach(event => {
+                            document.addEventListener(event, handleActivity, { passive: true });
+                        });
+                        
+                        // ✅ Cross-tab activity sync
+                        window.addEventListener('storage', (e) => {
+                            if (e.key === 'lastActivity' && e.newValue) {
+                                const otherTabActivity = parseInt(e.newValue);
+                                if (Math.abs(otherTabActivity - lastActivity) > 5000) {
+                                    // Another tab was active — reset our timer too
+                                    lastActivity = otherTabActivity;
+                                    resetInactivityTimer();
+                                }
+                            }
+                        });
+                        
+                        // ✅ Initial timer
+                        resetInactivityTimer();
+                    }
+                    
+                    // ✅ Start when DOM ready
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', () => {
+                            setTimeout(startTracking, 1500);
+                        });
+                    } else {
+                        setTimeout(startTracking, 1500);
+                    }
+                    
+                    console.log('✅ Auto Logout System loaded (30 min inactivity)');
+                })();
     
-    // ✅ Global functions for buttons
-    window._stayLoggedIn = function() {
-        console.log('✅ User clicked "I am here"');
-        removeInactivityWarning();
-        resetInactivityTimer();
-        if (typeof showToast === 'function') {
-            showToast('✅ সেশন চালু আছে', 'success');
-        }
-    };
-    
-    window._logoutNow = function() {
-        console.log('🚪 User clicked logout');
-        removeInactivityWarning();
-        if (typeof adminLogout === 'function') {
-            adminLogout();
-        } else {
-            performAutoLogout();
-        }
-    };
-    
-    // ✅ Start tracking
-    function startTracking() {
-        // ✅ Only if logged in
-        if (!localStorage.getItem('currentAdmin')) {
-            console.log('⚠️ No admin session — tracking disabled');
-            return;
-        }
-        
-        console.log('⏰ Inactivity tracking started (30 min limit)');
-        
-        // Activity events
-        const events = [
-            'mousedown', 'mousemove', 'keydown', 'scroll', 
-            'touchstart', 'touchmove', 'click', 'wheel'
-        ];
-        
-        events.forEach(event => {
-            document.addEventListener(event, handleActivity, { passive: true });
-        });
-        
-        // ✅ Cross-tab activity sync
-        window.addEventListener('storage', (e) => {
-            if (e.key === 'lastActivity' && e.newValue) {
-                const otherTabActivity = parseInt(e.newValue);
-                if (Math.abs(otherTabActivity - lastActivity) > 5000) {
-                    // Another tab was active — reset our timer too
-                    lastActivity = otherTabActivity;
-                    resetInactivityTimer();
-                }
-            }
-        });
-        
-        // ✅ Initial timer
-        resetInactivityTimer();
-    }
-    
-    // ✅ Start when DOM ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            setTimeout(startTracking, 1500);
-        });
-    } else {
-        setTimeout(startTracking, 1500);
-    }
-    
-    console.log('✅ Auto Logout System loaded (30 min inactivity)');
-})();
+                // ═══════════════════════════════════════════════════════════
+                // 🌐 Global Expose
+                // ═══════════════════════════════════════════════════════════             
+                console.log('✅ Admin functions exposed');
+                // ============================================================
+                // 🌐 REFERRAL BONUS SYSTEM — Global Expose
+                // ============================================================
+                window.findMemberByAnyField = findMemberByAnyField;
+                window.checkIfFirstPayment = checkIfFirstPayment;
+                window.processAllLevelBonuses = processAllLevelBonuses;
+                window.retryMissingReferralBonuses = retryMissingReferralBonuses;
+                console.log('✅ Referral Bonus System functions exposed:');
+                console.log('   • findMemberByAnyField');
+                console.log('   • checkIfFirstPayment');
+                console.log('   • processAllLevelBonuses');
+                console.log('   • retryMissingReferralBonuses');
+                console.log('   • approvePayment (updated)');
         
         </script>
     </body>
