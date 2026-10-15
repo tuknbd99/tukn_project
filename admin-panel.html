@@ -15084,117 +15084,329 @@ if (loan.status === 'pending') {
         }
     }
 
-    // ============================================================
-    // ===== LOAN COLLECTION REPORT =====
-    // ============================================================
-    async function loadLoanCollectionReport() {
-        const fromDate = document.getElementById('collectionFromDate').value;
-        const toDate = document.getElementById('collectionToDate').value;
-        const container = document.getElementById('collectionTableContainer');
-        if (!container) return;
-        container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লোন আদায় ডেটা লোড হচ্ছে...</p></div>';
-        const client = initSupabaseClient();
-        if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
-        try {
-            let loanQuery = client.from('loan_applications').select('*').eq('status', 'approved');
-            if (fromDate) loanQuery = loanQuery.gte('approved_at', fromDate);
-            if (toDate) loanQuery = loanQuery.lte('approved_at', toDate + 'T23:59:59');
-            const { data: approvedLoans } = await loanQuery;
-            let paymentQuery = client.from('loan_payments').select('*, loan_applications!inner(member_id, member_name, amount, loan_type)').eq('status', 'approved');
-            if (fromDate) paymentQuery = paymentQuery.gte('payment_date', fromDate);
-            if (toDate) paymentQuery = paymentQuery.lte('payment_date', toDate + 'T23:59:59');
-            const { data: payments } = await paymentQuery;
-            const loanList = approvedLoans || [];
-            const paymentList = payments || [];
-            const totalGiven = loanList.reduce((sum, l) => sum + (l.amount || 0), 0);
-            const totalCollected = paymentList.reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0);
-            const memberCollection = {};
-            const memberLoanInfo = {};
-            loanList.forEach(loan => {
-                const memberId = loan.member_id;
-                if (!memberLoanInfo[memberId]) {
-                    memberLoanInfo[memberId] = { member_name: loan.member_name || 'অজানা', total_loan: 0, loan_type: loan.loan_type || 'সাধারণ', loan_count: 0 };
-                }
-                memberLoanInfo[memberId].total_loan += (loan.amount || 0);
-                memberLoanInfo[memberId].loan_count += 1;
-            });
-            paymentList.forEach(payment => {
-                const loan = payment.loan_applications || {};
-                const memberId = loan.member_id || payment.loan_id;
-                if (!memberCollection[memberId]) {
-                    memberCollection[memberId] = { member_name: loan.member_name || 'অজানা', total_paid: 0, payment_count: 0, last_payment: null };
-                }
-                memberCollection[memberId].total_paid += (payment.total_amount || payment.emi_amount || 0);
-                memberCollection[memberId].payment_count += 1;
-                if (!memberCollection[memberId].last_payment || new Date(payment.payment_date) > new Date(memberCollection[memberId].last_payment)) {
-                    memberCollection[memberId].last_payment = payment.payment_date;
-                }
-            });
-            let totalRemaining = 0;
-            const memberSummary = [];
-            Object.keys(memberLoanInfo).forEach(memberId => {
-                const loanInfo = memberLoanInfo[memberId];
-                const collection = memberCollection[memberId] || { total_paid: 0, payment_count: 0, last_payment: null };
-                const remaining = loanInfo.total_loan - collection.total_paid;
-                totalRemaining += remaining;
-                memberSummary.push({
-                    member_id: memberId,
-                    member_name: loanInfo.member_name,
-                    loan_type: loanInfo.loan_type,
-                    total_loan: loanInfo.total_loan,
-                    total_paid: collection.total_paid,
-                    remaining: remaining,
-                    payment_count: collection.payment_count,
-                    last_payment: collection.last_payment,
-                    loan_count: loanInfo.loan_count
-                });
-            });
-            document.getElementById('totalCollected').innerHTML = formatAmountWithText(totalCollected);
-            document.getElementById('totalPendingCollection').innerHTML = formatAmountWithText(Math.max(0, totalRemaining));
-            document.getElementById('totalLoanGiven').innerHTML = formatAmountWithText(totalGiven);
-            document.getElementById('totalMembersWithLoan').innerHTML = Object.keys(memberLoanInfo).length + ' জন';
-            if (memberSummary.length === 0) {
-                container.innerHTML = `<div class="text-center text-gray-500 py-12"><i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i><p>কোনো লোন ডেটা পাওয়া যায়নি</p></div>`;
-                return;
+   // ============================================================
+// ✅ FIXED: LOAN COLLECTION REPORT — সব ০ সমস্যা সমাধান
+// ✅ JOIN ছাড়া — বেশি reliable
+// ✅ Date filter optional
+// ✅ Console log সহ — debug সহজ
+// ============================================================
+async function loadLoanCollectionReport() {
+    const fromDate = document.getElementById('collectionFromDate')?.value || '';
+    const toDate = document.getElementById('collectionToDate')?.value || '';
+    const container = document.getElementById('collectionTableContainer');
+    
+    if (!container) {
+        console.error('❌ collectionTableContainer পাওয়া যায়নি');
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-2">📊 লোন আদায় ডেটা লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📊 লোন আদায় রিপোর্ট লোড শুরু');
+        console.log('📅 From:', fromDate || 'সব');
+        console.log('📅 To:', toDate || 'সব');
+        
+        // ============================================================
+        // ✅ STEP 1: অনুমোদিত লোন লোড
+        // ============================================================
+        let loanQuery = client
+            .from('loan_applications')
+            .select('*')
+            .eq('status', 'approved');
+        
+        if (fromDate) loanQuery = loanQuery.gte('approved_at', fromDate);
+        if (toDate) loanQuery = loanQuery.lte('approved_at', toDate + 'T23:59:59');
+        
+        const { data: approvedLoans, error: loanError } = await loanQuery;
+        
+        if (loanError) {
+            console.error('❌ লোন লোড error:', loanError);
+        }
+        
+        console.log(`✅ অনুমোদিত লোন: ${approvedLoans?.length || 0} টি`);
+        
+        // ============================================================
+        // ✅ STEP 2: অনুমোদিত পেমেন্ট লোড (JOIN ছাড়া — আলাদা query)
+        // ============================================================
+        let paymentQuery = client
+            .from('loan_payments')
+            .select('*')
+            .eq('status', 'approved');
+        
+        if (fromDate) paymentQuery = paymentQuery.gte('payment_date', fromDate);
+        if (toDate) paymentQuery = paymentQuery.lte('payment_date', toDate + 'T23:59:59');
+        
+        const { data: payments, error: paymentError } = await paymentQuery;
+        
+        if (paymentError) {
+            console.error('❌ পেমেন্ট লোড error:', paymentError);
+        }
+        
+        console.log(`✅ অনুমোদিত পেমেন্ট: ${payments?.length || 0} টি`);
+        
+        const loanList = approvedLoans || [];
+        const paymentList = payments || [];
+        
+        // ============================================================
+        // ✅ STEP 3: Loan ID → Loan Map (JOIN-এর বিকল্প)
+        // ============================================================
+        const loanMap = {};
+        loanList.forEach(loan => {
+            loanMap[String(loan.id)] = loan;
+        });
+        
+        // ============================================================
+        // ✅ STEP 4: Member-wise হিসাব
+        // ============================================================
+        const memberLoanInfo = {};
+        const memberCollection = {};
+        
+        // ৪.১ লোন থেকে member তথ্য
+        loanList.forEach(loan => {
+            const memberId = loan.member_id || 'unknown';
+            
+            if (!memberLoanInfo[memberId]) {
+                memberLoanInfo[memberId] = {
+                    member_name: loan.member_name || 'অজানা',
+                    total_loan: 0,
+                    loan_type: loan.loan_type || 'সাধারণ',
+                    loan_count: 0
+                };
             }
-            memberSummary.sort((a, b) => b.remaining - a.remaining);
-            let html = `<table class="data-table"><thead><tr><th>সদস্য</th><th>আইডি</th><th>লোনের ধরন</th><th class="text-left">মোট লোন</th><th class="text-left">পরিশোধিত</th><th class="text-left">বাকি</th><th>কিস্তি</th><th>শেষ পেমেন্ট</th></tr></thead><tbody>`;
-            memberSummary.forEach(m => {
-                const remainingClass = m.remaining > 0 ? 'text-red-600 font-bold' : 'text-green-600';
-                html += `<tr>
+            
+            memberLoanInfo[memberId].total_loan += Number(loan.amount) || 0;
+            memberLoanInfo[memberId].loan_count += 1;
+        });
+        
+        // ৪.২ Payment থেকে collection তথ্য
+        paymentList.forEach(payment => {
+            const loanId = String(payment.loan_id || '');
+            const loan = loanMap[loanId] || {};
+            const memberId = loan.member_id || payment.member_id || 'unknown';
+            const memberName = loan.member_name || payment.member_name || 'অজানা';
+            
+            if (!memberCollection[memberId]) {
+                memberCollection[memberId] = {
+                    member_name: memberName,
+                    total_paid: 0,
+                    payment_count: 0,
+                    last_payment: null
+                };
+            }
+            
+            const amt = Number(payment.total_amount || payment.emi_amount || 0);
+            memberCollection[memberId].total_paid += amt;
+            memberCollection[memberId].payment_count += 1;
+            
+            const payDate = payment.payment_date || payment.created_at;
+            if (payDate) {
+                if (!memberCollection[memberId].last_payment || 
+                    new Date(payDate) > new Date(memberCollection[memberId].last_payment)) {
+                    memberCollection[memberId].last_payment = payDate;
+                }
+            }
+        });
+        
+        // ============================================================
+        // ✅ STEP 5: Member Summary তৈরি
+        // ============================================================
+        let totalRemaining = 0;
+        const memberSummary = [];
+        
+        Object.keys(memberLoanInfo).forEach(memberId => {
+            const loanInfo = memberLoanInfo[memberId];
+            const collection = memberCollection[memberId] || {
+                total_paid: 0,
+                payment_count: 0,
+                last_payment: null
+            };
+            
+            const remaining = Math.max(0, loanInfo.total_loan - collection.total_paid);
+            totalRemaining += remaining;
+            
+            memberSummary.push({
+                member_id: memberId,
+                member_name: loanInfo.member_name,
+                loan_type: loanInfo.loan_type,
+                total_loan: loanInfo.total_loan,
+                total_paid: collection.total_paid,
+                remaining: remaining,
+                payment_count: collection.payment_count,
+                last_payment: collection.last_payment,
+                loan_count: loanInfo.loan_count
+            });
+        });
+        
+        // ============================================================
+        // ✅ STEP 6: সারসংক্ষেপ আপডেট (safe)
+        // ============================================================
+        const totalGiven = loanList.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+        const totalCollected = paymentList.reduce((s, p) => 
+            s + Number(p.total_amount || p.emi_amount || 0), 0
+        );
+        
+        const setHtml = (id, html) => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = html;
+        };
+        
+        setHtml('totalCollected', formatAmountWithText(totalCollected));
+        setHtml('totalPendingCollection', formatAmountWithText(Math.max(0, totalRemaining)));
+        setHtml('totalLoanGiven', formatAmountWithText(totalGiven));
+        setHtml('totalMembersWithLoan', Object.keys(memberLoanInfo).length + ' জন');
+        
+        console.log('💰 মোট লোন:', formatAmount(totalGiven));
+        console.log('📥 মোট আদায়:', formatAmount(totalCollected));
+        console.log('⏳ মোট বাকি:', formatAmount(Math.max(0, totalRemaining)));
+        console.log('👥 মোট সদস্য:', Object.keys(memberLoanInfo).length);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        // ============================================================
+        // ✅ STEP 7: ডেটা না থাকলে message
+        // ============================================================
+        if (memberSummary.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fas fa-inbox text-5xl block mb-3 text-gray-300"></i>
+                    <p class="text-lg">কোনো লোন ডেটা পাওয়া যায়নি</p>
+                    <p class="text-sm text-gray-400 mt-2">
+                        ${fromDate || toDate 
+                            ? 'তারিখ ফিল্টার পরিবর্তন করে চেষ্টা করুন' 
+                            : 'এখনো কোনো লোন অনুমোদন করা হয়নি'}
+                    </p>
+                    ${fromDate || toDate ? `
+                        <button onclick="resetCollectionFilters()" class="btn btn-warning btn-sm mt-4">
+                            <i class="fas fa-undo mr-1"></i> ফিল্টার রিসেট
+                        </button>
+                    ` : ''}
+                </div>
+            `;
+            return;
+        }
+        
+        // ============================================================
+        // ✅ STEP 8: টেবিল তৈরি
+        // ============================================================
+        memberSummary.sort((a, b) => b.remaining - a.remaining);
+        
+        let html = `
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>সদস্য</th>
+                            <th>আইডি</th>
+                            <th>লোনের ধরন</th>
+                            <th class="text-left">মোট লোন</th>
+                            <th class="text-left">পরিশোধিত</th>
+                            <th class="text-left">বাকি</th>
+                            <th class="text-center">কিস্তি</th>
+                            <th>শেষ পেমেন্ট</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        memberSummary.forEach(m => {
+            const remainingClass = m.remaining > 0 
+                ? 'text-red-600 font-bold' 
+                : 'text-green-600 font-semibold';
+            
+            html += `
+                <tr>
                     <td><span class="font-medium">${m.member_name}</span></td>
                     <td class="text-xs text-gray-500">${m.member_id}</td>
-                    <td><span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">${m.loan_type}</span></td>
-                    <td class="text-left font-bold text-blue-600">${formatAmountWithText(m.total_loan)}</td>
-                    <td class="text-left text-emerald-600">${formatAmountWithText(m.total_paid)}</td>
-                    <td class="text-left ${remainingClass}">${formatAmountWithText(Math.max(0, m.remaining))}</td>
+                    <td>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                            ${m.loan_type}
+                        </span>
+                    </td>
+                    <td class="text-left font-bold text-blue-600">
+                        ${formatAmountWithText(m.total_loan)}
+                    </td>
+                    <td class="text-left text-emerald-600">
+                        ${formatAmountWithText(m.total_paid)}
+                    </td>
+                    <td class="text-left ${remainingClass}">
+                        ${formatAmountWithText(m.remaining)}
+                    </td>
                     <td class="text-center">${m.payment_count} / ${m.loan_count}</td>
-                    <td class="text-xs text-gray-400">${m.last_payment ? formatDateBD(m.last_payment) : '-'}</td>
-                </tr>`;
-            });
-            const totalRemainingSum = memberSummary.reduce((s, m) => s + m.remaining, 0);
-            const totalPaidSum = memberSummary.reduce((s, m) => s + m.total_paid, 0);
-            const totalLoanSum = memberSummary.reduce((s, m) => s + m.total_loan, 0);
-            html += `<tr style="font-weight:700; background:#f3f4f6; border-top:2px solid #059669;">
-                <td colspan="3" class="text-left">📊 মোট</td>
-                <td class="text-left text-blue-700">${formatAmountWithText(totalLoanSum)}</td>
-                <td class="text-left text-emerald-700">${formatAmountWithText(totalPaidSum)}</td>
-                <td class="text-left text-red-700">${formatAmountWithText(totalRemainingSum)}</td>
-                <td colspan="2"></td>
-            </tr>`;
-            html += '</tbody></table>';
-            container.innerHTML = html;
-        } catch(e) {
-            console.error('Collection report error:', e);
-            container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ রিপোর্ট লোড করতে সমস্যা!</div>';
-        }
+                    <td class="text-xs text-gray-400">
+                        ${m.last_payment ? formatDateBD(m.last_payment) : '-'}
+                    </td>
+                </tr>
+            `;
+        });
+        
+        // ✅ Total Row
+        const totalRemainingSum = memberSummary.reduce((s, m) => s + m.remaining, 0);
+        const totalPaidSum = memberSummary.reduce((s, m) => s + m.total_paid, 0);
+        const totalLoanSum = memberSummary.reduce((s, m) => s + m.total_loan, 0);
+        
+        html += `
+                    <tr style="font-weight:700; background:#f3f4f6; border-top:2px solid #059669;">
+                        <td colspan="3" class="text-left">📊 মোট (${memberSummary.length} জন)</td>
+                        <td class="text-left text-blue-700">${formatAmountWithText(totalLoanSum)}</td>
+                        <td class="text-left text-emerald-700">${formatAmountWithText(totalPaidSum)}</td>
+                        <td class="text-left text-red-700">${formatAmountWithText(totalRemainingSum)}</td>
+                        <td colspan="2"></td>
+                    </tr>
+                </tbody>
+                </table>
+            </div>
+            
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div class="bg-emerald-50 p-3 rounded-lg border border-emerald-200">
+                    <p class="text-xs text-gray-600">📊 আদায়ের হার</p>
+                    <p class="text-lg font-bold text-emerald-700">
+                        ${totalLoanSum > 0 ? ((totalPaidSum / totalLoanSum) * 100).toFixed(1) : '0.0'}%
+                    </p>
+                </div>
+                <div class="bg-blue-50 p-3 rounded-lg border border-blue-200">
+                    <p class="text-xs text-gray-600">📈 গড় আদায় (প্রতি সদস্য)</p>
+                    <p class="text-lg font-bold text-blue-700">
+                        ${formatAmountWithText(memberSummary.length > 0 ? totalPaidSum / memberSummary.length : 0)}
+                    </p>
+                </div>
+                <div class="bg-red-50 p-3 rounded-lg border border-red-200">
+                    <p class="text-xs text-gray-600">⚠️ গড় বাকি (প্রতি সদস্য)</p>
+                    <p class="text-lg font-bold text-red-700">
+                        ${formatAmountWithText(memberSummary.length > 0 ? totalRemainingSum / memberSummary.length : 0)}
+                    </p>
+                </div>
+            </div>
+        `;
+        
+        container.innerHTML = html;
+        console.log('✅ লোন আদায় রিপোর্ট রেন্ডার সম্পূর্ণ!');
+        
+    } catch(e) {
+        console.error('❌ Load loan collection report error:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p class="font-bold">❌ রিপোর্ট লোড করতে সমস্যা!</p>
+                <p class="text-sm text-gray-500 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="loadLoanCollectionReport()" class="btn btn-info btn-sm mt-3">
+                    <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
+                </button>
+            </div>
+        `;
     }
-
-    function resetCollectionFilters() {
-        document.getElementById('collectionFromDate').value = '';
-        document.getElementById('collectionToDate').value = '';
-        loadLoanCollectionReport();
-    }
+}
 
     // ============================================================
     // ===== SAVINGS LOAN REPORT =====
@@ -35453,32 +35665,54 @@ async function openLoanCollectionReport() {
     }, 300);
 }
 
-// ✅ ডেটা লোড করুন
-async function loadLoanCollectionReport() {
-    console.log('📊 loadLoanCollectionReport called');
+// ============================================================
+// ✅ FIXED: loadLoanCollectionReportModal() — ঋণ আদায় রিপোর্ট (মডাল)
+// ✅ নতুন নাম — সাইডবারের loadLoanCollectionReport() এর সাথে conflict নেই
+// ✅ JOIN ছাড়া — reliable
+// ✅ Filter support: Date + Method + Source
+// ✅ Console log সহ
+// ============================================================
+async function loadLoanCollectionReportModal() {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('📊 loadLoanCollectionReportModal called');
     
     const container = document.getElementById('collReportContainer');
-    if (!container) return;
+    if (!container) {
+        console.error('❌ collReportContainer পাওয়া যায়নি');
+        return;
+    }
     
-    container.innerHTML = `<div class="text-center py-8">
-        <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
-        <p>লোড হচ্ছে...</p>
-    </div>`;
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-2">লোড হচ্ছে...</p>
+        </div>
+    `;
     
     const client = initSupabaseClient();
     if (!client) {
-        container.innerHTML = `<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>`;
+        container.innerHTML = `
+            <div class="text-red-500 p-4 text-center">
+                ❌ সংযোগ সমস্যা!
+            </div>
+        `;
         return;
     }
     
     try {
-        // ✅ Filter নিন
+        // ============================================================
+        // ✅ STEP 1: Filter নিন
+        // ============================================================
         const fromDate = document.getElementById('reportCollFrom')?.value || '';
         const toDate = document.getElementById('reportCollTo')?.value || '';
         const methodFilter = document.getElementById('reportCollMethod')?.value || '';
         const sourceFilter = document.getElementById('reportCollSource')?.value || '';
         
-        // ✅ Query তৈরি
+        console.log('📋 Filters:', { fromDate, toDate, methodFilter, sourceFilter });
+        
+        // ============================================================
+        // ✅ STEP 2: Query তৈরি (safety সহ)
+        // ============================================================
         let query = client
             .from('loan_payments')
             .select('*')
@@ -35492,21 +35726,46 @@ async function loadLoanCollectionReport() {
         
         const { data: payments, error } = await query.limit(500);
         
-        if (error) throw error;
+        if (error) {
+            console.error('❌ Query error:', error);
+            throw error;
+        }
         
+        console.log(`✅ ${payments?.length || 0} টি পেমেন্ট পাওয়া গেছে`);
+        
+        // ============================================================
+        // ✅ STEP 3: ডেটা না থাকলে message
+        // ============================================================
         if (!payments || payments.length === 0) {
-            container.innerHTML = `<div class="text-center text-gray-500 py-8">
-                <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
-                <p>এই ফিল্টারে কোনো ডেটা নেই</p>
-            </div>`;
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fas fa-inbox text-5xl block mb-3 text-gray-300"></i>
+                    <p class="text-lg">এই ফিল্টারে কোনো ডেটা নেই</p>
+                    <p class="text-sm text-gray-400 mt-2">
+                        ${fromDate || toDate || methodFilter || sourceFilter 
+                            ? 'ফিল্টার পরিবর্তন করে চেষ্টা করুন' 
+                            : 'এখনো কোনো লোন পেমেন্ট অনুমোদিত হয়নি'}
+                    </p>
+                    ${fromDate || toDate || methodFilter || sourceFilter ? `
+                        <button onclick="resetLoanCollectionReportModal()" 
+                                class="btn btn-warning btn-sm mt-4">
+                            <i class="fas fa-undo mr-1"></i> ফিল্টার রিসেট
+                        </button>
+                    ` : ''}
+                </div>
+            `;
             updateCollSummary([], [], []);
             return;
         }
         
-        // ✅ হিসাব
-        const totalAmount = payments.reduce((s, p) => s + Number(p.total_amount || p.emi_amount || 0), 0);
+        // ============================================================
+        // ✅ STEP 4: হিসাব
+        // ============================================================
+        const totalAmount = payments.reduce((s, p) => 
+            s + Number(p.total_amount || p.emi_amount || 0), 0
+        );
         const totalCount = payments.length;
-        const uniqueMembers = new Set(payments.map(p => p.member_id)).size;
+        const uniqueMembers = new Set(payments.map(p => p.member_id).filter(Boolean)).size;
         
         const externalAmount = payments
             .filter(p => p.source === 'external' || !p.source)
@@ -35516,7 +35775,12 @@ async function loadLoanCollectionReport() {
             .filter(p => p.source === 'internal')
             .reduce((s, p) => s + Number(p.total_amount || p.emi_amount || 0), 0);
         
-        // ✅ Summary আপডেট
+        console.log('💰 মোট:', formatAmount(totalAmount));
+        console.log('👥 সদস্য:', uniqueMembers);
+        
+        // ============================================================
+        // ✅ STEP 5: Summary আপডেট (safe)
+        // ============================================================
         const setText = (id, text) => {
             const el = document.getElementById(id);
             if (el) el.textContent = text;
@@ -35528,30 +35792,48 @@ async function loadLoanCollectionReport() {
         setText('collExternalAmount', '৳ ' + formatAmount(externalAmount));
         setText('collInternalAmount', '৳ ' + formatAmount(internalAmount));
         
-        // ✅ সদস্যের নাম লোড
+        // ============================================================
+        // ✅ STEP 6: সদস্যের নাম লোড (JOIN ছাড়া)
+        // ============================================================
         const memberIds = [...new Set(payments.map(p => p.member_id))].filter(Boolean);
-        const { data: members } = await client
-            .from('members')
-            .select('member_id, full_name, mobile')
-            .in('member_id', memberIds);
         
-        const memberMap = {};
-        (members || []).forEach(m => { memberMap[m.member_id] = m; });
+        let memberMap = {};
+        if (memberIds.length > 0) {
+            const { data: members, error: memberError } = await client
+                .from('members')
+                .select('member_id, full_name, mobile')
+                .in('member_id', memberIds);
+            
+            if (memberError) {
+                console.warn('⚠️ Member load warning:', memberError);
+            }
+            
+            (members || []).forEach(m => {
+                memberMap[m.member_id] = m;
+            });
+            
+            console.log(`✅ ${members?.length || 0} টি সদস্যের তথ্য লোড হয়েছে`);
+        }
         
-        // ✅ Table তৈরি
-        let html = `<table class="data-table w-full">
-            <thead style="position:sticky; top:0; background:#f8fafc; z-index:10;">
-                <tr>
-                    <th>তারিখ</th>
-                    <th>সদস্য</th>
-                    <th>কিস্তি</th>
-                    <th class="text-right">পরিমাণ</th>
-                    <th>মাধ্যম</th>
-                    <th>উৎস</th>
-                    <th>ভাউচার/লেনদেন</th>
-                </tr>
-            </thead>
-            <tbody>`;
+        // ============================================================
+        // ✅ STEP 7: Table তৈরি
+        // ============================================================
+        let html = `
+            <div class="overflow-x-auto">
+                <table class="data-table w-full">
+                    <thead style="position:sticky; top:0; background:#f8fafc; z-index:10;">
+                        <tr>
+                            <th>তারিখ</th>
+                            <th>সদস্য</th>
+                            <th>কিস্তি</th>
+                            <th class="text-right">পরিমাণ</th>
+                            <th>মাধ্যম</th>
+                            <th>উৎস</th>
+                            <th>ভাউচার/লেনদেন</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
         
         payments.forEach(p => {
             const member = memberMap[p.member_id] || {};
@@ -35578,11 +35860,15 @@ async function loadLoanCollectionReport() {
                 <tr class="hover:bg-gray-50">
                     <td class="text-xs whitespace-nowrap">${dateStr}</td>
                     <td>
-                        <div class="font-medium text-sm">${member.full_name || p.member_id || '-'}</div>
-                        <div class="text-xs text-gray-500">🆔 ${p.member_id}</div>
+                        <div class="font-medium text-sm">
+                            ${member.full_name || p.member_name || p.member_id || '-'}
+                        </div>
+                        <div class="text-xs text-gray-500">🆔 ${p.member_id || '-'}</div>
                     </td>
                     <td class="text-center font-bold">#${p.installment_no || '-'}</td>
-                    <td class="text-right font-bold text-emerald-600">৳ ${formatAmount(amount)}</td>
+                    <td class="text-right font-bold text-emerald-600">
+                        ৳ ${formatAmount(amount)}
+                    </td>
                     <td class="text-center">
                         <span class="text-xs">${methodIcon} ${p.payment_method || 'cash'}</span>
                     </td>
@@ -35592,23 +35878,70 @@ async function loadLoanCollectionReport() {
             `;
         });
         
-        html += `</tbody></table>`;
+        html += `
+                    </tbody>
+                </table>
+            </div>
+        `;
+        
         container.innerHTML = html;
         
-        console.log(`✅ ${payments.length} টি পেমেন্ট লোড হয়েছে`);
+        console.log(`✅ ${payments.length} টি পেমেন্ট রেন্ডার সম্পূর্ণ!`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
     } catch(e) {
-        console.error('❌ loadLoanCollectionReport error:', e);
-        container.innerHTML = `<div class="text-red-500 p-4 text-center">
-            ❌ লোড করতে সমস্যা: ${e.message}
-        </div>`;
+        console.error('❌ loadLoanCollectionReportModal error:', e);
+        container.innerHTML = `
+            <div class="text-center text-red-500 py-8">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p class="font-bold">❌ লোড করতে সমস্যা!</p>
+                <p class="text-sm text-gray-500 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="loadLoanCollectionReportModal()" 
+                        class="btn btn-info btn-sm mt-3">
+                    <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
+                </button>
+            </div>
+        `;
     }
 }
 
-// ✅ Summary আপডেট (ব্যবহৃত হয় না কিন্তু রাখা)
-function updateCollSummary(payments, members, _) {
-    // loadLoanCollectionReport() এ সরাসরি আপডেট হয়
+// ============================================================
+// ✅ Filter রিসেট (নতুন নাম)
+// ============================================================
+function resetLoanCollectionReportModal() {
+    const fromEl = document.getElementById('reportCollFrom');
+    const toEl = document.getElementById('reportCollTo');
+    const methodEl = document.getElementById('reportCollMethod');
+    const sourceEl = document.getElementById('reportCollSource');
+    
+    if (fromEl) fromEl.value = '';
+    if (toEl) toEl.value = '';
+    if (methodEl) methodEl.value = '';
+    if (sourceEl) sourceEl.value = '';
+    
+    loadLoanCollectionReportModal();
+    
+    if (typeof showToast === 'function') {
+        showToast('✅ ফিল্টার রিসেট হয়েছে', 'info');
+    }
 }
+
+// ============================================================
+// ✅ updateCollSummary (ব্যবহৃত হয় না কিন্তু compatibility জন্য)
+// ============================================================
+function updateCollSummary(payments, members, _) {
+    // loadLoanCollectionReportModal() এ সরাসরি আপডেট হয়
+    console.log('ℹ️ updateCollSummary called (no-op)');
+}
+
+// ============================================================
+// ✅ Global Expose
+// ============================================================
+window.loadLoanCollectionReportModal = loadLoanCollectionReportModal;
+window.resetLoanCollectionReportModal = resetLoanCollectionReportModal;
+window.updateCollSummary = updateCollSummary;
+
+console.log('✅ loadLoanCollectionReportModal loaded!');
 
 // ✅ Filter রিসেট
 function resetLoanCollectionReport() {
