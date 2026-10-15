@@ -15539,117 +15539,339 @@ function printLoanDetails(loanId) {
         }
     }
 
-    // ============================================================
-    // ===== LOAN COLLECTION REPORT =====
-    // ============================================================
-    async function loadLoanCollectionReport() {
-        const fromDate = document.getElementById('collectionFromDate').value;
-        const toDate = document.getElementById('collectionToDate').value;
-        const container = document.getElementById('collectionTableContainer');
-        if (!container) return;
-        container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">লোন আদায় ডেটা লোড হচ্ছে...</p></div>';
-        const client = initSupabaseClient();
-        if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
-        try {
-            let loanQuery = client.from('loan_applications').select('*').eq('status', 'approved');
-            if (fromDate) loanQuery = loanQuery.gte('approved_at', fromDate);
-            if (toDate) loanQuery = loanQuery.lte('approved_at', toDate + 'T23:59:59');
-            const { data: approvedLoans } = await loanQuery;
-            let paymentQuery = client.from('loan_payments').select('*, loan_applications!inner(member_id, member_name, amount, loan_type)').eq('status', 'approved');
-            if (fromDate) paymentQuery = paymentQuery.gte('payment_date', fromDate);
-            if (toDate) paymentQuery = paymentQuery.lte('payment_date', toDate + 'T23:59:59');
-            const { data: payments } = await paymentQuery;
-            const loanList = approvedLoans || [];
-            const paymentList = payments || [];
-            const totalGiven = loanList.reduce((sum, l) => sum + (l.amount || 0), 0);
-            const totalCollected = paymentList.reduce((sum, p) => sum + (p.total_amount || p.emi_amount || 0), 0);
-            const memberCollection = {};
-            const memberLoanInfo = {};
-            loanList.forEach(loan => {
-                const memberId = loan.member_id;
-                if (!memberLoanInfo[memberId]) {
-                    memberLoanInfo[memberId] = { member_name: loan.member_name || 'অজানা', total_loan: 0, loan_type: loan.loan_type || 'সাধারণ', loan_count: 0 };
-                }
-                memberLoanInfo[memberId].total_loan += (loan.amount || 0);
-                memberLoanInfo[memberId].loan_count += 1;
-            });
-            paymentList.forEach(payment => {
-                const loan = payment.loan_applications || {};
-                const memberId = loan.member_id || payment.loan_id;
-                if (!memberCollection[memberId]) {
-                    memberCollection[memberId] = { member_name: loan.member_name || 'অজানা', total_paid: 0, payment_count: 0, last_payment: null };
-                }
-                memberCollection[memberId].total_paid += (payment.total_amount || payment.emi_amount || 0);
-                memberCollection[memberId].payment_count += 1;
-                if (!memberCollection[memberId].last_payment || new Date(payment.payment_date) > new Date(memberCollection[memberId].last_payment)) {
-                    memberCollection[memberId].last_payment = payment.payment_date;
-                }
-            });
-            let totalRemaining = 0;
-            const memberSummary = [];
-            Object.keys(memberLoanInfo).forEach(memberId => {
-                const loanInfo = memberLoanInfo[memberId];
-                const collection = memberCollection[memberId] || { total_paid: 0, payment_count: 0, last_payment: null };
-                const remaining = loanInfo.total_loan - collection.total_paid;
-                totalRemaining += remaining;
-                memberSummary.push({
-                    member_id: memberId,
-                    member_name: loanInfo.member_name,
-                    loan_type: loanInfo.loan_type,
-                    total_loan: loanInfo.total_loan,
-                    total_paid: collection.total_paid,
-                    remaining: remaining,
-                    payment_count: collection.payment_count,
-                    last_payment: collection.last_payment,
-                    loan_count: loanInfo.loan_count
-                });
-            });
-            document.getElementById('totalCollected').innerHTML = formatAmountWithText(totalCollected);
-            document.getElementById('totalPendingCollection').innerHTML = formatAmountWithText(Math.max(0, totalRemaining));
-            document.getElementById('totalLoanGiven').innerHTML = formatAmountWithText(totalGiven);
-            document.getElementById('totalMembersWithLoan').innerHTML = Object.keys(memberLoanInfo).length + ' জন';
-            if (memberSummary.length === 0) {
-                container.innerHTML = `<div class="text-center text-gray-500 py-12"><i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i><p>কোনো লোন ডেটা পাওয়া যায়নি</p></div>`;
-                return;
-            }
-            memberSummary.sort((a, b) => b.remaining - a.remaining);
-            let html = `<table class="data-table"><thead><tr><th>সদস্য</th><th>আইডি</th><th>লোনের ধরন</th><th class="text-left">মোট লোন</th><th class="text-left">পরিশোধিত</th><th class="text-left">বাকি</th><th>কিস্তি</th><th>শেষ পেমেন্ট</th></tr></thead><tbody>`;
-            memberSummary.forEach(m => {
-                const remainingClass = m.remaining > 0 ? 'text-red-600 font-bold' : 'text-green-600';
-                html += `<tr>
-                    <td><span class="font-medium">${m.member_name}</span></td>
-                    <td class="text-xs text-gray-500">${m.member_id}</td>
-                    <td><span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">${m.loan_type}</span></td>
-                    <td class="text-left font-bold text-blue-600">${formatAmountWithText(m.total_loan)}</td>
-                    <td class="text-left text-emerald-600">${formatAmountWithText(m.total_paid)}</td>
-                    <td class="text-left ${remainingClass}">${formatAmountWithText(Math.max(0, m.remaining))}</td>
-                    <td class="text-center">${m.payment_count} / ${m.loan_count}</td>
-                    <td class="text-xs text-gray-400">${m.last_payment ? formatDateBD(m.last_payment) : '-'}</td>
-                </tr>`;
-            });
-            const totalRemainingSum = memberSummary.reduce((s, m) => s + m.remaining, 0);
-            const totalPaidSum = memberSummary.reduce((s, m) => s + m.total_paid, 0);
-            const totalLoanSum = memberSummary.reduce((s, m) => s + m.total_loan, 0);
-            html += `<tr style="font-weight:700; background:#f3f4f6; border-top:2px solid #059669;">
-                <td colspan="3" class="text-left">📊 মোট</td>
-                <td class="text-left text-blue-700">${formatAmountWithText(totalLoanSum)}</td>
-                <td class="text-left text-emerald-700">${formatAmountWithText(totalPaidSum)}</td>
-                <td class="text-left text-red-700">${formatAmountWithText(totalRemainingSum)}</td>
-                <td colspan="2"></td>
-            </tr>`;
-            html += '</tbody></table>';
-            container.innerHTML = html;
-        } catch(e) {
-            console.error('Collection report error:', e);
-            container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ রিপোর্ট লোড করতে সমস্যা!</div>';
+// ============================================================
+// ===== LOAN COLLECTION REPORT (ট্যাব ভার্সন) =====
+// ✅ FIXED: সব approved loan + payment load করে JS-এ filter
+// ✅ FIXED: Member-wise aggregation সঠিক
+// ✅ FIXED: Summary cards + Total row
+// ============================================================
+async function loadLoanCollectionReport() {
+    console.log('📊 loadLoanCollectionReport() called — ট্যাব ভার্সন');
+    
+    const fromDate = document.getElementById('collectionFromDate')?.value || '';
+    const toDate = document.getElementById('collectionToDate')?.value || '';
+    const container = document.getElementById('collectionTableContainer');
+    
+    if (!container) {
+        console.error('❌ collectionTableContainer not found');
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-2">লোন আদায় ডেটা লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; 
+        return; 
+    }
+    
+    try {
+        console.log('🔍 Filter:', { fromDate, toDate });
+        
+        // ============================================================
+        // ✅ STEP 1: সব অনুমোদিত লোন লোড (filter ছাড়া)
+        // ============================================================
+        const { data: approvedLoans, error: loanErr } = await client
+            .from('loan_applications')
+            .select('*')
+            .eq('status', 'approved');
+        
+        if (loanErr) throw loanErr;
+        
+        const loanList = approvedLoans || [];
+        console.log(`✅ Approved loans: ${loanList.length}`);
+        
+        if (loanList.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                    <p>কোনো অনুমোদিত লোন নেই</p>
+                </div>
+            `;
+            
+            // Summary reset
+            const resetSummary = (id, txt) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = txt;
+            };
+            resetSummary('totalCollected', '০ টাকা');
+            resetSummary('totalPendingCollection', '০ টাকা');
+            resetSummary('totalLoanGiven', '০ টাকা');
+            resetSummary('totalMembersWithLoan', '০ জন');
+            return;
         }
+        
+        // ✅ Loan IDs
+        const loanIds = loanList.map(l => l.id);
+        
+        // ============================================================
+        // ✅ STEP 2: সব approved payments লোড (filter ছাড়া)
+        // ============================================================
+        const { data: allPayments, error: payErr } = await client
+            .from('loan_payments')
+            .select('*')
+            .in('loan_id', loanIds)
+            .eq('status', 'approved');
+        
+        if (payErr) throw payErr;
+        
+        const allPaymentList = allPayments || [];
+        console.log(`✅ Approved payments: ${allPaymentList.length}`);
+        
+        // ============================================================
+        // ✅ STEP 3: Date filter (JS-এ, নির্ভরযোগ্য)
+        // ============================================================
+        let filteredPayments = [...allPaymentList];
+        
+        if (fromDate) {
+            const fromTime = new Date(fromDate + 'T00:00:00+06:00').getTime();
+            filteredPayments = filteredPayments.filter(p => {
+                if (!p.payment_date) return false;
+                return new Date(p.payment_date).getTime() >= fromTime;
+            });
+        }
+        
+        if (toDate) {
+            const toTime = new Date(toDate + 'T23:59:59+06:00').getTime();
+            filteredPayments = filteredPayments.filter(p => {
+                if (!p.payment_date) return false;
+                return new Date(p.payment_date).getTime() <= toTime;
+            });
+        }
+        
+        console.log(`✅ Filtered payments: ${filteredPayments.length}`);
+        
+        // ============================================================
+        // ✅ STEP 4: হিসাব
+        // ============================================================
+        
+        // Loan-wise payment map (সব পেমেন্ট)
+        const paymentMapAll = {};
+        allPaymentList.forEach(p => {
+            const loanIdStr = String(p.loan_id);
+            if (!paymentMapAll[loanIdStr]) paymentMapAll[loanIdStr] = 0;
+            paymentMapAll[loanIdStr] += Number(p.total_amount || p.emi_amount || 0);
+        });
+        
+        // Loan-wise payment map (filtered)
+        const paymentMapFiltered = {};
+        filteredPayments.forEach(p => {
+            const loanIdStr = String(p.loan_id);
+            if (!paymentMapFiltered[loanIdStr]) paymentMapFiltered[loanIdStr] = 0;
+            paymentMapFiltered[loanIdStr] += Number(p.total_amount || p.emi_amount || 0);
+        });
+        
+        const totalGiven = loanList.reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+        const totalCollected = filteredPayments.reduce(
+            (sum, p) => sum + Number(p.total_amount || p.emi_amount || 0), 0
+        );
+        const totalPaidAll = allPaymentList.reduce(
+            (sum, p) => sum + Number(p.total_amount || p.emi_amount || 0), 0
+        );
+        const totalRemaining = Math.max(0, totalGiven - totalPaidAll);
+        
+        // ============================================================
+        // ✅ STEP 5: সদস্য ভিত্তিক গ্রুপ
+        // ============================================================
+        const memberLoanInfo = {};
+        
+        loanList.forEach(loan => {
+            const memberId = loan.member_id;
+            if (!memberLoanInfo[memberId]) {
+                memberLoanInfo[memberId] = {
+                    member_id: memberId,
+                    member_name: loan.member_name || 'অজানা',
+                    member_mobile: loan.member_mobile || '-',
+                    total_loan: 0,
+                    total_paid_all: 0,
+                    total_paid_filtered: 0,
+                    loan_count: 0,
+                    loan_types: new Set(),
+                    last_payment: null,
+                    payment_count_filtered: 0
+                };
+            }
+            
+            const info = memberLoanInfo[memberId];
+            const loanIdStr = String(loan.id);
+            
+            info.total_loan += Number(loan.amount) || 0;
+            info.total_paid_all += paymentMapAll[loanIdStr] || 0;
+            info.total_paid_filtered += paymentMapFiltered[loanIdStr] || 0;
+            info.loan_count += 1;
+            if (loan.loan_type) info.loan_types.add(loan.loan_type);
+        });
+        
+        // ✅ Last payment + count
+        filteredPayments.forEach(p => {
+            const loan = loanList.find(l => String(l.id) === String(p.loan_id));
+            if (!loan) return;
+            const info = memberLoanInfo[loan.member_id];
+            if (!info) return;
+            
+            info.payment_count_filtered++;
+            if (!info.last_payment || new Date(p.payment_date) > new Date(info.last_payment)) {
+                info.last_payment = p.payment_date;
+            }
+        });
+        
+        const memberSummary = Object.values(memberLoanInfo).map(info => ({
+            ...info,
+            loan_type: Array.from(info.loan_types).join(', ') || 'সাধারণ',
+            remaining: Math.max(0, info.total_loan - info.total_paid_all)
+        }));
+        
+        // ============================================================
+        // ✅ STEP 6: Summary cards আপডেট
+        // ============================================================
+        const setText = (id, txt) => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = txt;
+        };
+        
+        setText('totalCollected', formatAmountWithText(totalCollected));
+        setText('totalPendingCollection', formatAmountWithText(totalRemaining));
+        setText('totalLoanGiven', formatAmountWithText(totalGiven));
+        setText('totalMembersWithLoan', memberSummary.length + ' জন');
+        
+        // ============================================================
+        // ✅ STEP 7: Table রেন্ডার
+        // ============================================================
+        if (memberSummary.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                    <p>কোনো সদস্য ডেটা নেই</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Sort: যাদের বাকি বেশি তাদের আগে
+        memberSummary.sort((a, b) => b.remaining - a.remaining);
+        
+        let html = `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>সদস্য</th>
+                        <th>আইডি</th>
+                        <th>লোনের ধরন</th>
+                        <th class="text-right">মোট লোন</th>
+                        <th class="text-right">পরিশোধিত</th>
+                        <th class="text-right">বাকি</th>
+                        <th class="text-center">কিস্তি</th>
+                        <th>শেষ পেমেন্ট</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        
+        memberSummary.forEach(m => {
+            const remainingClass = m.remaining > 0 ? 'text-red-600 font-bold' : 'text-green-600';
+            const paidPercent = m.total_loan > 0 
+                ? ((m.total_paid_all / m.total_loan) * 100).toFixed(1) 
+                : '0.0';
+            const lastPaymentStr = m.last_payment ? formatDateBD(m.last_payment) : '-';
+            
+            html += `
+                <tr>
+                    <td>
+                        <span class="font-medium">${m.member_name}</span>
+                        ${m.member_mobile !== '-' ? `<br><span class="text-xs text-gray-500">📱 ${m.member_mobile}</span>` : ''}
+                    </td>
+                    <td class="text-xs text-gray-500">${m.member_id}</td>
+                    <td>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                            ${m.loan_type}
+                        </span>
+                    </td>
+                    <td class="text-right font-bold text-blue-600">${formatAmountWithText(m.total_loan)}</td>
+                    <td class="text-right text-emerald-600">
+                        ${formatAmountWithText(m.total_paid_all)}
+                        <div style="font-size:10px; color:#6b7280;">${paidPercent}%</div>
+                    </td>
+                    <td class="text-right ${remainingClass}">
+                        ${formatAmountWithText(m.remaining)}
+                    </td>
+                    <td class="text-center">
+                        <span class="text-xs">${m.payment_count_filtered} / ${m.loan_count}</span>
+                    </td>
+                    <td class="text-xs text-gray-400">${lastPaymentStr}</td>
+                </tr>
+            `;
+        });
+        
+        // ✅ Total Row
+        const totalRemainingSum = memberSummary.reduce((s, m) => s + m.remaining, 0);
+        const totalPaidSum = memberSummary.reduce((s, m) => s + m.total_paid_all, 0);
+        const totalLoanSum = memberSummary.reduce((s, m) => s + m.total_loan, 0);
+        const totalPaymentCount = memberSummary.reduce((s, m) => s + m.payment_count_filtered, 0);
+        const totalLoanCount = memberSummary.reduce((s, m) => s + m.loan_count, 0);
+        
+        html += `
+                    <tr style="font-weight:700; background:#f3f4f6; border-top:2px solid #059669;">
+                        <td colspan="3" class="text-right">📊 মোট (${memberSummary.length} জন)</td>
+                        <td class="text-right text-blue-700">${formatAmountWithText(totalLoanSum)}</td>
+                        <td class="text-right text-emerald-700">${formatAmountWithText(totalPaidSum)}</td>
+                        <td class="text-right text-red-700">${formatAmountWithText(totalRemainingSum)}</td>
+                        <td class="text-center">${totalPaymentCount} / ${totalLoanCount}</td>
+                        <td></td>
+                    </tr>
+                </tbody>
+            </table>
+        `;
+        
+        // ✅ Filter info
+        const filterInfo = (fromDate || toDate) ? `
+            <div class="text-xs text-gray-500 text-center mb-2">
+                📅 ফিল্টার: 
+                ${fromDate ? formatDateBD(fromDate) : 'শুরু'} → 
+                ${toDate ? formatDateBD(toDate) : 'আজ'}
+                <span class="ml-2">|</span>
+                📊 ${filteredPayments.length} টি পেমেন্ট
+            </div>
+        ` : '';
+        
+        container.innerHTML = filterInfo + html;
+        
+        console.log('✅ লোন আদায় রিপোর্ট রেন্ডার সম্পূর্ণ!');
+        
+    } catch(e) {
+        console.error('❌ loadLoanCollectionReport error:', e);
+        container.innerHTML = `
+            <div class="text-red-500 p-4 text-center">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ রিপোর্ট লোড করতে সমস্যা!</p>
+                <p class="text-sm text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+                <button onclick="loadLoanCollectionReport()" class="btn btn-info btn-sm mt-3">
+                    <i class="fas fa-sync-alt mr-1"></i> পুনরায় চেষ্টা করুন
+                </button>
+            </div>
+        `;
     }
+}
 
-    function resetCollectionFilters() {
-        document.getElementById('collectionFromDate').value = '';
-        document.getElementById('collectionToDate').value = '';
-        loadLoanCollectionReport();
+// ============================================================
+// resetCollectionFilters() — ফিল্টার রিসেট
+// ============================================================
+function resetCollectionFilters() {
+    const fromEl = document.getElementById('collectionFromDate');
+    const toEl = document.getElementById('collectionToDate');
+    
+    if (fromEl) fromEl.value = '';
+    if (toEl) toEl.value = '';
+    
+    loadLoanCollectionReport();
+    if (typeof showToast === 'function') {
+        showToast('✅ ফিল্টার রিসেট হয়েছে', 'info');
     }
+}
 
     // ============================================================
     // ===== SAVINGS LOAN REPORT =====
@@ -16613,7 +16835,8 @@ function closeDueInvoiceModalOnOverlay(event) {
 }
 
 // ============================================================
-// 🖨️ Print Due Invoice — Single A4 Page
+// printDueInvoice() - FIXED
+// ✅ Loading state চেক + content loaded কিনা যাচাই
 // ============================================================
 function printDueInvoice() {
     const printArea = document.getElementById('dueInvoicePrintArea');
@@ -16621,6 +16844,28 @@ function printDueInvoice() {
         showToast('❌ প্রিন্ট করার জন্য কোনো ইনভয়েস নেই', 'error');
         return;
     }
+    
+    // ✅ Content loaded কিনা যাচাই
+    const contentHTML = printArea.innerHTML || '';
+    const isLoading = 
+        contentHTML.includes('ইনভয়েস লোড হচ্ছে') ||
+        contentHTML.includes('লোড হচ্ছে...') ||
+        contentHTML.includes('loading-spinner') ||
+        contentHTML.includes('fa-spinner') ||
+        contentHTML.trim().length < 500;
+    
+    if (isLoading) {
+        showToast('⏳ ইনভয়েস লোড হচ্ছে, দয়া করে অপেক্ষা করুন...', 'warning');
+        return;
+    }
+    
+    // ✅ Data যাচাই
+    if (!window.currentDueInvoiceData) {
+        showToast('❌ ইনভয়েস ডেটা পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    console.log('🖨️ Print Due Invoice — শুরু...');
     
     const printWindow = window.open('', '_blank', 'width=900,height=1200');
     if (!printWindow) {
@@ -16635,6 +16880,7 @@ function printDueInvoice() {
             <meta charset="UTF-8">
             <title>বকেয়া ইনভয়েস | TUKNBD</title>
             <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
             <style>
                 * {
                     font-family: 'Noto Sans Bengali', sans-serif;
@@ -16657,7 +16903,6 @@ function printDueInvoice() {
                     line-height: 1.3;
                 }
                 
-                /* Compact all text */
                 h1 { font-size: 14px !important; margin: 0 0 2px !important; }
                 h2 { font-size: 12px !important; margin: 0 0 2px !important; }
                 h3 { font-size: 10px !important; margin: 0 0 4px !important; }
@@ -16666,7 +16911,6 @@ function printDueInvoice() {
                 td { font-size: 9px !important; }
                 th { font-size: 8px !important; }
                 
-                /* Compact tables */
                 table {
                     font-size: 9px !important;
                     border-collapse: collapse !important;
@@ -16678,17 +16922,14 @@ function printDueInvoice() {
                     border: 1px solid #000 !important;
                 }
                 
-                /* All borders black */
                 [style*="border"] {
                     border-color: #000 !important;
                 }
                 
-                /* Reduce paddings */
                 [style*="padding"] {
                     padding: 4px !important;
                 }
                 
-                /* Reduce margins */
                 [style*="margin-bottom"] {
                     margin-bottom: 4px !important;
                 }
@@ -16697,23 +16938,19 @@ function printDueInvoice() {
                     margin-top: 4px !important;
                 }
                 
-                /* Remove watermark */
                 [style*="rotate(-30deg)"] {
                     display: none !important;
                 }
                 
-                /* Keep big number manageable */
                 strong[style*="font-size:24px"] { font-size: 16px !important; }
                 strong[style*="font-size:20px"] { font-size: 14px !important; }
                 strong[style*="font-size:16px"] { font-size: 12px !important; }
                 
-                /* Progress bar */
                 [style*="height:8px"] {
                     height: 4px !important;
                     border: 1px solid #000 !important;
                 }
                 
-                /* Ensure single page */
                 body > * {
                     max-height: 275mm !important;
                     overflow: hidden !important;
@@ -16721,6 +16958,7 @@ function printDueInvoice() {
                 
                 @media print {
                     body { padding: 0; }
+                    .no-print { display: none !important; }
                 }
             </style>
         </head>
@@ -16730,8 +16968,10 @@ function printDueInvoice() {
                 window.onload = function() {
                     setTimeout(function() {
                         window.print();
-                        setTimeout(function() { window.close(); }, 500);
-                    }, 400);
+                        setTimeout(function() { 
+                            try { window.close(); } catch(e) {} 
+                        }, 500);
+                    }, 600);
                 };
             <\/script>
         </body>
@@ -29597,23 +29837,38 @@ function closeLoanEMIModal() {
     }
 }
 
+// ============================================================
+// printLoanEMIDetails() - FIXED
+// ✅ Loading state চেক
+// ============================================================
 function printLoanEMIDetails() {
     const content = document.getElementById('loanEMIDetailContent');
-    if (!content || !content.innerHTML.trim()) {
-        showToast('প্রিন্ট করার কোনো ডেটা নেই!', 'error');
+    
+    if (!content) {
+        showToast('❌ প্রিন্ট করার ডেটা নেই!', 'error');
+        return;
+    }
+    
+    // ✅ Content loaded কিনা যাচাই
+    const contentHTML = content.innerHTML || '';
+    const isLoading = 
+        contentHTML.includes('লোড হচ্ছে') ||
+        contentHTML.includes('loading-spinner') ||
+        contentHTML.includes('fa-spinner') ||
+        contentHTML.trim().length < 500;
+    
+    if (isLoading) {
+        showToast('⏳ লোন EMI ডেটা লোড হচ্ছে, অপেক্ষা করুন...', 'warning');
         return;
     }
     
     console.log('🖨️ লোন EMI প্রিন্ট শুরু...');
-    
-    // ✅ স্ক্রল টপে নিন
     window.scrollTo({ top: 0, behavior: 'instant' });
     
-    // ✅ Delay দিয়ে প্রিন্ট করুন (নির্ভরযোগ্য)
     setTimeout(() => {
         window.print();
         console.log('✅ প্রিন্ট ডায়ালগ খোলা হয়েছে');
-    }, 250);
+    }, 300);
 }
 
 // ============================================================
@@ -35968,7 +36223,7 @@ async function openLoanCollectionReport() {
             
             <!-- Filter Buttons -->
             <div class="flex flex-wrap gap-2">
-                <button onclick="loadLoanCollectionReport()" class="btn btn-info btn-sm flex-1 min-w-[120px]">
+                <button onclick="loadLoanCollectionReportModal()" class="btn btn-info btn-sm flex-1 min-w-[120px]">
                     <i class="fas fa-filter mr-1"></i> ফিল্টার
                 </button>
                 <button onclick="resetLoanCollectionReport()" class="btn btn-warning btn-sm">
@@ -36025,21 +36280,32 @@ async function openLoanCollectionReport() {
     
     // ✅ প্রথমে ডেটা লোড করুন
     setTimeout(() => {
-        loadLoanCollectionReport();
-    }, 300);
-}
+    loadLoanCollectionReportModal();
+}, 300);
 
-// ✅ ডেটা লোড করুন
-async function loadLoanCollectionReport() {
-    console.log('📊 loadLoanCollectionReport called');
+// ============================================================
+// loadLoanCollectionReportModal() — মডাল ভার্সন
+// ✅ Container: collReportContainer
+// ✅ Filter: reportCollFrom, reportCollTo, reportCollMethod, reportCollSource
+// ✅ Summary Cards: collTotalAmount, collTotalCount, collTotalMembers,
+//                  collExternalAmount, collInternalAmount
+// ✅ View: Payment-wise list (প্রতিটি পেমেন্ট আলাদা row)
+// ============================================================
+async function loadLoanCollectionReportModal() {
+    console.log('📊 loadLoanCollectionReportModal() called — মডাল ভার্সন');
     
     const container = document.getElementById('collReportContainer');
-    if (!container) return;
+    if (!container) {
+        console.warn('⚠️ collReportContainer not found');
+        return;
+    }
     
-    container.innerHTML = `<div class="text-center py-8">
-        <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
-        <p>লোড হচ্ছে...</p>
-    </div>`;
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+            <p>লোড হচ্ছে...</p>
+        </div>
+    `;
     
     const client = initSupabaseClient();
     if (!client) {
@@ -36054,7 +36320,11 @@ async function loadLoanCollectionReport() {
         const methodFilter = document.getElementById('reportCollMethod')?.value || '';
         const sourceFilter = document.getElementById('reportCollSource')?.value || '';
         
+        console.log('🔍 Modal Filters:', { fromDate, toDate, methodFilter, sourceFilter });
+        
+        // ============================================================
         // ✅ Query তৈরি
+        // ============================================================
         let query = client
             .from('loan_payments')
             .select('*')
@@ -36070,17 +36340,38 @@ async function loadLoanCollectionReport() {
         
         if (error) throw error;
         
+        console.log(`✅ Payments loaded: ${payments?.length || 0}`);
+        
+        // ============================================================
+        // ✅ No data case — সরাসরি summary reset (undefined function call নেই)
+        // ============================================================
         if (!payments || payments.length === 0) {
-            container.innerHTML = `<div class="text-center text-gray-500 py-8">
-                <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
-                <p>এই ফিল্টারে কোনো ডেটা নেই</p>
-            </div>`;
-            updateCollSummary([], [], []);
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                    <p>এই ফিল্টারে কোনো ডেটা নেই</p>
+                </div>
+            `;
+            
+            // ✅ Summary reset — সরাসরি setText
+            const setText = (id, txt) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = txt;
+            };
+            setText('collTotalAmount', '৳ ০');
+            setText('collTotalCount', '০ টি');
+            setText('collTotalMembers', '০ জন');
+            setText('collExternalAmount', '৳ ০');
+            setText('collInternalAmount', '৳ ০');
             return;
         }
         
+        // ============================================================
         // ✅ হিসাব
-        const totalAmount = payments.reduce((s, p) => s + Number(p.total_amount || p.emi_amount || 0), 0);
+        // ============================================================
+        const totalAmount = payments.reduce(
+            (s, p) => s + Number(p.total_amount || p.emi_amount || 0), 0
+        );
         const totalCount = payments.length;
         const uniqueMembers = new Set(payments.map(p => p.member_id)).size;
         
@@ -36092,7 +36383,9 @@ async function loadLoanCollectionReport() {
             .filter(p => p.source === 'internal')
             .reduce((s, p) => s + Number(p.total_amount || p.emi_amount || 0), 0);
         
+        // ============================================================
         // ✅ Summary আপডেট
+        // ============================================================
         const setText = (id, text) => {
             const el = document.getElementById(id);
             if (el) el.textContent = text;
@@ -36104,39 +36397,49 @@ async function loadLoanCollectionReport() {
         setText('collExternalAmount', '৳ ' + formatAmount(externalAmount));
         setText('collInternalAmount', '৳ ' + formatAmount(internalAmount));
         
-        // ✅ সদস্যের নাম লোড
+        // ============================================================
+        // ✅ সদস্যের নাম লোড (সুরক্ষা সহ)
+        // ============================================================
         const memberIds = [...new Set(payments.map(p => p.member_id))].filter(Boolean);
-        const { data: members } = await client
-            .from('members')
-            .select('member_id, full_name, mobile')
-            .in('member_id', memberIds);
         
-        const memberMap = {};
-        (members || []).forEach(m => { memberMap[m.member_id] = m; });
+        let memberMap = {};
+        if (memberIds.length > 0) {
+            const { data: members } = await client
+                .from('members')
+                .select('member_id, full_name, mobile')
+                .in('member_id', memberIds);
+            
+            (members || []).forEach(m => { memberMap[m.member_id] = m; });
+        }
         
+        // ============================================================
         // ✅ Table তৈরি
-        let html = `<table class="data-table w-full">
-            <thead style="position:sticky; top:0; background:#f8fafc; z-index:10;">
-                <tr>
-                    <th>তারিখ</th>
-                    <th>সদস্য</th>
-                    <th>কিস্তি</th>
-                    <th class="text-right">পরিমাণ</th>
-                    <th>মাধ্যম</th>
-                    <th>উৎস</th>
-                    <th>ভাউচার/লেনদেন</th>
-                </tr>
-            </thead>
-            <tbody>`;
+        // ============================================================
+        let html = `
+            <table class="data-table w-full">
+                <thead style="position:sticky; top:0; background:#f8fafc; z-index:10;">
+                    <tr>
+                        <th>তারিখ</th>
+                        <th>সদস্য</th>
+                        <th>কিস্তি</th>
+                        <th class="text-right">পরিমাণ</th>
+                        <th>মাধ্যম</th>
+                        <th>উৎস</th>
+                        <th>ভাউচার/লেনদেন</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
         
         payments.forEach(p => {
             const member = memberMap[p.member_id] || {};
             const amount = Number(p.total_amount || p.emi_amount || 0);
             
-            const methodIcon = p.payment_method === 'bKash' ? '💚' :
-                              p.payment_method === 'Nagad' ? '🧡' :
-                              p.payment_method === 'Rocket' ? '💜' :
-                              p.payment_method === 'bank' ? '🏦' : '💵';
+            const methodIcon = 
+                p.payment_method === 'bKash' ? '💚' :
+                p.payment_method === 'Nagad' ? '🧡' :
+                p.payment_method === 'Rocket' ? '💜' :
+                p.payment_method === 'bank' ? '🏦' : '💵';
             
             const sourceLabel = p.source === 'internal' 
                 ? '<span class="text-xs bg-pink-100 text-pink-700 px-2 py-0.5 rounded-full">💰 ব্যালেন্স</span>'
@@ -36171,13 +36474,15 @@ async function loadLoanCollectionReport() {
         html += `</tbody></table>`;
         container.innerHTML = html;
         
-        console.log(`✅ ${payments.length} টি পেমেন্ট লোড হয়েছে`);
+        console.log(`✅ Modal: ${payments.length} টি পেমেন্ট লোড হয়েছে`);
         
     } catch(e) {
-        console.error('❌ loadLoanCollectionReport error:', e);
-        container.innerHTML = `<div class="text-red-500 p-4 text-center">
-            ❌ লোড করতে সমস্যা: ${e.message}
-        </div>`;
+        console.error('❌ loadLoanCollectionReportModal error:', e);
+        container.innerHTML = `
+            <div class="text-red-500 p-4 text-center">
+                ❌ লোড করতে সমস্যা: ${e.message}
+            </div>
+        `;
     }
 }
 
@@ -36198,7 +36503,7 @@ function resetLoanCollectionReport() {
     if (methodEl) methodEl.value = '';
     if (sourceEl) sourceEl.value = '';
     
-    loadLoanCollectionReport();
+    loadLoanCollectionReportModal();
     showToast('✅ ফিল্টার রিসেট হয়েছে', 'info');
 }
 
