@@ -12529,7 +12529,10 @@ async function updateAllBadges() {
 }
 
 // ============================================================
-// ✅ loadPendingPayments() — Numeric ID → Formatted ID Match
+// ✅ FIXED: loadPendingPayments() — Mobile + Name Match
+// ✅ Priority 1: mobile + name (double verify)
+// ✅ Priority 2: mobile only (unique)
+// ✅ Priority 3: name fallback
 // ============================================================
 async function loadPendingPayments() {
     const loadingDiv = document.getElementById('paymentLoading');
@@ -12544,9 +12547,12 @@ async function loadPendingPayments() {
     }
     
     try {
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🔍 loadPendingPayments() START');
+        console.log('📱 Match Method: Mobile + Name');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
-        // ✅ STEP 1: সব pending payment লোড (কোনো filter ছাড়া)
+        // ✅ STEP 1: সব pending payment লোড
         const { data: payments, error } = await client
             .from('payments')
             .select('*')
@@ -12567,65 +12573,149 @@ async function loadPendingPayments() {
             return;
         }
         
-        // ✅ STEP 2: Numeric IDs বের করুন
-        const numericIds = payments
-            .map(p => parseInt(p.member_id, 10))
-            .filter(id => !isNaN(id));
+        // ✅ STEP 2: Unique Mobiles এবং Names
+        const mobiles = [...new Set(
+            payments
+                .map(p => String(p.mobile || '').trim())
+                .filter(m => m && m !== 'null' && m !== 'undefined' && m.length >= 10)
+        )];
         
-        console.log('🔢 Numeric IDs:', numericIds);
+        const memberNames = [...new Set(
+            payments
+                .map(p => String(p.member_name || '').trim())
+                .filter(n => n && n !== 'null' && n !== 'undefined')
+        )];
         
-        // ✅ STEP 3: Members লোড (numeric id দিয়ে)
-        const { data: members, error: memberError } = await client
-            .from('members')
-            .select('id, member_id, full_name, mobile, present_district, status')
-            .in('id', numericIds);
+        console.log(`📱 Unique Mobiles: ${mobiles.length} টি`, mobiles);
+        console.log(`👤 Unique Names: ${memberNames.length} টি`);
         
-        if (memberError) {
-            console.warn('⚠️ Member load warning:', memberError);
+        // ✅ STEP 3: Members লোড — mobile AND full_name
+        let membersByMobile = [];
+        let membersByName = [];
+        
+        if (mobiles.length > 0) {
+            const { data: mByMobile, error: e1 } = await client
+                .from('members')
+                .select('id, member_id, full_name, mobile, present_district, status')
+                .in('mobile', mobiles);
+            
+            if (!e1 && mByMobile) membersByMobile = mByMobile;
+            else if (e1) console.warn('⚠️ Mobile query error:', e1);
         }
         
-        console.log(`👥 ${members?.length || 0} টি member পাওয়া গেছে`);
+        if (memberNames.length > 0) {
+            const { data: mByName, error: e2 } = await client
+                .from('members')
+                .select('id, member_id, full_name, mobile, present_district, status')
+                .in('full_name', memberNames);
+            
+            if (!e2 && mByName) membersByName = mByName;
+            else if (e2) console.warn('⚠️ Name query error:', e2);
+        }
         
-        // ✅ STEP 4: Member Map তৈরি (numeric id → member data)
+        // ✅ Merge + Dedupe
         const memberMap = {};
-        (members || []).forEach(m => {
-            memberMap[String(m.id)] = m;
+        [...membersByMobile, ...membersByName].forEach(m => {
+            memberMap[m.id] = m;
+        });
+        const allMembers = Object.values(memberMap);
+        
+        console.log(`👥 Mobile দিয়ে: ${membersByMobile.length} টি`);
+        console.log(`👥 Name দিয়ে: ${membersByName.length} টি`);
+        console.log(`👥 Total unique: ${allMembers.length} টি`);
+        
+        // ✅ STEP 4: 3টি Lookup Map তৈরি
+        const mobileMap = {};
+        allMembers.forEach(m => {
+            const mobile = String(m.mobile || '').trim();
+            if (mobile) mobileMap[mobile] = m;
         });
         
-        // ✅ STEP 5: Payment + Member Merge
+        const nameMap = {};
+        allMembers.forEach(m => {
+            const name = String(m.full_name || '').trim().toLowerCase();
+            if (name) nameMap[name] = m;
+        });
+        
+        const mobileNameMap = {};
+        allMembers.forEach(m => {
+            const mobile = String(m.mobile || '').trim();
+            const name = String(m.full_name || '').trim().toLowerCase();
+            if (mobile && name) mobileNameMap[`${mobile}__${name}`] = m;
+        });
+        
+        console.log(`📋 Mobile Map: ${Object.keys(mobileMap).length}`);
+        console.log(`📋 Name Map: ${Object.keys(nameMap).length}`);
+        
+        // ✅ STEP 5: Payment + Member Match (Priority Order)
         pendingPaymentsData = payments.map(p => {
-            const numericId = String(p.member_id || '').trim();
-            const member = memberMap[numericId];
+            const pMobile = String(p.mobile || '').trim();
+            const pName = String(p.member_name || '').trim().toLowerCase();
+            const pNameOrig = String(p.member_name || '').trim();
+            
+            let member = null;
+            let matchMethod = 'none';
+            
+            // 🥇 Priority 1: Mobile + Name
+            if (pMobile && pName) {
+                const key = `${pMobile}__${pName}`;
+                if (mobileNameMap[key]) {
+                    member = mobileNameMap[key];
+                    matchMethod = '📱+👤 mobile+name';
+                }
+            }
+            
+            // 🥈 Priority 2: Mobile only
+            if (!member && pMobile && mobileMap[pMobile]) {
+                member = mobileMap[pMobile];
+                matchMethod = '📱 mobile';
+            }
+            
+            // 🥉 Priority 3: Name only
+            if (!member && pName && nameMap[pName]) {
+                member = nameMap[pName];
+                matchMethod = '👤 name';
+            }
             
             if (member) {
                 return {
                     ...p,
                     _realMemberId: member.member_id,
+                    _numericId: member.id,
                     _realFullName: member.full_name,
                     _realMobile: member.mobile,
                     _realDistrict: member.present_district,
                     _realMemberStatus: member.status,
-                    _numericId: member.id,
-                    _matched: true
+                    _matched: true,
+                    _matchMethod: matchMethod
                 };
             } else {
                 return {
                     ...p,
                     _realMemberId: p.member_id,
-                    _realFullName: p.member_name || 'অজানা',
-                    _realMobile: '',
-                    _matched: false
+                    _realFullName: pNameOrig || 'অজানা',
+                    _realMobile: pMobile || '',
+                    _matched: false,
+                    _matchMethod: 'none'
                 };
             }
         });
         
+        // ✅ STEP 6: Debug Report
         const matchedCount = pendingPaymentsData.filter(p => p._matched).length;
-        console.log(`✅ ${matchedCount}/${pendingPaymentsData.length} টি payment match হয়েছে`);
+        const unmatchedCount = pendingPaymentsData.length - matchedCount;
+        
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`📊 MATCH: ✅ ${matchedCount} | ❌ ${unmatchedCount}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
         pendingPaymentsData.forEach(p => {
-            console.log(`   ${p._matched ? '✅' : '⚠️'} #${p.id}: "${p.member_id}" → "${p._realMemberId}" (${p._realFullName})`);
+            const icon = p._matched ? '✅' : '❌';
+            console.log(`   ${icon} #${p.id}: "${p.member_name?.trim()}" (${p.mobile})`);
+            console.log(`      └─ ${p._matchMethod} → ${p._realFullName} (${p._realMobile})`);
         });
         
+        // ✅ STEP 7: UI আপডেট
         if (loadingDiv) loadingDiv.style.display = 'none';
         if (table) table.style.display = 'block';
         
