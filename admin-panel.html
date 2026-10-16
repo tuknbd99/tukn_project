@@ -5539,7 +5539,7 @@ body.dark-mode .all-clear-box p {
 
 </div><!-- main-content -->
 
-    <!-- ============================================================ -->
+<!-- ============================================================ -->
 <!-- ===== ADD BRANCH ADMIN MODAL (WITH PERMISSIONS) ===== -->
 <!-- ============================================================ -->
 <div id="addBranchAdminModal" class="modal-overlay">
@@ -20398,29 +20398,36 @@ function editBranchAdminPermissions(adminId) {
         showToast('সংযোগ সমস্যা!', 'error');
         return;
     }
+    
     client.from('branch_admins')
         .select('*')
         .eq('id', adminId)
         .single()
-        .then(({ data, error }) => {
+        .then(async ({ data, error }) => {
             if (error || !data) {
-                showToast('অ্যাডমিন পাওয়া যায়নি!', 'error');
-                return;
-            }
-            const modal = document.getElementById('addBranchAdminModal');
-            if (!modal) {
-                showToast('মডাল পাওয়া যায়নি!', 'error');
+                showToast('অ্যাডমিন পাওয়া যায়নি!', 'error');
                 return;
             }
             
+            const modal = document.getElementById('addBranchAdminModal');
+            if (!modal) {
+                showToast('মডাল পাওয়া যায়নি!', 'error');
+                return;
+            }
+            
+            // ✅ STEP 1: প্রথমে ব্রাঞ্চ লিস্ট load করুন (await সহ)
+            await loadBranchesForAdminSelect();
+            
+            // ✅ STEP 2: তারপর সব ফিল্ড populate করুন
             document.getElementById('baFullName').value = data.full_name || '';
             document.getElementById('baUsername').value = data.username || '';
             document.getElementById('baPassword').value = data.password || '123456';
             document.getElementById('baEmail').value = data.email || '';
             document.getElementById('baPhone').value = data.phone || '';
-            document.getElementById('baBranch').value = data.branch_id || '';
+            document.getElementById('baBranch').value = String(data.branch_id || '');
             document.getElementById('baRole').value = data.role || 'branch_officer';
             
+            // ✅ STEP 3: Form edit mode সেট করুন
             const form = document.getElementById('addBranchAdminForm');
             if (form) {
                 form.dataset.editId = adminId;
@@ -20430,17 +20437,24 @@ function editBranchAdminPermissions(adminId) {
                 }
             }
             
-            if (data.permissions) {
+            // ✅ STEP 4: Permissions render
+            if (data.permissions && Object.keys(data.permissions).length > 0) {
                 renderPermissionGrid(data.permissions);
             } else {
                 loadRolePermissions(data.role || 'branch_officer');
             }
             
-            modal.classList.add('active');
-            
+            // ✅ STEP 5: ব্রাঞ্চ value আবার নিশ্চিত করুন (double-check)
             setTimeout(() => {
-                loadBranchesForAdminSelect();
+                const branchSelect = document.getElementById('baBranch');
+                if (branchSelect && data.branch_id) {
+                    branchSelect.value = String(data.branch_id);
+                    console.log('✅ Branch value set:', branchSelect.value);
+                }
             }, 300);
+            
+            modal.classList.add('active');
+            console.log('✅ Edit modal ready');
         })
         .catch(e => {
             console.error('Edit admin error:', e);
@@ -20503,9 +20517,23 @@ function editBranchAdminPermissions(adminId) {
     }
 
     // ============================================================
-    // ===== ADD BRANCH ADMIN FORM SUBMIT =====
-    // ============================================================
-    document.getElementById('addBranchAdminForm')?.addEventListener('submit', async function(e) {
+// ✅ FIXED: addBranchAdminForm — Single Binding + Debug
+// ============================================================
+(function bindAddBranchAdminForm() {
+    const form = document.getElementById('addBranchAdminForm');
+    if (!form) {
+        console.warn('⚠️ addBranchAdminForm পাওয়া যায়নি');
+        return;
+    }
+    
+    // ✅ Multiple binding প্রতিরোধ
+    if (form.dataset.bound === 'true') {
+        console.log('ℹ️ addBranchAdminForm already bound');
+        return;
+    }
+    form.dataset.bound = 'true';
+    
+    form.addEventListener('submit', async function(e) {
         e.preventDefault();
         
         const editId = this.dataset.editId || '';
@@ -20517,12 +20545,24 @@ function editBranchAdminPermissions(adminId) {
         const branchId = document.getElementById('baBranch').value;
         const role = document.getElementById('baRole').value;
         
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📝 Form Submit:');
+        console.log('   Mode:', editId ? 'UPDATE' : 'INSERT');
+        console.log('   Edit ID:', editId || 'new');
+        console.log('   Full Name:', fullName);
+        console.log('   Username:', username);
+        console.log('   Branch ID:', branchId);
+        console.log('   Role:', role);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
         if (!fullName || !username || !branchId) {
             showToast('সব তথ্য পূরণ করুন!', 'error');
             return;
         }
         
         const permissions = getSelectedPermissions();
+        const checkedCount = Object.values(permissions).filter(v => v === true).length;
+        console.log('   Permissions checked:', checkedCount);
         
         const client = initSupabaseClient();
         if (!client) {
@@ -20552,20 +20592,24 @@ function editBranchAdminPermissions(adminId) {
             if (password) data.password = password;
             
             if (editId) {
+                // ✅ UPDATE
+                console.log('🔄 Updating admin:', editId);
                 const { error } = await client
                     .from('branch_admins')
                     .update(data)
                     .eq('id', editId);
                 if (error) throw error;
-                showToast('✅ অ্যাডমিন আপডেট করা হয়েছে!', 'success');
+                showToast('✅ অ্যাডমিন আপডেট করা হয়েছে!', 'success');
             } else {
+                // ✅ INSERT
+                console.log('➕ Creating new admin');
                 data.created_at = new Date().toISOString();
                 data.status = 'active';
                 const { error } = await client
                     .from('branch_admins')
                     .insert([data]);
                 if (error) throw error;
-                showToast('✅ নতুন অ্যাডমিন তৈরি করা হয়েছে!', 'success');
+                showToast('✅ নতুন অ্যাডমিন তৈরি করা হয়েছে!', 'success');
             }
             
             closeAddBranchAdminModal();
@@ -20575,8 +20619,8 @@ function editBranchAdminPermissions(adminId) {
             loadBranchAdmins();
             
         } catch(e) {
-            console.error('Save admin error:', e);
-            showToast('❌ সংরক্ষণ ব্যর্থ!', 'error');
+            console.error('❌ Save admin error:', e);
+            showToast('❌ সংরক্ষণ ব্যর্থ: ' + (e.message || 'অজানা ত্রুটি'), 'error');
         } finally {
             if (submitBtn) {
                 submitBtn.disabled = false;
@@ -20584,6 +20628,9 @@ function editBranchAdminPermissions(adminId) {
             }
         }
     });
+    
+    console.log('✅ addBranchAdminForm bound (single instance)');
+})();
 
 // ============================================================
 // ✅ FIXED: loadRealDashboard() - সদস্যের ফান্ড ডেটা লোড
