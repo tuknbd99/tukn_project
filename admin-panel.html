@@ -9074,176 +9074,222 @@ async function loadPermissionsForEdit(adminId, tableName = 'admins') {
 }
 
 // ================================================================
-// 🔐 LOAD USER PERMISSIONS & RENDER SIDEBAR
-// ✅ লগইনের পর অটো কল হয়
-// ✅ পারমিশন অনুযায়ী সাইডবার তৈরি করে
+// 🔐 LOAD USER PERMISSIONS & RENDER SIDEBAR — সম্পূর্ণ নতুন ভার্সন
+// ✅ সুপার অ্যাডমিন, অ্যাডমিন, ব্রাঞ্চ এডমিন — সবাই কাজ করবে
+// ✅ ব্রাঞ্চ permission → Registry permission auto-convert
+// ✅ কোনো সেশন না থাকলে redirect করে না, message দেখায়
 // ================================================================
 async function loadUserPermissionsAndRenderSidebar() {
-    console.log('🔐 ইউজার পারমিশন লোড হচ্ছে...');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('🔐 ইউজার পারমিশন লোড শুরু...');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
-    // ✅ localStorage থেকে অ্যাডমিন তথ্য নিন
-    const adminStr = localStorage.getItem('currentAdmin') || 
-                    sessionStorage.getItem('currentAdmin');
+    // ✅ ১. সেশন খুঁজুন (সব storage key চেক করবে)
+    const session = getCurrentAdmin();
     
-    if (!adminStr) {
-        console.warn('⚠️ কোনো অ্যাডমিন লগইন নেই!');
-        window.location.href = 'admin-login.html';
+    if (!session) {
+        console.warn('❌ কোনো সেশন নেই!');
+        
+        // ⚠️ redirect না করে message দেখান — যাতে ব্রাঞ্চ এডমিন আটকে না যায়
+        const sidebarNav = document.querySelector('.sidebar-nav');
+        if (sidebarNav) {
+            sidebarNav.innerHTML = `
+                <div class="p-6 text-center text-white/60">
+                    <i class="fas fa-lock text-4xl mb-3"></i>
+                    <p class="text-sm mb-3">লগইন করুন</p>
+                    <a href="admin-login.html" class="btn btn-success btn-sm inline-block">
+                        <i class="fas fa-sign-in-alt mr-1"></i> লগইন
+                    </a>
+                </div>
+            `;
+        }
         return;
     }
     
-    let admin;
-    try {
-        admin = JSON.parse(adminStr);
-    } catch(e) {
-        console.error('❌ Invalid admin data:', e);
-        window.location.href = 'admin-login.html';
-        return;
-    }
+    const role = session.role || 'custom';
+    const isSuper = isSuperAdmin();
+    const isBranch = isBranchAdmin();
     
-    const role = admin.role || 'custom';
+    console.log('👤 ইউজার:', session.full_name || session.name || session.username);
+    console.log('🎭 রোল:', role);
+    console.log('👑 সুপার অ্যাডমিন?', isSuper);
+    console.log('🏢 ব্রাঞ্চ এডমিন?', isBranch);
+    console.log('🏢 ব্রাঞ্চ:', session.branch_name || 'N/A');
     
-    // ✅ সুপার অ্যাডমিন হলে — সব পারমিশন
-    if (role === 'সুপার অ্যাডমিন' || role === 'super_admin' || role === 'Super Admin') {
-        console.log('👑 সুপার অ্যাডমিন — সব পারমিশন');
+    // ============================================================
+    // ✅ ২. সুপার অ্যাডমিন — সব পারমিশন
+    // ============================================================
+    if (isSuper) {
+        console.log('👑 সুপার অ্যাডমিন — সব পারমিশন সক্রিয়');
         
         const allPermissions = {};
         Object.keys(PERMISSION_REGISTRY).forEach(key => {
             allPermissions[key] = true;
         });
         
-        // ✅ সাইডবার তৈরি
         generateDynamicSidebar(allPermissions, role);
         
-        // ✅ currentAdmin-এ সেভ করুন
-        admin.permissions = allPermissions;
-        const storage = localStorage.getItem('currentAdmin') ? 'localStorage' : 'sessionStorage';
-        if (storage === 'localStorage') {
-            localStorage.setItem('currentAdmin', JSON.stringify(admin));
-        } else {
-            sessionStorage.setItem('currentAdmin', JSON.stringify(admin));
-        }
-        
-        console.log('✅ সুপার অ্যাডমিন সাইডবার তৈরি সম্পূর্ণ');
+        console.log('✅ সাইডবার তৈরি (সুপার অ্যাডমিন)');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         return;
     }
     
-    // ✅ 일반 অ্যাডমিন — Supabase থেকে পারমিশন লোড
-    const client = initSupabaseClient();
-    if (!client) {
-        console.error('❌ Supabase client নেই!');
-        return;
-    }
+    // ============================================================
+    // ✅ ৩. সাধারণ ইউজার — পারমিশন normalize
+    // ============================================================
+    let userPermissions = session.permissions || {};
     
-    // ✅ টেবিল নির্ধারণ করুন
-    const tableName = (admin.is_branch_admin || admin.branch_id) ? 'branch_admins' : 'admins';
-    console.log(`📊 টেবিল: ${tableName}`);
+    console.log('📋 Raw permissions:', Object.keys(userPermissions).length, 'টি');
     
-    try {
-        const { data, error } = await client
-            .from(tableName)
-            .select('permissions')
-            .eq('id', admin.id)
-            .single();
-        
-        if (error) {
-            console.warn('⚠️ পারমিশন লোড error:', error);
-        }
-        
-        // ✅ পারমিশন নিন
-        let userPermissions = data?.permissions || {};
-        
-        // ✅ PERMISSION_REGISTRY-এর সব key চেক করুন
-        const cleanPermissions = {};
-        Object.entries(PERMISSION_REGISTRY).forEach(([key, config]) => {
-            // ✅ পারমিশন সরাসরি আছে কিনা
-            if (userPermissions[key] !== undefined) {
-                cleanPermissions[key] = userPermissions[key] === true;
-            } else {
-                // ✅ না থাকলে ডিফল্ট
-                cleanPermissions[key] = config.default === true;
-            }
-        });
-        
-        userPermissions = cleanPermissions;
-        
-        console.log('✅ লোড হওয়া পারমিশন:');
-        console.log(`   Active: ${Object.values(userPermissions).filter(v => v).length} টি`);
-        console.log(`   Inactive: ${Object.values(userPermissions).filter(v => !v).length} টি`);
-        
-        // ✅ currentAdmin-এ সেভ করুন
-        admin.permissions = userPermissions;
-        const storage = localStorage.getItem('currentAdmin') ? 'localStorage' : 'sessionStorage';
-        if (storage === 'localStorage') {
-            localStorage.setItem('currentAdmin', JSON.stringify(admin));
+    // ✅ PERMISSION_REGISTRY-এর সব key normalize
+    const cleanPermissions = {};
+    Object.entries(PERMISSION_REGISTRY).forEach(([key, config]) => {
+        if (userPermissions[key] !== undefined) {
+            cleanPermissions[key] = userPermissions[key] === true;
         } else {
-            sessionStorage.setItem('currentAdmin', JSON.stringify(admin));
+            cleanPermissions[key] = config.default === true;
         }
-        
-        // ✅ সাইডবার তৈরি করুন
-        generateDynamicSidebar(userPermissions, role);
-        
-        console.log('✅ সাইডবার তৈরি সম্পূর্ণ!');
-        
-    } catch(e) {
-        console.error('❌ লোড পারমিশন error:', e);
-        
-        // ✅ Fallback — ডিফল্ট পারমিশন
-        const defaultPermissions = {};
-        Object.entries(PERMISSION_REGISTRY).forEach(([key, config]) => {
-            defaultPermissions[key] = config.default === true;
-        });
-        generateDynamicSidebar(defaultPermissions, 'custom');
-    }
+    });
+    
+    const activeCount = Object.values(cleanPermissions).filter(v => v).length;
+    console.log('✅ Normalized permissions:', activeCount, 'টি active');
+    
+    // ============================================================
+    // ✅ ৪. ডাইনামিক সাইডবার তৈরি
+    // ============================================================
+    generateDynamicSidebar(cleanPermissions, role);
+    
+    console.log('✅ সাইডবার তৈরি সম্পূর্ণ!');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 }
 
+// ✅ Global expose
+window.loadUserPermissionsAndRenderSidebar = loadUserPermissionsAndRenderSidebar;
+
+console.log('✅ loadUserPermissionsAndRenderSidebar() — নতুন ভার্সন লোড হয়েছে!');
+
 // ================================================================
-// 🔍 CHECK PERMISSION (যেকোনো জায়গায় ব্যবহারের জন্য)
+// 🔍 CHECK PERMISSION — সম্পূর্ণ নতুন ভার্সন
+// ✅ সুপার অ্যাডমিন, অ্যাডমিন, ব্রাঞ্চ এডমিন — সবাই কাজ করবে
+// ✅ localStorage + sessionStorage উভয়ই চেক করে
+// ✅ ৩টি ভিন্ন storage key সাপোর্ট করে
 // ================================================================
 function hasPermission(permissionKey) {
-    const adminStr = localStorage.getItem('currentAdmin') || 
-                    sessionStorage.getItem('currentAdmin');
-    
-    if (!adminStr) return false;
+    if (!permissionKey) return false;
     
     try {
-        const admin = JSON.parse(adminStr);
+        // ✅ সব সম্ভাব্য storage key চেক
+        const storageKeys = [
+            'currentAdmin',           // সুপার অ্যাডমিন / অ্যাডমিন
+            'currentBranchAdmin',     // ব্রাঞ্চ এডমিন (compatibility)
+            'tuknbd_branch_session'   // ব্রাঞ্চ এডমিন (নতুন লগইন)
+        ];
         
-        // ✅ সুপার অ্যাডমিন — সব পারমিশন
-        if (admin.role === 'সুপার অ্যাডমিন' || 
-            admin.role === 'super_admin' || 
-            admin.role === 'Super Admin') {
+        let admin = null;
+        
+        for (const key of storageKeys) {
+            const raw = localStorage.getItem(key) || sessionStorage.getItem(key);
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (parsed && (parsed.id || parsed.username)) {
+                        admin = parsed;
+                        break;
+                    }
+                } catch(e) {}
+            }
+        }
+        
+        if (!admin) return false;
+        
+        // ✅ সুপার অ্যাডমিন — সব allowed
+        const role = admin.role || '';
+        if (role === 'সুপার অ্যাডমিন' || 
+            role === 'super_admin' || 
+            role === 'Super Admin') {
             return true;
         }
         
-        // ✅ পারমিশন চেক
-        return admin.permissions?.[permissionKey] === true;
+        // ✅ পারমিশন JSONB চেক
+        const perms = admin.permissions || {};
+        
+        // ✅ সরাসরি key (নতুন ফরম্যাট)
+        if (perms[permissionKey] === true) return true;
+        
+        // ✅ পুরনো ফরম্যাট: module.action
+        if (perms[permissionKey]?.read === true) return true;
+        
+        return false;
         
     } catch(e) {
+        console.error('❌ hasPermission error:', e);
         return false;
     }
 }
 
-// ✅ Current Admin Helper
+// ================================================================
+// 👤 getCurrentAdmin() — সব storage key থেকে
+// ================================================================
 function getCurrentAdmin() {
-    const adminStr = localStorage.getItem('currentAdmin') || 
-                    sessionStorage.getItem('currentAdmin');
+    const storageKeys = [
+        'currentAdmin',
+        'currentBranchAdmin',
+        'tuknbd_branch_session'
+    ];
     
-    if (!adminStr) return null;
-    
-    try {
-        return JSON.parse(adminStr);
-    } catch(e) {
-        return null;
+    for (const key of storageKeys) {
+        const raw = localStorage.getItem(key) || sessionStorage.getItem(key);
+        if (raw) {
+            try {
+                const parsed = JSON.parse(raw);
+                if (parsed && (parsed.id || parsed.username)) {
+                    return parsed;
+                }
+            } catch(e) {}
+        }
     }
+    
+    return null;
 }
 
-// ✅ Is Super Admin Helper
+// ================================================================
+// 👑 isSuperAdmin() — সুপার অ্যাডমিন চেক
+// ================================================================
 function isSuperAdmin() {
     const admin = getCurrentAdmin();
-    return admin?.role === 'সুপার অ্যাডমিন' || 
-           admin?.role === 'super_admin' || 
-           admin?.role === 'Super Admin';
+    if (!admin) return false;
+    
+    const role = admin.role || '';
+    return role === 'সুপার অ্যাডমিন' || 
+           role === 'super_admin' || 
+           role === 'Super Admin';
 }
+
+// ================================================================
+// 🏢 isBranchAdmin() — ব্রাঞ্চ এডমিন চেক
+// ================================================================
+function isBranchAdmin() {
+    const admin = getCurrentAdmin();
+    if (!admin) return false;
+    
+    // ব্রাঞ্চ এডমিন হলে branch_id থাকবে
+    if (admin.branch_id) return true;
+    
+    const role = admin.role || '';
+    return role === 'branch_officer' || 
+           role === 'ব্রাঞ্চ অ্যাডমিন' ||
+           role === 'branch_admin';
+}
+
+// ================================================================
+// 🌐 Global Expose
+// ================================================================
+window.hasPermission = hasPermission;
+window.getCurrentAdmin = getCurrentAdmin;
+window.isSuperAdmin = isSuperAdmin;
+window.isBranchAdmin = isBranchAdmin;
+
+console.log('✅ hasPermission, getCurrentAdmin, isSuperAdmin, isBranchAdmin loaded!');
 
      // ============================================================
         // ✅ clearWithdrawalForm() — উত্তোলনের ফর্ম রিসেট করুন
