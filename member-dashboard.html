@@ -10895,15 +10895,26 @@ async function loadReferralData() {
             .order('created_at', { ascending: false });
         
         console.log(`📋 Total bonus logs: ${bonusLogs?.length || 0}`);
+
+        // ═══════════════════════════════════════════════════════
+        // STEP 7.5: Referral Bonus Lock থেকে actual credits আনুন
+        // ═══════════════════════════════════════════════════════
+        const { data: allBonusLocks } = await client
+            .from('referral_bonus_lock')
+            .select('level, bonus_amount, downline_id')
+            .eq('referrer_id', myInfo.member_id);
         
-        // ═══════════════════════════════════════════════════════
-        // STEP 8: Bonus Map তৈরি (Mobile + Name + ID)
-        // ═══════════════════════════════════════════════════════
-        window._bonusMap = {
-            byMobile: {},
-            byName: {},
-            byId: {}
-        };
+        console.log(`💰 Total Bonus Locks from DB: ${(allBonusLocks || []).length}`);
+        console.log(`💰 Total Lock Amount: ${(allBonusLocks || []).reduce((s, b) => s + Number(b.bonus_amount || 0), 0)}`);
+                
+                // ═══════════════════════════════════════════════════════
+                // STEP 8: Bonus Map তৈরি (Mobile + Name + ID)
+                // ═══════════════════════════════════════════════════════
+                window._bonusMap = {
+                    byMobile: {},
+                    byName: {},
+                    byId: {}
+                };
         
         (bonusLogs || []).forEach(log => {
             const mobileKey = String(log.from_member_mobile || '').replace(/\D/g, '');
@@ -10967,12 +10978,36 @@ async function loadReferralData() {
             
             // Bonus Calculate
             refs.forEach(ref => {
+                // ═══════════════════════════════════════════════════
+                // Priority 1: referral_bonus_lock থেকে actual credit
+                // ═══════════════════════════════════════════════════
+                const lockBonuses = (allBonusLocks || []).filter(b =>
+                    String(b.downline_id || '').trim() === String(ref.member_id || '').trim() &&
+                    Number(b.level) === level
+                );
+                
+                if (lockBonuses.length > 0) {
+                    const sum = lockBonuses.reduce((s, b) => s + Number(b.bonus_amount || 0), 0);
+                    levelStats[level].totalBonus += sum;
+                    levelStats[level].withBonus++;
+                    return;
+                }
+                
+                // ═══════════════════════════════════════════════════
+                // Priority 2: referral_bonus_log থেকে
+                // ═══════════════════════════════════════════════════
                 const bonusesFromThis = findBonusesForMember(ref);
                 if (bonusesFromThis.length > 0) {
                     const sum = bonusesFromThis.reduce((s, l) => s + Number(l.amount), 0);
                     levelStats[level].totalBonus += sum;
                     levelStats[level].withBonus++;
-                } else if (ref._firstPayment) {
+                    return;
+                }
+                
+                // ═══════════════════════════════════════════════════
+                // Priority 3: Expected (fixed rate calculation)
+                // ═══════════════════════════════════════════════════
+                if (ref._firstPayment) {
                     const expected = Math.round(ref._firstPayment * (rate / 100));
                     levelStats[level].totalBonus += expected;
                     levelStats[level].withBonus++;
