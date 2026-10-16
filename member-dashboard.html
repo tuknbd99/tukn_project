@@ -11067,14 +11067,117 @@ async function loadReferralData() {
         updateReferralLink();
         updateFundsDisplay();
         
-        // Bonus History Section Update
-        if (typeof updateBonusHistorySection === 'function') {
-            try {
-                updateBonusHistorySection(bonusLogs || []);
-            } catch(e) {
-                console.warn('⚠️ Bonus history update error:', e);
+       // ═══════════════════════════════════════════════════════
+// Bonus History Section Update (from referral_bonus_lock)
+// ═══════════════════════════════════════════════════════
+if (typeof updateBonusHistorySection === 'function') {
+    try {
+        // ─────────────────────────────────────────────────
+        // Downline Lookup Maps (Mobile + Name + ID)
+        // ─────────────────────────────────────────────────
+        const downlineByIdMap = {};
+        const downlineByMobileMap = {};
+        const downlineByNameMap = {};
+        
+        normalizedMembers.forEach(m => {
+            if (!m) return;
+            
+            // By member_id (multiple formats)
+            const rawId = String(m.member_id || '').trim();
+            if (rawId) {
+                downlineByIdMap[rawId] = m;
+                downlineByIdMap[rawId.replace(/\s+/g, '')] = m;
+                downlineByIdMap[rawId.replace(/-/g, '')] = m;
+                downlineByIdMap[rawId.replace(/\s+/g, '-')] = m;
+                downlineByIdMap[rawId.replace(/-/g, ' ')] = m;
+                downlineByIdMap[rawId.replace(/\s+/g, '').replace(/-/g, '').toUpperCase()] = m;
             }
+            
+            // By mobile (digits only)
+            const mobile = String(m.mobile || '').replace(/\D/g, '');
+            if (mobile) {
+                downlineByMobileMap[mobile] = m;
+            }
+            
+            // By name (trimmed, lowercase)
+            const nameKey = String(m.full_name || '').trim().toLowerCase();
+            if (nameKey) {
+                downlineByNameMap[nameKey] = m;
+            }
+        });
+        
+        console.log('📋 Lookup Maps built:', {
+            byId: Object.keys(downlineByIdMap).length,
+            byMobile: Object.keys(downlineByMobileMap).length,
+            byName: Object.keys(downlineByNameMap).length
+        });
+        
+        // ─────────────────────────────────────────────────
+        // Helper: Find downline from bonus lock record
+        // ─────────────────────────────────────────────────
+        function findDownlineFromLock(b) {
+            // Priority 1: member_id (multiple formats)
+            const rawId = String(b.downline_id || '').trim();
+            if (rawId) {
+                const idKeys = [
+                    rawId,
+                    rawId.replace(/\s+/g, ''),
+                    rawId.replace(/-/g, ''),
+                    rawId.replace(/\s+/g, '-'),
+                    rawId.replace(/-/g, ' '),
+                    rawId.replace(/\s+/g, '').replace(/-/g, '').toUpperCase()
+                ];
+                for (const k of idKeys) {
+                    if (downlineByIdMap[k]) return downlineByIdMap[k];
+                }
+            }
+            
+            // Priority 2: note থেকে mobile extract
+            if (b.note) {
+                const mobileMatch = String(b.note).match(/01[3-9]\d{8}/);
+                if (mobileMatch) {
+                    const m = downlineByMobileMap[mobileMatch[0]];
+                    if (m) return m;
+                }
+                
+                // Priority 3: note থেকে name extract
+                const parts = String(b.note).split('—').pop().split('-').pop().trim();
+                if (parts) {
+                    const nameKey = parts.toLowerCase();
+                    if (downlineByNameMap[nameKey]) return downlineByNameMap[nameKey];
+                }
+            }
+            
+            return null;
         }
+        
+        // ─────────────────────────────────────────────────
+        // Convert referral_bonus_lock → bonusLogs format
+        // ─────────────────────────────────────────────────
+        const bonusHistoryFromLock = (allBonusLocks || []).map(b => {
+            const downline = findDownlineFromLock(b);
+            
+            return {
+                id: b.id,
+                amount: Number(b.bonus_amount) || 0,
+                level: Number(b.level) || 0,
+                from_member_id: b.downline_id || '',
+                from_member_name: downline?.full_name || 'Unknown',
+                from_member_mobile: downline?.mobile || '',
+                commission_rate: (b.level === 1 ? 15 : b.level === 2 ? 10 : 5),
+                savings_amount: Number(b.first_payment_amount) || 0,
+                created_at: b.locked_at || new Date().toISOString(),
+                note: b.note || ''
+            };
+        });
+        
+        console.log('🎁 Bonus History from lock:', bonusHistoryFromLock.length);
+        
+        updateBonusHistorySection(bonusHistoryFromLock);
+    } catch(e) {
+        console.warn('⚠️ Bonus history update error:', e);
+    }
+}
         
         // Referral Bonus Summary Card Update
         if (typeof updateReferralBonusSummary === 'function') {
