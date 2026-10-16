@@ -10885,68 +10885,227 @@ async function loadReferralData() {
             console.log(`📊 Level ${level}: ${nextLevelMembers.length} জন`);
         }
         
-        // ═══════════════════════════════════════════════════════
-        // STEP 7: Referral Bonus Log লোড
-        // ═══════════════════════════════════════════════════════
-        const { data: bonusLogs } = await client
-            .from('referral_bonus_log')
-            .select('*')
-            .eq('member_id', currentUser.id)
-            .order('created_at', { ascending: false });
+                // ═══════════════════════════════════════════════════════
+                // STEP 7: Referral Bonus Log লোড
+                // ═══════════════════════════════════════════════════════
+                const { data: bonusLogs } = await client
+                    .from('referral_bonus_log')
+                    .select('*')
+                    .eq('member_id', currentUser.id)
+                    .order('created_at', { ascending: false });
+                
+                console.log(`📋 Total bonus logs: ${bonusLogs?.length || 0}`);
         
-        console.log(`📋 Total bonus logs: ${bonusLogs?.length || 0}`);
-
-        // ═══════════════════════════════════════════════════════
-        // STEP 7.5: Referral Bonus Lock থেকে actual credits আনুন
-        // ═══════════════════════════════════════════════════════
-        const { data: allBonusLocks } = await client
+                const { data: allBonusLocks } = await client
             .from('referral_bonus_lock')
-            .select('level, bonus_amount, downline_id')
-            .eq('referrer_id', myInfo.member_id);
+            .select('id, level, bonus_amount, downline_id, first_payment_amount, locked_at, note')
+            .eq('referrer_id', myInfo.member_id)
+            .order('locked_at', { ascending: false });
         
         console.log(`💰 Total Bonus Locks from DB: ${(allBonusLocks || []).length}`);
         console.log(`💰 Total Lock Amount: ${(allBonusLocks || []).reduce((s, b) => s + Number(b.bonus_amount || 0), 0)}`);
-                
-                // ═══════════════════════════════════════════════════════
-                // STEP 8: Bonus Map তৈরি (Mobile + Name + ID)
-                // ═══════════════════════════════════════════════════════
-                window._bonusMap = {
-                    byMobile: {},
-                    byName: {},
-                    byId: {}
-                };
+
         
-        (bonusLogs || []).forEach(log => {
-            const mobileKey = String(log.from_member_mobile || '').replace(/\D/g, '');
-            const nameKey = String(log.from_member_name || '').trim().toLowerCase();
-            const rawId = String(log.from_member_id || '').trim();
+               // ═══════════════════════════════════════════════════════
+            // STEP 8: Bonus Map তৈরি (Mobile + Name + ID)
+            // Source: referral_bonus_log + referral_bonus_lock
+            // ═══════════════════════════════════════════════════════
+            window._bonusMap = {
+                byMobile: {},
+                byName: {},
+                byId: {}
+            };
             
-            if (mobileKey) {
-                if (!window._bonusMap.byMobile[mobileKey]) window._bonusMap.byMobile[mobileKey] = [];
-                window._bonusMap.byMobile[mobileKey].push(log);
-            }
-            if (nameKey) {
-                if (!window._bonusMap.byName[nameKey]) window._bonusMap.byName[nameKey] = [];
-                window._bonusMap.byName[nameKey].push(log);
-            }
-            if (rawId && rawId !== 'UNKNOWN') {
-                const idKeys = [
-                    rawId,
-                    rawId.replace(/\s+/g, '').replace(/-/g, '').toUpperCase(),
-                    rawId.replace(/\s+/g, '-'),
-                    rawId.replace(/-/g, ' '),
-                    rawId.replace(/-/g, ''),
-                    rawId.replace(/\s+/g, '')
-                ];
-                idKeys.forEach(k => {
-                    if (!k) return;
-                    if (!window._bonusMap.byId[k]) window._bonusMap.byId[k] = [];
-                    if (!window._bonusMap.byId[k].find(l => l.id === log.id)) {
-                        window._bonusMap.byId[k].push(log);
+            // ─────────────────────────────────────────────────────
+            // ৮.১: referral_bonus_log থেকে যোগ করুন
+            // ─────────────────────────────────────────────────────
+            (bonusLogs || []).forEach(log => {
+                const mobileKey = String(log.from_member_mobile || '').replace(/\D/g, '');
+                const nameKey = String(log.from_member_name || '').trim().toLowerCase();
+                const rawId = String(log.from_member_id || '').trim();
+                
+                if (mobileKey) {
+                    if (!window._bonusMap.byMobile[mobileKey]) window._bonusMap.byMobile[mobileKey] = [];
+                    window._bonusMap.byMobile[mobileKey].push(log);
+                }
+                if (nameKey) {
+                    if (!window._bonusMap.byName[nameKey]) window._bonusMap.byName[nameKey] = [];
+                    window._bonusMap.byName[nameKey].push(log);
+                }
+                if (rawId && rawId !== 'UNKNOWN') {
+                    const idKeys = [
+                        rawId,
+                        rawId.replace(/\s+/g, '').replace(/-/g, '').toUpperCase(),
+                        rawId.replace(/\s+/g, '-'),
+                        rawId.replace(/-/g, ' '),
+                        rawId.replace(/-/g, ''),
+                        rawId.replace(/\s+/g, '')
+                    ];
+                    idKeys.forEach(k => {
+                        if (!k) return;
+                        if (!window._bonusMap.byId[k]) window._bonusMap.byId[k] = [];
+                        if (!window._bonusMap.byId[k].find(l => l.id === log.id)) {
+                            window._bonusMap.byId[k].push(log);
+                        }
+                    });
+                }
+            });
+            
+            console.log(`📋 From referral_bonus_log: ${(bonusLogs || []).length} logs`);
+            
+            // ─────────────────────────────────────────────────────
+            // ৮.২: referral_bonus_lock থেকে যোগ করুন (actual credits)
+            // ─────────────────────────────────────────────────────
+            console.log(`💰 Processing ${(allBonusLocks || []).length} bonus locks into _bonusMap`);
+            
+            // Downline lookup map তৈরি করুন (all format এ)
+            const downlineByIdLookup = {};
+            const downlineByMobileLookup = {};
+            const downlineByNameLookup = {};
+            
+            normalizedMembers.forEach(m => {
+                if (!m) return;
+                
+                // By ID (multiple formats)
+                const rawId = String(m.member_id || '').trim();
+                if (rawId) {
+                    downlineByIdLookup[rawId] = m;
+                    downlineByIdLookup[rawId.replace(/\s+/g, '')] = m;
+                    downlineByIdLookup[rawId.replace(/-/g, '')] = m;
+                    downlineByIdLookup[rawId.replace(/\s+/g, '-')] = m;
+                    downlineByIdLookup[rawId.replace(/-/g, ' ')] = m;
+                    downlineByIdLookup[rawId.replace(/\s+/g, '').replace(/-/g, '').toUpperCase()] = m;
+                }
+                
+                // By Mobile
+                const mobile = String(m.mobile || '').replace(/\D/g, '');
+                if (mobile) {
+                    downlineByMobileLookup[mobile] = m;
+                }
+                
+                // By Name
+                const nameKey = String(m.full_name || '').trim().toLowerCase();
+                if (nameKey) {
+                    if (!downlineByNameLookup[nameKey]) downlineByNameLookup[nameKey] = [];
+                    downlineByNameLookup[nameKey].push(m);
+                }
+            });
+            
+            console.log('📋 Downline Lookup Maps:', {
+                byId: Object.keys(downlineByIdLookup).length,
+                byMobile: Object.keys(downlineByMobileLookup).length,
+                byName: Object.keys(downlineByNameLookup).length
+            });
+            
+            // ─────────────────────────────────────────────────────
+            // Helper: downline খুঁজুন (ID → Mobile → Name)
+            // ─────────────────────────────────────────────────────
+            function findDownlineFromLock(lock) {
+                const downlineId = String(lock.downline_id || '').trim();
+                
+                // Priority 1: ID (multiple formats)
+                if (downlineId) {
+                    const idKeys = [
+                        downlineId,
+                        downlineId.replace(/\s+/g, ''),
+                        downlineId.replace(/-/g, ''),
+                        downlineId.replace(/\s+/g, '-'),
+                        downlineId.replace(/-/g, ' '),
+                        downlineId.replace(/\s+/g, '').replace(/-/g, '').toUpperCase()
+                    ];
+                    for (const k of idKeys) {
+                        if (downlineByIdLookup[k]) return downlineByIdLookup[k];
                     }
-                });
+                }
+                
+                // Priority 2: note থেকে mobile extract
+                if (lock.note) {
+                    const mobileMatch = String(lock.note).match(/01[3-9]\d{8}/);
+                    if (mobileMatch) {
+                        const m = downlineByMobileLookup[mobileMatch[0]];
+                        if (m) return m;
+                    }
+                    
+                    // Priority 3: note থেকে name extract
+                    const parts = String(lock.note).split('—').pop().split('-').pop().trim();
+                    if (parts) {
+                        const nameKey = parts.toLowerCase();
+                        if (downlineByNameLookup[nameKey] && downlineByNameLookup[nameKey].length === 1) {
+                            return downlineByNameLookup[nameKey][0];
+                        }
+                    }
+                }
+                
+                return null;
             }
-        });
+            
+            // ─────────────────────────────────────────────────────
+            // Process each lock
+            // ─────────────────────────────────────────────────────
+            (allBonusLocks || []).forEach(lock => {
+                const downlineId = String(lock.downline_id || '').trim();
+                const downline = findDownlineFromLock(lock);
+                
+                // Log format এ convert
+                const lockLog = {
+                    id: `lock-${lock.id}`,
+                    from_member_id: downlineId,
+                    from_member_mobile: downline?.mobile || '',
+                    from_member_name: downline?.full_name || '',
+                    level: Number(lock.level) || 0,
+                    amount: Number(lock.bonus_amount) || 0,
+                    savings_amount: Number(lock.first_payment_amount) || 0,
+                    created_at: lock.locked_at || new Date().toISOString(),
+                    note: lock.note || '',
+                    _source: 'lock'
+                };
+                
+                // By ID (all formats)
+                if (downlineId) {
+                    const idKeys = [
+                        downlineId,
+                        downlineId.replace(/\s+/g, ''),
+                        downlineId.replace(/-/g, ''),
+                        downlineId.replace(/\s+/g, '-'),
+                        downlineId.replace(/-/g, ' '),
+                        downlineId.replace(/\s+/g, '').replace(/-/g, '').toUpperCase()
+                    ];
+                    idKeys.forEach(k => {
+                        if (!k) return;
+                        if (!window._bonusMap.byId[k]) window._bonusMap.byId[k] = [];
+                        if (!window._bonusMap.byId[k].find(l => l.id === lockLog.id)) {
+                            window._bonusMap.byId[k].push(lockLog);
+                        }
+                    });
+                }
+                
+                // By Mobile
+                if (downline?.mobile) {
+                    const mobileKey = String(downline.mobile).replace(/\D/g, '');
+                    if (mobileKey) {
+                        if (!window._bonusMap.byMobile[mobileKey]) window._bonusMap.byMobile[mobileKey] = [];
+                        if (!window._bonusMap.byMobile[mobileKey].find(l => l.id === lockLog.id)) {
+                            window._bonusMap.byMobile[mobileKey].push(lockLog);
+                        }
+                    }
+                }
+                
+                // By Name
+                if (downline?.full_name) {
+                    const nameKey = String(downline.full_name).trim().toLowerCase();
+                    if (!window._bonusMap.byName[nameKey]) window._bonusMap.byName[nameKey] = [];
+                    if (!window._bonusMap.byName[nameKey].find(l => l.id === lockLog.id)) {
+                        window._bonusMap.byName[nameKey].push(lockLog);
+                    }
+                }
+            });
+            
+            console.log('📋 Final Bonus Map:', {
+                byId: Object.keys(window._bonusMap.byId).length,
+                byMobile: Object.keys(window._bonusMap.byMobile).length,
+                byName: Object.keys(window._bonusMap.byName).length,
+                totalLocksProcessed: (allBonusLocks || []).length
+            });
         
         // ═══════════════════════════════════════════════════════
         // STEP 9: Level-Wise Bonus Statistics
