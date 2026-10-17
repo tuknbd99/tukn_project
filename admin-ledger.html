@@ -1774,6 +1774,9 @@ function updateMasterLedgerSummary(data) {
     setText('masterLedgerNetBalance', '৳ ' + formatAmount(totalCredit - totalDebit));
 }
 
+// ============================================================
+// ✅ FIXED: renderMasterLedger() — ডিলিট বাটন সহ
+// ============================================================
 function renderMasterLedger() {
     const container = document.getElementById('masterLedgerContainer');
     if (!container) return;
@@ -1806,6 +1809,7 @@ function renderMasterLedger() {
                     <th class="text-right">ব্যালেন্স</th>
                     ${showBranchColumn ? '<th>ব্রাঞ্চ</th>' : ''}
                     <th>বিবরণ</th>
+                    <th>অ্যাকশন</th>  <!-- ✅ নতুন কলাম -->
                 </tr>
             </thead>
             <tbody>
@@ -1833,6 +1837,11 @@ function renderMasterLedger() {
             }
         }
         
+        // ✅ if item is reversed, show "REVERSED" badge
+        const reversedBadge = item.is_reversed 
+            ? '<span class="px-2 py-0.5 rounded-full text-xs bg-gray-200 text-gray-600 ml-1">🔒 রিভার্সড</span>'
+            : '';
+        
         html += `
             <tr>
                 <td class="text-xs whitespace-nowrap">${dateStr}</td>
@@ -1851,11 +1860,21 @@ function renderMasterLedger() {
                     ${isCredit 
                         ? '<span class="px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700">➕ জমা</span>'
                         : '<span class="px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700">➖ খরচ</span>'}
+                    ${reversedBadge}
                 </td>
                 <td class="text-right font-bold ${amountColor}">${sign} ৳${formatAmount(item.amount)}</td>
                 <td class="text-right text-xs text-gray-600">৳${formatAmount(item.balance_after || 0)}</td>
                 ${showBranchColumn ? `<td class="text-xs">${branchBadge}</td>` : ''}
                 <td class="text-xs text-gray-600">${item.description || item.source || '-'}</td>
+                <td class="whitespace-nowrap">
+                    <!-- ✅ ডিলিট বাটন -->
+                    ${!item.is_reversed ? `
+                        <button onclick="deleteMasterLedgerEntry('${item.id}')" 
+                                class="btn btn-danger btn-xs" title="ডিলিট">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    ` : '<span class="text-xs text-gray-400">—</span>'}
+                </td>
             </tr>
         `;
     });
@@ -1884,6 +1903,127 @@ function renderMasterLedger() {
         `;
     }
 }
+
+    // ============================================================
+// 🗑️ deleteMasterLedgerEntry() — লেজার এন্ট্রি ডিলিট (Soft Delete)
+// ============================================================
+async function deleteMasterLedgerEntry(id) {
+    console.log('🗑️ deleteMasterLedgerEntry:', id);
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        const { data: entry, error } = await client
+            .from('main_ledger')
+            .select('*')
+            .eq('id', id)
+            .single();
+        
+        if (error || !entry) {
+            showToast('❌ লেনদেন পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        if (entry.is_reversed) {
+            showToast('⚠️ এই লেনদেন ইতিমধ্যে reverse করা হয়েছে!', 'warning');
+            return;
+        }
+        
+        const confirmMsg = 
+            `🗑️ লেনদেন ডিলিট (Reverse)\n\n` +
+            `📝 TXN: ${entry.transaction_id}\n` +
+            `👤 সদস্য: ${entry.member_name}\n` +
+            `📊 খাত: ${entry.account}\n` +
+            `💰 পরিমাণ: ${formatAmountWithText(entry.amount)}\n` +
+            `⚙️ ধরন: ${entry.action === 'credit' ? '➕ জমা' : '➖ খরচ'}\n\n` +
+            `⚠️ reversal হলে ব্যালেন্স বিপরীতভাবে adjust হবে।\n\n` +
+            `"OK" চাপুন নিশ্চিত করতে।`;
+        
+        if (!window.confirm(confirmMsg)) return;
+        
+        const reason = prompt('📝 ডিলিটের কারণ লিখুন:', 'ভুল এন্ট্রি');
+        if (!reason || reason.trim() === '') {
+            showToast('❌ কারণ লিখুন!', 'error');
+            return;
+        }
+        
+        const adminName = currentAdmin?.full_name || currentAdmin?.username || 'Admin';
+        
+        // ১. মূল এন্ট্রি mark as reversed
+        const { error: updateError } = await client
+            .from('main_ledger')
+            .update({
+                is_reversed: true,
+                reversed_at: new Date().toISOString(),
+                reversed_by: adminName,
+                reversal_reason: reason.trim()
+            })
+            .eq('id', id);
+        
+        if (updateError) throw updateError;
+        
+        // ২. Reversal entry তৈরি
+        const reversalAmount = Number(entry.amount) || 0;
+        const reversalAction = entry.action === 'credit' ? 'debit' : 'credit';
+        
+        await client.from('main_ledger').insert([{
+            member_id: entry.member_id,
+            member_name: entry.member_name,
+            account: entry.account,
+            action: reversalAction,
+            amount: reversalAmount,
+            source: 'reversal',
+            description: `REVERSAL of ${entry.transaction_id} — ${reason.trim()}`,
+            voucher_no: entry.voucher_no,
+            reference_id: entry.id,
+            created_by: adminName,
+            metadata: {
+                reversal_of: entry.id,
+                original_txn: entry.transaction_id
+            },
+            is_reversal_entry: true
+        }]);
+        
+        // ৩. সদস্যের ব্যালেন্স আপডেট
+        const { data: member } = await client
+            .from('members')
+            .select(entry.account)
+            .eq('member_id', entry.member_id)
+            .single();
+        
+        if (member) {
+            const currentValue = Number(member[entry.account]) || 0;
+            let newValue = currentValue;
+            
+            if (entry.action === 'credit') {
+                newValue = Math.max(0, currentValue - reversalAmount);
+            } else {
+                newValue = currentValue + reversalAmount;
+            }
+            
+            await client.from('members')
+                .update({ [entry.account]: newValue })
+                .eq('member_id', entry.member_id);
+        }
+        
+        showToast(`✅ লেনদেন রিভার্স সম্পন্ন!`, 'success');
+        
+        // ৪. UI রিফ্রেশ
+        await loadMasterLedger();
+        await loadAccountWiseSummary();
+        
+    } catch(e) {
+        console.error('❌ Delete error:', e);
+        showToast(`❌ ডিলিট ব্যর্থ: ${e.message}`, 'error');
+    }
+}
+
+// ✅ Global expose
+window.deleteMasterLedgerEntry = deleteMasterLedgerEntry;
 
 function changeLedgerPage(newPage) {
     const totalPages = Math.ceil(masterLedgerData.length / masterLedgerPageSize);
