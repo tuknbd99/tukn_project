@@ -1906,6 +1906,7 @@ function renderMasterLedger() {
 
     // ============================================================
 // 🗑️ deleteMasterLedgerEntry() — লেজার এন্ট্রি ডিলিট (Soft Delete)
+// ✅ সঠিক account mapping সহ (savings → balance)
 // ============================================================
 async function deleteMasterLedgerEntry(id) {
     console.log('🗑️ deleteMasterLedgerEntry:', id);
@@ -1917,6 +1918,7 @@ async function deleteMasterLedgerEntry(id) {
     }
     
     try {
+        // ১. লেনদেন লোড
         const { data: entry, error } = await client
             .from('main_ledger')
             .select('*')
@@ -1933,6 +1935,7 @@ async function deleteMasterLedgerEntry(id) {
             return;
         }
         
+        // ২. Confirm
         const confirmMsg = 
             `🗑️ লেনদেন ডিলিট (Reverse)\n\n` +
             `📝 TXN: ${entry.transaction_id}\n` +
@@ -1953,7 +1956,7 @@ async function deleteMasterLedgerEntry(id) {
         
         const adminName = currentAdmin?.full_name || currentAdmin?.username || 'Admin';
         
-        // ১. মূল এন্ট্রি mark as reversed
+        // ৩. মূল এন্ট্রি mark as reversed
         const { error: updateError } = await client
             .from('main_ledger')
             .update({
@@ -1966,7 +1969,7 @@ async function deleteMasterLedgerEntry(id) {
         
         if (updateError) throw updateError;
         
-        // ২. Reversal entry তৈরি
+        // ৪. Reversal entry তৈরি
         const reversalAmount = Number(entry.amount) || 0;
         const reversalAction = entry.action === 'credit' ? 'debit' : 'credit';
         
@@ -1988,31 +1991,73 @@ async function deleteMasterLedgerEntry(id) {
             is_reversal_entry: true
         }]);
         
-        // ৩. সদস্যের ব্যালেন্স আপডেট
-        const { data: member } = await client
-            .from('members')
-            .select(entry.account)
-            .eq('member_id', entry.member_id)
-            .single();
+        // ✅ ৫. সঠিক Account Mapping (main_ledger.account → members.column)
+        const accountToMemberColumn = {
+            'savings': 'balance',                       // ← সঞ্চয়ের জন্য
+            'referral_bonus': 'referral_bonus',
+            'profit_savings': 'profit_balance_savings',
+            'profit_investment': 'profit_balance_investment',
+            'profit_referral': 'profit_balance_referral'
+        };
         
-        if (member) {
-            const currentValue = Number(member[entry.account]) || 0;
-            let newValue = currentValue;
+        const memberColumn = accountToMemberColumn[entry.account];
+        
+        if (memberColumn) {
+            const { data: member, error: memberError } = await client
+                .from('members')
+                .select(memberColumn)
+                .eq('member_id', entry.member_id)
+                .single();
             
-            if (entry.action === 'credit') {
-                newValue = Math.max(0, currentValue - reversalAmount);
-            } else {
-                newValue = currentValue + reversalAmount;
+            if (memberError) {
+                console.warn('⚠️ Member fetch warning:', memberError.message);
+            } else if (member) {
+                const currentValue = Number(member[memberColumn]) || 0;
+                let newValue = currentValue;
+                
+                if (entry.action === 'credit') {
+                    newValue = Math.max(0, currentValue - reversalAmount);
+                } else {
+                    newValue = currentValue + reversalAmount;
+                }
+                
+                const { error: balanceUpdateError } = await client
+                    .from('members')
+                    .update({ [memberColumn]: newValue })
+                    .eq('member_id', entry.member_id);
+                
+                if (balanceUpdateError) {
+                    console.error('❌ Balance update error:', balanceUpdateError);
+                } else {
+                    console.log(`✅ Member balance updated: ${memberColumn}: ${currentValue} → ${newValue}`);
+                }
             }
-            
-            await client.from('members')
-                .update({ [entry.account]: newValue })
-                .eq('member_id', entry.member_id);
+        } else {
+            console.warn('⚠️ Unknown account type:', entry.account);
         }
         
-        showToast(`✅ লেনদেন রিভার্স সম্পন্ন!`, 'success');
+        // ৬. Audit log
+        try {
+            await client.from('audit_logs').insert([{
+                admin_name: adminName,
+                action: 'DELETE_LEDGER_ENTRY',
+                table_name: 'main_ledger',
+                record_id: String(id),
+                changes: {
+                    transaction_id: entry.transaction_id,
+                    amount: reversalAmount,
+                    reason: reason.trim(),
+                    action: entry.action
+                },
+                created_at: new Date().toISOString()
+            }]);
+        } catch(e) {
+            console.warn('Audit log warning:', e);
+        }
         
-        // ৪. UI রিফ্রেশ
+        showToast(`✅ লেনদেন reversal সম্পন্ন!`, 'success');
+        
+        // ৭. UI রিফ্রেশ
         await loadMasterLedger();
         await loadAccountWiseSummary();
         
@@ -2022,7 +2067,6 @@ async function deleteMasterLedgerEntry(id) {
     }
 }
 
-// ✅ Global expose
 window.deleteMasterLedgerEntry = deleteMasterLedgerEntry;
 
 function changeLedgerPage(newPage) {
