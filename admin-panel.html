@@ -13,8 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     
     <style>
-
-        @media print {
+     @media print {
     /* Member Info inline compact */
     #dueInvoicePrintArea [style*="display:inline-flex"] {
         gap: 3px !important;
@@ -20383,23 +20382,46 @@ function editBranchAdminPermissions(adminId) {
 });
 
 // ============================================================
-// ✅ FIXED: loadRealDashboard() - সদস্যের ফান্ড ডেটা লোড
+// ✅ FIXED: loadRealDashboard() — Complete Fix
+// ✅ BD Timezone dates
+// ✅ সঠিক সদস্য পরিসংখ্যান (active/inactive/pending আলাদা)
+// ✅ উত্তোলনে লোন যোগ হবে না
 // ============================================================
 async function loadRealDashboard() {
     try {
         const client = initSupabaseClient();
         if (!client) {
-            console.log('❌ Supabase client পাওয়া যায়নি!');
+            console.log('❌ Supabase client পাওয়া যায়নি!');
             return;
         }
         
-        await updateAllBadges();
+        if (typeof updateAllBadges === 'function') {
+            await updateAllBadges();
+        }
         
+        // ============================================================
+        // ✅ ১. BD Timezone এ current month range
+        // ============================================================
         const now = new Date();
-        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
+        const bdParts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Dhaka',
+            year: 'numeric',
+            month: '2-digit'
+        }).formatToParts(now);
         
-        // ✅ মাসিক সংগ্রহ
+        const bdYear = bdParts.find(p => p.type === 'year')?.value || '2026';
+        const bdMonth = bdParts.find(p => p.type === 'month')?.value || '01';
+        
+        const firstDay = `${bdYear}-${bdMonth}-01T00:00:00+06:00`;
+        const lastDayDate = new Date(parseInt(bdYear), parseInt(bdMonth), 0);
+        const lastDayNum = String(lastDayDate.getDate()).padStart(2, '0');
+        const lastDay = `${bdYear}-${bdMonth}-${lastDayNum}T23:59:59+06:00`;
+        
+        console.log('📅 Monthly range:', { from: firstDay, to: lastDay });
+        
+        // ============================================================
+        // ✅ ২. মাসিক সংগ্রহ
+        // ============================================================
         const { data: monthlyPayments } = await client
             .from('payments')
             .select('amount')
@@ -20407,151 +20429,170 @@ async function loadRealDashboard() {
             .gte('submitted_at', firstDay)
             .lte('submitted_at', lastDay);
         
-        let monthlyCollection = 0;
-        if (monthlyPayments && monthlyPayments.length > 0) {
-            monthlyCollection = monthlyPayments.reduce((s, p) => s + (p.amount || 0), 0);
-        }
+        const monthlyCollection = (monthlyPayments || []).reduce(
+            (s, p) => s + (Number(p.amount) || 0), 0
+        );
         
-        // ✅ সব পেমেন্ট
-        const { data: allPayments } = await client
-            .from('payments')
-            .select('amount')
-            .eq('status', 'approved');
+        console.log(`💰 Monthly collection: ${monthlyCollection} Tk (${monthlyPayments?.length || 0} payments)`);
         
-        let totalSavings = 0;
-        if (allPayments && allPayments.length > 0) {
-            totalSavings = allPayments.reduce((s, p) => s + (p.amount || 0), 0);
-        }
-        
-        // ✅ সব সদস্যের ডেটা (ফান্ডের জন্য)
+        // ============================================================
+        // ✅ ৩. সব সদস্যের ফান্ড ডেটা
+        // ============================================================
         const { data: allMembers } = await client
             .from('members')
             .select('referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral, balance');
         
-        let totalReferralBonus = 0, totalProfitSavings = 0, totalProfitInvestment = 0, totalProfitReferral = 0;
+        let totalReferralBonus = 0;
+        let totalProfitSavings = 0;
+        let totalProfitInvestment = 0;
+        let totalProfitReferral = 0;
         let totalBalance = 0;
         
-        if (allMembers && allMembers.length > 0) {
-            totalReferralBonus = allMembers.reduce((s, m) => s + (m.referral_bonus || 0), 0);
-            totalProfitSavings = allMembers.reduce((s, m) => s + (m.profit_balance_savings || 0), 0);
-            totalProfitInvestment = allMembers.reduce((s, m) => s + (m.profit_balance_investment || 0), 0);
-            totalProfitReferral = allMembers.reduce((s, m) => s + (m.profit_balance_referral || 0), 0);
-            totalBalance = allMembers.reduce((s, m) => s + (m.balance || 0), 0);
-        }
+        (allMembers || []).forEach(m => {
+            totalReferralBonus += Number(m.referral_bonus) || 0;
+            totalProfitSavings += Number(m.profit_balance_savings) || 0;
+            totalProfitInvestment += Number(m.profit_balance_investment) || 0;
+            totalProfitReferral += Number(m.profit_balance_referral) || 0;
+            totalBalance += Number(m.balance) || 0;
+        });
         
         const totalProfit = totalProfitSavings + totalProfitInvestment + totalProfitReferral;
         
-        // ✅ লোন আদায়
+        // ============================================================
+        // ✅ ৪. লোন আদায়
+        // ============================================================
         const { data: loanPayments } = await client
             .from('loan_payments')
             .select('total_amount, emi_amount')
             .eq('status', 'approved');
         
-        let totalLoanCollected = 0;
-        if (loanPayments && loanPayments.length > 0) {
-            totalLoanCollected = loanPayments.reduce((s, p) => s + (p.total_amount || p.emi_amount || 0), 0);
-        }
+        const totalLoanCollected = (loanPayments || []).reduce(
+            (s, p) => s + (Number(p.total_amount) || Number(p.emi_amount) || 0), 0
+        );
         
-        // ✅ কল্যাণ তহবিল
+        // ============================================================
+        // ✅ ৫. কল্যাণ তহবিল
+        // ============================================================
         const { data: welfareData } = await client
             .from('welfare_fund')
             .select('total');
         
-        let totalWelfare = 0;
-        if (welfareData && welfareData.length > 0) {
-            totalWelfare = welfareData.reduce((s, w) => s + (w.total || 0), 0);
-        }
+        const totalWelfare = (welfareData || []).reduce(
+            (s, w) => s + (Number(w.total) || 0), 0
+        );
         
-        const totalFund = totalBalance + totalReferralBonus + totalProfit + totalLoanCollected + totalWelfare;
-        
-        // ✅ উত্তোলন
-        const { data: savingsWithdrawals } = await client
-            .from('withdrawals')
-            .select('amount')
-            .eq('status', 'approved')
-            .eq('type', 'মূলধন উত্তোলন');
-        
-        let totalSavingsWithdrawal = 0;
-        if (savingsWithdrawals && savingsWithdrawals.length > 0) {
-            totalSavingsWithdrawal = savingsWithdrawals.reduce((s, w) => s + (w.amount || 0), 0);
-        }
-        
-        const { data: bonusWithdrawals } = await client
-            .from('withdrawals')
-            .select('amount')
-            .eq('status', 'approved')
-            .eq('type', 'রেফারেল বোনাস উত্তোলন');
-        
-        let totalBonusWithdrawal = 0;
-        if (bonusWithdrawals && bonusWithdrawals.length > 0) {
-            totalBonusWithdrawal = bonusWithdrawals.reduce((s, w) => s + (w.amount || 0), 0);
-        }
-        
-        const { data: profitWithdrawals } = await client
-            .from('withdrawals')
-            .select('amount')
-            .eq('status', 'approved')
-            .in('type', ['সঞ্চয় লভ্যাংশ উত্তোলন', 'বিনিয়োগ লভ্যাংশ উত্তোলন', 'রেফারেল লভ্যাংশ উত্তোলন']);
-        
-        let totalProfitWithdrawal = 0;
-        if (profitWithdrawals && profitWithdrawals.length > 0) {
-            totalProfitWithdrawal = profitWithdrawals.reduce((s, w) => s + (w.amount || 0), 0);
-        }
-        
-        // ✅ লোন প্রদান
+        // ============================================================
+        // ✅ ৬. লোন প্রদান
+        // ============================================================
         const { data: loansGiven } = await client
             .from('loan_applications')
             .select('amount')
             .eq('status', 'approved');
         
-        let totalLoanGiven = 0;
-        if (loansGiven && loansGiven.length > 0) {
-            totalLoanGiven = loansGiven.reduce((s, l) => s + (l.amount || 0), 0);
-        }
+        const totalLoanGiven = (loansGiven || []).reduce(
+            (s, l) => s + (Number(l.amount) || 0), 0
+        );
         
-        const totalWithdrawal = totalSavingsWithdrawal + totalBonusWithdrawal + totalProfitWithdrawal + totalLoanGiven;
+        // ============================================================
+        // ✅ ৭. উত্তোলন (শুধু withdrawal টেবিল থেকে — লোন ছাড়া!)
+        // ============================================================
+        const { data: allWithdrawals } = await client
+            .from('withdrawals')
+            .select('amount')
+            .eq('status', 'approved');
+        
+        const totalWithdrawal = (allWithdrawals || []).reduce(
+            (s, w) => s + (Number(w.amount) || 0), 0
+        );
+        
+        // ============================================================
+        // ✅ ৮. হিসাব
+        // ============================================================
+        const totalFund = totalBalance + totalReferralBonus + totalProfit + totalWelfare;
         const netBalance = totalFund - totalWithdrawal;
         const totalDue = totalLoanGiven - totalLoanCollected;
         
-        // ✅ সদস্য পরিসংখ্যান
+        // ============================================================
+        // ✅ ৯. সদস্য পরিসংখ্যান — আলাদা query দিয়ে
+        // ============================================================
         const { count: totalMembers } = await client
             .from('members')
             .select('*', { count: 'exact', head: true });
+        
+        const { count: activeMembers } = await client
+            .from('members')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'active');
         
         const { count: pendingMembers } = await client
             .from('members')
             .select('*', { count: 'exact', head: true })
             .eq('status', 'pending');
         
-        // ✅ UI আপডেট করুন
+        const { count: inactiveMembers } = await client
+            .from('members')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'inactive');
+        
+        console.log('👥 Members:', {
+            total: totalMembers,
+            active: activeMembers,
+            pending: pendingMembers,
+            inactive: inactiveMembers
+        });
+        
+        // ============================================================
+        // ✅ ১০. UI আপডেট
+        // ============================================================
         const setText = (id, text) => {
             const el = document.getElementById(id);
-            if (el) el.innerHTML = text;
+            if (el) el.textContent = text;
         };
         
+        // সঞ্চয় ও লভ্যাংশ
         setText('dashMonthlyCollection', formatAmountWithText(monthlyCollection));
         setText('dashSavingsProfit', formatAmountWithText(totalProfitSavings));
         setText('dashInvestmentProfit', formatAmountWithText(totalProfitInvestment));
+        
+        // রেফারেল ও বোনাস
         setText('dashReferralBonus', formatAmountWithText(totalReferralBonus));
         setText('dashReferralProfit', formatAmountWithText(totalProfitReferral));
         setText('dashTotalDividend', formatAmountWithText(totalProfit));
+        
+        // লোন ও আদায়
         setText('dashTotalLoanGiven', formatAmountWithText(totalLoanGiven));
         setText('dashLoanCollected', formatAmountWithText(totalLoanCollected));
-        setText('dashLoanDue', formatAmountWithText(totalDue));
+        setText('dashLoanDue', formatAmountWithText(Math.max(0, totalDue)));
+        
+        // উত্তোলন ও ব্যালেন্স
         setText('dashTotalWithdrawal', formatAmountWithText(totalWithdrawal));
         setText('dashWelfareFund', formatAmountWithText(totalWelfare));
         setText('dashCurrentFund', formatAmountWithText(netBalance));
         
-        setText('statActiveMembers', (totalMembers || 0) - (pendingMembers || 0));
+        // সদস্য পরিসংখ্যান — সঠিকভাবে
+        setText('statActiveMembers', activeMembers || 0);
         setText('statPendingMembers2', pendingMembers || 0);
+        setText('statInactiveMembers', inactiveMembers || 0);
         setText('statTotalMembers2', totalMembers || 0);
         
         console.log('✅ ড্যাশবোর্ড আপডেট সম্পূর্ণ!');
+        console.log('   💰 Monthly:', monthlyCollection);
+        console.log('   📈 Total Profit:', totalProfit);
+        console.log('   🎁 Referral:', totalReferralBonus);
+        console.log('   🏦 Loans Given:', totalLoanGiven);
+        console.log('   📥 Collected:', totalLoanCollected);
+        console.log('   💸 Withdrawal:', totalWithdrawal);
+        console.log('   🏦 Net Balance:', netBalance);
         
     } catch(e) {
         console.error('❌ Dashboard error:', e);
     }
 }
+
+// ✅ Global expose
+window.loadRealDashboard = loadRealDashboard;
+
+console.log('✅ loadRealDashboard() FIXED version loaded');
 
     async function updateCharts() {
         const client = initSupabaseClient();
