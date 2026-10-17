@@ -17517,7 +17517,304 @@ async function loadReport() {
         showToast('✅ PDF ডাউনলোড শুরু হয়েছে!');
     }
 
+// ============================================================
+// ✅ loadAllTransactions() — সকল লেনদেন লোড (Summary + Filter সহ)
+// ============================================================
+async function loadAllTransactions() {
+    const fromDate = document.getElementById('txFromDate')?.value || '';
+    const toDate = document.getElementById('txToDate')?.value || '';
+    const typeFilter = document.getElementById('txTypeFilter')?.value || '';
+    const container = document.getElementById('allTransactionsContainer');
+    const summaryContainer = document.getElementById('txSummary');
+    
+    if (!container) {
+        console.error('❌ allTransactionsContainer not found');
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="text-center py-8">
+            <div class="loading-spinner mx-auto"></div>
+            <p class="text-gray-500 mt-2">লেনদেন লোড হচ্ছে...</p>
+        </div>
+    `;
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>';
+        return;
+    }
+    
+    try {
+        const transactions = [];
+        
+        const startDate = fromDate ? `${fromDate}T00:00:00+06:00` : '2000-01-01T00:00:00+06:00';
+        const endDate = toDate ? `${toDate}T23:59:59+06:00` : new Date().toISOString();
+        
+        console.log('📊 loadAllTransactions:');
+        console.log('   From:', startDate);
+        console.log('   To:', endDate);
+        console.log('   Type:', typeFilter || 'all');
+        
+        // ১. পেমেন্ট
+        if (!typeFilter || typeFilter === 'payment') {
+            const { data: payments } = await client
+                .from('payments')
+                .select('*')
+                .eq('status', 'approved')
+                .gte('submitted_at', startDate)
+                .lte('submitted_at', endDate);
+            
+            (payments || []).forEach(p => {
+                transactions.push({
+                    date: p.submitted_at || p.approved_at,
+                    type: 'সঞ্চয়',
+                    typeClass: 'savings',
+                    member: p.member_name,
+                    id: p.member_id,
+                    amount: Number(p.amount) || 0,
+                    note: `${p.month || ''} ${p.year || ''} - ${p.payment_method || 'cash'}`,
+                    isCredit: true
+                });
+            });
+            console.log(`   ✅ Payments: ${payments?.length || 0}`);
+        }
+        
+        // ২. লোন
+        if (!typeFilter || typeFilter === 'loan') {
+            const { data: loans } = await client
+                .from('loan_applications')
+                .select('*')
+                .eq('status', 'approved')
+                .gte('submitted_at', startDate)
+                .lte('submitted_at', endDate);
+            
+            (loans || []).forEach(l => {
+                transactions.push({
+                    date: l.approved_at || l.submitted_at,
+                    type: 'লোন',
+                    typeClass: 'loan',
+                    member: l.member_name,
+                    id: l.member_id,
+                    amount: Number(l.amount) || 0,
+                    note: l.loan_type || 'লোন',
+                    isCredit: true
+                });
+            });
+            console.log(`   ✅ Loans: ${loans?.length || 0}`);
+        }
+        
+        // ৩. উত্তোলন
+        if (!typeFilter || typeFilter === 'withdrawal') {
+            const { data: withdrawals } = await client
+                .from('withdrawals')
+                .select('*')
+                .eq('status', 'approved')
+                .gte('requested_at', startDate)
+                .lte('requested_at', endDate);
+            
+            (withdrawals || []).forEach(w => {
+                transactions.push({
+                    date: w.approved_at || w.requested_at,
+                    type: 'উত্তোলন',
+                    typeClass: 'withdrawal',
+                    member: w.member_name,
+                    id: w.member_id,
+                    amount: Number(w.amount) || 0,
+                    note: (w.type || 'উত্তোলন').replace(/ উত্তোলন/g, ''),
+                    isCredit: false
+                });
+            });
+            console.log(`   ✅ Withdrawals: ${withdrawals?.length || 0}`);
+        }
+        
+        // ৪. লোন পেমেন্ট
+        if (!typeFilter || typeFilter === 'loan_payment') {
+            const { data: loanPayments } = await client
+                .from('loan_payments')
+                .select('*')
+                .eq('status', 'approved')
+                .gte('payment_date', startDate)
+                .lte('payment_date', endDate);
+            
+            (loanPayments || []).forEach(lp => {
+                transactions.push({
+                    date: lp.payment_date,
+                    type: 'ঋণ আদায়',
+                    typeClass: 'loan',
+                    member: lp.member_name || 'অজানা',
+                    id: lp.member_id,
+                    amount: Number(lp.total_amount || lp.emi_amount) || 0,
+                    note: `কিস্তি #${lp.installment_no || '-'} - ${lp.payment_method || 'cash'}`,
+                    isCredit: true
+                });
+            });
+            console.log(`   ✅ Loan Payments: ${loanPayments?.length || 0}`);
+        }
+        
+        // ৫. রেফারেল বোনাস
+        if (!typeFilter || typeFilter === 'referral_bonus') {
+            const { data: bonusLogs } = await client
+                .from('referral_bonus_log')
+                .select('*')
+                .gte('created_at', startDate)
+                .lte('created_at', endDate);
+            
+            (bonusLogs || []).forEach(log => {
+                transactions.push({
+                    date: log.created_at,
+                    type: 'রেফারেল বোনাস',
+                    typeClass: 'referral',
+                    member: log.member_id || 'অজানা',
+                    id: log.member_id,
+                    amount: Number(log.amount) || 0,
+                    note: `L${log.level || 1} - ${log.commission_rate || 0}%`,
+                    isCredit: true
+                });
+            });
+            console.log(`   ✅ Referral Bonuses: ${bonusLogs?.length || 0}`);
+        }
+        
+        // ৬. লভ্যাংশ
+        if (!typeFilter || typeFilter.startsWith('profit_')) {
+            const { data: profits } = await client
+                .from('profit_distribution_history')
+                .select('*')
+                .gte('created_at', startDate)
+                .lte('created_at', endDate);
+            
+            (profits || []).forEach(pr => {
+                const profitType = pr.profit_type || 'savings';
+                if (typeFilter && typeFilter !== `profit_${profitType}`) return;
+                
+                transactions.push({
+                    date: pr.created_at,
+                    type: `লভ্যাংশ (${profitType === 'savings' ? 'সঞ্চয়' : profitType === 'investment' ? 'বিনিয়োগ' : 'রেফারেল'})`,
+                    typeClass: 'profit',
+                    member: pr.member_name || 'অজানা',
+                    id: pr.member_id,
+                    amount: Number(pr.amount) || 0,
+                    note: `profit_${profitType}`,
+                    isCredit: true
+                });
+            });
+            console.log(`   ✅ Profits: ${profits?.length || 0}`);
+        }
+        
+        // সাজান
+        transactions.sort((a, b) => {
+            const dateA = a.date ? new Date(a.date).getTime() : 0;
+            const dateB = b.date ? new Date(b.date).getTime() : 0;
+            return dateB - dateA;
+        });
+        
+        console.log(`📊 Total transactions: ${transactions.length}`);
+        
+        // Summary
+        const totalCredit = transactions.filter(t => t.isCredit).reduce((s, t) => s + t.amount, 0);
+        const totalDebit = transactions.filter(t => !t.isCredit).reduce((s, t) => s + t.amount, 0);
+        const netBalance = totalCredit - totalDebit;
+        
+        if (summaryContainer) {
+            summaryContainer.innerHTML = `
+                <div class="summary-card total">
+                    <div class="label">📋 মোট লেনদেন</div>
+                    <div class="amount">${transactions.length}</div>
+                </div>
+                <div class="summary-card savings">
+                    <div class="label">💰 মোট জমা</div>
+                    <div class="amount">${formatAmountWithText(totalCredit)}</div>
+                </div>
+                <div class="summary-card due">
+                    <div class="label">💸 মোট খরচ</div>
+                    <div class="amount">${formatAmountWithText(totalDebit)}</div>
+                </div>
+                <div class="summary-card ${netBalance >= 0 ? 'total' : 'due'}">
+                    <div class="label">📊 নেট ব্যালেন্স</div>
+                    <div class="amount">${formatAmountWithText(netBalance)}</div>
+                </div>
+            `;
+            console.log('✅ Summary rendered');
+        }
+        
+        // Empty state
+        if (transactions.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fas fa-inbox text-4xl block mb-3 text-gray-300"></i>
+                    <p>কোনো লেনদেন নেই</p>
+                    <p class="text-sm text-gray-400 mt-2">
+                        ${fromDate || toDate ? 'ফিল্টার মেলে কোনো ডেটা নেই' : 'এখনো কোনো লেনদেন হয়নি'}
+                    </p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Table
+        let html = `
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>তারিখ</th>
+                            <th>ধরন</th>
+                            <th>সদস্য</th>
+                            <th>আইডি</th>
+                            <th class="text-left">পরিমাণ</th>
+                            <th>বিবরণ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        transactions.forEach(t => {
+            const isCredit = t.isCredit;
+            const sign = isCredit ? '+' : '−';
+            const amountClass = isCredit ? 'text-emerald-600' : 'text-red-600';
+            
+            const badgeClass = 
+                t.typeClass === 'savings' ? 'tx-badge savings' :
+                t.typeClass === 'loan' ? 'tx-badge loan' :
+                t.typeClass === 'withdrawal' ? 'tx-badge withdrawal' :
+                t.typeClass === 'referral' ? 'tx-badge referral' :
+                'tx-badge profit';
+            
+            const dateStr = t.date ? formatDateBD(t.date) : '-';
+            
+            html += `
+                <tr>
+                    <td class="text-xs whitespace-nowrap">${dateStr}</td>
+                    <td><span class="${badgeClass}">${t.type}</span></td>
+                    <td><span class="font-medium text-sm">${t.member || '-'}</span></td>
+                    <td class="text-xs text-gray-500">${t.id || '-'}</td>
+                    <td class="text-left font-bold ${amountClass}">${sign} ${formatAmountWithText(t.amount)}</td>
+                    <td class="text-xs text-gray-500">${t.note || '-'}</td>
+                </tr>
+            `;
+        });
+        
+        html += `</tbody></table></div>`;
+        container.innerHTML = html;
+        
+        console.log('✅ loadAllTransactions complete');
+        
+    } catch(e) {
+        console.error('❌ loadAllTransactions error:', e);
+        container.innerHTML = `
+            <div class="text-red-500 p-4 text-center">
+                <i class="fas fa-exclamation-circle text-3xl block mb-2"></i>
+                <p>❌ লেনদেন লোড করতে সমস্যা</p>
+                <p class="text-sm text-gray-400 mt-2">${e.message || 'অজানা ত্রুটি'}</p>
+            </div>
+        `;
+    }
+}
 
+// ✅ Global expose
+window.loadAllTransactions = loadAllTransactions;
+
+console.log('✅ loadAllTransactions() loaded successfully');
 
     function exportTransactionsExcel() {
         const table = document.querySelector('#allTransactionsContainer table');
