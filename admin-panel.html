@@ -7932,6 +7932,125 @@ async function loadMasterLedger() {
         `;
     }
 }
+    // ============================================================
+// 🗑️ deleteMasterLedgerEntry() — লেজার এন্ট্রি ডিলিট (Soft Delete)
+// ============================================================
+async function deleteMasterLedgerEntry(id) {
+    console.log('🗑️ deleteMasterLedgerEntry:', id);
+    
+    const client = initSupabaseClient();
+    if (!client) {
+        showToast('❌ সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    try {
+        // ১. লেনদেনের তথ্য লোড
+        const { data: entry, error } = await client
+            .from('main_ledger')
+            .select('*')
+            .eq('id', id)
+            .single();
+        
+        if (error || !entry) {
+            showToast('❌ লেনদেন পাওয়া যায়নি!', 'error');
+            return;
+        }
+        
+        if (entry.is_reversed) {
+            showToast('⚠️ এই লেনদেন ইতিমধ্যে রিভার্স করা হয়েছে!', 'warning');
+            return;
+        }
+        
+        // ২. কনফার্মেশন
+        const confirmMsg = 
+            `🗑️ লেনদেন ডিলিট (Reverse)\n\n` +
+            `📝 TXN: ${entry.transaction_id}\n` +
+            `👤 সদস্য: ${entry.member_name}\n` +
+            `📊 খাত: ${entry.account}\n` +
+            `💰 পরিমাণ: ${formatAmountWithText(entry.amount)}\n` +
+            `⚙️ ধরন: ${entry.action === 'credit' ? '➕ জমা' : '➖ খরচ'}\n\n` +
+            `⚠️ reversal হলে ব্যালেন্স বিপরীতভাবে adjust হবে।\n\n` +
+            `"OK" চাপুন নিশ্চিত করতে।`;
+        
+        if (!window.confirm(confirmMsg)) return;
+        
+        const reason = prompt('📝 ডিলিটের কারণ লিখুন:', 'ভুল এন্ট্রি');
+        if (!reason || reason.trim() === '') {
+            showToast('❌ কারণ লিখুন!', 'error');
+            return;
+        }
+        
+        const adminName = currentAdmin?.full_name || currentAdmin?.username || 'Admin';
+        
+        // ৩. মূল এন্ট্রি mark as reversed
+        const { error: updateError } = await client
+            .from('main_ledger')
+            .update({
+                is_reversed: true,
+                reversed_at: new Date().toISOString(),
+                reversed_by: adminName,
+                reversal_reason: reason.trim()
+            })
+            .eq('id', id);
+        
+        if (updateError) throw updateError;
+        
+        // ৪. রিভার্সাল এন্ট্রি তৈরি (বিপরীত direction)
+        const reversalAmount = Number(entry.amount) || 0;
+        const reversalAction = entry.action === 'credit' ? 'debit' : 'credit';
+        
+        await client.from('main_ledger').insert([{
+            member_id: entry.member_id,
+            member_name: entry.member_name,
+            account: entry.account,
+            action: reversalAction,
+            amount: reversalAmount,
+            source: 'reversal',
+            description: `REVERSAL of ${entry.transaction_id} — ${reason.trim()}`,
+            voucher_no: entry.voucher_no,
+            reference_id: entry.id,
+            created_by: adminName,
+            metadata: {
+                reversal_of: entry.id,
+                original_txn: entry.transaction_id
+            },
+            is_reversal_entry: true
+        }]);
+        
+        // ৫. সদস্যের ব্যালেন্স আপডেট (যদি trigger না থাকে)
+        const { data: member } = await client
+            .from('members')
+            .select(entry.account)
+            .eq('member_id', entry.member_id)
+            .single();
+        
+        if (member) {
+            const currentValue = Number(member[entry.account]) || 0;
+            let newValue = currentValue;
+            
+            if (entry.action === 'credit') {
+                newValue = Math.max(0, currentValue - reversalAmount);
+            } else {
+                newValue = currentValue + reversalAmount;
+            }
+            
+            await client.from('members')
+                .update({ [entry.account]: newValue })
+                .eq('member_id', entry.member_id);
+        }
+        
+        // ৬. সফল মেসেজ
+        showToast(`✅ লেনদেন রিভার্স সম্পন্ন!`, 'success');
+        
+        // ৭. UI রিফ্রেশ
+        await loadMasterLedger();
+        
+    } catch(e) {
+        console.error('❌ Delete error:', e);
+        showToast(`❌ ডিলিট ব্যর্থ: ${e.message}`, 'error');
+    }
+}
 
 // ============================================================
 // 📊 updateMasterLedgerSummary() — Summary cards আপডেট
@@ -8268,6 +8387,8 @@ function viewMasterLedgerDetails(id) {
     }
 }
 
+    
+
 // ============================================================
 // 📤 exportMasterLedgerCSV() — CSV Export
 // ============================================================
@@ -8313,6 +8434,7 @@ window.resetLedgerFilter = resetLedgerFilter;
 window.changeLedgerPage = changeLedgerPage;
 window.viewMasterLedgerDetails = viewMasterLedgerDetails;
 window.exportMasterLedgerCSV = exportMasterLedgerCSV;
+window.deleteMasterLedgerEntry = deleteMasterLedgerEntry;    
 
   // ============================================================
 // 👤 viewMemberLedger() — একজন সদস্যের সম্পূর্ণ খতিয়ান
