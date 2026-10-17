@@ -7958,7 +7958,7 @@ async function deleteMasterLedgerEntry(id) {
         }
         
         if (entry.is_reversed) {
-            showToast('⚠️ এই লেনদেন ইতিমধ্যে রিভার্স করা হয়েছে!', 'warning');
+            showToast('⚠️ এই লেনদেন ইতিমধ্যে reverse করা হয়েছে!', 'warning');
             return;
         }
         
@@ -8018,7 +8018,7 @@ async function deleteMasterLedgerEntry(id) {
             is_reversal_entry: true
         }]);
         
-        // ৫. সদস্যের ব্যালেন্স আপডেট (যদি trigger না থাকে)
+        // ৫. সদস্যের ব্যালেন্স আপডেট
         const { data: member } = await client
             .from('members')
             .select(entry.account)
@@ -8040,17 +8040,22 @@ async function deleteMasterLedgerEntry(id) {
                 .eq('member_id', entry.member_id);
         }
         
-        // ৬. সফল মেসেজ
         showToast(`✅ লেনদেন রিভার্স সম্পন্ন!`, 'success');
         
-        // ৭. UI রিফ্রেশ
+        // ৬. UI রিফ্রেশ
         await loadMasterLedger();
+        await loadMembers();
+        await loadRealDashboard();
         
     } catch(e) {
         console.error('❌ Delete error:', e);
         showToast(`❌ ডিলিট ব্যর্থ: ${e.message}`, 'error');
     }
 }
+
+// ✅ Global expose
+window.deleteMasterLedgerEntry = deleteMasterLedgerEntry;
+window.renderMasterLedger = renderMasterLedger;
 
 // ============================================================
 // 📊 updateMasterLedgerSummary() — Summary cards আপডেট
@@ -8082,7 +8087,7 @@ function updateMasterLedgerSummary(data) {
 }
 
 // ============================================================
-// 📋 renderMasterLedger() — Table render
+// ✅ FIXED: renderMasterLedger() — ডিলিট বাটন সহ
 // ============================================================
 function renderMasterLedger() {
     const container = document.getElementById('masterLedgerContainer');
@@ -8157,6 +8162,11 @@ function renderMasterLedger() {
             ? '<span class="px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700">➕ জমা</span>'
             : '<span class="px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700">➖ খরচ</span>';
         
+        // ✅ if item is reversed, show "REVERSED" badge
+        const reversedBadge = item.is_reversed 
+            ? '<span class="px-2 py-0.5 rounded-full text-xs bg-gray-200 text-gray-600 ml-1">🔒 রিভার্সড</span>'
+            : '';
+        
         html += `
             <tr>
                 <td class="text-xs font-mono">${item.transaction_id || '-'}</td>
@@ -8166,7 +8176,7 @@ function renderMasterLedger() {
                     <div class="text-xs text-gray-500">${item.member_id || '-'}</div>
                 </td>
                 <td class="text-xs">${accountLabel}</td>
-                <td>${typeBadge}</td>
+                <td>${typeBadge}${reversedBadge}</td>
                 <td class="text-right font-bold ${amountColor}">
                     ${sign} ৳${formatAmount(item.amount)}
                 </td>
@@ -8174,11 +8184,17 @@ function renderMasterLedger() {
                     ৳${formatAmount(item.balance_after || 0)}
                 </td>
                 <td class="text-xs">${sourceLabel}</td>
-                <td>
+                <td class="whitespace-nowrap">
                     <button onclick="viewMasterLedgerDetails('${item.id}')" 
                             class="btn btn-info btn-xs" title="বিস্তারিত">
                         <i class="fas fa-eye"></i>
                     </button>
+                    ${!item.is_reversed ? `
+                        <button onclick="deleteMasterLedgerEntry('${item.id}')" 
+                                class="btn btn-danger btn-xs" title="ডিলিট">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    ` : ''}
                 </td>
             </tr>
         `;
@@ -8210,7 +8226,7 @@ function renderMasterLedger() {
         `;
     }
 }
-
+    
 // ============================================================
 // 📄 changeLedgerPage() — Pagination
 // ============================================================
@@ -8433,8 +8449,7 @@ window.applyLedgerFilter = applyLedgerFilter;
 window.resetLedgerFilter = resetLedgerFilter;
 window.changeLedgerPage = changeLedgerPage;
 window.viewMasterLedgerDetails = viewMasterLedgerDetails;
-window.exportMasterLedgerCSV = exportMasterLedgerCSV;
-window.deleteMasterLedgerEntry = deleteMasterLedgerEntry;    
+window.exportMasterLedgerCSV = exportMasterLedgerCSV; 
 
   // ============================================================
 // 👤 viewMemberLedger() — একজন সদস্যের সম্পূর্ণ খতিয়ান
