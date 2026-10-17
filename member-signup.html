@@ -1572,6 +1572,47 @@ document.getElementById('signupForm').addEventListener('submit', async function(
         return;
     }
 
+    // 🆕 Duplicate Mobile চেক
+    const client = initSupabaseClient();
+    if (!client) {
+        showCenterNotification('❌ সার্ভার সংযোগে সমস্যা! ইন্টারনেট চেক করে আবার চেষ্টা করুন।', 'error');
+        return;
+    }
+
+    try {
+        const { data: existingMember, error: checkErr } = await client
+            .from('members')
+            .select('id, full_name, status')
+            .eq('mobile', mobile)
+            .maybeSingle();
+
+        if (checkErr && checkErr.code !== 'PGRST116') {
+            // PGRST116 = no rows — কোনো রেকর্ড নেই, ঠিক আছে
+            console.error('Duplicate check error:', checkErr);
+            showCenterNotification(
+                '⚠️ ডাটাবেজ চেক করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।\n\n' +
+                `<span class="text-xs text-gray-500">${checkErr.message || ''}</span>`,
+                'error'
+            );
+            return;
+        }
+
+        if (existingMember) {
+            showCenterNotification(
+                `❌ এই মোবাইল নম্বর (${mobile}) দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট আছে!\n\n` +
+                `👤 নাম: ${existingMember.full_name || '-'}\n` +
+                `📌 স্ট্যাটাস: ${existingMember.status || '-'}\n\n` +
+                `যদি এটি আপনার হয়, লগইন করুন অথবা অ্যাডমিনের সাথে যোগাযোগ করুন।\n` +
+                `যদি ভিন্ন ব্যক্তি হন, অন্য নম্বর দিয়ে চেষ্টা করুন।`,
+                'error'
+            );
+            return;
+        }
+    } catch (dupErr) {
+        console.error('Duplicate check exception:', dupErr);
+        // চেক ব্যর্থ হলেও ফর্ম আটকাব না — DB unique index সুরক্ষা দেবে
+    }
+
     // Branch চেক
     const branchId = document.getElementById('signupBranch').value;
     if(!branchId) {
@@ -1598,9 +1639,6 @@ document.getElementById('signupForm').addEventListener('submit', async function(
     submitBtn.innerHTML = '<span class="loading-spinner"></span> নিবন্ধন হচ্ছে...';
 
     try {
-        const client = initSupabaseClient();
-        if (!client) throw new Error('Supabase সংযোগ নেই');
-
         const fullName = document.getElementById('fullName').value.trim();
         const memberTerm = memberType === 'regular' ? parseInt(document.getElementById('memberTerm').value) || 0 : 0;
         const referCodeInput = document.getElementById('referCode').value.trim();
@@ -1765,6 +1803,28 @@ document.getElementById('signupForm').addEventListener('submit', async function(
 
         if (memberError) {
             console.error('❌ Member Insert Error:', memberError);
+            
+            // Unique constraint violation friendly message
+            if (memberError.code === '23505') {
+                if (memberError.message && memberError.message.includes('mobile')) {
+                    showCenterNotification(
+                        `❌ এই মোবাইল নম্বর (${mobile}) ইতিমধ্যে নিবন্ধিত!\n\n` +
+                        `অনুগ্রহ করে লগইন করুন অথবা অ্যাডমিনের সাথে যোগাযোগ করুন।`,
+                        'error'
+                    );
+                } else if (memberError.message && memberError.message.includes('member_id')) {
+                    showCenterNotification(
+                        '⚠️ সদস্য আইডি সংক্রান্ত সমস্যা হয়েছে। আবার চেষ্টা করুন।',
+                        'error'
+                    );
+                } else {
+                    showCenterNotification('❌ ডুপ্লিকেট তথ্য! আবার চেষ্টা করুন।', 'error');
+                }
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>নিবন্ধন জমা দিন';
+                return;
+            }
+            
             throw memberError;
         }
 
