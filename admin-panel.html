@@ -17156,226 +17156,244 @@ async function viewEventParticipants(eventId) {
         container.innerHTML = html;
     }
 
-// ============================================================
-// ===== REPORT FUNCTIONS (COMPLETE UPDATE) =====
-// ============================================================
-async function loadReport() {
-    const fromDate = document.getElementById('reportFromDate').value;
-    const toDate = document.getElementById('reportToDate').value;
-    const container = document.getElementById('reportTableContainer');
-    const summaryContainer = document.getElementById('reportSummary');
-    if (!container) return;
-    
-    container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner"></div><p class="text-gray-500 mt-2">ডেটা লোড হচ্ছে...</p></div>';
-    
-    const client = initSupabaseClient();
-    if (!client) { 
-        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; 
-        return; 
-    }
-    
-    try {
-        let query = client.from('members').select('*');
-        if (fromDate) query = query.gte('created_at', fromDate);
-        if (toDate) query = query.lte('created_at', toDate + 'T23:59:59');
-        const { data: members } = await query;
+    // ============================================================
+    // ✅ loadReport() — মাসিক collection breakdown (submitted_at)
+    // ============================================================
+    async function loadReport() {
+        const fromDate = document.getElementById('reportFromDate')?.value || '';
+        const toDate = document.getElementById('reportToDate')?.value || '';
+        const container = document.getElementById('reportTableContainer');
+        const summaryContainer = document.getElementById('reportSummary');
         
-        if (!members || members.length === 0) { 
-            container.innerHTML = '<div class="text-center text-gray-500 py-8"><i class="fas fa-inbox text-4xl block mb-3"></i><p>কোনো সদস্য নেই</p></div>';
-            if (summaryContainer) summaryContainer.innerHTML = '';
-            return; 
-        }
+        if (!container) return;
         
-        let totalSavings = 0, totalLoans = 0, totalPaid = 0, totalBalance = 0, totalReferral = 0;
-        const memberIds = members.map(m => m.member_id);
+        container.innerHTML = '<div class="text-center py-8"><div class="loading-spinner mx-auto"></div><p class="text-gray-500 mt-2">লোড হচ্ছে...</p></div>';
         
-        const { data: payments } = await client.from('payments').select('member_id, amount').eq('status', 'approved').in('member_id', memberIds);
-        const { data: loans } = await client.from('loan_applications').select('member_id, amount').eq('status', 'approved').in('member_id', memberIds);
+        const client = initSupabaseClient();
+        if (!client) return;
         
-        // ✅ প্রতি ২০ জন সদস্যের জন্য পেজ ব্রেক
-        const PAGE_SIZE = 20;
-        let runningTotalSavings = 0;
-        let runningTotalLoans = 0;
-        let runningTotalBalance = 0;
-        let runningTotalReferral = 0;
-        
-        const memberData = members.map((m, index) => {
-            const memberSavings = payments?.filter(p => p.member_id === m.member_id).reduce((s, p) => s + p.amount, 0) || 0;
-            const memberLoans = loans?.filter(l => l.member_id === m.member_id).reduce((s, l) => s + l.amount, 0) || 0;
-            const totalProfit = (m.profit_balance_savings || 0) + (m.profit_balance_investment || 0) + (m.profit_balance_referral || 0);
+        try {
+            const startDate = fromDate ? `${fromDate}T00:00:00+06:00` : '2026-01-01T00:00:00+06:00';
+            const endDate = toDate ? `${toDate}T23:59:59+06:00` : new Date().toISOString();
             
-            totalSavings += memberSavings;
-            totalLoans += memberLoans;
-            totalBalance += (m.balance || 0);
-            totalReferral += (m.referral_bonus || 0);
+            console.log('📊 loadReport range:', { from: startDate, to: endDate });
             
-            return {
-                ...m,
-                memberSavings,
-                memberLoans,
-                totalProfit,
-                index
-            };
-        });
-        
-        totalPaid = totalLoans; // পেমেন্ট ডেটা থেকে ক্যালকুলেট করা যায়
-        const totalDue = totalLoans - totalPaid;
-        
-        // ✅ উপরের সারাংশ খালি করুন
-        if (summaryContainer) summaryContainer.innerHTML = '';
-        
-        // ✅ টেবিল তৈরি করুন
-        let html = `
-            <div class="table-scroll">
-                <table class="data-table" id="reportTable">
-                    <thead>
-                        <tr>
-                            <th>আইডি</th>
-                            <th>নাম</th>
-                            <th>মোবাইল</th>
-                            <th>জেলা</th>
-                            <th>স্ট্যাটাস</th>
-                            <th class="text-left">সঞ্চয়</th>
-                            <th class="text-left">লোন</th>
-                            <th class="text-left">ব্যালেন্স</th>
-                            <th class="text-left">রেফারেল</th>
-                            <th class="text-left">মোট লভ্যাংশ</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        `;
-        
-        // ✅ পেজ অনুযায়ী ডেটা রেন্ডার করুন
-        for (let i = 0; i < memberData.length; i++) {
-            const m = memberData[i];
+            // ✅ সব approved payment আনুন
+            const { data: payments } = await client
+                .from('payments')
+                .select('member_id, member_name, amount, submitted_at, month, year')
+                .eq('status', 'approved')
+                .gte('submitted_at', startDate)
+                .lte('submitted_at', endDate);
             
-            // চলমান যোগফল আপডেট
-            runningTotalSavings += m.memberSavings;
-            runningTotalLoans += m.memberLoans;
-            runningTotalBalance += (m.balance || 0);
-            runningTotalReferral += (m.referral_bonus || 0);
+            // ✅ মাস ভিত্তিক গ্রুপ (submitted_at অনুযায়ী)
+            const monthGroups = {};
             
-            html += `<tr>
-                <td>${m.member_id}</td>
-                <td>${m.full_name}</td>
-                <td>${m.mobile}</td>
-                <td>${m.present_district || '-'}</td>
-                <td><span class="status-badge ${m.status==='active'?'status-active':m.status==='pending'?'status-pending':'status-inactive'}">${m.status==='active'?'সক্রিয়':m.status==='pending'?'পেন্ডিং':'নিষ্ক্রিয়'}</span></td>
-                <td class="text-left">${formatAmountWithText(m.memberSavings)}</td>
-                <td class="text-left">${formatAmountWithText(m.memberLoans)}</td>
-                <td class="text-left">${formatAmountWithText(m.balance || 0)}</td>
-                <td class="text-left">${formatAmountWithText(m.referral_bonus || 0)}</td>
-                <td class="text-left">${formatAmountWithText(m.totalProfit)}</td>
-            </tr>`;
+            (payments || []).forEach(p => {
+                if (!p.submitted_at) return;
+                
+                const date = new Date(p.submitted_at);
+                const bdParts = new Intl.DateTimeFormat('en-CA', {
+                    timeZone: 'Asia/Dhaka',
+                    year: 'numeric',
+                    month: '2-digit'
+                }).formatToParts(date);
+                
+                const year = bdParts.find(x => x.type === 'year')?.value;
+                const month = bdParts.find(x => x.type === 'month')?.value;
+                const key = `${year}-${month}`;
+                
+                if (!monthGroups[key]) {
+                    const monthNames = [
+                        'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল',
+                        'মে', 'জুন', 'জুলাই', 'আগস্ট',
+                        'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
+                    ];
+                    monthGroups[key] = {
+                        year: year,
+                        month: month,
+                        monthName: monthNames[parseInt(month) - 1],
+                        payments: [],
+                        totalAmount: 0,
+                        members: new Set()
+                    };
+                }
+                
+                monthGroups[key].payments.push(p);
+                monthGroups[key].totalAmount += Number(p.amount) || 0;
+                if (p.member_id) monthGroups[key].members.add(p.member_id);
+            });
             
-            // ✅ প্রতি পেজের শেষে (পেজ সাইজ অনুযায়ী) যোগফল দেখান
-            if ((i + 1) % PAGE_SIZE === 0 && i < memberData.length - 1) {
-                html += `
-                    </tbody>
-                </table>
-            </div>
+            // ✅ Sort (নতুন থেকে পুরনো)
+            const sortedMonths = Object.keys(monthGroups).sort().reverse();
             
-            <!-- ✅ পেজের শেষে যোগফল -->
-            <div class="report-summary-bottom page-footer">
-                <div class="summary-card">
-                    <div class="label">📊 এই পেজের যোগফল</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#059669;">
-                        সঞ্চয়: ${formatAmountWithText(runningTotalSavings)} | 
-                        লোন: ${formatAmountWithText(runningTotalLoans)}
+            if (sortedMonths.length === 0) {
+                container.innerHTML = `<div class="text-center text-gray-500 py-8"><p>এই range-এ কোনো payment নেই</p></div>`;
+                if (summaryContainer) summaryContainer.innerHTML = '';
+                return;
+            }
+            
+            // ✅ Summary
+            const grandTotal = sortedMonths.reduce((s, k) => s + monthGroups[k].totalAmount, 0);
+            const grandCount = (payments || []).length;
+            
+            if (summaryContainer) {
+                summaryContainer.innerHTML = `
+                    <div class="summary-card total">
+                        <div class="label">📊 মোট মাস</div>
+                        <div class="amount">${sortedMonths.length}</div>
                     </div>
-                </div>
-                <div class="summary-card">
-                    <div class="label">👥 সদস্য</div>
-                    <div class="amount" style="font-size:12px; font-weight:700;">${i + 1}</div>
-                </div>
-            </div>
+                    <div class="summary-card savings">
+                        <div class="label">💰 মোট সংগ্রহ</div>
+                        <div class="amount">${formatAmountWithText(grandTotal)}</div>
+                    </div>
+                    <div class="summary-card info">
+                        <div class="label">📋 মোট payment</div>
+                        <div class="amount">${grandCount}</div>
+                    </div>
+                `;
+            }
             
-            <!-- ✅ পেজ ব্রেক + পরের পেজের শুরুতে চলমান যোগফল -->
-            <div class="page-break"></div>
-            <div class="running-total-header">
-                <div style="background:#f0fdf4; padding:6px 10px; border-radius:4px; border:1px solid #059669; margin-bottom:8px; font-size:12px;">
-                    <span style="font-weight:700; color:#059669;">📊 পূর্ববর্তী পেজের যোগফল:</span>
-                    <span style="font-weight:700;">সঞ্চয়: ${formatAmountWithText(runningTotalSavings)} | 
-                    লোন: ${formatAmountWithText(runningTotalLoans)} | 
-                    সদস্য: ${i + 1} জন</span>
-                </div>
-            </div>
-            
-            <div class="table-scroll">
+            // ✅ Table
+            let html = `
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>আইডি</th>
-                            <th>নাম</th>
-                            <th>মোবাইল</th>
-                            <th>জেলা</th>
-                            <th>স্ট্যাটাস</th>
-                            <th class="text-left">সঞ্চয়</th>
-                            <th class="text-left">লোন</th>
-                            <th class="text-left">ব্যালেন্স</th>
-                            <th class="text-left">রেফারেল</th>
-                            <th class="text-left">মোট লভ্যাংশ</th>
+                            <th>মাস</th>
+                            <th>সদস্য</th>
+                            <th class="text-right">সংগ্রহ</th>
+                            <th class="text-center">Payment</th>
+                            <th>Action</th>
                         </tr>
                     </thead>
                     <tbody>
+            `;
+            
+            sortedMonths.forEach(key => {
+                const data = monthGroups[key];
+                html += `
+                    <tr>
+                        <td>
+                            <span class="font-bold text-gray-800">${data.monthName} ${data.year}</span>
+                        </td>
+                        <td>
+                            <span class="text-sm">${data.members.size} জন</span>
+                        </td>
+                        <td class="text-right">
+                            <span class="font-bold text-emerald-600">${formatAmountWithText(data.totalAmount)}</span>
+                        </td>
+                        <td class="text-center">
+                            <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">${data.payments.length} টি</span>
+                        </td>
+                        <td>
+                            <button onclick="viewMonthDetails('${key}')" class="btn btn-info btn-xs">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </td>
+                    </tr>
                 `;
-            }
+            });
+            
+            html += `
+                    <tr style="font-weight: 700; background: #f0fdf4; border-top: 2px solid #059669;">
+                        <td colspan="2">📊 মোট</td>
+                        <td class="text-right text-emerald-700">${formatAmountWithText(grandTotal)}</td>
+                        <td class="text-center">${grandCount} টি</td>
+                        <td></td>
+                    </tr>
+                </tbody></table>
+            `;
+            
+            container.innerHTML = html;
+            window._monthGroupsData = monthGroups;
+            
+            console.log('✅ Monthly breakdown loaded:');
+            sortedMonths.forEach(key => {
+                console.log(`   ${monthGroups[key].monthName} ${monthGroups[key].year}: ${monthGroups[key].totalAmount} Tk (${monthGroups[key].payments.length})`);
+            });
+            
+        } catch(e) {
+            console.error('❌ Report error:', e);
+            container.innerHTML = `<div class="text-red-500 p-4 text-center">❌ লোড করতে সমস্যা: ${e.message}</div>`;
         }
+    }
+    
+    // ✅ Month details
+    function viewMonthDetails(monthKey) {
+        const data = window._monthGroupsData?.[monthKey];
+        if (!data) return;
         
-        // ✅ শেষ পেজের যোগফল
+        let html = `
+            <div class="space-y-3">
+                <div class="bg-gradient-to-r from-emerald-50 to-blue-50 p-4 rounded-lg border-2 border-emerald-300">
+                    <h4 class="font-bold text-emerald-700 text-lg">📅 ${data.monthName} ${data.year}</h4>
+                    <div class="grid grid-cols-3 gap-2 mt-3">
+                        <div class="bg-white p-2 rounded text-center">
+                            <div class="text-xs text-gray-500">সদস্য</div>
+                            <div class="font-bold text-blue-700">${data.members.size}</div>
+                        </div>
+                        <div class="bg-white p-2 rounded text-center">
+                            <div class="text-xs text-gray-500">মোট সংগ্রহ</div>
+                            <div class="font-bold text-emerald-700">${formatAmountWithText(data.totalAmount)}</div>
+                        </div>
+                        <div class="bg-white p-2 rounded text-center">
+                            <div class="text-xs text-gray-500">Payment</div>
+                            <div class="font-bold text-purple-700">${data.payments.length}</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="table-scroll max-h-96 overflow-y-auto border rounded-lg">
+                    <table class="data-table">
+                        <thead style="position: sticky; top: 0; background: #f8fafc; z-index: 10;">
+                            <tr>
+                                <th>তারিখ</th>
+                                <th>সদস্য</th>
+                                <th>আইডি</th>
+                                <th class="text-right">পরিমাণ</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+        
+        const sortedPayments = [...data.payments].sort((a, b) => 
+            new Date(b.submitted_at) - new Date(a.submitted_at)
+        );
+        
+        sortedPayments.forEach(p => {
+            const dateStr = p.submitted_at 
+                ? new Date(p.submitted_at).toLocaleDateString('bn-BD', {
+                    year: 'numeric', month: 'short', day: 'numeric'
+                })
+                : '-';
+            
+            html += `
+                <tr>
+                    <td class="text-xs">${dateStr}</td>
+                    <td class="text-sm">${p.member_name || '-'}</td>
+                    <td class="text-xs">${p.member_id || '-'}</td>
+                    <td class="text-right font-bold text-emerald-600">${formatAmountWithText(p.amount)}</td>
+                </tr>
+            `;
+        });
+        
         html += `
-                    </tbody>
-                </table>
-            </div>
-            
-            <!-- ✅ শেষ পেজের যোগফল -->
-            <div class="report-summary-bottom page-footer">
-                <div class="summary-card">
-                    <div class="label">📊 এই পেজের যোগফল</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#059669;">
-                        সঞ্চয়: ${formatAmountWithText(runningTotalSavings)} | 
-                        লোন: ${formatAmountWithText(runningTotalLoans)}
-                    </div>
+                        </tbody>
+                    </table>
                 </div>
-                <div class="summary-card">
-                    <div class="label">👥 সদস্য</div>
-                    <div class="amount" style="font-size:12px; font-weight:700;">${memberData.length}</div>
-                </div>
-            </div>
-            
-            <!-- ✅ মোট যোগফল (সব পেজের) -->
-            <div class="report-summary-bottom" style="border-top: 3px solid #059669; margin-top: 12px; padding-top: 10px;">
-                <div class="summary-card" style="background: #ecfdf5; border: 2px solid #059669;">
-                    <div class="label" style="font-weight:700; color:#059669;">📊 মোট যোগফল</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#059669;">
-                        সঞ্চয়: ${formatAmountWithText(totalSavings)} | 
-                        লোন: ${formatAmountWithText(totalLoans)} | 
-                        ব্যালেন্স: ${formatAmountWithText(totalBalance)}
-                    </div>
-                </div>
-                <div class="summary-card" style="background: #fef3c7; border: 2px solid #f59e0b;">
-                    <div class="label" style="font-weight:700; color:#d97706;">💰 রেফারেল & লভ্যাংশ</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#d97706;">
-                        রেফারেল: ${formatAmountWithText(totalReferral)} | 
-                        বকেয়া: ${formatAmountWithText(totalDue)}
-                    </div>
-                </div>
-                <div class="summary-card" style="background: #dbeafe; border: 2px solid #3b82f6;">
-                    <div class="label" style="font-weight:700; color:#2563eb;">👥 সদস্য পরিসংখ্যান</div>
-                    <div class="amount" style="font-size:12px; font-weight:700; color:#2563eb;">
-                        মোট: ${members.length} জন
-                    </div>
-                </div>
+                
+                <button onclick="closeCustomModal()" class="btn btn-warning w-full py-2">
+                    <i class="fas fa-times mr-1"></i> বন্ধ
+                </button>
             </div>
         `;
         
-        container.innerHTML = html;
-        
-    } catch(e) { 
-        console.error('Report error:', e); 
-        container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ রিপোর্ট লোড করতে সমস্যা!</div>'; 
+        showCustomModal(`📋 ${data.monthName} ${data.year}`, html);
     }
-}
+    
+    window.loadReport = loadReport;
+    window.viewMonthDetails = viewMonthDetails;
+    console.log('✅ loadReport() — month breakdown loaded');
 
     function resetReportFilters() { document.getElementById('reportFromDate').value = ''; document.getElementById('reportToDate').value = ''; loadReport(); }
     function exportReportExcel() {
@@ -20382,96 +20400,65 @@ function editBranchAdminPermissions(adminId) {
 });
 
 // ============================================================
-// ✅ FIXED: loadRealDashboard() — Complete Version
-// ✅ BD Timezone
-// ✅ সঠিক সদস্য পরিসংখ্যান
-// ✅ উত্তোলনে লোন যোগ হবে না
-// ✅ Monthly Collection = সর্বশেষ পেমেন্টের মাস
+// ✅ FINAL: loadRealDashboard()
+// 📆 মাসিক সংগ্রহ = current মাসে জমা পড়া টাকা (submitted_at)
 // ============================================================
 async function loadRealDashboard() {
     try {
         const client = initSupabaseClient();
-        if (!client) {
-            console.log('❌ Supabase client পাওয়া যায়নি!');
-            return;
-        }
+        if (!client) return;
         
-        if (typeof updateAllBadges === 'function') {
-            await updateAllBadges();
-        }
+        if (typeof updateAllBadges === 'function') await updateAllBadges();
         
-        // ============================================================
-        // ✅ ১. Monthly Collection — সর্বশেষ পেমেন্টের মাস
-        // ============================================================
-        let monthlyCollection = 0;
-        let collectionLabel = '📆 মাসিক সংগ্রহ';
+        // ✅ Current month (BD timezone)
+        const now = new Date();
+        const bdParts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Dhaka',
+            year: 'numeric',
+            month: '2-digit'
+        }).formatToParts(now);
         
-        try {
-            // সর্বশেষ payment খুঁজুন
-            const { data: latestPayment } = await client
-                .from('payments')
-                .select('submitted_at')
-                .eq('status', 'approved')
-                .order('submitted_at', { ascending: false })
-                .limit(1);
-            
-            if (latestPayment && latestPayment[0]?.submitted_at) {
-                const lastDate = new Date(latestPayment[0].submitted_at);
-                
-                // BD timezone এ year-month
-                const bdParts = new Intl.DateTimeFormat('en-CA', {
-                    timeZone: 'Asia/Dhaka',
-                    year: 'numeric',
-                    month: '2-digit'
-                }).formatToParts(lastDate);
-                
-                const lastYear = bdParts.find(p => p.type === 'year')?.value;
-                const lastMonth = bdParts.find(p => p.type === 'month')?.value;
-                
-                const firstDay = `${lastYear}-${lastMonth}-01T00:00:00+06:00`;
-                const lastDayDate = new Date(parseInt(lastYear), parseInt(lastMonth), 0);
-                const lastDayNum = String(lastDayDate.getDate()).padStart(2, '0');
-                const lastDay = `${lastYear}-${lastMonth}-${lastDayNum}T23:59:59+06:00`;
-                
-                // সেই মাসের সব payment
-                const { data: monthData } = await client
-                    .from('payments')
-                    .select('amount')
-                    .eq('status', 'approved')
-                    .gte('submitted_at', firstDay)
-                    .lte('submitted_at', lastDay);
-                
-                monthlyCollection = (monthData || []).reduce(
-                    (s, p) => s + (Number(p.amount) || 0), 0
-                );
-                
-                // বাংলা মাসের নাম
-                const monthNames = [
-                    'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল',
-                    'মে', 'জুন', 'জুলাই', 'আগস্ট',
-                    'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
-                ];
-                const monthName = monthNames[parseInt(lastMonth) - 1];
-                collectionLabel = `📆 ${monthName} ${lastYear} সংগ্রহ`;
-                
-                console.log(`💰 Latest month collection (${lastYear}-${lastMonth}):`, monthlyCollection, 'Tk');
-            }
-        } catch(e) {
-            console.warn('Monthly collection error:', e);
-        }
+        const bdYear = bdParts.find(p => p.type === 'year')?.value || '2026';
+        const bdMonth = bdParts.find(p => p.type === 'month')?.value || '01';
         
-        // ============================================================
-        // ✅ ২. সব সদস্যের ফান্ড ডেটা
-        // ============================================================
+        const monthNames = [
+            'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল',
+            'মে', 'জুন', 'জুলাই', 'আগস্ট',
+            'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
+        ];
+        const currentMonthName = monthNames[parseInt(bdMonth) - 1];
+        
+        const currentFirstDay = `${bdYear}-${bdMonth}-01T00:00:00+06:00`;
+        const lastDayDate = new Date(parseInt(bdYear), parseInt(bdMonth), 0);
+        const lastDayNum = String(lastDayDate.getDate()).padStart(2, '0');
+        const currentLastDay = `${bdYear}-${bdMonth}-${lastDayNum}T23:59:59+06:00`;
+        
+        console.log(`📆 ${currentMonthName} ${bdYear}`);
+        console.log(`   From: ${currentFirstDay}`);
+        console.log(`   To: ${currentLastDay}`);
+        
+        // ✅ Monthly collection (submitted_at ভিত্তিক)
+        const { data: monthlyPayments } = await client
+            .from('payments')
+            .select('amount, submitted_at')
+            .eq('status', 'approved')
+            .gte('submitted_at', currentFirstDay)
+            .lte('submitted_at', currentLastDay);
+        
+        const monthlyCollection = (monthlyPayments || []).reduce(
+            (s, p) => s + (Number(p.amount) || 0), 0
+        );
+        const monthlyCount = monthlyPayments?.length || 0;
+        
+        console.log(`💰 Monthly collection: ${monthlyCollection} Tk (${monthlyCount} payments)`);
+        
+        // ✅ সব সদস্যের ফান্ড
         const { data: allMembers } = await client
             .from('members')
             .select('referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral, balance');
         
-        let totalReferralBonus = 0;
-        let totalProfitSavings = 0;
-        let totalProfitInvestment = 0;
-        let totalProfitReferral = 0;
-        let totalBalance = 0;
+        let totalReferralBonus = 0, totalProfitSavings = 0, totalProfitInvestment = 0;
+        let totalProfitReferral = 0, totalBalance = 0;
         
         (allMembers || []).forEach(m => {
             totalReferralBonus += Number(m.referral_bonus) || 0;
@@ -20483,9 +20470,7 @@ async function loadRealDashboard() {
         
         const totalProfit = totalProfitSavings + totalProfitInvestment + totalProfitReferral;
         
-        // ============================================================
-        // ✅ ৩. লোন আদায়
-        // ============================================================
+        // ✅ লোন আদায়
         const { data: loanPayments } = await client
             .from('loan_payments')
             .select('total_amount, emi_amount')
@@ -20495,137 +20480,96 @@ async function loadRealDashboard() {
             (s, p) => s + (Number(p.total_amount) || Number(p.emi_amount) || 0), 0
         );
         
-        // ============================================================
-        // ✅ ৪. কল্যাণ তহবিল
-        // ============================================================
-        const { data: welfareData } = await client
-            .from('welfare_fund')
-            .select('total');
+        // ✅ কল্যাণ তহবিল
+        const { data: welfareData } = await client.from('welfare_fund').select('total');
+        const totalWelfare = (welfareData || []).reduce((s, w) => s + (Number(w.total) || 0), 0);
         
-        const totalWelfare = (welfareData || []).reduce(
-            (s, w) => s + (Number(w.total) || 0), 0
-        );
-        
-        // ============================================================
-        // ✅ ৫. লোন প্রদান
-        // ============================================================
+        // ✅ লোন প্রদান
         const { data: loansGiven } = await client
-            .from('loan_applications')
-            .select('amount')
-            .eq('status', 'approved');
+            .from('loan_applications').select('amount').eq('status', 'approved');
+        const totalLoanGiven = (loansGiven || []).reduce((s, l) => s + (Number(l.amount) || 0), 0);
         
-        const totalLoanGiven = (loansGiven || []).reduce(
-            (s, l) => s + (Number(l.amount) || 0), 0
-        );
-        
-        // ============================================================
-        // ✅ ৬. উত্তোলন (শুধু withdrawals টেবিল থেকে — লোন ছাড়া)
-        // ============================================================
+        // ✅ উত্তোলন
         const { data: allWithdrawals } = await client
-            .from('withdrawals')
-            .select('amount')
-            .eq('status', 'approved');
+            .from('withdrawals').select('amount').eq('status', 'approved');
+        const totalWithdrawal = (allWithdrawals || []).reduce((s, w) => s + (Number(w.amount) || 0), 0);
         
-        const totalWithdrawal = (allWithdrawals || []).reduce(
-            (s, w) => s + (Number(w.amount) || 0), 0
-        );
-        
-        // ============================================================
-        // ✅ ৭. হিসাব
-        // ============================================================
+        // ✅ হিসাব
         const totalFund = totalBalance + totalReferralBonus + totalProfit + totalWelfare;
         const netBalance = totalFund - totalWithdrawal;
         const totalDue = totalLoanGiven - totalLoanCollected;
         
-        // ============================================================
-        // ✅ ৮. সদস্য পরিসংখ্যান — আলাদা query দিয়ে
-        // ============================================================
+        // ✅ সদস্য পরিসংখ্যান
         const { count: totalMembers } = await client
-            .from('members')
-            .select('*', { count: 'exact', head: true });
-        
+            .from('members').select('*', { count: 'exact', head: true });
         const { count: activeMembers } = await client
-            .from('members')
-            .select('*', { count: 'exact', head: true })
-            .eq('status', 'active');
-        
+            .from('members').select('*', { count: 'exact', head: true }).eq('status', 'active');
         const { count: pendingMembers } = await client
-            .from('members')
-            .select('*', { count: 'exact', head: true })
-            .eq('status', 'pending');
-        
+            .from('members').select('*', { count: 'exact', head: true }).eq('status', 'pending');
         const { count: inactiveMembers } = await client
-            .from('members')
-            .select('*', { count: 'exact', head: true })
-            .eq('status', 'inactive');
+            .from('members').select('*', { count: 'exact', head: true }).eq('status', 'inactive');
         
-        console.log('👥 Members:', {
-            total: totalMembers,
-            active: activeMembers,
-            pending: pendingMembers,
-            inactive: inactiveMembers
-        });
-        
-        // ============================================================
-        // ✅ ৯. UI আপডেট
-        // ============================================================
+        // ✅ UI আপডেট
         const setText = (id, text) => {
             const el = document.getElementById(id);
             if (el) el.textContent = text;
         };
         
-        // সঞ্চয় ও লভ্যাংশ
         setText('dashMonthlyCollection', formatAmountWithText(monthlyCollection));
         setText('dashSavingsProfit', formatAmountWithText(totalProfitSavings));
         setText('dashInvestmentProfit', formatAmountWithText(totalProfitInvestment));
-        
-        // রেফারেল ও বোনাস
         setText('dashReferralBonus', formatAmountWithText(totalReferralBonus));
         setText('dashReferralProfit', formatAmountWithText(totalProfitReferral));
         setText('dashTotalDividend', formatAmountWithText(totalProfit));
-        
-        // লোন ও আদায়
         setText('dashTotalLoanGiven', formatAmountWithText(totalLoanGiven));
         setText('dashLoanCollected', formatAmountWithText(totalLoanCollected));
         setText('dashLoanDue', formatAmountWithText(Math.max(0, totalDue)));
-        
-        // উত্তোলন ও ব্যালেন্স
         setText('dashTotalWithdrawal', formatAmountWithText(totalWithdrawal));
         setText('dashWelfareFund', formatAmountWithText(totalWelfare));
         setText('dashCurrentFund', formatAmountWithText(netBalance));
         
-        // সদস্য পরিসংখ্যান
         setText('statActiveMembers', activeMembers || 0);
         setText('statPendingMembers2', pendingMembers || 0);
         setText('statInactiveMembers', inactiveMembers || 0);
         setText('statTotalMembers2', totalMembers || 0);
         
-        // ✅ Collection label আপডেট (📆 মাসিক সংগ্রহ → 📆 সেপ্টেম্বর 2026 সংগ্রহ)
+        // ✅ Label + hint
         const collectionEl = document.getElementById('dashMonthlyCollection');
         if (collectionEl) {
-            const labelEl = collectionEl.parentElement?.querySelector('.label');
-            if (labelEl) {
-                labelEl.textContent = collectionLabel;
+            const card = collectionEl.closest('.stat-card') || collectionEl.parentElement?.parentElement;
+            if (card) {
+                const labelEl = card.querySelector('.label');
+                if (labelEl) labelEl.textContent = `📆 ${currentMonthName} ${bdYear} সংগ্রহ`;
+                
+                const oldInfo = card.querySelector('.monthly-context-info');
+                if (oldInfo) oldInfo.remove();
+                
+                const infoDiv = document.createElement('div');
+                infoDiv.className = 'monthly-context-info';
+                if (monthlyCount > 0) {
+                    infoDiv.style.cssText = 'margin-top: 4px; padding: 3px 6px; background: rgba(5,150,105,0.1); border-radius: 4px; font-size: 10px; color: #065f46; text-align: center;';
+                    infoDiv.textContent = `✅ ${monthlyCount} টি payment`;
+                } else {
+                    infoDiv.style.cssText = 'margin-top: 4px; padding: 3px 6px; background: rgba(0,0,0,0.04); border-radius: 4px; font-size: 10px; color: #6b7280; text-align: center;';
+                    infoDiv.textContent = 'এই মাসে এখনো জমা পড়েনি';
+                }
+                card.appendChild(infoDiv);
             }
         }
         
         console.log('✅ ড্যাশবোর্ড আপডেট সম্পূর্ণ!');
-        console.log('   💰 Monthly:', monthlyCollection);
-        console.log('   📈 Total Profit:', totalProfit);
-        console.log('   🎁 Referral:', totalReferralBonus);
-        console.log('   🏦 Loans Given:', totalLoanGiven);
-        console.log('   📥 Collected:', totalLoanCollected);
-        console.log('   💸 Withdrawal:', totalWithdrawal);
-        console.log('   🏦 Net Balance:', netBalance);
+        console.log(`   📆 ${currentMonthName} ${bdYear}: ${monthlyCollection} Tk`);
+        console.log(`   📊 ${monthlyCount} payments`);
+        console.log(`   💸 Withdrawal: ${totalWithdrawal}`);
+        console.log(`   🏦 Net Balance: ${netBalance}`);
         
     } catch(e) {
         console.error('❌ Dashboard error:', e);
     }
 }
 
-// ✅ Global expose
 window.loadRealDashboard = loadRealDashboard;
-
+console.log('✅ loadRealDashboard() — corrected with submitted_at');
 console.log('✅ loadRealDashboard() with Monthly Collection FIX loaded');
 console.log('✅ loadRealDashboard() FIXED version loaded');
 
