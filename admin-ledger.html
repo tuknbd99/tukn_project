@@ -1904,12 +1904,13 @@ function renderMasterLedger() {
     }
 }
 
-    // ============================================================
-// 🗑️ deleteMasterLedgerEntry() — লেজার এন্ট্রি ডিলিট (Soft Delete)
-// ✅ সঠিক account mapping সহ (savings → balance)
+// ============================================================
+// 🗑️ deleteMasterLedgerEntry() — সরাসরি ডিলিট (সঠিক ব্যালেন্স অ্যাডজাস্টমেন্ট সহ)
+// ✅ জমা ডিলিট → জমা কমবে
+// ✅ খরচ ডিলিট → জমা বাড়বে
 // ============================================================
 async function deleteMasterLedgerEntry(id) {
-    console.log('🗑️ deleteMasterLedgerEntry:', id);
+    console.log('🗑️ Hard Delete:', id);
     
     const client = initSupabaseClient();
     if (!client) {
@@ -1918,7 +1919,7 @@ async function deleteMasterLedgerEntry(id) {
     }
     
     try {
-        // ১. লেনদেন লোড
+        // ১. লেনদেনের তথ্য লোড
         const { data: entry, error } = await client
             .from('main_ledger')
             .select('*')
@@ -1930,70 +1931,26 @@ async function deleteMasterLedgerEntry(id) {
             return;
         }
         
-        if (entry.is_reversed) {
-            showToast('⚠️ এই লেনদেন ইতিমধ্যে reverse করা হয়েছে!', 'warning');
-            return;
-        }
+        // ২. কনফার্মেশন (সঠিক মেসেজ)
+        const actionText = entry.action === 'credit' ? 'জমা' : 'খরচ';
+        const balanceEffect = entry.action === 'credit' 
+            ? `জমা কমবে (${formatAmountWithText(entry.amount)})` 
+            : `জমা বাড়বে (${formatAmountWithText(entry.amount)})`;
         
-        // ২. Confirm
         const confirmMsg = 
-            `🗑️ লেনদেন ডিলিট (Reverse)\n\n` +
+            `🗑️ সরাসরি ডিলিট করবেন?\n\n` +
             `📝 TXN: ${entry.transaction_id}\n` +
             `👤 সদস্য: ${entry.member_name}\n` +
-            `📊 খাত: ${entry.account}\n` +
             `💰 পরিমাণ: ${formatAmountWithText(entry.amount)}\n` +
-            `⚙️ ধরন: ${entry.action === 'credit' ? '➕ জমা' : '➖ খরচ'}\n\n` +
-            `⚠️ reversal হলে ব্যালেন্স বিপরীতভাবে adjust হবে।\n\n` +
+            `⚙️ ধরন: ${actionText}\n\n` +
+            `⚠️ ডিলিট করলে: ${balanceEffect}\n\n` +
             `"OK" চাপুন নিশ্চিত করতে।`;
         
         if (!window.confirm(confirmMsg)) return;
         
-        const reason = prompt('📝 ডিলিটের কারণ লিখুন:', 'ভুল এন্ট্রি');
-        if (!reason || reason.trim() === '') {
-            showToast('❌ কারণ লিখুন!', 'error');
-            return;
-        }
-        
-        const adminName = currentAdmin?.full_name || currentAdmin?.username || 'Admin';
-        
-        // ৩. মূল এন্ট্রি mark as reversed
-        const { error: updateError } = await client
-            .from('main_ledger')
-            .update({
-                is_reversed: true,
-                reversed_at: new Date().toISOString(),
-                reversed_by: adminName,
-                reversal_reason: reason.trim()
-            })
-            .eq('id', id);
-        
-        if (updateError) throw updateError;
-        
-        // ৪. Reversal entry তৈরি
-        const reversalAmount = Number(entry.amount) || 0;
-        const reversalAction = entry.action === 'credit' ? 'debit' : 'credit';
-        
-        await client.from('main_ledger').insert([{
-            member_id: entry.member_id,
-            member_name: entry.member_name,
-            account: entry.account,
-            action: reversalAction,
-            amount: reversalAmount,
-            source: 'reversal',
-            description: `REVERSAL of ${entry.transaction_id} — ${reason.trim()}`,
-            voucher_no: entry.voucher_no,
-            reference_id: entry.id,
-            created_by: adminName,
-            metadata: {
-                reversal_of: entry.id,
-                original_txn: entry.transaction_id
-            },
-            is_reversal_entry: true
-        }]);
-        
-        // ✅ ৫. সঠিক Account Mapping (main_ledger.account → members.column)
+        // ৩. সঠিক ব্যালেন্স অ্যাডজাস্টমেন্ট
         const accountToMemberColumn = {
-            'savings': 'balance',                       // ← সঞ্চয়ের জন্য
+            'savings': 'balance',
             'referral_bonus': 'referral_bonus',
             'profit_savings': 'profit_balance_savings',
             'profit_investment': 'profit_balance_investment',
@@ -2003,61 +1960,51 @@ async function deleteMasterLedgerEntry(id) {
         const memberColumn = accountToMemberColumn[entry.account];
         
         if (memberColumn) {
-            const { data: member, error: memberError } = await client
+            const { data: member } = await client
                 .from('members')
                 .select(memberColumn)
                 .eq('member_id', entry.member_id)
                 .single();
             
-            if (memberError) {
-                console.warn('⚠️ Member fetch warning:', memberError.message);
-            } else if (member) {
+            if (member) {
                 const currentValue = Number(member[memberColumn]) || 0;
+                const amount = Number(entry.amount) || 0;
                 let newValue = currentValue;
                 
+                // ✅ সঠিক হিসাব:
+                // জমা (credit) ডিলিট করলে → কমবে
+                // খরচ (debit) ডিলিট করলে → বাড়বে
                 if (entry.action === 'credit') {
-                    newValue = Math.max(0, currentValue - reversalAmount);
+                    newValue = Math.max(0, currentValue - amount);
                 } else {
-                    newValue = currentValue + reversalAmount;
+                    newValue = currentValue + amount;
                 }
                 
-                const { error: balanceUpdateError } = await client
+                const { error: balanceError } = await client
                     .from('members')
                     .update({ [memberColumn]: newValue })
                     .eq('member_id', entry.member_id);
                 
-                if (balanceUpdateError) {
-                    console.error('❌ Balance update error:', balanceUpdateError);
+                if (balanceError) {
+                    console.error('❌ Balance update failed:', balanceError);
+                    showToast('⚠️ ব্যালেন্স আপডেটে সমস্যা!', 'warning');
                 } else {
-                    console.log(`✅ Member balance updated: ${memberColumn}: ${currentValue} → ${newValue}`);
+                    console.log(`✅ Balance adjusted: ${memberColumn}: ${currentValue} → ${newValue}`);
                 }
             }
-        } else {
-            console.warn('⚠️ Unknown account type:', entry.account);
         }
         
-        // ৬. Audit log
-        try {
-            await client.from('audit_logs').insert([{
-                admin_name: adminName,
-                action: 'DELETE_LEDGER_ENTRY',
-                table_name: 'main_ledger',
-                record_id: String(id),
-                changes: {
-                    transaction_id: entry.transaction_id,
-                    amount: reversalAmount,
-                    reason: reason.trim(),
-                    action: entry.action
-                },
-                created_at: new Date().toISOString()
-            }]);
-        } catch(e) {
-            console.warn('Audit log warning:', e);
-        }
+        // ৪. main_ledger থেকে ডিলিট
+        const { error: deleteError } = await client
+            .from('main_ledger')
+            .delete()
+            .eq('id', id);
         
-        showToast(`✅ লেনদেন reversal সম্পন্ন!`, 'success');
+        if (deleteError) throw deleteError;
         
-        // ৭. UI রিফ্রেশ
+        // ৫. সফল মেসেজ ও UI রিফ্রেশ
+        showToast(`✅ লেনদেন ডিলিট সম্পন্ন!`, 'success');
+        
         await loadMasterLedger();
         await loadAccountWiseSummary();
         
@@ -2067,7 +2014,9 @@ async function deleteMasterLedgerEntry(id) {
     }
 }
 
+// ✅ Global expose
 window.deleteMasterLedgerEntry = deleteMasterLedgerEntry;
+
 
 function changeLedgerPage(newPage) {
     const totalPages = Math.ceil(masterLedgerData.length / masterLedgerPageSize);
