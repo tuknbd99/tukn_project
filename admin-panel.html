@@ -22923,7 +22923,10 @@ async function loadBranchAdminsForPermission() {
     }
 }
 
-// ব্রাঞ্চ অ্যাডমিনের পারমিশন লোড
+// ============================================================
+// ✅ FIXED: loadBranchAdminPermissions() — BRANCH_PERMISSIONS filter
+// ✅ DB-তে extra key থাকলেও শুধু BRANCH key render হবে
+// ============================================================
 async function loadBranchAdminPermissions() {
     const adminId = document.getElementById('branchAdminSelect').value;
     if (!adminId) {
@@ -22949,10 +22952,38 @@ async function loadBranchAdminPermissions() {
         
         if (error) throw error;
         
-        const currentPermissions = admin?.permissions || {};
+        const dbPermissions = admin?.permissions || {};
         const role = admin?.role || 'branch_officer';
         
-        renderBranchPermissionGrid(currentPermissions, role);
+        // ✅✅✅ CRITICAL FIX: শুধু BRANCH_PERMISSIONS এর key রাখুন
+        const filteredPermissions = {};
+        Object.keys(BRANCH_PERMISSIONS).forEach(key => {
+            filteredPermissions[key] = dbPermissions[key] === true;
+        });
+        
+        // ✅ যদি কোনো key-ই true না হয় — role থেকে ডিফল্ট নিন
+        const hasAnyActive = Object.values(filteredPermissions).some(v => v === true);
+        let permissionsToRender = filteredPermissions;
+        
+        if (!hasAnyActive && Object.keys(dbPermissions).length === 0) {
+            // সম্পূর্ণ খালি DB — role ডিফল্ট
+            permissionsToRender = ROLE_PERMISSIONS[role] || ROLE_PERMISSIONS['branch_officer'];
+            console.log('📌 Empty DB — using role defaults:', role);
+        } else if (!hasAnyActive) {
+            // সব false — role ডিফল্ট দেখান
+            permissionsToRender = ROLE_PERMISSIONS[role] || ROLE_PERMISSIONS['branch_officer'];
+            console.log('📌 All false — using role defaults:', role);
+        }
+        
+        console.log('✅ loadBranchAdminPermissions:', {
+            adminId,
+            dbKeys: Object.keys(dbPermissions).length,
+            filteredKeys: Object.keys(filteredPermissions).length,
+            activeInBranch: Object.values(filteredPermissions).filter(v => v).length,
+            role
+        });
+        
+        renderBranchPermissionGrid(permissionsToRender, role);
         document.getElementById('saveBranchPermBtn').style.display = 'block';
         document.getElementById('saveBranchPermBtn').dataset.adminId = adminId;
         
@@ -23065,27 +23096,43 @@ function selectAllBranchPermissions(select) {
     });
 }
 
-// ব্রাঞ্চ অ্যাডমিন পারমিশন সংরক্ষণ
+// ============================================================
+// ✅ FIXED: saveBranchAdminPermissions() — শুধু BRANCH_PERMISSIONS সেভ
+// ============================================================
 async function saveBranchAdminPermissions() {
     const adminId = document.getElementById('saveBranchPermBtn').dataset.adminId;
     if (!adminId) {
-        showToast('❌ অ্যাডমিন আইডি পাওয়া যায়নি!', 'error');
+        showToast('❌ অ্যাডমিন আইডি পাওয়া যায়নি!', 'error');
         return;
     }
     
+    // ✅✅✅ CRITICAL FIX: শুধু BRANCH_PERMISSIONS এর key নিন
     const checkboxes = document.querySelectorAll('.branch-perm-checkbox');
     const permissions = {};
-    checkboxes.forEach(cb => {
-        permissions[cb.dataset.permission] = cb.checked;
+    
+    // সব BRANCH_PERMISSIONS প্রথমে false
+    Object.keys(BRANCH_PERMISSIONS).forEach(key => {
+        permissions[key] = false;
     });
     
-    Object.keys(BRANCH_PERMISSIONS).forEach(key => {
-        if (BRANCH_PERMISSIONS[key].default && permissions[key] === undefined) {
-            permissions[key] = true;
+    // চেক করা গুলো true
+    checkboxes.forEach(cb => {
+        const permKey = cb.dataset.permission;
+        if (permKey && BRANCH_PERMISSIONS[permKey]) {
+            permissions[permKey] = cb.checked === true;
         }
     });
     
-    if (!confirm('এই ব্রাঞ্চ অ্যাডমিনের পারমিশন আপডেট করবেন?')) return;
+    const activeCount = Object.values(permissions).filter(v => v).length;
+    console.log('💾 Saving branch admin permissions:');
+    console.log('   Total keys:', Object.keys(permissions).length);
+    console.log('   Active:', activeCount);
+    
+    if (!confirm(
+        `এই ব্রাঞ্চ অ্যাডমিনের পারমিশন আপডেট করবেন?\n\n` +
+        `✅ সক্রিয়: ${activeCount} টি\n` +
+        `❌ নিষ্ক্রিয়: ${Object.keys(permissions).length - activeCount} টি`
+    )) return;
     
     const client = initSupabaseClient();
     if (!client) return;
@@ -23106,22 +23153,32 @@ async function saveBranchAdminPermissions() {
         
         if (error) throw error;
         
-        await client.from('audit_logs').insert([{
-            admin_name: currentAdmin?.full_name || 'সুপার অ্যাডমিন',
-            action: 'UPDATE',
-            table_name: 'branch_admins',
-            record_id: adminId,
-            changes: { permissions: 'আপডেট করা হয়েছে' },
-            created_at: new Date().toISOString()
-        }]);
+        // ✅ Audit log
+        try {
+            await client.from('audit_logs').insert([{
+                admin_name: currentAdmin?.full_name || currentAdmin?.username || 'Admin',
+                action: 'UPDATE_BRANCH_PERMISSIONS',
+                table_name: 'branch_admins',
+                record_id: String(adminId),
+                changes: { 
+                    active_count: activeCount,
+                    total_keys: Object.keys(permissions).length
+                },
+                created_at: new Date().toISOString()
+            }]);
+        } catch(e) {
+            console.warn('Audit log warning:', e);
+        }
         
-        showToast('✅ ব্রাঞ্চ অ্যাডমিনের পারমিশন আপডেট করা হয়েছে!', 'success');
+        showToast(`✅ ${activeCount} টি পারমিশন সংরক্ষণ সম্পন্ন!`, 'success');
         
-        await updateBranchAdminSession(adminId);
+        // ✅ রিফ্রেশ
+        await loadBranchAdmins();
+        await loadBranchAdminPermissions();
         
     } catch(e) {
         console.error('Save permissions error:', e);
-        showToast('❌ পারমিশন সংরক্ষণ ব্যর্থ!', 'error');
+        showToast(`❌ সংরক্ষণ ব্যর্থ: ${e.message}`, 'error');
     } finally {
         btn.disabled = false;
         btn.innerHTML = originalText;
