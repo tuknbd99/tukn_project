@@ -20382,10 +20382,11 @@ function editBranchAdminPermissions(adminId) {
 });
 
 // ============================================================
-// ✅ FIXED: loadRealDashboard() — Complete Fix
-// ✅ BD Timezone dates
-// ✅ সঠিক সদস্য পরিসংখ্যান (active/inactive/pending আলাদা)
+// ✅ FIXED: loadRealDashboard() — Complete Version
+// ✅ BD Timezone
+// ✅ সঠিক সদস্য পরিসংখ্যান
 // ✅ উত্তোলনে লোন যোগ হবে না
+// ✅ Monthly Collection = সর্বশেষ পেমেন্টের মাস
 // ============================================================
 async function loadRealDashboard() {
     try {
@@ -20400,43 +20401,67 @@ async function loadRealDashboard() {
         }
         
         // ============================================================
-        // ✅ ১. BD Timezone এ current month range
+        // ✅ ১. Monthly Collection — সর্বশেষ পেমেন্টের মাস
         // ============================================================
-        const now = new Date();
-        const bdParts = new Intl.DateTimeFormat('en-CA', {
-            timeZone: 'Asia/Dhaka',
-            year: 'numeric',
-            month: '2-digit'
-        }).formatToParts(now);
+        let monthlyCollection = 0;
+        let collectionLabel = '📆 মাসিক সংগ্রহ';
         
-        const bdYear = bdParts.find(p => p.type === 'year')?.value || '2026';
-        const bdMonth = bdParts.find(p => p.type === 'month')?.value || '01';
-        
-        const firstDay = `${bdYear}-${bdMonth}-01T00:00:00+06:00`;
-        const lastDayDate = new Date(parseInt(bdYear), parseInt(bdMonth), 0);
-        const lastDayNum = String(lastDayDate.getDate()).padStart(2, '0');
-        const lastDay = `${bdYear}-${bdMonth}-${lastDayNum}T23:59:59+06:00`;
-        
-        console.log('📅 Monthly range:', { from: firstDay, to: lastDay });
+        try {
+            // সর্বশেষ payment খুঁজুন
+            const { data: latestPayment } = await client
+                .from('payments')
+                .select('submitted_at')
+                .eq('status', 'approved')
+                .order('submitted_at', { ascending: false })
+                .limit(1);
+            
+            if (latestPayment && latestPayment[0]?.submitted_at) {
+                const lastDate = new Date(latestPayment[0].submitted_at);
+                
+                // BD timezone এ year-month
+                const bdParts = new Intl.DateTimeFormat('en-CA', {
+                    timeZone: 'Asia/Dhaka',
+                    year: 'numeric',
+                    month: '2-digit'
+                }).formatToParts(lastDate);
+                
+                const lastYear = bdParts.find(p => p.type === 'year')?.value;
+                const lastMonth = bdParts.find(p => p.type === 'month')?.value;
+                
+                const firstDay = `${lastYear}-${lastMonth}-01T00:00:00+06:00`;
+                const lastDayDate = new Date(parseInt(lastYear), parseInt(lastMonth), 0);
+                const lastDayNum = String(lastDayDate.getDate()).padStart(2, '0');
+                const lastDay = `${lastYear}-${lastMonth}-${lastDayNum}T23:59:59+06:00`;
+                
+                // সেই মাসের সব payment
+                const { data: monthData } = await client
+                    .from('payments')
+                    .select('amount')
+                    .eq('status', 'approved')
+                    .gte('submitted_at', firstDay)
+                    .lte('submitted_at', lastDay);
+                
+                monthlyCollection = (monthData || []).reduce(
+                    (s, p) => s + (Number(p.amount) || 0), 0
+                );
+                
+                // বাংলা মাসের নাম
+                const monthNames = [
+                    'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল',
+                    'মে', 'জুন', 'জুলাই', 'আগস্ট',
+                    'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
+                ];
+                const monthName = monthNames[parseInt(lastMonth) - 1];
+                collectionLabel = `📆 ${monthName} ${lastYear} সংগ্রহ`;
+                
+                console.log(`💰 Latest month collection (${lastYear}-${lastMonth}):`, monthlyCollection, 'Tk');
+            }
+        } catch(e) {
+            console.warn('Monthly collection error:', e);
+        }
         
         // ============================================================
-        // ✅ ২. মাসিক সংগ্রহ
-        // ============================================================
-        const { data: monthlyPayments } = await client
-            .from('payments')
-            .select('amount')
-            .eq('status', 'approved')
-            .gte('submitted_at', firstDay)
-            .lte('submitted_at', lastDay);
-        
-        const monthlyCollection = (monthlyPayments || []).reduce(
-            (s, p) => s + (Number(p.amount) || 0), 0
-        );
-        
-        console.log(`💰 Monthly collection: ${monthlyCollection} Tk (${monthlyPayments?.length || 0} payments)`);
-        
-        // ============================================================
-        // ✅ ৩. সব সদস্যের ফান্ড ডেটা
+        // ✅ ২. সব সদস্যের ফান্ড ডেটা
         // ============================================================
         const { data: allMembers } = await client
             .from('members')
@@ -20459,7 +20484,7 @@ async function loadRealDashboard() {
         const totalProfit = totalProfitSavings + totalProfitInvestment + totalProfitReferral;
         
         // ============================================================
-        // ✅ ৪. লোন আদায়
+        // ✅ ৩. লোন আদায়
         // ============================================================
         const { data: loanPayments } = await client
             .from('loan_payments')
@@ -20471,7 +20496,7 @@ async function loadRealDashboard() {
         );
         
         // ============================================================
-        // ✅ ৫. কল্যাণ তহবিল
+        // ✅ ৪. কল্যাণ তহবিল
         // ============================================================
         const { data: welfareData } = await client
             .from('welfare_fund')
@@ -20482,7 +20507,7 @@ async function loadRealDashboard() {
         );
         
         // ============================================================
-        // ✅ ৬. লোন প্রদান
+        // ✅ ৫. লোন প্রদান
         // ============================================================
         const { data: loansGiven } = await client
             .from('loan_applications')
@@ -20494,7 +20519,7 @@ async function loadRealDashboard() {
         );
         
         // ============================================================
-        // ✅ ৭. উত্তোলন (শুধু withdrawal টেবিল থেকে — লোন ছাড়া!)
+        // ✅ ৬. উত্তোলন (শুধু withdrawals টেবিল থেকে — লোন ছাড়া)
         // ============================================================
         const { data: allWithdrawals } = await client
             .from('withdrawals')
@@ -20506,14 +20531,14 @@ async function loadRealDashboard() {
         );
         
         // ============================================================
-        // ✅ ৮. হিসাব
+        // ✅ ৭. হিসাব
         // ============================================================
         const totalFund = totalBalance + totalReferralBonus + totalProfit + totalWelfare;
         const netBalance = totalFund - totalWithdrawal;
         const totalDue = totalLoanGiven - totalLoanCollected;
         
         // ============================================================
-        // ✅ ৯. সদস্য পরিসংখ্যান — আলাদা query দিয়ে
+        // ✅ ৮. সদস্য পরিসংখ্যান — আলাদা query দিয়ে
         // ============================================================
         const { count: totalMembers } = await client
             .from('members')
@@ -20542,7 +20567,7 @@ async function loadRealDashboard() {
         });
         
         // ============================================================
-        // ✅ ১০. UI আপডেট
+        // ✅ ৯. UI আপডেট
         // ============================================================
         const setText = (id, text) => {
             const el = document.getElementById(id);
@@ -20569,11 +20594,20 @@ async function loadRealDashboard() {
         setText('dashWelfareFund', formatAmountWithText(totalWelfare));
         setText('dashCurrentFund', formatAmountWithText(netBalance));
         
-        // সদস্য পরিসংখ্যান — সঠিকভাবে
+        // সদস্য পরিসংখ্যান
         setText('statActiveMembers', activeMembers || 0);
         setText('statPendingMembers2', pendingMembers || 0);
         setText('statInactiveMembers', inactiveMembers || 0);
         setText('statTotalMembers2', totalMembers || 0);
+        
+        // ✅ Collection label আপডেট (📆 মাসিক সংগ্রহ → 📆 সেপ্টেম্বর 2026 সংগ্রহ)
+        const collectionEl = document.getElementById('dashMonthlyCollection');
+        if (collectionEl) {
+            const labelEl = collectionEl.parentElement?.querySelector('.label');
+            if (labelEl) {
+                labelEl.textContent = collectionLabel;
+            }
+        }
         
         console.log('✅ ড্যাশবোর্ড আপডেট সম্পূর্ণ!');
         console.log('   💰 Monthly:', monthlyCollection);
@@ -20592,6 +20626,7 @@ async function loadRealDashboard() {
 // ✅ Global expose
 window.loadRealDashboard = loadRealDashboard;
 
+console.log('✅ loadRealDashboard() with Monthly Collection FIX loaded');
 console.log('✅ loadRealDashboard() FIXED version loaded');
 
     async function updateCharts() {
@@ -23618,7 +23653,6 @@ function loadDashboardWithPermissions() {
     window.formatAmountWithText = formatAmountWithText;
     window.fixWithdrawalsDisplay = fixWithdrawalsDisplay;
     window.loadAllData = loadAllData;
-    window.loadRealDashboard = loadRealDashboard;
     window.loadMembers = loadMembers;
     window.loadStatement = loadStatement;
     window.loadAllWithdrawals = loadAllWithdrawals;
