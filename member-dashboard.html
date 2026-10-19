@@ -2909,6 +2909,7 @@ function formatStatementAmount(amount) {
     return num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
+// ✅ সব transaction count দেখান (FIXED — PostgREST-safe date format)
 async function countStatementTransactions() {
     if (!currentUser) return;
     
@@ -2923,13 +2924,16 @@ async function countStatementTransactions() {
     const client = await initSupabase();
     if (!client) return;
     
-    // ✅ FIXED: Bangladesh time → UTC (400 error এড়াতে)
+    // ✅ FIXED: PostgREST-এর জন্য উপযুক্ত ফরম্যাট (মিলিসেকেন্ড ছাড়া)
     const fromDateObj = new Date(`${fromDate}T00:00:00+06:00`);
     const toDateObj = new Date(`${toDate}T23:59:59+06:00`);
-    const fromDateTime = fromDateObj.toISOString();
-    const toDateTime = toDateObj.toISOString();
     
-    console.log('📅 Count Date Range (UTC):', { fromDateTime, toDateTime });
+    const formatForPostgrest = (date) => date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    
+    const fromDateTime = formatForPostgrest(fromDateObj);
+    const toDateTime = formatForPostgrest(toDateObj);
+    
+    console.log('📅 Count Date Range (UTC, PostgREST-safe):', { fromDateTime, toDateTime });
     
     try {
         const [p, w, l, lp, t1, t2, b, pr] = await Promise.all([
@@ -12292,16 +12296,21 @@ async function generateStatement() {
     
     try {
         // ============================================================
-        // ২. Date Range তৈরি (Bangladesh Time → UTC)
-        // ✅ FIXED: 400 error এড়াতে toISOString() ব্যবহার
+        // ২. Date Range তৈরি (Bangladesh Time → UTC, PostgREST-safe)
+        // ✅ FIXED: মিলিসেকেন্ড বাদ দিয়ে Z ফরম্যাটে পাঠানো
         // ============================================================
         const fromDateObj = new Date(`${fromDate}T00:00:00+06:00`);
         const toDateObj = new Date(`${toDate}T23:59:59+06:00`);
         
-        const fromDateTime = fromDateObj.toISOString();
-        const toDateTime = toDateObj.toISOString();
+        // ✅ PostgREST-এর জন্য উপযুক্ত ফরম্যাট (মিলিসেকেন্ড ছাড়া)
+        const formatForPostgrest = (date) => {
+            return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+        };
         
-        console.log('📅 Date Range (UTC):', { fromDateTime, toDateTime });
+        const fromDateTime = formatForPostgrest(fromDateObj);
+        const toDateTime = formatForPostgrest(toDateObj);
+        
+        console.log('📅 Date Range (UTC, PostgREST-safe):', { fromDateTime, toDateTime });
         console.log('📅 Bangladesh time:', { fromDate, toDate });
         
         // ============================================================
@@ -12500,12 +12509,11 @@ async function generateStatement() {
         
         // ✅ ৫ছ. রেফারেল বোনাস (আয়) — RPC থেকে
         (bonusRes.data || []).forEach(b => {
-            // Date range চেক করুন
             const bonusDate = b.created_at ? new Date(b.created_at) : null;
-            const fromDateObj = new Date(fromDateTime);
-            const toDateObj = new Date(toDateTime);
+            const fromDateObj2 = new Date(fromDateTime);
+            const toDateObj2 = new Date(toDateTime);
             
-            if (bonusDate && bonusDate >= fromDateObj && bonusDate <= toDateObj) {
+            if (bonusDate && bonusDate >= fromDateObj2 && bonusDate <= toDateObj2) {
                 transactions.push({
                     date: b.created_at,
                     type: 'রেফারেল বোনাস',
@@ -12576,9 +12584,6 @@ async function generateStatement() {
         const printDateTime = formatDateTimeBD(new Date().toISOString());
         
         let html = `
-            <!-- ═══════════════════════════════════════════════════ -->
-            <!-- 📄 Statement Header -->
-            <!-- ═══════════════════════════════════════════════════ -->
             <div style="text-align:center; border-bottom:3px solid #059669; padding-bottom:12px; margin-bottom:15px;">
                 <img src="images/logo.png" 
                      alt="TUKNBD Logo" 
@@ -12595,9 +12600,6 @@ async function generateStatement() {
                 </p>
             </div>
             
-            <!-- ═══════════════════════════════════════════════════ -->
-            <!-- 👤 Member Info -->
-            <!-- ═══════════════════════════════════════════════════ -->
             <div style="display:flex; flex-wrap:wrap; gap:6px 20px; padding:10px 14px; background:#f0fdf4; border:1px solid #86efac; border-radius:8px; margin-bottom:12px; font-size:12px; justify-content:center;">
                 <span><strong>👤 নাম:</strong> ${member.full_name || '-'}</span>
                 <span><strong>🆔 আইডি:</strong> ${member.member_id || '-'}</span>
