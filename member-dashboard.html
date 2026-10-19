@@ -11189,19 +11189,58 @@ async function loadReferralData() {
             updateLevelList(level, refs, rate);
             }
         
-        // ═══════════════════════════════════════════════════════
+                // ═══════════════════════════════════════════════════════
         // STEP 10: Statistics Cards Update
+        // ✅ FIXED: RPC দিয়ে (RLS বাইপাস) + Fallback calculation
         // ═══════════════════════════════════════════════════════
-        const { data: currentMember } = await client
-            .from('members')
-            .select('referral_bonus, referral_count')
-            .eq('member_id', currentUser.id)
-            .single();
+        const { data: currentMemberRows, error: memberErr } = await client.rpc('get_member_by_id', {
+            input_id: currentUser.id
+        });
         
-        const totalCommission = Number(currentMember?.referral_bonus) || 0;
-        const activeRefs = levelReferrals[1].filter(r => 
-            r.status === 'active' || r.status === 'approved'
-        ).length;
+        if (memberErr) {
+            console.error('❌ get_member_by_id error:', memberErr);
+        }
+        
+        const currentMember = currentMemberRows && currentMemberRows.length > 0 ? currentMemberRows[0] : null;
+        
+        console.log('🔍 currentMember from RPC:', {
+            referral_bonus: currentMember?.referral_bonus,
+            referral_count: currentMember?.referral_count,
+            full_name: currentMember?.full_name
+        });
+        
+        // ✅ totalCommission calculation with 3 fallbacks
+        let totalCommission = 0;
+        
+        // Fallback 1: currentMember.referral_bonus
+        if (currentMember?.referral_bonus !== undefined && currentMember?.referral_bonus !== null) {
+            totalCommission = Number(currentMember.referral_bonus) || 0;
+        }
+        
+        // Fallback 2: allBonusLocks থেকে sum
+        if (totalCommission === 0 && allBonusLocks && allBonusLocks.length > 0) {
+            totalCommission = allBonusLocks.reduce((sum, lock) => 
+                sum + (Number(lock.bonus_amount) || 0), 0
+            );
+            console.log('⚠️ referral_bonus 0, lock sum ব্যবহার:', totalCommission);
+        }
+        
+        // Fallback 3: levelStats থেকে sum
+        if (totalCommission === 0) {
+            let levelSum = 0;
+            for (let level = 1; level <= 10; level++) {
+                levelSum += levelStats[level].totalBonus || 0;
+            }
+            totalCommission = levelSum;
+            console.log('⚠️ Level-wise sum ব্যবহার:', totalCommission);
+        }
+        
+        console.log('✅ Total Commission:', totalCommission);
+        
+        const activeRefs = levelReferrals[1].filter(r => {
+            const status = String(r.status || '').toLowerCase().trim();
+            return status === 'active' || status === 'approved';
+        }).length;
         
         const totalRefEl = document.getElementById('totalReferrals');
         const totalComEl = document.getElementById('totalCommission');
@@ -11213,11 +11252,31 @@ async function loadReferralData() {
         if (maxLvlEl) maxLvlEl.innerText = bnToEn(maxActiveLevel);
         if (actRefEl) actRefEl.innerText = bnToEn(activeRefs);
         
-        // userFunds Update
+        console.log('📊 UI updated:', {
+            totalReferrals: totalAllReferrals,
+            totalCommission: totalCommission,
+            maxLevel: maxActiveLevel,
+            activeReferrals: activeRefs
+        });
+        
+        // ✅ userFunds Update (সব variable সেট করুন)
         userFunds.referralBonus = totalCommission;
-        userFunds.referralCount = Number(currentMember?.referral_count) || 0;
+        userFunds.referralCount = totalAllReferrals;
+        userFunds.referralBonusTotal = totalCommission;
+        userFunds.referralBonusWithdrawn = 0;
+        
+        // ✅ window variables (referral summary card এর জন্য)
         window._liveReferralBonus = totalCommission;
-        window._liveReferralCount = Number(currentMember?.referral_count) || 0;
+        window._liveReferralCount = totalAllReferrals;
+        window._totalReferrals = totalAllReferrals;
+        window._maxActiveLevel = maxActiveLevel;
+        window._activeReferrals = activeRefs;
+        
+        console.log('🔍 Referral variables set:', {
+            totalReferrals: totalAllReferrals,
+            totalCommission: totalCommission,
+            activeReferrals: activeRefs
+        });
         
         // ═══════════════════════════════════════════════════════
         // STEP 11: Referral Link Update
