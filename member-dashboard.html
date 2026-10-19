@@ -5692,11 +5692,6 @@ window.updateFundsDisplayWithAnimation = updateFundsDisplayWithAnimation;
 window.updateFundsDisplaySilent = updateFundsDisplaySilent;
 
 
-    // ============================================================
-// ✅ FIXED: loadSavingsData() — Admin Panel-এর সাথে সিংক্রোনাইজড
-// members.balance থেকে সরাসরি balance পড়ে (single source of truth)
-// ============================================================
-
 async function loadSavingsData() {
     if(!currentUser) return;
     let client = await initSupabase();
@@ -5709,7 +5704,6 @@ async function loadSavingsData() {
         let totalMonthsSinceJoin = (currentYear - joinYear) * 12 + (currentMonth - joinMonth) + 1;
         if(totalMonthsSinceJoin < 0) totalMonthsSinceJoin = 0;
         
-        // ✅ approved payments লোড করুন
         const { data: approvedPayments } = await client
             .from('payments')
             .select('amount, month, year')
@@ -5734,49 +5728,46 @@ async function loadSavingsData() {
         }
         
         const dueMonths = Math.max(0, totalMonthsSinceJoin - paidMonthsCount);
-        
-        // ✅ চেক করুন সদস্য কারেন্ট/মেয়াদহীন কিনা
         const isCurrentMember = parseInt(currentUser.memberTerm) === 0;
         
-        document.getElementById('paidMonthsDisplay').innerText = paidMonthsCount + ' মাস';
+        const paidEl = document.getElementById('paidMonthsDisplay');
+        if (paidEl) paidEl.innerText = paidMonthsCount + ' মাস';
         
-        // ✅ কারেন্ট সদস্যদের জন্য "বাকি" দেখাবেন না
-        if (isCurrentMember) {
-            document.getElementById('dueMonthsDisplay').innerHTML = `
-                <span class="text-green-600 font-bold">
-                    <i class="fas fa-infinity mr-1"></i> সীমাহীন
-                </span>
-                <span class="text-xs text-gray-400 block">(কারেন্ট সদস্য)</span>
-            `;
-        } else {
-            document.getElementById('dueMonthsDisplay').innerHTML = 
-                `<span class="${dueMonths > 0 ? 'text-red-500' : 'text-green-600'}">${dueMonths} মাস</span>`;
+        const dueEl = document.getElementById('dueMonthsDisplay');
+        if (dueEl) {
+            if (isCurrentMember) {
+                dueEl.innerHTML = `
+                    <span class="text-green-600 font-bold">
+                        <i class="fas fa-infinity mr-1"></i> সীমাহীন
+                    </span>
+                    <span class="text-xs text-gray-400 block">(কারেন্ট সদস্য)</span>
+                `;
+            } else {
+                dueEl.innerHTML = 
+                    `<span class="${dueMonths > 0 ? 'text-red-500' : 'text-green-600'}">${dueMonths} মাস</span>`;
+            }
         }
         
-      document.getElementById('totalPaidDisplay').innerText = totalPaid.toLocaleString();
+        const totalPaidEl = document.getElementById('totalPaidDisplay');
+        if (totalPaidEl) totalPaidEl.innerText = totalPaid.toLocaleString();
         
-        // ============================================================
-        // ✅✅✅ MAIN FIX: members.balance থেকে সরাসরি পড়ুন ✅✅✅
-        // ============================================================
-        const { data: memberData, error: mError } = await client
-            .from('members')
-            .select('balance')
-            .eq('member_id', currentUser.id)
-            .single();
+        // ✅ FIXED: RPC দিয়ে balance লোড (406 error এড়াতে)
+        const { data: memberDataRows, error: mError } = await client.rpc('get_member_by_id', {
+            input_id: currentUser.id
+        });
         
         if (mError) {
             console.error('❌ member balance fetch error:', mError);
         }
         
+        const memberData = memberDataRows && memberDataRows.length > 0 ? memberDataRows[0] : null;
         const currentBalance = Number(memberData?.balance) || 0;
         
-        // ✅ totalBalanceDisplay (মোট সঞ্চয় ব্যালেন্স কার্ড) আপডেট করুন
         const balanceEl = document.getElementById('totalBalanceDisplay');
         if (balanceEl) {
             balanceEl.innerHTML = formatAmountWithText(currentBalance);
         }
         
-        // ✅ userFunds-এ সিঙ্ক করুন (কারণ কার্ডগুলো এটা থেকে পড়ে)
         userFunds.monthlySavings = currentBalance;
         updateFundsDisplay();
         
@@ -8375,27 +8366,16 @@ function setupBroadcastChannel() {
     }
 }
 
- // ============================================================
-// অ্যাডমিন থেকে আপডেট চেক করার জন্য পোলিং (সম্পূর্ণ ঠিক করা)
-// ============================================================
 function startAdminUpdatePolling() {
     console.log('🔄 অ্যাডমিন আপডেট পোলিং চালু হয়েছে (প্রতি ৩০ সেকেন্ড)');
     
-    // আগের interval থাকলে clear করুন (duplicate এড়াতে)
     if (window._adminUpdateInterval) {
         clearInterval(window._adminUpdateInterval);
         console.log('🗑️ পুরনো পোলিং interval clear করা হয়েছে');
     }
     
-    // ✅ প্রতি ৩০ সেকেন্ড পর পর চেক করবে
     window._adminUpdateInterval = setInterval(async function() {
-        
-        // ✅ চেক ১: currentUser আছে কিনা
-        if (!currentUser || !currentUser.id) {
-            return;
-        }
-        
-        // ✅ চেক ২: ট্যাব visible আছে কিনা (hidden tab-এ API call করবেন না)
+        if (!currentUser || !currentUser.id) return;
         if (document.hidden) {
             console.log('⏸️ ট্যাব hidden — পোলিং স্কিপ');
             return;
@@ -8405,25 +8385,23 @@ function startAdminUpdatePolling() {
             const client = await initSupabase();
             if (!client) return;
             
-            // ============================================================
-            // ✅ ১. ডাটাবেস থেকে সব ফিল্ড লোড করুন
-            // ============================================================
-            const { data, error } = await client
-                .from('members')
-                .select('updated_at, balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
-                .eq('member_id', currentUser.id)
-                .single();
+            // ✅ FIXED: RPC দিয়ে ডাটা লোড (406 error এড়াতে)
+            const { data: memberRows, error } = await client.rpc('get_member_by_id', {
+                input_id: currentUser.id
+            });
             
             if (error) {
                 console.error('❌ পোলিং error:', error);
                 return;
             }
             
-            if (!data) return;
+            const data = memberRows && memberRows.length > 0 ? memberRows[0] : null;
             
-            // ============================================================
-            // ✅ ২. সব ফান্ডের পুরনো ও নতুন মান তুলনা করুন
-            // ============================================================
+            if (!data) {
+                console.warn('⚠️ পোলিং: সদস্য পাওয়া যায়নি');
+                return;
+            }
+            
             const oldFunds = {
                 balance: Number(userFunds.monthlySavings) || 0,
                 referral_bonus: Number(userFunds.referralBonus) || 0,
@@ -8440,9 +8418,6 @@ function startAdminUpdatePolling() {
                 profit_referral: Number(data.profit_balance_referral) || 0
             };
             
-            // ============================================================
-            // ✅ ৩. কোন কোন field পরিবর্তন হয়েছে তা বের করুন
-            // ============================================================
             const changes = [];
             
             if (oldFunds.balance !== newFunds.balance) {
@@ -8495,16 +8470,8 @@ function startAdminUpdatePolling() {
                 });
             }
             
-            // ============================================================
-            // ✅ ৪. কোনো পরিবর্তন না থাকলে চুপচাপ ফিরে যান
-            // ============================================================
-            if (changes.length === 0) {
-                return;
-            }
+            if (changes.length === 0) return;
             
-            // ============================================================
-            // ✅ ৫. পরিবর্তন লগ করুন
-            // ============================================================
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log(`🔄 ${changes.length} টি ফান্ড পরিবর্তন শনাক্ত!`);
             changes.forEach(c => {
@@ -8513,31 +8480,22 @@ function startAdminUpdatePolling() {
             });
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             
-            // ============================================================
-            // ✅ ৬. Supabase থেকে সব ডেটা রিফ্রেশ করুন
-            // ============================================================
             await refreshMemberDataFromSupabase();
             await loadUserFunds();
             
-            // ✅ UI আপডেট (animation সহ)
             if (typeof updateFundsDisplayWithAnimation === 'function') {
                 updateFundsDisplayWithAnimation();
             } else {
                 updateFundsDisplay();
             }
             
-            // ============================================================
-            // ✅ ৭. Notification তৈরি করুন
-            // ============================================================
             let toastMessage = '';
             
             if (changes.length === 1) {
-                // একটি field পরিবর্তন
                 const c = changes[0];
                 const sign = c.diff > 0 ? '+' : '';
                 toastMessage = `${c.name} আপডেট: ${c.old.toLocaleString()} → ${c.new.toLocaleString()} টাকা (${sign}${c.diff.toLocaleString()})`;
             } else {
-                // একাধিক field পরিবর্তন
                 const totalDiff = changes.reduce((sum, c) => sum + c.diff, 0);
                 const sign = totalDiff > 0 ? '+' : '';
                 toastMessage = `${changes.length} টি ফান্ড আপডেট হয়েছে! মোট পরিবর্তন: ${sign}${totalDiff.toLocaleString()} টাকা`;
@@ -8545,9 +8503,6 @@ function startAdminUpdatePolling() {
             
             showToast(`💰 ${toastMessage}`, 'success');
             
-            // ============================================================
-            // ✅ ৮. একাধিক পরিবর্তন হলে বিস্তারিত দেখান
-            // ============================================================
             if (changes.length > 1) {
                 setTimeout(() => {
                     const details = changes
@@ -8564,7 +8519,7 @@ function startAdminUpdatePolling() {
         } catch(e) {
             console.error('❌ পোলিং error:', e);
         }
-    }, 30000); // ✅ প্রতি ৩০ সেকেন্ড
+    }, 30000);
 }
     
 // ============================================================
@@ -13138,10 +13093,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     console.log('  showNoticePopup() - নোটিশ পপআপ টেস্ট');
 });
 
-    // ============================================================
-// ✅ ব্যালেন্স মিসম্যাচ চেক ও ফিক্স
-// ============================================================
-
 async function checkAndFixBalanceMismatch() {
     if (!currentUser || !currentUser.id) return;
     
@@ -13149,34 +13100,30 @@ async function checkAndFixBalanceMismatch() {
         const client = await initSupabase();
         if (!client) return;
         
-        // ডাটাবেস থেকে বর্তমান ব্যালেন্স নিন
-        const { data: member, error } = await client
-            .from('members')
-            .select('balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
-            .eq('member_id', currentUser.id)
-            .single();
+        // ✅ FIXED: RPC দিয়ে ডাটা লোড (406 error এড়াতে)
+        const { data: memberRows, error } = await client.rpc('get_member_by_id', {
+            input_id: currentUser.id
+        });
+        
+        const member = memberRows && memberRows.length > 0 ? memberRows[0] : null;
         
         if (error || !member) return;
         
         const dbBalance = Number(member.balance) || 0;
         const localBalance = userFunds.monthlySavings || 0;
         
-        // যদি মিসম্যাচ হয়
         if (dbBalance !== localBalance) {
             console.log(`⚠️ ব্যালেন্স মিসম্যাচ! DB: ${dbBalance}, Local: ${localBalance}`);
             console.log('🔄 অটো-ফিক্স চলছে...');
             
-            // ফান্ড আপডেট করুন
             userFunds.monthlySavings = dbBalance;
             userFunds.savingsProfit = Number(member.profit_balance_savings) || 0;
             userFunds.investmentProfit = Number(member.profit_balance_investment) || 0;
             userFunds.referralProfit = Number(member.profit_balance_referral) || 0;
             userFunds.referralBonus = Number(member.referral_bonus) || 0;
             
-            // UI আপডেট করুন
             updateFundsDisplay();
             
-                        // sessionStorage আপডেট
             try {
                 const storedUser = sessionStorage.getItem('tukn_logged_member');
                 if (storedUser) {
@@ -13191,14 +13138,13 @@ async function checkAndFixBalanceMismatch() {
             } catch(e) {}
             
             showToast(`💰 আপনার ব্যালেন্স আপডেট হয়েছে! নতুন ব্যালেন্স: ${dbBalance.toLocaleString()} টাকা`, 'success');
-                }                                    
-        
-            } catch(e) {
-                console.error('❌ মিসম্যাচ চেক error:', e);
-            }
         }
+    } catch(e) {
+        console.error('❌ মিসম্যাচ চেক error:', e);
+    }
+}
 
-window.forceBalanceUpdate = async function() {
+    window.forceBalanceUpdate = async function() {
     console.log('🔍 ফোর্স ব্যালেন্স আপডেট শুরু...');
     await refreshMemberDataFromSupabase();
     await loadUserFunds();
