@@ -4745,9 +4745,6 @@ function setupTimeIntervals() {
 }
 
 
-// ============================================================
-// Address Functions
-// ============================================================
 async function openAddressModal() {
     if (!currentUser) {
         showToast('❌ সেশন এক্সপায়ার হয়েছে! পেজ রিলোড করুন।', 'error');
@@ -4763,23 +4760,16 @@ async function openAddressModal() {
     }
     
     try {
-        const { data: memberData, error: fetchError } = await client
-            .from('members')
-            .select(`
-                full_name, mobile, father_name, mother_name,
-                date_of_birth, birth_certificate_no, voter_id_no,
-                education, occupation, email, bkash_number, nagad_number,
-                present_address, permanent_address,
-                nominee_name, nominee_relation, nominee_mobile,
-                nominee_id_no, nominee_address,
-                profile_updated, profile_updated_at
-            `)
-            .eq('member_id', currentUser.id)
-            .single();
+        // ✅ RPC দিয়ে ডাটা লোড (RLS বাইপাস করে)
+        const { data: memberRows, error: fetchError } = await client.rpc('get_member_by_id', {
+            input_id: currentUser.id
+        });
+        
+        const memberData = memberRows && memberRows.length > 0 ? memberRows[0] : null;
         
         if (fetchError || !memberData) {
-            console.error('❌ সদস্য তথ্য লোড error:', fetchError);
-            showToast('❌ সদস্য তথ্য লোড করতে ব্যর্থ!', 'error');
+            console.error('❌ প্রোফাইল তথ্য লোড error:', fetchError);
+            showToast('❌ প্রোফাইল তথ্য লোড করতে সমস্যা!', 'error');
             return;
         }
         
@@ -5026,116 +5016,120 @@ async function checkProfileUpdateStatus() {
     const btnContainer = document.getElementById('profileUpdateButtonContainer');
     const statusDiv = document.getElementById('profileUpdateStatus');
     
-    try {
-        // ডাটাবেস থেকে প্রোফাইল তথ্য আনুন
-        const { data, error } = await client
-            .from('members')
-            .select('full_name, mobile, email, present_address, permanent_address, profile_updated, profile_updated_at')
-            .eq('member_id', currentUser.id)
-            .single();
-        
-        if (error || !data) {
-            console.error('❌ প্রোফাইল লোড error:', error);
-            if (grid) {
-                grid.innerHTML = `
-                    <div class="col-span-full text-center text-red-500 py-4">
-                        <i class="fas fa-exclamation-circle mr-1"></i>
-                        প্রোফাইল তথ্য লোড করতে সমস্যা!
-                    </div>
-                `;
-            }
-            return;
-        }
-        
-        // ✅ Profile Display Grid তৈরি করুন
-        if (grid) {
-            grid.innerHTML = `
-                <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                    <p class="text-xs text-gray-500 mb-1"><i class="fas fa-user mr-1"></i>পূর্ণ নাম</p>
-                    <p class="font-semibold text-gray-800">${data.full_name || 'যোগ করা হয়নি'}</p>
-                </div>
-                
-                <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                    <p class="text-xs text-gray-500 mb-1"><i class="fas fa-mobile-alt mr-1"></i>মোবাইল নম্বর</p>
-                    <p class="font-semibold text-gray-800">${data.mobile || 'যোগ করা হয়নি'}</p>
-                </div>
-                
-                <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                    <p class="text-xs text-gray-500 mb-1"><i class="fas fa-envelope mr-1"></i>ইমেইল</p>
-                    <p class="font-semibold text-gray-800">${data.email || 'যোগ করা হয়নি'}</p>
-                </div>
-                
-                <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                    <p class="text-xs text-gray-500 mb-1"><i class="fas fa-id-card mr-1"></i>সদস্য আইডি</p>
-                    <p class="font-semibold text-gray-800">${currentUser.id}</p>
-                </div>
-                
-                <div class="bg-blue-50 p-3 rounded-lg border border-blue-200 col-span-full">
-                    <p class="text-xs text-blue-600 mb-1"><i class="fas fa-home mr-1"></i>বর্তমান ঠিকানা</p>
-                    <p class="font-medium text-gray-800" id="presentAddressDisplay">${data.present_address || 'যোগ করা হয়নি'}</p>
-                </div>
-                
-                <div class="bg-purple-50 p-3 rounded-lg border border-purple-200 col-span-full">
-                    <p class="text-xs text-purple-600 mb-1"><i class="fas fa-map-marker-alt mr-1"></i>স্থায়ী ঠিকানা</p>
-                    <p class="font-medium text-gray-800" id="permanentAddressDisplay">${data.permanent_address || 'যোগ করা হয়নি'}</p>
-                </div>
-            `;
-        }
-        
-        // ✅ Lock Status অনুযায়ী UI দেখান
-        if (data.profile_updated === true) {
-            // প্রোফাইল লকড
-            if (lockMsg) {
-                lockMsg.classList.remove('hidden');
-                const dateEl = document.getElementById('profileUpdatedDate');
-                if (dateEl && data.profile_updated_at) {
-                    dateEl.textContent = formatDateTimeBD(data.profile_updated_at);
-                }
-            }
-            if (btnContainer) {
-                btnContainer.style.display = 'none';
-            }
-            if (statusDiv) {
-                statusDiv.innerHTML = `
-                    <span class="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-semibold">
-                        <i class="fas fa-check-circle mr-1"></i> প্রোফাইল সম্পূর্ণ
-                    </span>
-                `;
-            }
-        } else {
-            // আপডেট করা যায়
-            if (lockMsg) {
-                lockMsg.classList.add('hidden');
-            }
-            if (btnContainer) {
-                btnContainer.style.display = 'block';
-            }
-            if (statusDiv) {
-                statusDiv.innerHTML = `
-                    <span class="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-xs font-semibold">
-                        <i class="fas fa-edit mr-1"></i> আপডেট করুন
-                    </span>
-                `;
-            }
-        }
-        
-        // Local state আপডেট
-        currentUser.presentAddress = data.present_address || '';
-        currentUser.permanentAddress = data.permanent_address || '';
-        currentUser.email = data.email || '';
-        
-        console.log('✅ প্রোফাইল স্ট্যাটাস লোড সম্পূর্ণ');
-        
-    } catch (e) {
-        console.error('❌ checkProfileUpdateStatus error:', e);
+   try {
+    // ✅ RPC দিয়ে ডাটা লোড (RLS বাইপাস করে)
+    const { data: profileRows, error } = await client.rpc('get_member_by_id', {
+        input_id: currentUser.id
+    });
+    
+    const data = profileRows && profileRows.length > 0 ? profileRows[0] : null;
+    
+    if (error || !data) {
+        console.error('❌ প্রোফাইল লোড error:', error);
         if (grid) {
             grid.innerHTML = `
                 <div class="col-span-full text-center text-red-500 py-4">
-                    <i class="fas fa-exclamation-triangle mr-1"></i>
-                    লোড করতে ব্যর্থ!
+                    <i class="fas fa-exclamation-circle mr-1"></i>
+                    প্রোফাইল তথ্য লোড করতে সমস্যা!
                 </div>
             `;
         }
+        return;
+    }
+    
+    // ✅ Profile Display Grid তৈরি করুন
+    if (grid) {
+        grid.innerHTML = `
+            <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                <p class="text-xs text-gray-500 mb-1"><i class="fas fa-user mr-1"></i>পূর্ণ নাম</p>
+                <p class="font-semibold text-gray-800">${data.full_name || 'যোগ করা হয়নি'}</p>
+            </div>
+            
+            <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                <p class="text-xs text-gray-500 mb-1"><i class="fas fa-mobile-alt mr-1"></i>মোবাইল নম্বর</p>
+                <p class="font-semibold text-gray-800">${data.mobile || 'যোগ করা হয়নি'}</p>
+            </div>
+            
+            <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                <p class="text-xs text-gray-500 mb-1"><i class="fas fa-envelope mr-1"></i>ইমেইল</p>
+                <p class="font-semibold text-gray-800">${data.email || 'যোগ করা হয়নি'}</p>
+            </div>
+            
+            <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                <p class="text-xs text-gray-500 mb-1"><i class="fas fa-id-card mr-1"></i>সদস্য আইডি</p>
+                <p class="font-semibold text-gray-800">${currentUser.id}</p>
+            </div>
+            
+            <div class="bg-blue-50 p-3 rounded-lg border border-blue-200 col-span-full">
+                <p class="text-xs text-blue-600 mb-1"><i class="fas fa-home mr-1"></i>বর্তমান ঠিকানা</p>
+                <p class="font-medium text-gray-800" id="presentAddressDisplay">${data.present_address || 'যোগ করা হয়নি'}</p>
+            </div>
+            
+            <div class="bg-purple-50 p-3 rounded-lg border border-purple-200 col-span-full">
+                <p class="text-xs text-purple-600 mb-1"><i class="fas fa-map-marker-alt mr-1"></i>স্থায়ী ঠিকানা</p>
+                <p class="font-medium text-gray-800" id="permanentAddressDisplay">${data.permanent_address || 'যোগ করা হয়নি'}</p>
+            </div>
+        `;
+    }
+    
+    // ✅ Lock Status অনুযায়ী UI দেখান
+    if (data.profile_updated === true) {
+        // প্রোফাইল লকড
+        if (lockMsg) {
+            lockMsg.classList.remove('hidden');
+            const dateEl = document.getElementById('profileUpdatedDate');
+            if (dateEl && data.profile_updated_at) {
+                dateEl.textContent = formatDateTimeBD(data.profile_updated_at);
+            }
+        }
+        if (btnContainer) {
+            btnContainer.style.display = 'none';
+        }
+        if (statusDiv) {
+            statusDiv.innerHTML = `
+                <span class="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-semibold">
+                    <i class="fas fa-check-circle mr-1"></i> প্রোফাইল সম্পূর্ণ
+                </span>
+            `;
+        }
+    } else {
+        // আপডেট করা যায়
+        if (lockMsg) {
+            lockMsg.classList.add('hidden');
+        }
+        if (btnContainer) {
+            btnContainer.style.display = 'block';
+        }
+        if (statusDiv) {
+            statusDiv.innerHTML = `
+                <span class="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-xs font-semibold">
+                    <i class="fas fa-edit mr-1"></i> আপডেট করুন
+                </span>
+            `;
+        }
+    }
+    
+    // Local state আপডেট
+    currentUser.presentAddress = data.present_address || '';
+    currentUser.permanentAddress = data.permanent_address || '';
+    currentUser.email = data.email || '';
+    
+    console.log('✅ প্রোফাইল স্ট্যাটাস লোড সম্পূর্ণ:', {
+        full_name: data.full_name,
+        mobile: data.mobile,
+        email: data.email,
+        profile_updated: data.profile_updated
+    });
+    
+} catch (e) {
+    console.error('❌ checkProfileUpdateStatus error:', e);
+    if (grid) {
+        grid.innerHTML = `
+            <div class="col-span-full text-center text-red-500 py-4">
+                <i class="fas fa-exclamation-triangle mr-1"></i>
+                লোড করতে ব্যর্থ!
+            </div>
+        `;
     }
 }
 
@@ -5232,49 +5226,55 @@ async function refreshMemberDataFromSupabase() {
     }
     
     try {
-        const { data, error } = await client
-            .from('members')
-            .select('balance, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus, member_term, approved_at, status, lockin_agreed, lockin_agreed_at, lockin_end_date')
-            .eq('member_id', currentUser.id)
-            .single();
-            
-        if(error) {
-            console.error('❌ ডাটাবেস error:', error);
-            return;
-        }
-        
-        if(data) {
-            userFunds.monthlySavings = Number(data.balance) || 0;
-            userFunds.savingsProfit = Number(data.profit_balance_savings) || 0;
-            userFunds.investmentProfit = Number(data.profit_balance_investment) || 0;
-            userFunds.referralProfit = Number(data.profit_balance_referral) || 0;
-            
-            // ✅ DB-এর referral_bonus = উপলব্ধ
-            userFunds.referralBonus = Number(data.referral_bonus) || 0;
-            
-            // 🆕 Lock-in Data Sync (currentUser object-এ)
-            if (currentUser) {
-                currentUser.lockin_agreed = data.lockin_agreed || false;
-                currentUser.lockin_agreed_at = data.lockin_agreed_at || null;
-                currentUser.lockin_end_date = data.lockin_end_date || null;
-                
-                console.log('🔒 Lock-in Data Synced:', {
-                    agreed: currentUser.lockin_agreed,
-                    end_date: currentUser.lockin_end_date
-                });
-            }
-            
-            // ✅ window._liveReferralBonus আপডেট করুন
-            if (window._liveReferralBonus === undefined) {
-                window._liveReferralBonus = Number(data.referral_bonus) || 0;
-            }
-            
-            updateFundsDisplay();
-        }
-        
-    } catch(e) { 
-        console.error('❌ refreshMemberDataFromSupabase error:', e); 
+    // ✅ RPC দিয়ে ডাটা লোড (RLS বাইপাস করে)
+    const { data: memberRows, error } = await client.rpc('get_member_by_id', {
+        input_id: currentUser.id
+    });
+    
+    if (error) {
+        console.error('❌ ডাটাবেস error:', error);
+        return;
     }
+    
+    const data = memberRows && memberRows.length > 0 ? memberRows[0] : null;
+    
+    if (data) {
+        userFunds.monthlySavings = Number(data.balance) || 0;
+        userFunds.savingsProfit = Number(data.profit_balance_savings) || 0;
+        userFunds.investmentProfit = Number(data.profit_balance_investment) || 0;
+        userFunds.referralProfit = Number(data.profit_balance_referral) || 0;
+        
+        // ✅ DB-এর referral_bonus = উপলব্ধ
+        userFunds.referralBonus = Number(data.referral_bonus) || 0;
+        
+        // 🆕 Lock-in Data Sync (currentUser object-এ)
+        if (currentUser) {
+            currentUser.lockin_agreed = data.lockin_agreed || false;
+            currentUser.lockin_agreed_at = data.lockin_agreed_at || null;
+            currentUser.lockin_end_date = data.lockin_end_date || null;
+            
+            console.log('🔒 Lock-in Data Synced:', {
+                agreed: currentUser.lockin_agreed,
+                end_date: currentUser.lockin_end_date
+            });
+        }
+        
+        // ✅ window._liveReferralBonus আপডেট করুন
+        if (window._liveReferralBonus === undefined) {
+            window._liveReferralBonus = Number(data.referral_bonus) || 0;
+        }
+        
+        console.log('✅ ডাটা লোড সম্পূর্ণ:', {
+            balance: userFunds.monthlySavings,
+            referralBonus: userFunds.referralBonus,
+            savingsProfit: userFunds.savingsProfit
+        });
+        
+        updateFundsDisplay();
+    }
+    
+} catch(e) { 
+    console.error('❌ refreshMemberDataFromSupabase error:', e); 
 }
 
 async function loadUserFunds() {
@@ -5291,40 +5291,54 @@ async function loadUserFunds() {
     }
     
     try {
-        const { data: member, error } = await client
-            .from('members')
-            .select('balance, profit_balance_savings, profit_balance_investment, profit_balance_referral, referral_bonus')
-            .eq('member_id', currentUser.id)
-            .single();
-        
-        if(error) {
-            console.error('❌ member data error:', error);
-            return;
-        }
-        
-        if(member) {
-            console.log('📥 ফান্ড ডাটা:', member);
-            
-            // ✅ সব ফিল্ড সঠিকভাবে সেট করুন
-            userFunds.monthlySavings = Number(member.balance) || 0;
-            userFunds.savingsProfit = Number(member.profit_balance_savings) || 0;
-            userFunds.investmentProfit = Number(member.profit_balance_investment) || 0;
-            userFunds.referralProfit = Number(member.profit_balance_referral) || 0;
-            userFunds.referralBonus = Number(member.referral_bonus) || 0;
-            
-            // ✅ UI আপডেট করুন
-            updateFundsDisplay();
-            console.log('✅ ফান্ড লোড সম্পূর্ণ:', userFunds);
-        }
-        
-    } catch(error) { 
-        console.error('❌ ফান্ড লোড সমস্যা:', error); 
+    // ✅ RPC দিয়ে ডাটা লোড (RLS বাইপাস করে)
+    const { data: fundRows, error } = await client.rpc('get_member_by_id', {
+        input_id: currentUser.id
+    });
+    
+    if (error) {
+        console.error('❌ member data error:', error);
+        return;
     }
+    
+    const member = fundRows && fundRows.length > 0 ? fundRows[0] : null;
+    
+    if (member) {
+        console.log('📥 ফান্ড ডাটা:', {
+            balance: member.balance,
+            referral_bonus: member.referral_bonus,
+            profit_balance_savings: member.profit_balance_savings,
+            profit_balance_investment: member.profit_balance_investment,
+            profit_balance_referral: member.profit_balance_referral
+        });
+        
+        // ✅ সব ফিল্ড সঠিকভাবে সেট করুন
+        userFunds.monthlySavings = Number(member.balance) || 0;
+        userFunds.savingsProfit = Number(member.profit_balance_savings) || 0;
+        userFunds.investmentProfit = Number(member.profit_balance_investment) || 0;
+        userFunds.referralProfit = Number(member.profit_balance_referral) || 0;
+        userFunds.referralBonus = Number(member.referral_bonus) || 0;
+        
+        // ✅ window._liveReferralBonus আপডেট
+        window._liveReferralBonus = Number(member.referral_bonus) || 0;
+        
+        // ✅ UI আপডেট করুন
+        updateFundsDisplay();
+        
+        console.log('✅ ফান্ড লোড সম্পূর্ণ:', {
+            monthly: userFunds.monthlySavings,
+            savingsProfit: userFunds.savingsProfit,
+            referralBonus: userFunds.referralBonus
+        });
+    }
+    
+} catch(error) { 
+    console.error('❌ ফান্ড লোড সমস্যা:', error); 
 }
 
     // ============================================================
-// ✅ ফোর্স রিলোড - সব ডেটা রিফ্রেশ করবে
-// ============================================================
+    // ✅ ফোর্স রিলোড - সব ডেটা রিফ্রেশ করবে
+    // ============================================================
 
 async function forceReloadAllData() {
     console.log('🔄 সব ডেটা ফোর্স রিলোড করা হচ্ছে...');
