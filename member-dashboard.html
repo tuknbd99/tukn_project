@@ -12296,26 +12296,23 @@ async function generateStatement() {
     
     try {
         // ============================================================
-        // ২. Date Range তৈরি (Bangladesh Time → UTC, PostgREST-safe)
-        // ✅ FIXED: মিলিসেকেন্ড বাদ দিয়ে Z ফরম্যাটে পাঠানো
+        // ২. Date Range তৈরি (Bangladesh Time → UTC, PostgreSQL-safe)
         // ============================================================
         const fromDateObj = new Date(`${fromDate}T00:00:00+06:00`);
         const toDateObj = new Date(`${toDate}T23:59:59+06:00`);
         
-        // ✅ PostgREST-এর জন্য উপযুক্ত ফরম্যাট (মিলিসেকেন্ড ছাড়া)
-        const formatForPostgrest = (date) => {
+        // PostgreSQL-এর জন্য নিরাপদ ফরম্যাট (মিলিসেকেন্ড ছাড়া Z)
+        const formatForPostgres = (date) => {
             return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
         };
         
-        const fromDateTime = formatForPostgrest(fromDateObj);
-        const toDateTime = formatForPostgrest(toDateObj);
+        const fromDateTime = formatForPostgres(fromDateObj);
+        const toDateTime = formatForPostgres(toDateObj);
         
-        console.log('📅 Date Range (UTC, PostgREST-safe):', { fromDateTime, toDateTime });
-        console.log('📅 Bangladesh time:', { fromDate, toDate });
+        console.log('📅 Date Range (UTC):', { fromDateTime, toDateTime });
         
         // ============================================================
-        // ৩. সদস্যের তথ্য লোড করুন
-        // ✅ FIXED: RPC দিয়ে (RLS বাইপাস করে) — 406 error এড়াতে
+        // ৩. সদস্যের তথ্য লোড করুন (RPC দিয়ে — RLS বাইপাস)
         // ============================================================
         const { data: memberRows, error: memberErr } = await client.rpc('get_member_by_id', {
             input_id: currentUser.id
@@ -12332,19 +12329,29 @@ async function generateStatement() {
         console.log('✅ সদস্য data loaded:', member.full_name);
         
         // ============================================================
-        // ৪. সব ধরনের লেনদেন একসাথে লোড করুন
+        // ৪. লোন ID গুলো আগে বের করুন (loan_payments এর জন্য)
+        // ============================================================
+        const { data: memberLoans, error: loansErr } = await client
+            .from('loan_applications')
+            .select('id')
+            .eq('member_id', currentUser.id);
+        
+        const loanIds = (memberLoans || []).map(l => l.id);
+        console.log('🔑 Loan IDs:', loanIds);
+        
+        // ============================================================
+        // ৫. সব ধরনের লেনদেন একসাথে লোড করুন (সমান্তরাল)
         // ============================================================
         const [
             paymentsRes,
             withdrawalsRes,
             loansRes,
             loanPaymentsRes,
-            transfersFromRes,
-            transfersToRes,
+            transfersRes,
             bonusRes,
             profitRes
         ] = await Promise.all([
-            // ৪ক. সঞ্চয় জমা (Approved)
+            // ৫ক. সঞ্চয় জমা
             client.from('payments')
                 .select('*')
                 .eq('member_id', currentUser.id)
@@ -12352,7 +12359,7 @@ async function generateStatement() {
                 .gte('submitted_at', fromDateTime)
                 .lte('submitted_at', toDateTime),
             
-            // ৪খ. উত্তোলন (Approved)
+            // ৫খ. উত্তোলন
             client.from('withdrawals')
                 .select('*')
                 .eq('member_id', currentUser.id)
@@ -12360,7 +12367,7 @@ async function generateStatement() {
                 .gte('approved_at', fromDateTime)
                 .lte('approved_at', toDateTime),
             
-            // ৪গ. লোন (Approved)
+            // ৫গ. লোন
             client.from('loan_applications')
                 .select('*')
                 .eq('member_id', currentUser.id)
@@ -12368,36 +12375,29 @@ async function generateStatement() {
                 .gte('approved_at', fromDateTime)
                 .lte('approved_at', toDateTime),
             
-            // ৪ঘ. লোন পরিশোধ (Approved)
-            client.from('loan_payments')
-                .select('*')
-                .eq('member_id', currentUser.id)
-                .eq('status', 'approved')
-                .gte('payment_date', fromDateTime)
-                .lte('payment_date', toDateTime),
+            // ৫ঘ. লোন পরিশোধ — .in('loan_id', loanIds) দিয়ে
+            loanIds.length > 0
+                ? client.from('loan_payments')
+                    .select('*')
+                    .in('loan_id', loanIds)
+                    .eq('status', 'approved')
+                    .gte('payment_date', fromDateTime)
+                    .lte('payment_date', toDateTime)
+                : Promise.resolve({ data: [], error: null }),
             
-            // ৪ঙ. সঞ্চয় ট্রান্সফার (প্রেরক)
+            // ৫ঙ. ট্রান্সফার (from_member_id + to_member_id — সঠিক column নাম)
             client.from('transfers')
                 .select('*')
-                .eq('sender_id', currentUser.id)
-                .eq('status', 'completed')
+                .or(`from_member_id.eq.${currentUser.id},to_member_id.eq.${currentUser.id}`)
                 .gte('created_at', fromDateTime)
                 .lte('created_at', toDateTime),
             
-            // ৪চ. সঞ্চয় ট্রান্সফার (গ্রহীতা)
-            client.from('transfers')
-                .select('*')
-                .eq('receiver_id', currentUser.id)
-                .eq('status', 'completed')
-                .gte('created_at', fromDateTime)
-                .lte('created_at', toDateTime),
-            
-            // ৪ছ. রেফারেল বোনাস লগ (RPC দিয়ে)
+            // ৫চ. রেফারেল বোনাস লগ (RPC দিয়ে)
             client.rpc('get_referral_bonus_logs', {
                 p_member_id: currentUser.id
             }),
             
-            // ৪জ. লভ্যাংশ লগ
+            // ৫ছ. লভ্যাংশ লগ
             client.from('profit_distribution_history')
                 .select('*')
                 .eq('member_id', currentUser.id)
@@ -12406,11 +12406,32 @@ async function generateStatement() {
         ]);
         
         // ============================================================
-        // ৫. সব লেনদেন এক array-তে একত্রিত করুন
+        // ৬. Error চেক (যদি থাকে)
+        // ============================================================
+        if (paymentsRes.error) console.error('❌ payments:', paymentsRes.error);
+        if (withdrawalsRes.error) console.error('❌ withdrawals:', withdrawalsRes.error);
+        if (loansRes.error) console.error('❌ loans:', loansRes.error);
+        if (loanPaymentsRes.error) console.error('❌ loan_payments:', loanPaymentsRes.error);
+        if (transfersRes.error) console.error('❌ transfers:', transfersRes.error);
+        if (bonusRes.error) console.error('❌ bonus:', bonusRes.error);
+        if (profitRes.error) console.error('❌ profit:', profitRes.error);
+        
+        console.log('📊 Data loaded:', {
+            payments: paymentsRes.data?.length || 0,
+            withdrawals: withdrawalsRes.data?.length || 0,
+            loans: loansRes.data?.length || 0,
+            loan_payments: loanPaymentsRes.data?.length || 0,
+            transfers: transfersRes.data?.length || 0,
+            bonus: bonusRes.data?.length || 0,
+            profit: profitRes.data?.length || 0
+        });
+        
+        // ============================================================
+        // ৭. সব লেনদেন এক array-তে একত্রিত করুন
         // ============================================================
         const transactions = [];
         
-        // ✅ ৫ক. সঞ্চয় জমা
+        // ৭ক. সঞ্চয় জমা
         (paymentsRes.data || []).forEach(p => {
             transactions.push({
                 date: p.submitted_at || p.approved_at || p.created_at,
@@ -12425,7 +12446,7 @@ async function generateStatement() {
             });
         });
         
-        // ✅ ৫খ. উত্তোলন (সব ধরনের)
+        // ৭খ. উত্তোলন
         (withdrawalsRes.data || []).forEach(w => {
             let typeName = (w.type || 'মূলধন উত্তোলন').trim();
             let typeClass = 'withdrawal';
@@ -12446,7 +12467,7 @@ async function generateStatement() {
             });
         });
         
-        // ✅ ৫গ. লোন গ্রহণ
+        // ৭গ. লোন গ্রহণ
         (loansRes.data || []).forEach(l => {
             transactions.push({
                 date: l.approved_at || l.submitted_at || l.created_at,
@@ -12462,7 +12483,7 @@ async function generateStatement() {
             });
         });
         
-        // ✅ ৫ঘ. লোন পরিশোধ
+        // ৭ঘ. লোন পরিশোধ
         (loanPaymentsRes.data || []).forEach(lp => {
             transactions.push({
                 date: lp.payment_date || lp.approved_at || lp.created_at,
@@ -12477,37 +12498,39 @@ async function generateStatement() {
             });
         });
         
-        // ✅ ৫ঙ. ট্রান্সফার (প্রেরক — ব্যয়)
-        (transfersFromRes.data || []).forEach(t => {
-            transactions.push({
-                date: t.completed_at || t.created_at,
-                type: 'সঞ্চয় ট্রান্সফার (প্রেরণ)',
-                typeClass: 'transfer-out',
-                description: `গ্রহীতা: ${t.receiver_name || t.receiver_id || 'N/A'}`,
-                method: 'transfer',
-                reference: t.transaction_id || '',
-                credit: 0,
-                debit: Number(t.amount) || 0,
-                sortPriority: 5
-            });
+        // ৭ঙ. ট্রান্সফার — from_member_id / to_member_id দিয়ে
+        (transfersRes.data || []).forEach(t => {
+            const isSender = t.from_member_id === currentUser.id;
+            const isReceiver = t.to_member_id === currentUser.id;
+            
+            if (isSender) {
+                transactions.push({
+                    date: t.created_at,
+                    type: 'সঞ্চয় ট্রান্সফার (প্রেরণ)',
+                    typeClass: 'transfer-out',
+                    description: `গ্রহীতা: ${t.to_member_id || 'N/A'}${t.note ? ' | ' + t.note : ''}`,
+                    method: 'transfer',
+                    reference: '',
+                    credit: 0,
+                    debit: Number(t.amount) || 0,
+                    sortPriority: 5
+                });
+            } else if (isReceiver) {
+                transactions.push({
+                    date: t.created_at,
+                    type: 'সঞ্চয় ট্রান্সফার (প্রাপ্তি)',
+                    typeClass: 'transfer-in',
+                    description: `প্রেরক: ${t.from_member_id || 'N/A'}${t.note ? ' | ' + t.note : ''}`,
+                    method: 'transfer',
+                    reference: '',
+                    credit: Number(t.amount) || 0,
+                    debit: 0,
+                    sortPriority: 6
+                });
+            }
         });
         
-        // ✅ ৫চ. ট্রান্সফার (গ্রহীতা — আয়)
-        (transfersToRes.data || []).forEach(t => {
-            transactions.push({
-                date: t.completed_at || t.created_at,
-                type: 'সঞ্চয় ট্রান্সফার (প্রাপ্তি)',
-                typeClass: 'transfer-in',
-                description: `প্রেরক: ${t.sender_name || t.sender_id || 'N/A'}`,
-                method: 'transfer',
-                reference: t.transaction_id || '',
-                credit: Number(t.amount) || 0,
-                debit: 0,
-                sortPriority: 6
-            });
-        });
-        
-        // ✅ ৫ছ. রেফারেল বোনাস (আয়) — RPC থেকে
+        // ৭চ. রেফারেল বোনাস (RPC থেকে)
         (bonusRes.data || []).forEach(b => {
             const bonusDate = b.created_at ? new Date(b.created_at) : null;
             const fromDateObj2 = new Date(fromDateTime);
@@ -12528,40 +12551,36 @@ async function generateStatement() {
             }
         });
         
-        // ✅ ৫জ. লভ্যাংশ (আয়)
+        // ৭জ. লভ্যাংশ
         (profitRes.data || []).forEach(p => {
             transactions.push({
                 date: p.distributed_at || p.created_at,
                 type: 'লভ্যাংশ প্রাপ্তি',
                 typeClass: 'profit',
-                description: `${p.month_name || p.month || ''} ${p.year || ''} - ${p.profit_type || 'লভ্যাংশ'}`.trim(),
+                description: `${p.month || ''} ${p.year || ''} - লভ্যাংশ`.trim(),
                 method: 'system',
                 reference: '',
-                credit: Number(p.total_received || p.amount || 0) || 0,
+                credit: Number(p.total_received || 0) || 0,
                 debit: 0,
                 sortPriority: 8
             });
         });
         
         // ============================================================
-        // ৬. তারিখ অনুযায়ী সাজান
+        // ৮. তারিখ অনুযায়ী সাজান
         // ============================================================
         transactions.sort((a, b) => {
             const dateA = new Date(a.date || 0);
             const dateB = new Date(b.date || 0);
-            
-            if (dateA.getTime() !== dateB.getTime()) {
-                return dateA - dateB;
-            }
+            if (dateA.getTime() !== dateB.getTime()) return dateA - dateB;
             return (a.sortPriority || 0) - (b.sortPriority || 0);
         });
         
         // ============================================================
-        // ৭. Total হিসাব করুন
+        // ৯. Total হিসাব
         // ============================================================
         let totalCredit = 0;
         let totalDebit = 0;
-        
         transactions.forEach(t => {
             totalCredit += t.credit || 0;
             totalDebit += t.debit || 0;
@@ -12571,13 +12590,10 @@ async function generateStatement() {
         const currentBalance = Number(member.balance) || 0;
         
         // ============================================================
-        // ৮. HTML তৈরি করুন
+        // ১০. HTML তৈরি
         // ============================================================
         const printArea = document.getElementById('statementPrintArea');
-        if (!printArea) {
-            console.error('❌ statementPrintArea পাওয়া যায়নি!');
-            return;
-        }
+        if (!printArea) return;
         
         const fromDateFormatted = formatDateBD(fromDate);
         const toDateFormatted = formatDateBD(toDate);
@@ -12585,43 +12601,29 @@ async function generateStatement() {
         
         let html = `
             <div style="text-align:center; border-bottom:3px solid #059669; padding-bottom:12px; margin-bottom:15px;">
-                <img src="images/logo.png" 
-                     alt="TUKNBD Logo" 
-                     style="width:60px; height:60px; border-radius:8px; margin:0 auto 6px; display:block;"
-                     onerror="this.src='https://placehold.co/60x60/059669/white?text=T'">
-                <h3 style="margin:0; font-size:20px; color:#064e3b; font-weight:800;">
-                    ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ
-                </h3>
-                <p style="margin:2px 0; font-size:13px; color:#059669; font-weight:700;">
-                    📊 লেনদেন স্টেটমেন্ট
-                </p>
-                <p style="margin:2px 0; font-size:11px; color:#555;">
-                    ${fromDateFormatted} — ${toDateFormatted}
-                </p>
+                <img src="images/logo.png" alt="TUKNBD Logo" style="width:60px; height:60px; border-radius:8px; margin:0 auto 6px; display:block;" onerror="this.src='https://placehold.co/60x60/059669/white?text=T'">
+                <h3 style="margin:0; font-size:20px; color:#064e3b; font-weight:800;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</h3>
+                <p style="margin:2px 0; font-size:13px; color:#059669; font-weight:700;">📊 লেনদেন স্টেটমেন্ট</p>
+                <p style="margin:2px 0; font-size:11px; color:#555;">${fromDateFormatted} — ${toDateFormatted}</p>
             </div>
             
             <div style="display:flex; flex-wrap:wrap; gap:6px 20px; padding:10px 14px; background:#f0fdf4; border:1px solid #86efac; border-radius:8px; margin-bottom:12px; font-size:12px; justify-content:center;">
                 <span><strong>👤 নাম:</strong> ${member.full_name || '-'}</span>
                 <span><strong>🆔 আইডি:</strong> ${member.member_id || '-'}</span>
                 <span><strong>📱 মোবাইল:</strong> ${member.mobile || '-'}</span>
-                <span><strong>📍 জেলা:</strong> ${member.present_district || '-'}</span>
                 <span><strong>🕐 প্রিন্ট:</strong> ${printDateTime}</span>
             </div>
         `;
         
         // ============================================================
-        // ৯. টেবিল তৈরি
+        // ১১. টেবিল
         // ============================================================
         if (transactions.length === 0) {
             html += `
                 <div style="text-align:center; padding:40px 20px; background:#f9fafb; border:1px dashed #d1d5db; border-radius:8px;">
                     <p style="font-size:40px; margin:0;">📭</p>
-                    <p style="font-size:14px; color:#6b7280; margin:8px 0 0;">
-                        এই তারিখের মধ্যে কোনো লেনদেন নেই
-                    </p>
-                    <p style="font-size:12px; color:#9ca3af; margin:4px 0 0;">
-                        ${fromDateFormatted} — ${toDateFormatted}
-                    </p>
+                    <p style="font-size:14px; color:#6b7280; margin:8px 0 0;">এই তারিখের মধ্যে কোনো লেনদেন নেই</p>
+                    <p style="font-size:12px; color:#9ca3af; margin:4px 0 0;">${fromDateFormatted} — ${toDateFormatted}</p>
                 </div>
             `;
         } else {
@@ -12630,20 +12632,19 @@ async function generateStatement() {
                     <table style="min-width:750px; width:100%; border-collapse:collapse; font-size:11px;">
                         <thead>
                             <tr style="background:linear-gradient(135deg, #064e3b, #059669); color:white;">
-                                <th style="padding:8px 10px; text-align:center; color:white; font-weight:700; border:1px solid #047857; font-size:10px;">তারিখ ও সময়</th>
-                                <th style="padding:8px 10px; text-align:center; color:white; font-weight:700; border:1px solid #047857; font-size:10px;">লেনদেনের ধরন</th>
-                                <th style="padding:8px 10px; text-align:left; color:white; font-weight:700; border:1px solid #047857; font-size:10px;">বিবরণ</th>
-                                <th style="padding:8px 10px; text-align:center; color:white; font-weight:700; border:1px solid #047857; font-size:10px;">মাধ্যম</th>
-                                <th style="padding:8px 10px; text-align:right; color:white; font-weight:700; border:1px solid #047857; font-size:10px;">জমা (৳)</th>
-                                <th style="padding:8px 10px; text-align:right; color:white; font-weight:700; border:1px solid #047857; font-size:10px;">খরচ (৳)</th>
-                                <th style="padding:8px 10px; text-align:right; color:white; font-weight:700; border:1px solid #047857; font-size:10px;">ব্যালেন্স (৳)</th>
+                                <th style="padding:8px 10px; text-align:center; font-weight:700; border:1px solid #047857; font-size:10px;">তারিখ ও সময়</th>
+                                <th style="padding:8px 10px; text-align:center; font-weight:700; border:1px solid #047857; font-size:10px;">ধরন</th>
+                                <th style="padding:8px 10px; text-align:left; font-weight:700; border:1px solid #047857; font-size:10px;">বিবরণ</th>
+                                <th style="padding:8px 10px; text-align:center; font-weight:700; border:1px solid #047857; font-size:10px;">মাধ্যম</th>
+                                <th style="padding:8px 10px; text-align:right; font-weight:700; border:1px solid #047857; font-size:10px;">জমা (৳)</th>
+                                <th style="padding:8px 10px; text-align:right; font-weight:700; border:1px solid #047857; font-size:10px;">খরচ (৳)</th>
+                                <th style="padding:8px 10px; text-align:right; font-weight:700; border:1px solid #047857; font-size:10px;">ব্যালেন্স (৳)</th>
                             </tr>
                         </thead>
                         <tbody>
             `;
             
             let runningBalance = 0;
-            
             const typeColors = {
                 'savings': { bg: '#d1fae5', color: '#065f46', icon: '💰' },
                 'withdrawal': { bg: '#fee2e2', color: '#991b1b', icon: '💸' },
@@ -12658,54 +12659,31 @@ async function generateStatement() {
             
             transactions.forEach((t, idx) => {
                 runningBalance += (t.credit || 0) - (t.debit || 0);
-                
                 const tc = typeColors[t.typeClass] || { bg: '#f3f4f6', color: '#374151', icon: '📋' };
                 const dateStr = formatDateTimeBD(t.date);
                 const rowBg = idx % 2 === 0 ? '#ffffff' : '#f9fafb';
                 
                 html += `
                     <tr style="background:${rowBg}; border-bottom:1px solid #e5e7eb;">
-                        <td style="padding:6px 8px; font-size:10px; text-align:center; border:1px solid #e5e7eb; white-space:nowrap;">
-                            ${dateStr}
-                        </td>
+                        <td style="padding:6px 8px; font-size:10px; text-align:center; border:1px solid #e5e7eb; white-space:nowrap;">${dateStr}</td>
                         <td style="padding:6px 8px; text-align:center; border:1px solid #e5e7eb;">
-                            <span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:9px; font-weight:600; background:${tc.bg}; color:${tc.color}; white-space:nowrap;">
-                                ${tc.icon} ${t.type}
-                            </span>
+                            <span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:9px; font-weight:600; background:${tc.bg}; color:${tc.color}; white-space:nowrap;">${tc.icon} ${t.type}</span>
                         </td>
-                        <td style="padding:6px 8px; font-size:10px; text-align:left; border:1px solid #e5e7eb; color:#374151;">
-                            ${t.description || '-'}
-                        </td>
-                        <td style="padding:6px 8px; font-size:10px; text-align:center; border:1px solid #e5e7eb; color:#6b7280;">
-                            ${t.method || '-'}
-                        </td>
-                        <td style="padding:6px 8px; font-size:11px; text-align:right; border:1px solid #e5e7eb; font-weight:600; color:#059669;">
-                            ${t.credit > 0 ? formatAmount(t.credit) : '-'}
-                        </td>
-                        <td style="padding:6px 8px; font-size:11px; text-align:right; border:1px solid #e5e7eb; font-weight:600; color:#dc2626;">
-                            ${t.debit > 0 ? formatAmount(t.debit) : '-'}
-                        </td>
-                        <td style="padding:6px 8px; font-size:11px; text-align:right; border:1px solid #e5e7eb; font-weight:700; color:#1e40af;">
-                            ${formatAmount(runningBalance)}
-                        </td>
+                        <td style="padding:6px 8px; font-size:10px; text-align:left; border:1px solid #e5e7eb; color:#374151;">${t.description || '-'}</td>
+                        <td style="padding:6px 8px; font-size:10px; text-align:center; border:1px solid #e5e7eb; color:#6b7280;">${t.method || '-'}</td>
+                        <td style="padding:6px 8px; font-size:11px; text-align:right; border:1px solid #e5e7eb; font-weight:600; color:#059669;">${t.credit > 0 ? formatAmount(t.credit) : '-'}</td>
+                        <td style="padding:6px 8px; font-size:11px; text-align:right; border:1px solid #e5e7eb; font-weight:600; color:#dc2626;">${t.debit > 0 ? formatAmount(t.debit) : '-'}</td>
+                        <td style="padding:6px 8px; font-size:11px; text-align:right; border:1px solid #e5e7eb; font-weight:700; color:#1e40af;">${formatAmount(runningBalance)}</td>
                     </tr>
                 `;
             });
             
             html += `
                         <tr style="background:linear-gradient(135deg, #064e3b, #059669); font-weight:700; color:white;">
-                            <td colspan="4" style="padding:8px 12px; text-align:right; border:1px solid #047857; color:white; font-size:12px;">
-                                📊 মোট:
-                            </td>
-                            <td style="padding:8px 12px; text-align:right; border:1px solid #047857; color:white; font-size:13px; font-weight:800;">
-                                ${formatAmount(totalCredit)}
-                            </td>
-                            <td style="padding:8px 12px; text-align:right; border:1px solid #047857; color:white; font-size:13px; font-weight:800;">
-                                ${formatAmount(totalDebit)}
-                            </td>
-                            <td style="padding:8px 12px; text-align:right; border:1px solid #047857; color:white; font-size:13px; font-weight:800;">
-                                ${formatAmount(runningBalance)}
-                            </td>
+                            <td colspan="4" style="padding:8px 12px; text-align:right; border:1px solid #047857; color:white; font-size:12px;">📊 মোট:</td>
+                            <td style="padding:8px 12px; text-align:right; border:1px solid #047857; color:white; font-size:13px; font-weight:800;">${formatAmount(totalCredit)}</td>
+                            <td style="padding:8px 12px; text-align:right; border:1px solid #047857; color:white; font-size:13px; font-weight:800;">${formatAmount(totalDebit)}</td>
+                            <td style="padding:8px 12px; text-align:right; border:1px solid #047857; color:white; font-size:13px; font-weight:800;">${formatAmount(runningBalance)}</td>
                         </tr>
                     </tbody>
                 </table>
@@ -12714,7 +12692,7 @@ async function generateStatement() {
         }
         
         // ============================================================
-        // ১০. Summary Section
+        // ১২. Summary
         // ============================================================
         html += `
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-top:15px; padding:12px; background:#f8fafc; border-radius:10px; border:1px solid #e5e7eb;">
@@ -12727,10 +12705,8 @@ async function generateStatement() {
                     <div style="font-size:16px; font-weight:800; color:#dc2626;">৳ ${formatAmount(totalDebit)}</div>
                 </div>
                 <div style="text-align:center; padding:8px; background:white; border-radius:8px; border:1px solid #e5e7eb;">
-                    <div style="font-size:10px; color:#6b7280; margin-bottom:4px;">📊 নেট (এই পিরিয়ড)</div>
-                    <div style="font-size:16px; font-weight:800; color:${netBalance >= 0 ? '#7c3aed' : '#dc2626'};">
-                        ৳ ${formatAmount(Math.abs(netBalance))}
-                    </div>
+                    <div style="font-size:10px; color:#6b7280; margin-bottom:4px;">📊 নেট</div>
+                    <div style="font-size:16px; font-weight:800; color:${netBalance >= 0 ? '#7c3aed' : '#dc2626'};">৳ ${formatAmount(Math.abs(netBalance))}</div>
                 </div>
                 <div style="text-align:center; padding:8px; background:linear-gradient(135deg, #ecfdf5, #d1fae5); border-radius:8px; border:2px solid #059669;">
                     <div style="font-size:10px; color:#065f46; margin-bottom:4px;">🏦 বর্তমান তহবিল</div>
@@ -12741,32 +12717,17 @@ async function generateStatement() {
                     <div style="font-size:16px; font-weight:800; color:#064e3b;">${transactions.length} টি</div>
                 </div>
             </div>
-        `;
-        
-        // ============================================================
-        // ১১. Footer
-        // ============================================================
-        html += `
+            
             <div style="margin-top:12px; padding-top:10px; border-top:1px solid #e5e7eb; text-align:center;">
-                <p style="font-size:9px; color:#9ca3af; margin:0;">
-                    🔒 স্বয়ংক্রিয় জেনারেটেড রিপোর্ট | TUKNBD - ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ
-                </p>
-                <p style="font-size:9px; color:#9ca3af; margin:3px 0 0;">
-                    📌 জমা = সবুজ | খরচ = লাল | ব্যালেন্স = নীল
-                </p>
+                <p style="font-size:9px; color:#9ca3af; margin:0;">🔒 স্বয়ংক্রিয় জেনারেটেড রিপোর্ট | TUKNBD - ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</p>
             </div>
         `;
         
-        // ============================================================
-        // ১২. UI তে দেখান
-        // ============================================================
         printArea.innerHTML = html;
         printArea.style.display = 'block';
         
         const container = document.getElementById('statementContainer');
-        if (container) {
-            container.style.display = 'block';
-        }
+        if (container) container.style.display = 'block';
         
         console.log(`✅ Statement তৈরি সম্পূর্ণ!`);
         console.log(`   📊 Total Credit: ৳${totalCredit}`);
@@ -12788,10 +12749,7 @@ async function generateStatement() {
                     <p style="font-size:32px; margin:0;">❌</p>
                     <h3 style="color:#991b1b; margin:10px 0 5px;">স্টেটমেন্ট লোড ব্যর্থ</h3>
                     <p style="color:#6b7280; font-size:12px; margin:0;">${e.message}</p>
-                    <button onclick="generateStatement()" 
-                            style="margin-top:15px; padding:8px 20px; background:#059669; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:600;">
-                        🔄 আবার চেষ্টা করুন
-                    </button>
+                    <button onclick="generateStatement()" style="margin-top:15px; padding:8px 20px; background:#059669; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:600;">🔄 আবার চেষ্টা করুন</button>
                 </div>
             `;
             printArea.style.display = 'block';
