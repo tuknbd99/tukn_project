@@ -151,9 +151,10 @@
                 if (typeof supabase !== 'undefined' && supabase.createClient) {
                     supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
                         auth: {
-                            persistSession: false,
-                            autoRefreshToken: false,
-                            detectSessionInUrl: false
+                            persistSession: true,
+                            autoRefreshToken: true,
+                            detectSessionInUrl: true,
+                            storageKey: 'tuknbd-auth-token'
                         }
                     });
                     console.log('✅ Supabase client initialized');
@@ -239,7 +240,7 @@
         }
 
         // ============================================================
-        // 🔥 লগইন হ্যান্ডলার — RPC-BASED (RLS-SAFE)
+        // 🔥 লগইন হ্যান্ডলার — RPC + Supabase Auth (দুটোই)
         // ============================================================
         async function handleLogin(e) {
             e.preventDefault();
@@ -271,8 +272,8 @@
                     return;
                 }
 
-                // ✅ RPC-based login (RLS-safe)
-                console.log('🔐 Calling RPC verify_admin_login...');
+                // ✅ STEP 1: RPC-based login (RLS-safe)
+                console.log('🔐 Step 1: RPC verify_admin_login...');
                 
                 const { data, error } = await client.rpc(
                     'verify_admin_login',
@@ -291,7 +292,6 @@
                     return;
                 }
 
-                // ✅ data[0] check (RPC returns array)
                 const admin = data && data[0];
 
                 // ✅ ভুল তথ্য — failed attempts বাড়ান
@@ -304,10 +304,8 @@
                     loginBtn.disabled = false;
                     loginBtn.innerHTML = '<i class="fas fa-sign-in-alt mr-2"></i>লগইন করুন';
                     
-                    // ✅ 3 বার ভুল হলে auto-refresh
                     if (failedAttempts >= 3) {
                         showToast('⚠️ ৩ বার ভুল! ৫ সেকেন্ড পর পেজ রিফ্রেশ হবে...', 'warning');
-                        
                         let countdown = 5;
                         const countdownToast = setInterval(() => {
                             countdown--;
@@ -315,7 +313,6 @@
                                 showToast(`🔄 ${countdown} সেকেন্ড পর পেজ রিফ্রেশ হবে...`, 'warning');
                             }
                         }, 1000);
-                        
                         setTimeout(() => {
                             clearInterval(countdownToast);
                             window.location.reload();
@@ -345,10 +342,37 @@
 
                 // ✅ সফল — failed attempts reset
                 failedAttempts = 0;
+                console.log('✅ Step 1 complete: RPC verified admin');
 
-                // ✅ Permissions (RPC থেকে আসা + Super admin এর জন্য সব)
-                let permissions = admin.permissions || {};
+                // ═══════════════════════════════════════════════════════
+                // ✅ STEP 2: Supabase Auth সেশন তৈরি (RLS-এর জন্য)
+                // ═══════════════════════════════════════════════════════
+                console.log('🔐 Step 2: Creating Supabase Auth session...');
                 
+                const authEmail = admin.email;
+
+                if (!authEmail) {
+                    console.error('❌ admin.email নেই — Auth session তৈরি করা যাবে না');
+                    console.warn('⚠️ Auth session ছাড়াই লগইন হবে');
+                } else {
+                    console.log('   Auth email:', authEmail);
+                    
+                    const { data: authData, error: authError } = await client.auth.signInWithPassword({
+                        email: authEmail,
+                        password: password
+                    });
+                    
+                    if (authError) {
+                        console.error('❌ Auth error:', authError.message);
+                        showToast('⚠️ Auth session তৈরি ব্যর্থ — কিছু ফিচার কাজ নাও করতে পারে', 'warning');
+                    } else {
+                        console.log('✅ Step 2 complete: Auth session created');
+                        console.log('   User ID:', authData.user?.id);
+                    }
+                }
+
+                // ✅ Permissions তৈরি
+                let permissions = admin.permissions || {};
                 if (isSuper) {
                     permissions = { ...ALL_PERMISSIONS };
                     console.log('👑 সুপার অ্যাডমিন: সমস্ত পারমিশন সক্রিয়');
@@ -364,6 +388,7 @@
                     status: admin.status,
                     permissions: permissions,
                     admin_uuid: admin.admin_uuid,
+                    email: authEmail,
                     login_time: new Date().toISOString(),
                     login_type: 'admin'
                 };
@@ -376,7 +401,7 @@
                 const permCount = Object.keys(permissions).filter(k => permissions[k] === true).length;
                 
                 console.log('✅ Login success:', adminData.username, `(${permCount} permissions)`);
-                showToast(`✅ স্বাগতম ${adminData.full_name}! (${roleLabel} - ${permCount}টি পারমিশন)`, 'success');
+                showToast(`✅ স্বাগতম ${adminData.full_name}! (${roleLabel})`, 'success');
 
                 setTimeout(() => {
                     window.location.replace('admin-panel.html');
@@ -410,7 +435,6 @@
         // ============================================================
         document.addEventListener('DOMContentLoaded', function() {
             console.log('📄 অ্যাডমিন লগইন পেজ লোড হচ্ছে...');
-            console.log('✅ RPC-based login (RLS-safe)');
             
             initSupabase();
             
@@ -475,7 +499,7 @@
         window.hasPermission = hasPermission;
         window.togglePasswordVisibility = togglePasswordVisibility;
 
-        console.log('✅ অ্যাডমিন লগইন পেজ রেডি! (RPC-based)');
+        console.log('✅ অ্যাডমিন লগইন পেজ রেডি! (RPC + Auth Session)');
     </script>
 </body>
 </html>
