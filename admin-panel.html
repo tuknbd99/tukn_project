@@ -4816,6 +4816,40 @@ body.dark-mode .all-clear-box p {
     </div>
 
     <!-- ========================================================== -->
+<!-- ===== TAB: ADMIN PERMISSIONS ===== -->
+<!-- ========================================================== -->
+<div id="adminPermissionTab" class="tab-content">
+    <div class="content-card">
+        <div class="card-header">
+            <h3><i class="fas fa-user-shield mr-2 text-purple-600"></i>🔑 অ্যাডমিন পারমিশন ম্যানেজমেন্ট</h3>
+            <button onclick="loadAdminsForPermission()" class="btn btn-info btn-sm"><i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ</button>
+        </div>
+        <div class="p-4">
+            <!-- অ্যাডমিন সিলেক্ট -->
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">👤 অ্যাডমিন নির্বাচন করুন</label>
+                <select id="adminPermissionSelect" class="w-full border rounded-lg p-2" onchange="loadAdminPermissions()">
+                    <option value="">-- অ্যাডমিন নির্বাচন করুন --</option>
+                </select>
+            </div>
+            
+            <!-- পারমিশন গ্রিড -->
+            <div id="adminPermissionGrid" class="border rounded-lg p-4 bg-gray-50">
+                <div class="text-center text-gray-500 py-8">
+                    <i class="fas fa-user-tie text-4xl block mb-3 text-gray-300"></i>
+                    <p>অ্যাডমিন নির্বাচন করুন</p>
+                </div>
+            </div>
+            
+            <!-- সংরক্ষণ বাটন -->
+            <button onclick="saveAdminPermissions()" class="btn btn-success w-full mt-4 py-2.5" id="saveAdminPermBtn" style="display:none;">
+                <i class="fas fa-save mr-2"></i> 💾 পারমিশন সংরক্ষণ করুন
+            </button>
+        </div>
+    </div>
+</div>
+
+    <!-- ========================================================== -->
     <!-- ===== TAB: SLIDER ===== -->
     <!-- ========================================================== -->
     <div id="sliderTab" class="tab-content">
@@ -6242,6 +6276,7 @@ const PERMISSION_REGISTRY = {
     'branchReport': { label: '📈 ব্রাঞ্চ রিপোর্ট', icon: 'fa-file-alt', group: '🏢 ব্রাঞ্চ', tabId: 'branchReport', order: 42, default: true },
     'branchAdmins': { label: '👤 ব্রাঞ্চ অ্যাডমিন', icon: 'fa-user-tie', group: '🏢 ব্রাঞ্চ', tabId: 'branchAdmins', order: 43, default: false },
     'branchAdminPermission': { label: '🔑 ব্রাঞ্চ পারমিশন', icon: 'fa-user-shield', group: '🏢 ব্রাঞ্চ', tabId: 'branchAdminPermission', order: 44, default: false },
+    'adminPermission': { label: '🔑 অ্যাডমিন পারমিশন', icon: 'fa-user-shield', group: '🎯 কন্টেন্ট', tabId: 'adminPermission', order: 94.5, default: false, superAdminOnly: true },
 
     // ⏳ অনুমোদন
     'pendingPayments': { label: '💳 পেন্ডিং সঞ্চয়', icon: 'fa-hand-holding-usd', group: '⏳ অনুমোদন', tabId: 'pendingPayments', order: 50, default: true, badgeId: 'pendingPaymentBadge' },
@@ -6332,7 +6367,189 @@ const PERMISSION_REGISTRY = {
                 }
             }
         };
+
+// ═══════════════════════════════════════════════════════
+// 🔑 ADMIN PERMISSION FUNCTIONS
+// ═══════════════════════════════════════════════════════
+
+// ১. অ্যাডমিন লিস্ট লোড করা
+async function loadAdminsForPermission() {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    const select = document.getElementById('adminPermissionSelect');
+    if (!select) return;
+    
+    try {
+        const { data: admins, error } = await client
+            .from('admins')
+            .select('id, username, full_name, role, permissions')
+            .order('full_name');
             
+        if (error) throw error;
+        
+        select.innerHTML = '<option value="">-- অ্যাডমিন নির্বাচন করুন --</option>';
+        (admins || []).forEach(admin => {
+            const option = document.createElement('option');
+            option.value = admin.id;
+            option.textContent = `${admin.full_name} (${admin.role === 'super_admin' ? 'সুপার অ্যাডমিন' : 'অ্যাডমিন'})`;
+            select.appendChild(option);
+        });
+        
+        // গ্রিড রিসেট
+        document.getElementById('adminPermissionGrid').innerHTML = `
+            <div class="text-center text-gray-500 py-8">
+                <i class="fas fa-user-tie text-4xl block mb-3 text-gray-300"></i>
+                <p>অ্যাডমিন নির্বাচন করুন</p>
+            </div>
+        `;
+        document.getElementById('saveAdminPermBtn').style.display = 'none';
+        
+    } catch (e) {
+        console.error('Load admins error:', e);
+        showToast('❌ লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ২. নির্দিষ্ট অ্যাডমিনের পারমিশন লোড করা
+async function loadAdminPermissions() {
+    const adminId = document.getElementById('adminPermissionSelect')?.value;
+    const grid = document.getElementById('adminPermissionGrid');
+    const saveBtn = document.getElementById('saveAdminPermBtn');
+    
+    if (!adminId) {
+        grid.innerHTML = `
+            <div class="text-center text-gray-500 py-8">
+                <i class="fas fa-user-tie text-4xl block mb-3 text-gray-300"></i>
+                <p>অ্যাডমিন নির্বাচন করুন</p>
+            </div>
+        `;
+        saveBtn.style.display = 'none';
+        return;
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const { data: admin, error } = await client
+            .from('admins')
+            .select('permissions, role, full_name')
+            .eq('id', adminId)
+            .single();
+            
+        if (error) throw error;
+        
+        // যদি সুপার অ্যাডমিন হয়, তবে সব পারমিশন true দেখাবে
+        const isSuper = admin.role === 'super_admin';
+        const currentPerms = admin.permissions || {};
+        
+        // পারমিশন গ্রিড রেন্ডার করুন (আপনার PERMISSION_REGISTRY ব্যবহার করে)
+        renderAdminPermissionGrid(currentPerms, isSuper, admin.full_name);
+        saveBtn.style.display = 'block';
+        saveBtn.dataset.adminId = adminId;
+        
+    } catch (e) {
+        console.error('Load permissions error:', e);
+        showToast('❌ পারমিশন লোড করতে সমস্যা!', 'error');
+    }
+}
+
+// ৩. পারমিশন গ্রিড রেন্ডার করা
+function renderAdminPermissionGrid(currentPerms, isSuper, adminName) {
+    const grid = document.getElementById('adminPermissionGrid');
+    if (!grid) return;
+    
+    // গ্রুপ অনুযায়ী সাজান
+    const groups = {};
+    Object.entries(PERMISSION_REGISTRY).forEach(([key, config]) => {
+        if (config.superAdminOnly && !isSuper) return; // সুপার অ্যাডমিন না হলে superAdminOnly ফিচার বাদ
+        if (!groups[config.group]) groups[config.group] = [];
+        groups[config.group].push({ key, ...config });
+    });
+    
+    let html = `
+        <div class="mb-3 flex justify-between items-center flex-wrap gap-2">
+            <div>
+                <span class="text-sm font-medium text-gray-600">👤 অ্যাডমিন:</span>
+                <span class="text-sm font-semibold text-purple-600 bg-purple-50 px-3 py-1 rounded-full">${adminName}</span>
+                ${isSuper ? '<span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full ml-2">👑 সুপার অ্যাডমিন</span>' : ''}
+            </div>
+            <div class="flex gap-2">
+                <button type="button" onclick="selectAllAdminPerms(true)" class="btn btn-success btn-sm">সব সিলেক্ট</button>
+                <button type="button" onclick="selectAllAdminPerms(false)" class="btn btn-danger btn-sm">সব আনসিলেক্ট</button>
+            </div>
+        </div>
+        <div class="permission-grid-container max-h-96 overflow-y-auto border rounded-lg p-3 bg-white">
+    `;
+    
+    Object.entries(groups).forEach(([groupName, items]) => {
+        html += `<div class="col-span-full font-semibold text-gray-700 text-sm border-b pb-1 mb-1 mt-2 first:mt-0">${groupName}</div>`;
+        
+        items.sort((a, b) => a.order - b.order).forEach(item => {
+            const checked = isSuper ? 'checked' : (currentPerms[item.key] === true ? 'checked' : '');
+            const disabled = isSuper ? 'disabled' : '';
+            
+            html += `
+                <label class="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-100 p-1.5 rounded transition">
+                    <input type="checkbox" class="admin-perm-checkbox w-4 h-4 text-emerald-600 rounded" 
+                           data-permission="${item.key}" ${checked} ${disabled}>
+                    <span class="text-gray-700">${item.label}</span>
+                </label>
+            `;
+        });
+    });
+    
+    html += `</div>`;
+    grid.innerHTML = html;
+}
+
+// ৪. সব পারমিশন সিলেক্ট/আনসিলেক্ট
+function selectAllAdminPerms(select) {
+    document.querySelectorAll('.admin-perm-checkbox').forEach(cb => {
+        if (!cb.disabled) cb.checked = select;
+    });
+}
+
+// ৫. পারমিশন সংরক্ষণ করা
+async function saveAdminPermissions() {
+    const adminId = document.getElementById('saveAdminPermBtn')?.dataset.adminId;
+    if (!adminId) return;
+    
+    const permissions = {};
+    document.querySelectorAll('.admin-perm-checkbox').forEach(cb => {
+        if (cb.dataset.permission) {
+            permissions[cb.dataset.permission] = cb.checked;
+        }
+    });
+    
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    const btn = document.getElementById('saveAdminPermBtn');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> সংরক্ষণ...';
+    
+    try {
+        const { error } = await client
+            .from('admins')
+            .update({ permissions: permissions })
+            .eq('id', adminId);
+            
+        if (error) throw error;
+        
+        showToast('✅ পারমিশন সফলভাবে সংরক্ষণ হয়েছে!', 'success');
+        
+    } catch (e) {
+        console.error('Save permissions error:', e);
+        showToast('❌ সংরক্ষণ করতে সমস্যা!', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
+}
+    
         // ─────────────────────────────────────────────────────────────────
         // 🔧 FUNC 2: parseDateSafe() — Bangladesh-Aware Date Parser
         // ✅ Timezone না থাকলে UTC (Z) নয়, BD time (+06:00) ধরে নেবে
@@ -6711,6 +6928,7 @@ function formatBDTime(isoString, format = 'datetime') {
         case 'short-year':     return formatShortBD(isoString, true);
         case 'short-2digit':   return formatShortYearBD(isoString);
         case 'numeric':        return formatDateTimeNumericBD(isoString);
+            
         default:               return formatDateTimeBD(isoString);
     }
 }
@@ -9170,6 +9388,9 @@ function showTab(tabName) {
                 break;
             case 'notices':
                 if (typeof loadNoticesList === 'function') loadNoticesList();
+                break;
+                case 'adminPermission':
+                if (typeof loadAdminsForPermission === 'function') loadAdminsForPermission();
                 break;
             case 'leadership':
     console.log('🎯 Opening leadership tab...');
