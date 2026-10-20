@@ -5720,15 +5720,19 @@ body.dark-mode .all-clear-box p {
     </div>
 </div>
 
-<!-- ===== ADD ADMIN MODAL ===== -->
+<!-- ===== ADD ADMIN MODAL (Updated with Email) ===== -->
 <div id="addAdminModal" class="modal-overlay">
     <div class="modal-container">
         <h3 class="text-lg font-bold mb-4">নতুন অ্যাডমিন</h3>
         <form id="addAdminForm">
-            <input type="text" id="adminUsername" placeholder="ইউজারনেম" class="w-full border p-2 rounded-lg mb-3">
-            <input type="text" id="adminFullName" placeholder="পূর্ণ নাম" class="w-full border p-2 rounded-lg mb-3">
-            <input type="password" id="adminPassword" placeholder="পাসওয়ার্ড" value="12345" class="w-full border p-2 rounded-lg mb-3">
-            <select id="adminRole" class="w-full border p-2 rounded-lg mb-3"><option value="অ্যাডমিন">অ্যাডমিন</option><option value="সুপার অ্যাডমিন">সুপার অ্যাডমিন</option></select>
+            <input type="text" id="adminUsername" placeholder="ইউজারনেম (লগইনের জন্য)" class="w-full border p-2 rounded-lg mb-3" required>
+            <input type="text" id="adminFullName" placeholder="পূর্ণ নাম" class="w-full border p-2 rounded-lg mb-3" required>
+            <input type="email" id="adminEmail" placeholder="ইমেইল (Supabase Auth-এর জন্য)" class="w-full border p-2 rounded-lg mb-3" required>
+            <input type="password" id="adminPassword" placeholder="পাসওয়ার্ড" value="123456" class="w-full border p-2 rounded-lg mb-3" required>
+            <select id="adminRole" class="w-full border p-2 rounded-lg mb-3">
+                <option value="admin">🛡️ অ্যাডমিন</option>
+                <option value="super_admin">👑 সুপার অ্যাডমিন</option>
+            </select>
             <div class="flex gap-3">
                 <button type="submit" class="btn btn-success flex-1">যোগ করুন</button>
                 <button type="button" onclick="closeAddAdminModal()" class="btn btn-danger flex-1">বাতিল</button>
@@ -16544,15 +16548,116 @@ console.log('✅ Due Invoice System loaded');
     function closeAddAdminModal() { document.getElementById('addAdminModal').classList.remove('active'); }
 
     document.getElementById('addAdminForm')?.addEventListener('submit', async function(e) {
-        e.preventDefault();
-        const username = document.getElementById('adminUsername').value.trim();
-        const password = document.getElementById('adminPassword').value;
-        if (!username || !password) { showToast('সব তথ্য পূরণ করুন!', 'error'); return; }
-        const client = initSupabaseClient();
-        if (!client) { showToast('সংযোগ সমস্যা!', 'error'); return; }
-        await client.from('admins').insert([{ username, password, full_name: document.getElementById('adminFullName').value, role: document.getElementById('adminRole').value, created_at: new Date().toISOString() }]);
-        loadAdmins(); closeAddAdminModal(); showToast('✅ নতুন অ্যাডমিন যোগ করা হয়েছে!');
-    });
+    e.preventDefault();
+    
+    // ১. ফর্ম থেকে ডেটা নিন (ইমেইল সহ)
+    const username = document.getElementById('adminUsername').value.trim();
+    const fullName = document.getElementById('adminFullName').value.trim();
+    const email = document.getElementById('adminEmail').value.trim();
+    const password = document.getElementById('adminPassword').value;
+    const role = document.getElementById('adminRole').value;
+    
+    if (!username || !fullName || !email || !password) { 
+        showToast('সব তথ্য পূরণ করুন!', 'error'); 
+        return; 
+    }
+    
+    const client = initSupabaseClient();
+    if (!client) { 
+        showToast('সংযোগ সমস্যা!', 'error'); 
+        return; 
+    }
+
+    // বাটন লোডিং স্টেট
+    const btn = this.querySelector('button[type="submit"]');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> তৈরি হচ্ছে...';
+
+    try {
+        // ═══════════════════════════════════════════════════════
+        // ধাপ ১: Supabase Auth-এ নতুন ইউজার তৈরি করুন
+        // ═══════════════════════════════════════════════════════
+        const { data: authData, error: authError } = await client.auth.signUp({
+            email: email,
+            password: password,
+            options: {
+                data: { full_name: fullName }
+            }
+        });
+        
+        if (authError) {
+            if (authError.message.includes('already registered')) {
+                showToast('❌ এই ইমেইল দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট আছে!', 'error');
+            } else {
+                showToast('❌ Auth ত্রুটি: ' + authError.message, 'error');
+            }
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+            return;
+        }
+        
+        const authUserId = authData.user?.id;
+        if (!authUserId) {
+            showToast('❌ Auth ইউজার আইডি পাওয়া যায়নি!', 'error');
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+            return;
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // ধাপ ২: admins টেবিলে ডেটা ইনসার্ট করুন
+        // ═══════════════════════════════════════════════════════
+        const { data: adminData, error: adminInsertError } = await client
+            .from('admins')
+            .insert([{
+                username: username,
+                full_name: fullName,
+                email: email,
+                role: role,
+                status: 'active',
+                auth_user_id: authUserId,
+                admin_uuid: authUserId,
+                created_at: new Date().toISOString()
+            }])
+            .select('id')
+            .single();
+            
+        if (adminInsertError) {
+            showToast('❌ অ্যাডমিন ডেটাবেসে যোগ করা যায়নি: ' + adminInsertError.message, 'error');
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+            return;
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // ধাপ ৩: RPC দিয়ে পাসওয়ার্ড হ্যাশ করুন
+        // ═══════════════════════════════════════════════════════
+        const { error: pwdError } = await client.rpc('admin_update_password', {
+            p_admin_id: adminData.id,
+            p_new_password: password
+        });
+        
+        if (pwdError) {
+            console.warn('Password hash update failed:', pwdError);
+            showToast('⚠️ অ্যাডমিন তৈরি হয়েছে, কিন্তু পাসওয়ার্ড হ্যাশে সমস্যা হয়েছে!', 'warning');
+        } else {
+            showToast(`✅ নতুন অ্যাডমিন "${fullName}" সফলভাবে তৈরি হয়েছে!`, 'success');
+        }
+        
+        // ফর্ম রিসেট এবং রিফ্রেশ
+        loadAdmins(); 
+        closeAddAdminModal(); 
+        this.reset();
+        
+    } catch(err) {
+        console.error('Add admin error:', err);
+        showToast('❌ অ্যাডমিন তৈরি করতে সমস্যা: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
+});
 
     function deleteAdmin(id) {
         if (!confirm('অ্যাডমিন ডিলিট করবেন?')) return;
