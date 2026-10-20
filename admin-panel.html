@@ -4815,40 +4815,7 @@ body.dark-mode .all-clear-box p {
         </div>
     </div>
 
-    <!-- ========================================================== -->
-<!-- ===== TAB: ADMIN PERMISSIONS ===== -->
-<!-- ========================================================== -->
-<div id="adminPermissionTab" class="tab-content">
-    <div class="content-card">
-        <div class="card-header">
-            <h3><i class="fas fa-user-shield mr-2 text-purple-600"></i>🔑 অ্যাডমিন পারমিশন ম্যানেজমেন্ট</h3>
-            <button onclick="loadAdminsForPermission()" class="btn btn-info btn-sm"><i class="fas fa-sync-alt mr-1"></i> রিফ্রেশ</button>
-        </div>
-        <div class="p-4">
-            <!-- অ্যাডমিন সিলেক্ট -->
-            <div class="mb-4">
-                <label class="block text-sm font-medium text-gray-700 mb-1">👤 অ্যাডমিন নির্বাচন করুন</label>
-                <select id="adminPermissionSelect" class="w-full border rounded-lg p-2" onchange="loadAdminPermissions()">
-                    <option value="">-- অ্যাডমিন নির্বাচন করুন --</option>
-                </select>
-            </div>
-            
-            <!-- পারমিশন গ্রিড -->
-            <div id="adminPermissionGrid" class="border rounded-lg p-4 bg-gray-50">
-                <div class="text-center text-gray-500 py-8">
-                    <i class="fas fa-user-tie text-4xl block mb-3 text-gray-300"></i>
-                    <p>অ্যাডমিন নির্বাচন করুন</p>
-                </div>
-            </div>
-            
-            <!-- সংরক্ষণ বাটন -->
-            <button onclick="saveAdminPermissions()" class="btn btn-success w-full mt-4 py-2.5" id="saveAdminPermBtn" style="display:none;">
-                <i class="fas fa-save mr-2"></i> 💾 পারমিশন সংরক্ষণ করুন
-            </button>
-        </div>
-    </div>
-</div>
-
+ 
     <!-- ========================================================== -->
     <!-- ===== TAB: SLIDER ===== -->
     <!-- ========================================================== -->
@@ -38124,6 +38091,109 @@ ${data.reason ? '📝 কারণ: ' + data.reason : ''}
     window.open(url, '_blank');
     showToast('✅ WhatsApp খোলা হয়েছে', 'success');
 }
+
+    // ═══════════════════════════════════════════════════════
+// 🔑 ADMIN PERMISSIONS (গ্লোবাল স্কোপ)
+// ═══════════════════════════════════════════════════════
+
+window.editAdminPermissions = async function(adminId) {
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const { data: admin, error } = await client
+            .from('admins')
+            .select('permissions, role, full_name')
+            .eq('id', adminId)
+            .single();
+            
+        if (error) throw error;
+        
+        const isSuper = admin.role === 'super_admin';
+        const currentPerms = admin.permissions || {};
+        
+        const groups = {};
+        Object.entries(PERMISSION_REGISTRY).forEach(([key, config]) => {
+            if (config.superAdminOnly && !isSuper) return; 
+            if (!groups[config.group]) groups[config.group] = [];
+            groups[config.group].push({ key, ...config });
+        });
+        
+        let html = `
+            <div class="mb-4 flex justify-between items-center bg-gray-50 p-3 rounded-lg border">
+                <div>
+                    <span class="text-sm text-gray-600">অ্যাডমিন:</span>
+                    <span class="font-bold text-emerald-700">${admin.full_name}</span>
+                    ${isSuper ? '<span class="ml-2 text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">সুপার অ্যাডমিন</span>' : ''}
+                </div>
+                <div class="flex gap-2">
+                    <button onclick="document.querySelectorAll('.admin-perm-cb').forEach(c=>{if(!c.disabled)c.checked=true})" class="btn btn-success btn-sm">সব</button>
+                    <button onclick="document.querySelectorAll('.admin-perm-cb').forEach(c=>{if(!c.disabled)c.checked=false})" class="btn btn-danger btn-sm">কোনোটাই না</button>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[55vh] overflow-y-auto p-2 border rounded-lg bg-white">
+        `;
+        
+        Object.entries(groups).forEach(([groupName, items]) => {
+            html += `<div class="col-span-full font-bold text-gray-700 text-sm border-b pb-1 mt-2 first:mt-0 bg-emerald-50 px-2 py-1 rounded">${groupName}</div>`;
+            
+            items.sort((a, b) => a.order - b.order).forEach(item => {
+                const checked = isSuper ? 'checked' : (currentPerms[item.key] === true ? 'checked' : '');
+                const disabled = isSuper ? 'disabled' : '';
+                
+                html += `
+                    <label class="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-100 p-2 rounded transition ${isSuper ? 'opacity-60' : ''}">
+                        <input type="checkbox" class="admin-perm-cb w-4 h-4 text-emerald-600 rounded" 
+                               data-permission="${item.key}" ${checked} ${disabled}>
+                        <span class="text-gray-700">${item.label}</span>
+                    </label>
+                `;
+            });
+        });
+        
+        html += `</div>
+            <div class="flex gap-3 mt-4 pt-3 border-t">
+                <button onclick="window.saveAdminPermissions('${adminId}')" class="btn btn-success flex-1 py-2">💾 সংরক্ষণ করুন</button>
+                <button onclick="closeCustomModal()" class="btn btn-danger flex-1 py-2">বাতিল</button>
+            </div>
+        `;
+        
+        showCustomModal('🔑 পারমিশন এডিট করুন', html);
+        
+    } catch (e) {
+        console.error('Edit permissions error:', e);
+        showToast('❌ লোড করতে সমস্যা!', 'error');
+    }
+};
+
+window.saveAdminPermissions = async function(adminId) {
+    const permissions = {};
+    document.querySelectorAll('.admin-perm-cb').forEach(cb => {
+        if (cb.dataset.permission) {
+            permissions[cb.dataset.permission] = cb.checked;
+        }
+    });
+    
+    const client = initSupabaseClient();
+    if (!client) return;
+    
+    try {
+        const { error } = await client
+            .from('admins')
+            .update({ permissions: permissions })
+            .eq('id', adminId);
+            
+        if (error) throw error;
+        
+        showToast('✅ পারমিশন সফলভাবে আপডেট হয়েছে!', 'success');
+        closeCustomModal();
+        loadAdmins();
+        
+    } catch (e) {
+        console.error('Save permissions error:', e);
+        showToast('❌ সংরক্ষণ করতে সমস্যা!', 'error');
+    }
+};
 
 // ✅ Global Expose
 window.showTransactionVoucher = showTransactionVoucher;
