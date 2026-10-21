@@ -3357,27 +3357,27 @@
     let countdownInterval = null;
     let currentEventId = null;
 
-    async function initSupabase() {
-    try {
-        if (supabaseClient && supabaseClient.from) return supabaseClient;
-        if (typeof supabase !== 'undefined' && supabase.createClient) {
-            supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-                auth: {
-                    persistSession: true,       // ✅ সেশন সেভ হবে
-                    autoRefreshToken: true,     // ✅ টোকেন রিফ্রেশ হবে
-                    detectSessionInUrl: true,   // ✅ URL থেকে সেশন ধরবে
-                    storageKey: 'tuknbd-auth-token' // ✅ অ্যাডমিন প্যানেলের সাথে একই কী
-                }
-            });
-            console.log('✅ Supabase initialized (persistent session)');
-            return supabaseClient;
+        async function initSupabase() {
+        try {
+            if (supabaseClient && supabaseClient.from) return supabaseClient;
+            if (typeof supabase !== 'undefined' && supabase.createClient) {
+                supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+                    auth: {
+                        persistSession: true,       // ✅ সেশন সেভ হবে
+                        autoRefreshToken: true,     // ✅ টোকেন রিফ্রেশ হবে
+                        detectSessionInUrl: true,   
+                        storageKey: 'tuknbd-auth-token' // ✅ অ্যাডমিন প্যানেলের সাথে একই কী
+                    }
+                });
+                console.log('✅ Supabase initialized (persistent session)');
+                return supabaseClient;
+            }
+            throw new Error('Supabase not loaded');
+        } catch(e) {
+            console.error('❌ Supabase init error:', e);
+            return null;
         }
-        throw new Error('Supabase not loaded');
-    } catch(e) {
-        console.error('❌ Supabase init error:', e);
-        return null;
     }
-}
         
     function showToast(message, type = 'success') {
         const existingOverlay = document.querySelector('.notification-overlay');
@@ -3826,10 +3826,7 @@
     }
 }
 
-    // ═══════════════════════════════════════════════════════════
-    // ✅ handleAdminLogin() — Auto-redirect + Auto-refresh সহ
-    // ═══════════════════════════════════════════════════════════
-    async function handleAdminLogin() {
+        async function handleAdminLogin() {
         const username = document.getElementById('adminUsername').value.trim();
         const password = document.getElementById('adminPassword').value;
         const submitBtn = document.querySelector('#adminLoginModal .admin-login-btn');
@@ -3839,7 +3836,6 @@
             return; 
         }
         
-        // Button loading state
         const originalText = submitBtn ? submitBtn.innerHTML : 'লগইন করুন';
         if (submitBtn) {
             submitBtn.disabled = true;
@@ -3849,59 +3845,81 @@
         const sb = await initSupabase();
         if (!sb) { 
             showToast('সার্ভার সংযোগ সমস্যা!', 'error'); 
-            if (submitBtn) {
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = originalText;
-            }
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = originalText; }
             return; 
         }
         
         try {
             console.log('🔍 Admin login attempt:', username);
             
-            const { data, error } = await sb
-                .from('admins')
-                .select('*')
-                .eq('username', username)
-                .eq('password', password)
-                .maybeSingle();
-            
+            // ✅ ১. RPC দিয়ে ডেটাবেস থেকে ভেরিফাই
+            const { data, error } = await sb.rpc('verify_admin_login', {
+                p_username: username,
+                p_password: password
+            });
+
             if (error) throw error;
             
-            if (data) {
-                // ✅ সফল লগইন
-                console.log('✅ Admin login successful:', data.role);
-                
-                localStorage.setItem('tukn_admin', JSON.stringify(data));
-                sessionStorage.setItem('tukn_admin', JSON.stringify(data));
-                
-                showToast(`স্বাগতম ${data.username || 'অ্যাডমিন'}!`, 'success');
-                
-                // ✅ Auto-redirect with Auto-refresh
-                setTimeout(() => {
-                    if (data.role === 'super_admin') {
-                        window.location.replace('admin-panel.html');
-                    } else {
-                        window.location.replace('admin-dashboard.html');
-                    }
-                }, 1200);
-                
-            } else {
+            const admin = data && data[0];
+            
+            if (!admin || admin.is_valid !== true) {
                 showToast('ইউজারনেম বা পাসওয়ার্ড ভুল!', 'error');
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = originalText; }
+                return;
+            }
+
+            const isSuper = admin.role === 'super_admin' || admin.role === 'সুপার অ্যাডমিন';
+            console.log('✅ Admin verified:', admin.username);
+
+            // ✅ ২. Supabase Auth সেশন তৈরি (RLS-এর জন্য)
+            const authEmail = admin.email;
+            if (authEmail) {
+                const { error: authError } = await sb.auth.signInWithPassword({
+                    email: authEmail,
+                    password: password
+                });
                 
-                              
-                if (submitBtn) {
-                    submitBtn.disabled = false;
-                    submitBtn.innerHTML = originalText;
+                if (authError) {
+                    console.warn('⚠️ Auth session failed:', authError.message);
+                } else {
+                    console.log('✅ Auth session created:', authEmail);
                 }
             }
+
+            // ✅ ৩. পারমিশন তৈরি
+            let permissions = admin.permissions || {};
+            if (isSuper) {
+                permissions = { ...ALL_PERMISSIONS }; // নিশ্চিত করুন ALL_PERMISSIONS ডিফাইন করা আছে
+            }
+
+            // ✅ ৪. লোকাল স্টোরেজে সেভ
+            const adminData = {
+                id: admin.id,
+                username: admin.username,
+                name: admin.full_name || admin.username,
+                full_name: admin.full_name || admin.username,
+                role: isSuper ? 'super_admin' : admin.role,
+                status: admin.status,
+                permissions: permissions,
+                admin_uuid: admin.admin_uuid,
+                email: authEmail,
+                login_time: new Date().toISOString(),
+                login_type: 'admin'
+            };
+
+            localStorage.setItem('currentAdmin', JSON.stringify(adminData));
+            sessionStorage.setItem('currentAdmin', JSON.stringify(adminData));
+
+            showToast(`স্বাগতম ${adminData.full_name}!`, 'success');
+            
+            setTimeout(() => {
+                window.location.replace('admin-panel.html');
+            }, 1200);
+            
         } catch(e) { 
             console.error('Admin login error:', e); 
-            showToast('লগইন ব্যর্থ! নেটওয়ার্ক চেক করুন।', 'error'); 
-            if (submitBtn) {
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = originalText;
-            }
+            showToast('লগইন ব্যর্থ: ' + e.message, 'error'); 
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = originalText; }
         }
     }
 
