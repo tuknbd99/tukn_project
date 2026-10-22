@@ -398,7 +398,6 @@
             <button class="btn-action btn-secondary flex-1" onclick="shareSlip()"><i class="fas fa-share-alt"></i> শেয়ার</button>
         </div>
         
-        <!-- ✅ স্লিপের নিচেও হোম বাটন -->
         <div class="px-4 pb-4 no-print">
             <a href="index.html" class="btn-action btn-secondary w-full inline-flex items-center justify-center gap-2">
                 <i class="fas fa-home"></i> হোমে ফিরে যান
@@ -442,7 +441,6 @@ let currentMember = null;
 let selectedReceiver = null;
 let selectedMemberType = 'term';
 let selectedYear = '2026';
-let paymentsMemberIdIsUuid = true;
 
 async function initSupabase() {
     try {
@@ -555,27 +553,7 @@ function setCurrentAmount(amount) {
 }
 
 // ============================================
-// Payments মেম্বার আইডি টাইপ ডিটেক্ট
-// ============================================
-async function detectPaymentsMemberIdType() {
-    try {
-        const sb = await initSupabase();
-        if (!sb) return;
-        const { data, error } = await sb.from('payments').select('member_id').limit(1);
-        if (!error && data && data[0] && data[0].member_id) {
-            const val = String(data[0].member_id);
-            paymentsMemberIdIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
-            console.log('🔍 payments.member_id টাইপ:', paymentsMemberIdIsUuid ? 'UUID' : 'TEXT');
-        }
-    } catch(e) { /* silent */ }
-}
-
-function getMemberKeyForPayment() {
-    return paymentsMemberIdIsUuid ? currentMember.id : currentMember.member_id;
-}
-
-// ============================================
-// মাস পপুলেট — RPC ব্যবহার
+// মাস পপুলেট — RPC ব্যবহার (p_member_int)
 // ============================================
 async function populateMonths() {
     if (!currentMember) return;
@@ -588,8 +566,9 @@ async function populateMonths() {
     
     if (sb && selectedYear) {
         try {
+            // ✅ p_member_int ব্যবহার
             const { data, error } = await sb.rpc('get_member_payment_months', {
-                p_member_uuid: currentMember.id || null,
+                p_member_int: currentMember.id || null,
                 p_member_text: currentMember.member_id || null,
                 p_year: parseInt(selectedYear)
             });
@@ -637,7 +616,7 @@ function normalizeMobile(input) {
 }
 
 // ============================================
-// সদস্য সার্চ — VIEW ব্যবহার (নিরাপদ)
+// সদস্য সার্চ — VIEW ব্যবহার
 // ============================================
 async function searchMember() {
     const rawInput = document.getElementById('searchInput').value.trim();
@@ -678,7 +657,6 @@ async function searchMember() {
         
         if (data) {
             currentMember = data;
-            await detectPaymentsMemberIdType();
             
             const isTermMember = (data.member_term || 0) > 0;
             currentMember.actualMemberType = isTermMember ? 'term' : 'current';
@@ -686,7 +664,8 @@ async function searchMember() {
             document.getElementById('displayMemberName').innerText = data.full_name || 'নাম নেই';
             document.getElementById('displayMemberId').innerText = data.member_id || data.id;
             document.getElementById('displayMemberMobile').innerText = data.mobile || '-';
-            document.getElementById('displayReferCode').innerText = data.referral_code || '-';
+            // ✅ refer_code ব্যবহার
+            document.getElementById('displayReferCode').innerText = data.refer_code || '-';
             document.getElementById('displayJoinDate').innerText = formatDate(data.join_date);
             document.getElementById('displayApprovedDate').innerText = formatDate(data.approved_at);
             document.getElementById('displayMonthlyAmount').innerHTML = (data.monthly_savings || 500) + ' টাকা';
@@ -856,8 +835,9 @@ async function generateSlip() {
         const sb = await initSupabase();
         if (sb) {
             try {
+                // ✅ p_member_int ব্যবহার
                 const { data, error } = await sb.rpc('get_member_payment_months', {
-                    p_member_uuid: currentMember.id || null,
+                    p_member_int: currentMember.id || null,
                     p_member_text: currentMember.member_id || null,
                     p_year: parseInt(selectedYear)
                 });
@@ -1042,7 +1022,7 @@ function closeSuccessMessage() {
 }
 
 // ============================================
-// Payments সেভ
+// Payments সেভ — member_id String হিসেবে
 // ============================================
 async function savePaymentToSupabase(months, amount, method, details, slipNo, verificationCode, receiptHash, memberType, note) {
     const sb = await initSupabase();
@@ -1050,8 +1030,10 @@ async function savePaymentToSupabase(months, amount, method, details, slipNo, ve
     if (!currentMember.branch_id) throw new Error('❌ আপনার ব্রাঞ্চ সেট করা নেই!');
     
     const memberBranchName = await getBranchName(currentMember.branch_id);
-    const memberKey = getMemberKeyForPayment();
     let successCount = 0, errors = [];
+    
+    // ✅ payments.member_id = text → String()
+    const memberKey = String(currentMember.id);
     
     if (memberType === 'current') {
         const paymentData = {
@@ -1059,7 +1041,7 @@ async function savePaymentToSupabase(months, amount, method, details, slipNo, ve
             member_name: currentMember.full_name,
             mobile: currentMember.mobile,
             month: 'কারেন্ট জমা',
-            year: new Date().getFullYear(),
+            year: String(new Date().getFullYear()),
             amount: amount,
             payment_method: method,
             status: 'pending',
@@ -1095,7 +1077,7 @@ async function savePaymentToSupabase(months, amount, method, details, slipNo, ve
                 member_name: currentMember.full_name,
                 mobile: currentMember.mobile,
                 month: month,
-                year: parseInt(selectedYear),
+                year: String(selectedYear),  // ✅ year = text
                 amount: currentMember.monthly_savings || 500,
                 payment_method: method,
                 status: 'pending',
@@ -1157,9 +1139,9 @@ function shareWhatsApp() {
 document.getElementById('searchInput')?.addEventListener('keypress', function(e) { if (e.key === 'Enter') searchMember(); });
 document.getElementById('currentAmount')?.addEventListener('input', updateTotalAmount);
 
-initSupabase().then(() => detectPaymentsMemberIdType());
+initSupabase();
 populateYears();
-console.log('✅ TUKNBD Savings Page Loaded — RLS-safe + Home button version');
+console.log('✅ TUKNBD Savings Page Loaded — Final version with all fixes');
 </script>
 </body>
 </html>
