@@ -6677,6 +6677,16 @@ const BANGLA_MONTHS_SHORT = [
     'মে', 'জুন', 'জুলাই', 'আগস্ট',
     'সেপ্টে', 'অক্টো', 'নভে', 'ডিসে'
 ];
+    const ENGLISH_MONTHS = [
+    'january', 'february', 'march', 'april',
+    'may', 'june', 'july', 'august',
+    'september', 'october', 'november', 'december'
+];
+
+const ENGLISH_MONTHS_SHORT = [
+    'jan', 'feb', 'mar', 'apr', 'may', 'jun',
+    'jul', 'aug', 'sep', 'oct', 'nov', 'dec'
+];
 
 
     /**
@@ -32004,116 +32014,160 @@ document.getElementById('balanceAdjustmentForm')?.addEventListener('submit', asy
                             
                             if (updErr) throw updErr;
                             
-                            // ✅ ৪. মূল টেবিলে রেকর্ড
                             if (isDep) {
-                                // ============================================================
-                                // ✅ ৪.১: Month/Year normalize (বাংলা নাম নিশ্চিত করুন)
-                                // ============================================================
-                                const BANGLA_MONTHS = [
-                                    'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল',
-                                    'মে', 'জুন', 'জুলাই', 'আগস্ট',
-                                    'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
-                                ];
-                                
-                                let monthValue = String(data.month || '').trim();
-                                if (/^\d+$/.test(monthValue)) {
-                                    const idx = parseInt(monthValue) - 1;
-                                    monthValue = BANGLA_MONTHS[idx] || monthValue;
+                            // ============================================================
+                            // ✅ ৪.১: Month/Year Normalize — যেকোনো ফরম্যাট → বাংলা পূর্ণ নাম
+                            // "10" / 10 / "October" / "Oct" / "অক্টোবর" → "অক্টোবর"
+                            // ============================================================
+                            let monthValue = String(data.month || '').trim();
+                            
+                            // ✅ সংখ্যা হলে → বাংলা নামে
+                            if (/^\d{1,2}$/.test(monthValue)) {
+                                const idx = parseInt(monthValue, 10) - 1;
+                                if (idx >= 0 && idx < BANGLA_MONTHS.length) {
+                                    monthValue = BANGLA_MONTHS[idx];
                                 }
-                                const yearValue = String(data.year || '').trim();
+                            }
+                            // ✅ ইংরেজি হলে → বাংলা নামে
+                            else if (typeof ENGLISH_MONTHS !== 'undefined') {
+                                const lowerMonth = monthValue.toLowerCase();
                                 
-                                console.log('🔍 Payments check:', {
-                                    member_id: data.member_id,
-                                    month: monthValue,
-                                    year: yearValue
-                                });
+                                // পূর্ণ ইংরেজি নাম
+                                const engIdx = ENGLISH_MONTHS.indexOf(lowerMonth);
+                                if (engIdx >= 0) {
+                                    monthValue = BANGLA_MONTHS[engIdx];
+                                } 
+                                // সংক্ষিপ্ত ইংরেজি নাম (jan, feb, ...)
+                                else if (typeof ENGLISH_MONTHS_SHORT !== 'undefined') {
+                                    const shortIdx = ENGLISH_MONTHS_SHORT.indexOf(lowerMonth.substring(0, 3));
+                                    if (shortIdx >= 0) {
+                                        monthValue = BANGLA_MONTHS[shortIdx];
+                                    }
+                                }
+                            }
+                            
+                            const yearValue = data.year ? String(data.year).trim() : '';
+                            
+                            // ✅ Numeric version (পুরনো রেকর্ড মেলাতে)
+                            const banglaMonthIndex = BANGLA_MONTHS.indexOf(monthValue);
+                            const monthNumeric = banglaMonthIndex >= 0 ? String(banglaMonthIndex + 1) : '';
+                            const monthNumericPad = monthNumeric.padStart(2, '0');
+                            
+                            console.log('📅 Month Normalized:', {
+                                raw: data.month,
+                                rawType: typeof data.month,
+                                normalized: monthValue,
+                                numeric: monthNumeric,
+                                year: yearValue
+                            });
+                            
+                            // ============================================================
+                            // ✅ ৪.২: পুরনো pending রেকর্ড খুঁজুন — সব ফরম্যাটে
+                            // ============================================================
+                            const { data: pendingList, error: checkErr } = await client
+                                .from('payments')
+                                .select('id, month, year, amount, status')
+                                .eq('member_id', data.member_id)
+                                .eq('year', yearValue)
+                                .eq('status', 'pending');
+                            
+                            if (checkErr) {
+                                console.warn('⚠️ Pending check warning:', checkErr);
+                            }
+                            
+                            // ✅ JS-এ সব ফরম্যাট মিলিয়ে দেখুন
+                            const existingPending = (pendingList || []).find(p => {
+                                const pMonth = String(p.month || '').trim();
+                                const pMonthLower = pMonth.toLowerCase();
                                 
+                                return pMonth === monthValue                              // 'অক্টোবর'
+                                    || pMonth === monthNumeric                            // '10'
+                                    || pMonth === monthNumericPad                         // '010'
+                                    || pMonth === String(banglaMonthIndex + 1)            // '10' (number as string)
+                                    || pMonthLower === monthValue.toLowerCase()           // case-insensitive
+                                    || pMonthLower === (typeof ENGLISH_MONTHS !== 'undefined' 
+                                        ? ENGLISH_MONTHS[banglaMonthIndex] : '');         // 'october'
+                            });
+                            
+                            console.log('🔍 Pending check:', {
+                                totalPending: pendingList?.length || 0,
+                                matched: existingPending?.id || 'none',
+                                searchedMonth: monthValue,
+                                variants: [monthValue, monthNumeric, monthNumericPad]
+                            });
+                            
+                            if (existingPending) {
                                 // ============================================================
-                                // ✅ ৪.২: পুরনো pending রেকর্ড খুঁজুন
+                                // ✅ ৪.৩: পুরনো pending UPDATE — নতুন insert নয়
                                 // ============================================================
-                                const { data: existingPending, error: checkErr } = await client
+                                console.log('🔄 পুরনো pending payments UPDATE:', existingPending.id);
+                                
+                                const { error: updateErr } = await client
                                     .from('payments')
-                                    .select('id')
+                                    .update({
+                                        status: 'approved',
+                                        approved_by: adminName,
+                                        approved_at: getBangladeshTime(),
+                                        voucher_slip_no: data.voucher_no,
+                                        is_direct_deposit: true,
+                                        note: data.note || `Approved by ${adminName}`,
+                                        month: monthValue,          // ✅ month normalize করে ঠিক
+                                        year: yearValue,
+                                        updated_at: getBangladeshTime()
+                                    })
+                                    .eq('id', existingPending.id);
+                                
+                                if (updateErr) {
+                                    console.error('❌ Payments UPDATE error:', updateErr);
+                                    throw updateErr;
+                                }
+                                
+                                console.log('✅ পুরনো pending approved:', existingPending.id);
+                                
+                            } else {
+                                // ============================================================
+                                // ✅ ৪.৪: পুরনো নেই → নতুন INSERT (user_uuid সহ)
+                                // ============================================================
+                                console.log('🆕 নতুন payments রেকর্ড insert');
+                                
+                                // ✅ user_uuid লোড (RLS এর জন্য)
+                                const { data: memberForUuid } = await client
+                                    .from('members')
+                                    .select('user_uuid, user_id')
                                     .eq('member_id', data.member_id)
-                                    .eq('month', monthValue)
-                                    .eq('year', yearValue)
-                                    .eq('status', 'pending')
                                     .maybeSingle();
                                 
-                                if (checkErr) {
-                                    console.warn('⚠️ Pending check warning:', checkErr);
+                                const { error: insertErr } = await client
+                                    .from('payments')
+                                    .insert([{
+                                        member_id: data.member_id,
+                                        member_name: data.member_name,
+                                        mobile: data.member_mobile,
+                                        month: monthValue,
+                                        year: yearValue,
+                                        amount: amount,
+                                        payment_method: data.payment_method,
+                                        transaction_id: data.transaction_id,
+                                        status: 'approved',
+                                        submitted_at: data.requested_at,
+                                        approved_by: adminName,
+                                        approved_at: getBangladeshTime(),
+                                        voucher_slip_no: data.voucher_no,
+                                        note: data.note || `Approved by ${adminName}`,
+                                        is_direct_deposit: true,
+                                        user_uuid: memberForUuid?.user_uuid || null,
+                                        user_id: memberForUuid?.user_id || null,
+                                        updated_at: getBangladeshTime()
+                                    }]);
+                                
+                                if (insertErr) {
+                                    console.error('❌ Payments INSERT error:', insertErr);
+                                    throw insertErr;
                                 }
                                 
-                                if (existingPending) {
-                                    // ============================================================
-                                    // ✅ ৪.৩: পুরনো pending UPDATE করুন (নতুন insert নয়)
-                                    // ============================================================
-                                    console.log('🔄 পুরনো pending payments UPDATE:', existingPending.id);
-                                    
-                                    const { error: updateErr } = await client
-                                        .from('payments')
-                                        .update({
-                                            status: 'approved',
-                                            approved_by: adminName,
-                                            approved_at: getBangladeshTime(),
-                                            voucher_slip_no: data.voucher_no,
-                                            is_direct_deposit: true,
-                                            note: data.note || `Approved by ${adminName}`,
-                                            updated_at: getBangladeshTime()
-                                        })
-                                        .eq('id', existingPending.id);
-                                    
-                                    if (updateErr) {
-                                        console.error('❌ Payments UPDATE error:', updateErr);
-                                        throw updateErr;
-                                    }
-                                    
-                                    console.log('✅ পুরনো pending approved হয়েছে:', existingPending.id);
-                                    
-                                } else {
-                                    // ============================================================
-                                    // ✅ ৪.৪: পুরনো নেই → নতুন INSERT (user_uuid সহ)
-                                    // ============================================================
-                                    console.log('🆕 নতুন payments রেকর্ড insert');
-                                    
-                                    // ✅ সদস্যের user_uuid লোড (RLS এর জন্য)
-                                    const { data: memberForUuid } = await client
-                                        .from('members')
-                                        .select('user_uuid, user_id')
-                                        .eq('member_id', data.member_id)
-                                        .maybeSingle();
-                                    
-                                    const { error: insertErr } = await client
-                                        .from('payments')
-                                        .insert([{
-                                            member_id: data.member_id,
-                                            member_name: data.member_name,
-                                            mobile: data.member_mobile,
-                                            month: monthValue,
-                                            year: yearValue,
-                                            amount: amount,
-                                            payment_method: data.payment_method,
-                                            transaction_id: data.transaction_id,
-                                            status: 'approved',
-                                            submitted_at: data.requested_at,
-                                            approved_by: adminName,
-                                            approved_at: getBangladeshTime(),
-                                            voucher_slip_no: data.voucher_no,
-                                            note: data.note || `Approved by ${adminName}`,
-                                            is_direct_deposit: true,
-                                            user_uuid: memberForUuid?.user_uuid || null,
-                                            user_id: memberForUuid?.user_id || null,
-                                            updated_at: getBangladeshTime()
-                                        }]);
-                                    
-                                    if (insertErr) {
-                                        console.error('❌ Payments INSERT error:', insertErr);
-                                        throw insertErr;
-                                    }
-                                    
-                                    console.log('✅ নতুন payments insert সম্পূর্ণ');
-                                }
-                            } else {
+                                console.log('✅ নতুন payments insert সম্পূর্ণ');
+                            }
+                        } else {
                                 // ✅ উত্তোলন — আগের মতোই (withdrawals টেবিলে insert)
                                 await client.from('withdrawals').insert([{
                                     member_id: data.member_id,
