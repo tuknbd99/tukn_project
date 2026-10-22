@@ -154,7 +154,6 @@
 <body class="bg-gray-100 min-h-screen py-8 px-4">
 
 <div class="max-w-4xl mx-auto">
-    <!-- ✅ স্টিকি হেডার — হোম বাটন + পেজ টাইটেল -->
     <div class="sticky top-2 z-40 mb-4 no-print">
         <div class="flex items-center justify-between bg-white rounded-xl shadow-md px-4 py-3">
             <a href="index.html" class="inline-flex items-center gap-2 text-emerald-700 font-semibold hover:text-emerald-800 transition">
@@ -167,7 +166,6 @@
         </div>
     </div>
 
-    <!-- সদস্য সার্চ সেকশন -->
     <div class="bg-white rounded-2xl shadow-xl p-6 mb-6 no-print">
         <h2 class="text-xl font-bold text-emerald-700 mb-4"><i class="fas fa-search"></i> সদস্য তথ্য লোড করুন</h2>
         <div class="flex gap-3 mb-4 flex-wrap">
@@ -196,7 +194,6 @@
         </div>
     </div>
 
-    <!-- পেমেন্ট ফর্ম -->
     <div id="paymentForm" class="bg-white rounded-2xl shadow-xl p-6 mb-6 no-print" style="display:none;">
         <h2 class="text-xl font-bold text-emerald-700 mb-4"><i class="fas fa-credit-card"></i> সঞ্চয় পরিশোধ তথ্য</h2>
         
@@ -553,10 +550,26 @@ function setCurrentAmount(amount) {
 }
 
 // ============================================
-// মাস পপুলেট — RPC ব্যবহার (p_member_int)
+// মাস পপুলেট — RPC (p_member_text) + বাংলা/ইংরেজি ম্যাপ
 // ============================================
 async function populateMonths() {
     if (!currentMember) return;
+    
+    const monthMap = {
+        'জানুয়ারি': 'জানুয়ারি', 'january': 'জানুয়ারি', 'jan': 'জানুয়ারি', '1': 'জানুয়ারি',
+        'ফেব্রুয়ারি': 'ফেব্রুয়ারি', 'february': 'ফেব্রুয়ারি', 'feb': 'ফেব্রুয়ারি', '2': 'ফেব্রুয়ারি',
+        'মার্চ': 'মার্চ', 'march': 'মার্চ', 'mar': 'মার্চ', '3': 'মার্চ',
+        'এপ্রিল': 'এপ্রিল', 'april': 'এপ্রিল', 'apr': 'এপ্রিল', '4': 'এপ্রিল',
+        'মে': 'মে', 'may': 'মে', '5': 'মে',
+        'জুন': 'জুন', 'june': 'জুন', 'jun': 'জুন', '6': 'জুন',
+        'জুলাই': 'জুলাই', 'july': 'জুলাই', 'jul': 'জুলাই', '7': 'জুলাই',
+        'আগস্ট': 'আগস্ট', 'august': 'আগস্ট', 'aug': 'আগস্ট', '8': 'আগস্ট',
+        'সেপ্টেম্বর': 'সেপ্টেম্বর', 'september': 'সেপ্টেম্বর', 'sep': 'সেপ্টেম্বর', '9': 'সেপ্টেম্বর',
+        'অক্টোবর': 'অক্টোবর', 'october': 'অক্টোবর', 'oct': 'অক্টোবর', '10': 'অক্টোবর',
+        'নভেম্বর': 'নভেম্বর', 'november': 'নভেম্বর', 'nov': 'নভেম্বর', '11': 'নভেম্বর',
+        'ডিসেম্বর': 'ডিসেম্বর', 'december': 'ডিসেম্বর', 'dec': 'ডিসেম্বর', '12': 'ডিসেম্বর'
+    };
+    
     const months = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
     const container = document.getElementById('monthsContainer');
     container.innerHTML = '<div class="col-span-2 text-center text-gray-400 text-sm py-2"><i class="fas fa-spinner fa-spin"></i> লোড হচ্ছে...</div>';
@@ -564,30 +577,53 @@ async function populateMonths() {
     const sb = await initSupabase();
     let paidMonths = [], pendingMonths = [];
     
-    if (sb && selectedYear) {
+    if (sb && selectedYear && currentMember.member_id) {
         try {
-            // ✅ p_member_int ব্যবহার
+            // ✅ p_member_text ব্যবহার (payments.member_id = text)
             const { data, error } = await sb.rpc('get_member_payment_months', {
-                p_member_int: currentMember.id || null,
-                p_member_text: currentMember.member_id || null,
+                p_member_int: null,
+                p_member_text: currentMember.member_id,
                 p_year: parseInt(selectedYear)
             });
+            
+            console.log('📥 RPC response:', data, 'error:', error);
             
             if (error) {
                 console.error('❌ Month fetch error:', error);
             } else if (data) {
                 data.forEach(p => {
-                    if (String(p.year) !== String(selectedYear)) return;
-                    if ((p.member_type || 'term') !== 'term') return;
-                    const pMonth = String(p.month || '').trim();
-                    const matched = months.find(m => m === pMonth || m.toLowerCase() === pMonth.toLowerCase());
-                    if (!matched) return;
-                    if (p.status === 'approved') paidMonths.push(matched);
-                    else if (p.status === 'pending') pendingMonths.push(matched);
+                    // year তুলনা
+                    const dbYear = String(p.year || '').trim();
+                    if (dbYear !== String(selectedYear)) {
+                        console.log('⏭️ Year mismatch:', dbYear, 'vs', selectedYear);
+                        return;
+                    }
+                    
+                    // member_type তুলনা (case-insensitive)
+                    const mt = String(p.member_type || 'term').toLowerCase().trim();
+                    if (mt !== 'term' && mt !== 'মেয়াদী') {
+                        console.log('⏭️ member_type mismatch:', mt);
+                        return;
+                    }
+                    
+                    // month নাম ম্যাচ
+                    const rawMonth = String(p.month || '').trim();
+                    const lowerMonth = rawMonth.toLowerCase();
+                    const normalized = monthMap[rawMonth] || monthMap[lowerMonth];
+                    
+                    if (!normalized) {
+                        console.warn('⚠️ Unknown month:', rawMonth);
+                        return;
+                    }
+                    
+                    if (p.status === 'approved') paidMonths.push(normalized);
+                    else if (p.status === 'pending') pendingMonths.push(normalized);
                 });
             }
         } catch(e) { console.error('❌ RPC exception:', e); }
     }
+    
+    console.log('📊 Paid months:', paidMonths, '| Pending months:', pendingMonths);
     
     container.innerHTML = '';
     months.forEach(month => {
@@ -664,7 +700,6 @@ async function searchMember() {
             document.getElementById('displayMemberName').innerText = data.full_name || 'নাম নেই';
             document.getElementById('displayMemberId').innerText = data.member_id || data.id;
             document.getElementById('displayMemberMobile').innerText = data.mobile || '-';
-            // ✅ refer_code ব্যবহার
             document.getElementById('displayReferCode').innerText = data.refer_code || '-';
             document.getElementById('displayJoinDate').innerText = formatDate(data.join_date);
             document.getElementById('displayApprovedDate').innerText = formatDate(data.approved_at);
@@ -835,10 +870,10 @@ async function generateSlip() {
         const sb = await initSupabase();
         if (sb) {
             try {
-                // ✅ p_member_int ব্যবহার
+                // ✅ p_member_text ব্যবহার
                 const { data, error } = await sb.rpc('get_member_payment_months', {
-                    p_member_int: currentMember.id || null,
-                    p_member_text: currentMember.member_id || null,
+                    p_member_int: null,
+                    p_member_text: currentMember.member_id,
                     p_year: parseInt(selectedYear)
                 });
                 if (!error && data && data.length > 0) {
@@ -1022,7 +1057,7 @@ function closeSuccessMessage() {
 }
 
 // ============================================
-// Payments সেভ — member_id String হিসেবে
+// Payments সেভ — member_id = currentMember.member_id (text)
 // ============================================
 async function savePaymentToSupabase(months, amount, method, details, slipNo, verificationCode, receiptHash, memberType, note) {
     const sb = await initSupabase();
@@ -1032,8 +1067,8 @@ async function savePaymentToSupabase(months, amount, method, details, slipNo, ve
     const memberBranchName = await getBranchName(currentMember.branch_id);
     let successCount = 0, errors = [];
     
-    // ✅ payments.member_id = text → String()
-    const memberKey = String(currentMember.id);
+    // ✅ payments.member_id = text → member_id (TUKN-...) ব্যবহার
+    const memberKey = currentMember.member_id;
     
     if (memberType === 'current') {
         const paymentData = {
@@ -1077,7 +1112,7 @@ async function savePaymentToSupabase(months, amount, method, details, slipNo, ve
                 member_name: currentMember.full_name,
                 mobile: currentMember.mobile,
                 month: month,
-                year: String(selectedYear),  // ✅ year = text
+                year: String(selectedYear),
                 amount: currentMember.monthly_savings || 500,
                 payment_method: method,
                 status: 'pending',
@@ -1141,7 +1176,7 @@ document.getElementById('currentAmount')?.addEventListener('input', updateTotalA
 
 initSupabase();
 populateYears();
-console.log('✅ TUKNBD Savings Page Loaded — Final version with all fixes');
+console.log('✅ TUKNBD Savings Page Loaded — Final version (p_member_text + member_id text)');
 </script>
 </body>
 </html>
