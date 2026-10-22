@@ -32006,24 +32006,115 @@ document.getElementById('balanceAdjustmentForm')?.addEventListener('submit', asy
                             
                             // ✅ ৪. মূল টেবিলে রেকর্ড
                             if (isDep) {
-                                await client.from('payments').insert([{
+                                // ============================================================
+                                // ✅ ৪.১: Month/Year normalize (বাংলা নাম নিশ্চিত করুন)
+                                // ============================================================
+                                const BANGLA_MONTHS = [
+                                    'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল',
+                                    'মে', 'জুন', 'জুলাই', 'আগস্ট',
+                                    'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
+                                ];
+                                
+                                let monthValue = String(data.month || '').trim();
+                                if (/^\d+$/.test(monthValue)) {
+                                    const idx = parseInt(monthValue) - 1;
+                                    monthValue = BANGLA_MONTHS[idx] || monthValue;
+                                }
+                                const yearValue = String(data.year || '').trim();
+                                
+                                console.log('🔍 Payments check:', {
                                     member_id: data.member_id,
-                                    member_name: data.member_name,
-                                    mobile: data.member_mobile,
-                                    month: data.month,
-                                    year: data.year,
-                                    amount: amount,
-                                    payment_method: data.payment_method,
-                                    transaction_id: data.transaction_id,
-                                    status: 'approved',
-                                    submitted_at: data.requested_at,
-                                    approved_by: adminName,
-                                    approved_at: getBangladeshTime(),
-                                    voucher_slip_no: data.voucher_no,
-                                    note: data.note || `Approved by ${adminName}`,
-                                    is_direct_deposit: true
-                                }]);
+                                    month: monthValue,
+                                    year: yearValue
+                                });
+                                
+                                // ============================================================
+                                // ✅ ৪.২: পুরনো pending রেকর্ড খুঁজুন
+                                // ============================================================
+                                const { data: existingPending, error: checkErr } = await client
+                                    .from('payments')
+                                    .select('id')
+                                    .eq('member_id', data.member_id)
+                                    .eq('month', monthValue)
+                                    .eq('year', yearValue)
+                                    .eq('status', 'pending')
+                                    .maybeSingle();
+                                
+                                if (checkErr) {
+                                    console.warn('⚠️ Pending check warning:', checkErr);
+                                }
+                                
+                                if (existingPending) {
+                                    // ============================================================
+                                    // ✅ ৪.৩: পুরনো pending UPDATE করুন (নতুন insert নয়)
+                                    // ============================================================
+                                    console.log('🔄 পুরনো pending payments UPDATE:', existingPending.id);
+                                    
+                                    const { error: updateErr } = await client
+                                        .from('payments')
+                                        .update({
+                                            status: 'approved',
+                                            approved_by: adminName,
+                                            approved_at: getBangladeshTime(),
+                                            voucher_slip_no: data.voucher_no,
+                                            is_direct_deposit: true,
+                                            note: data.note || `Approved by ${adminName}`,
+                                            updated_at: getBangladeshTime()
+                                        })
+                                        .eq('id', existingPending.id);
+                                    
+                                    if (updateErr) {
+                                        console.error('❌ Payments UPDATE error:', updateErr);
+                                        throw updateErr;
+                                    }
+                                    
+                                    console.log('✅ পুরনো pending approved হয়েছে:', existingPending.id);
+                                    
+                                } else {
+                                    // ============================================================
+                                    // ✅ ৪.৪: পুরনো নেই → নতুন INSERT (user_uuid সহ)
+                                    // ============================================================
+                                    console.log('🆕 নতুন payments রেকর্ড insert');
+                                    
+                                    // ✅ সদস্যের user_uuid লোড (RLS এর জন্য)
+                                    const { data: memberForUuid } = await client
+                                        .from('members')
+                                        .select('user_uuid, user_id')
+                                        .eq('member_id', data.member_id)
+                                        .maybeSingle();
+                                    
+                                    const { error: insertErr } = await client
+                                        .from('payments')
+                                        .insert([{
+                                            member_id: data.member_id,
+                                            member_name: data.member_name,
+                                            mobile: data.member_mobile,
+                                            month: monthValue,
+                                            year: yearValue,
+                                            amount: amount,
+                                            payment_method: data.payment_method,
+                                            transaction_id: data.transaction_id,
+                                            status: 'approved',
+                                            submitted_at: data.requested_at,
+                                            approved_by: adminName,
+                                            approved_at: getBangladeshTime(),
+                                            voucher_slip_no: data.voucher_no,
+                                            note: data.note || `Approved by ${adminName}`,
+                                            is_direct_deposit: true,
+                                            user_uuid: memberForUuid?.user_uuid || null,
+                                            user_id: memberForUuid?.user_id || null,
+                                            updated_at: getBangladeshTime()
+                                        }]);
+                                    
+                                    if (insertErr) {
+                                        console.error('❌ Payments INSERT error:', insertErr);
+                                        throw insertErr;
+                                    }
+                                    
+                                    console.log('✅ নতুন payments insert সম্পূর্ণ');
+                                }
                             } else {
+                                // ✅ উত্তোলন — আগের মতোই (withdrawals টেবিলে insert)
                                 await client.from('withdrawals').insert([{
                                     member_id: data.member_id,
                                     member_name: data.member_name,
