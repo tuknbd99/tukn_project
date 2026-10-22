@@ -33693,109 +33693,195 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     
                     async function handleDirectDepositSubmit() {
-                        console.log('💰 Direct Deposit Submit...');
-                        
-                        const member = window._currentDepositMember;
-                        if (!member) { showToast('❌ প্রথমে সদস্য খুঁজুন!', 'error'); return; }
-                        
-                        const month = document.getElementById('depositMonth')?.value;
-                        const amount = parseFloat(document.getElementById('depositAmount')?.value) || 0;
-                        const method = document.getElementById('depositMethod')?.value || 'cash';
-                        const transactionId = document.getElementById('depositTransactionId')?.value?.trim() || '';
-                        const note = document.getElementById('depositNote')?.value?.trim() || '';
-                        const confirmChecked = document.getElementById('depositConfirm')?.checked;
-                        
-                        if (!month) { showToast('❌ মাস দিন!', 'error'); return; }
-                        if (amount <= 0) { showToast('❌ সঠিক পরিমাণ দিন!', 'error'); return; }
-                        if (!confirmChecked) { showToast('❌ চেকবক্স টিক দিন!', 'error'); return; }
-                        
-                        const useManual = document.getElementById('depositUseManualVoucher')?.checked || false;
-                        let voucherNo = useManual
-                            ? document.getElementById('depositManualVoucher')?.value?.trim() || ''
-                            : document.getElementById('depositAutoVoucher')?.value?.trim() || '';
-                        
-                        if (!voucherNo || voucherNo.includes('লোড')) {
-                            voucherNo = `DEP-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
-                        }
-                        
-                        const isSuper = typeof isSuperAdmin === 'function' ? isSuperAdmin() : false;
-                        const adminName = currentAdmin?.full_name || currentAdmin?.name || currentAdmin?.username || 'Admin';
-                        
-                        if (!window.confirm(`💰 জমা নিশ্চিতকরণ\n\nভাউচার: ${voucherNo}\nসদস্য: ${member.full_name}\nপরিমাণ: ${formatAmountWithText(amount)}`)) return;
-                        
-                        const client = initSupabaseClient();
-                        if (!client) { showToast('❌ সংযোগ সমস্যা!', 'error'); return; }
-                        
-                        const submitBtn = document.querySelector('#directDepositForm button[type="submit"]');
-                        const originalText = submitBtn?.innerHTML || 'জমা নিশ্চিত করুন';
-                        if (submitBtn) {
-                            submitBtn.disabled = true;
-                            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> প্রক্রিয়াকরণ...';
-                        }
-                        
-                        try {
-                            await client.from('pending_direct_deposits').insert([{
-                                voucher_no: voucherNo,
-                                member_id: member.member_id,
-                                member_name: member.full_name,
-                                member_mobile: member.mobile,
-                                month: month.split('-')[1],
-                                year: month.split('-')[0],
-                                amount: amount,
-                                payment_method: method,
-                                transaction_id: transactionId || null,
-                                note: note,
-                                requested_by: adminName,
-                                requested_at: getBangladeshTime(),
-                                status: isSuper ? 'approved' : 'pending',
-                                approved_by: isSuper ? adminName : null,
-                                approved_at: isSuper ? getBangladeshTime() : null
-                            }]);
-                            
-                            if (isSuper) {
-                                const newBalance = (Number(member.balance) || 0) + amount;
-                                await client.from('members')
-                                    .update({ balance: newBalance, updated_at: getBangladeshTime() })
-                                    .eq('member_id', member.member_id);
-                                
-                                await client.from('payments').insert([{
-                                    member_id: member.member_id,
-                                    member_name: member.full_name,
-                                    mobile: member.mobile,
-                                    month: month.split('-')[1],
-                                    year: month.split('-')[0],
-                                    amount: amount,
-                                    payment_method: method,
-                                    transaction_id: transactionId || null,
-                                    status: 'approved',
-                                    submitted_at: getBangladeshTime(),
-                                    approved_by: adminName,
-                                    approved_at: getBangladeshTime(),
-                                    voucher_slip_no: voucherNo,
-                                    note: note || `Direct by ${adminName}`,
-                                    is_direct_deposit: true
-                                }]);
-                            }
-                            
-                            showToast(isSuper ? `✅ ${formatAmountWithText(amount)} জমা সফল!` : `⏳ পেন্ডিং!`, isSuper ? 'success' : 'info');
-                            
-                            if (typeof clearDepositForm === 'function') clearDepositForm();
-                            if (typeof loadMyDirectDeposits === 'function') await loadMyDirectDeposits();
-                            if (typeof updatePendingDirectBadge === 'function') await updatePendingDirectBadge();
-                            if (typeof loadMembers === 'function') await loadMembers();
-                            if (typeof loadRealDashboard === 'function') await loadRealDashboard();
-                            
-                        } catch(e) {
-                            console.error('❌ Deposit error:', e);
-                            showToast(`❌ ব্যর্থ: ${e.message}`, 'error');
-                        } finally {
-                            if (submitBtn) {
-                                submitBtn.disabled = false;
-                                submitBtn.innerHTML = originalText;
-                            }
-                        }
-                    }
-
+    console.log('💰 Direct Deposit Submit...');
+    
+    // ✅ Step 1: গ্লোবাল ভেরিয়েবল
+    let member = window._currentDepositMember;
+    
+    // ✅ Step 2: ফলব্যাক — DOM hidden input থেকে সদস্য খুঁজুন
+    if (!member) {
+        const memberId = document.getElementById('depositMemberId')?.value?.trim();
+        if (memberId) {
+            const result = await smartSearchMember(memberId);
+            if (result && result.member) {
+                member = result.member;
+                window._currentDepositMember = member;
+                console.log('✅ Fallback সদস্য পাওয়া গেছে:', member.full_name);
+            }
+        }
+    }
+    
+    // ✅ Step 3: তবুও না পেলে error
+    if (!member) { 
+        showToast('❌ প্রথমে সদস্য খুঁজুন!', 'error'); 
+        return; 
+    }
+    
+    const month = document.getElementById('depositMonth')?.value;
+    const amount = parseFloat(document.getElementById('depositAmount')?.value) || 0;
+    const method = document.getElementById('depositMethod')?.value || 'cash';
+    const transactionId = document.getElementById('depositTransactionId')?.value?.trim() || '';
+    const note = document.getElementById('depositNote')?.value?.trim() || '';
+    const confirmChecked = document.getElementById('depositConfirm')?.checked;
+    
+    if (!month) { showToast('❌ মাস দিন!', 'error'); return; }
+    if (amount <= 0) { showToast('❌ সঠিক পরিমাণ দিন!', 'error'); return; }
+    if (!confirmChecked) { showToast('❌ চেকবক্স টিক দিন!', 'error'); return; }
+    
+    const useManual = document.getElementById('depositUseManualVoucher')?.checked || false;
+    let voucherNo = useManual
+        ? document.getElementById('depositManualVoucher')?.value?.trim() || ''
+        : document.getElementById('depositAutoVoucher')?.value?.trim() || '';
+    
+    if (!voucherNo || voucherNo.includes('লোড')) {
+        voucherNo = `DEP-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+    }
+    
+    const isSuper = typeof isSuperAdmin === 'function' ? isSuperAdmin() : false;
+    const adminName = currentAdmin?.full_name || currentAdmin?.name || currentAdmin?.username || 'Admin';
+    
+    if (!window.confirm(
+        `💰 জমা নিশ্চিতকরণ\n\n` +
+        `ভাউচার: ${voucherNo}\n` +
+        `সদস্য: ${member.full_name}\n` +
+        `পরিমাণ: ${formatAmountWithText(amount)}`
+    )) return;
+    
+    const client = initSupabaseClient();
+    if (!client) { showToast('❌ সংযোগ সমস্যা!', 'error'); return; }
+    
+    const submitBtn = document.querySelector('#directDepositForm button[type="submit"]');
+    const originalText = submitBtn?.innerHTML || 'জমা নিশ্চিত করুন';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> প্রক্রিয়াকরণ...';
+    }
+    
+    try {
+        // ============================================================
+        // ✅ ধাপ ১: pending_direct_deposits এ insert (error চেক সহ)
+        // ============================================================
+        const { error: pendErr } = await client
+            .from('pending_direct_deposits')
+            .insert([{
+                voucher_no: voucherNo,
+                member_id: member.member_id,
+                member_name: member.full_name,
+                member_mobile: member.mobile,
+                month: month.split('-')[1],
+                year: month.split('-')[0],
+                amount: amount,
+                payment_method: method,
+                transaction_id: transactionId || null,
+                note: note,
+                requested_by: adminName,
+                requested_at: getBangladeshTime(),
+                status: isSuper ? 'approved' : 'pending',
+                approved_by: isSuper ? adminName : null,
+                approved_at: isSuper ? getBangladeshTime() : null
+            }]);
+        
+        if (pendErr) {
+            console.error('❌ Pending insert failed:', pendErr);
+            throw new Error('পেন্ডিং রেকর্ড তৈরি ব্যর্থ: ' + pendErr.message);
+        }
+        
+        // ============================================================
+        // ✅ ধাপ ২: Super admin হলে সরাসরি balance + payments
+        // ============================================================
+        if (isSuper) {
+            const oldBalance = Number(member.balance) || 0;
+            const newBalance = oldBalance + amount;
+            
+            // ✅ ২.১: balance বাড়ান
+            const { error: memErr } = await client
+                .from('members')
+                .update({ balance: newBalance, updated_at: getBangladeshTime() })
+                .eq('member_id', member.member_id);
+            
+            if (memErr) {
+                console.error('❌ Member balance update failed:', memErr);
+                throw new Error('ব্যালেন্স আপডেট ব্যর্থ: ' + memErr.message);
+            }
+            
+            // ✅ ২.২: payments টেবিলে insert (user_uuid + updated_at সহ)
+            const { error: payErr } = await client
+                .from('payments')
+                .insert([{
+                    member_id: member.member_id,
+                    member_name: member.full_name,
+                    mobile: member.mobile,
+                    month: month.split('-')[1],
+                    year: month.split('-')[0],
+                    amount: amount,
+                    payment_method: method,
+                    transaction_id: transactionId || null,
+                    status: 'approved',
+                    submitted_at: getBangladeshTime(),
+                    approved_by: adminName,
+                    approved_at: getBangladeshTime(),
+                    voucher_slip_no: voucherNo,
+                    note: note || `Direct by ${adminName}`,
+                    is_direct_deposit: true,
+                    user_uuid: member.user_uuid || null,   // ✅ RLS এর জন্য জরুরি
+                    user_id: member.user_id || null,       // ✅ সুপারিশ
+                    updated_at: getBangladeshTime()        // ✅ NOT NULL কলাম
+                }]);
+            
+            if (payErr) {
+                console.error('❌ Payments insert failed:', payErr);
+                console.error('   Details:', payErr.details);
+                console.error('   Hint:', payErr.hint);
+                console.error('   Code:', payErr.code);
+                
+                // ✅ Rollback balance
+                await client.from('members')
+                    .update({ balance: oldBalance, updated_at: getBangladeshTime() })
+                    .eq('member_id', member.member_id);
+                
+                // ✅ RLS error হলে স্পষ্ট মেসেজ
+                if (payErr.code === '42501' || payErr.message?.includes('policy')) {
+                    throw new Error(
+                        'পেমেন্ট রেকর্ড RLS-এ আটকে গেছে!\n' +
+                        'সদস্যের user_uuid মেলেনি বা সদস্য active নয়।'
+                    );
+                }
+                throw new Error('পেমেন্ট রেকর্ড ব্যর্থ: ' + payErr.message);
+            }
+            
+            console.log('✅ Balance + Payment দুটোই আপডেট হয়েছে');
+        }
+        
+        // ============================================================
+        // ✅ ধাপ ৩: সফল মেসেজ
+        // ============================================================
+        showToast(
+            isSuper 
+                ? `✅ ${formatAmountWithText(amount)} জমা সফল!` 
+                : `⏳ পেন্ডিং!`,
+            isSuper ? 'success' : 'info'
+        );
+        
+        // ============================================================
+        // ✅ ধাপ ৪: UI রিফ্রেশ
+        // ============================================================
+        if (typeof clearDepositForm === 'function') clearDepositForm();
+        if (typeof loadMyDirectDeposits === 'function') await loadMyDirectDeposits();
+        if (typeof updatePendingDirectBadge === 'function') await updatePendingDirectBadge();
+        if (typeof loadMembers === 'function') await loadMembers();
+        if (typeof loadRealDashboard === 'function') await loadRealDashboard();
+        
+    } catch(e) {
+        console.error('❌ Deposit error:', e);
+        showToast(`❌ ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalText;
+        }
+    }
+}
+    
 // ============================================================
 // 🎯 UTTOlon Reject করার ফাংশন — Prompt সহ (সম্পূর্ণ)
 // ✅ UTTOlon বাতিল হলে DB-এর referral_bonus ফেরত দেবে
