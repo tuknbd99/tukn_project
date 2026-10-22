@@ -3181,18 +3181,216 @@ function printMemberDetails() {
     setTimeout(() => w.print(), 400);
 }
 
-function searchMemberForTransfer() {
+// ============================================================
+// 🔄 MEMBER TRANSFER — সম্পূর্ণ কার্যকরী
+// ============================================================
+
+async function loadMemberTransfer() {
     const c = document.getElementById('transferContent');
     if (!c) return;
-    const query = document.getElementById('transferSearchInput').value.trim();
-    if (!query) {
-        c.innerHTML = `<div class="empty-state" style="padding:40px 20px;"><div class="empty-icon"><i class="fas fa-exchange-alt"></i></div><h3>সদস্য স্থানান্তর</h3></div>`;
+    
+    c.innerHTML = `<div class="empty-state" style="padding:40px 20px;">
+        <div class="empty-icon"><i class="fas fa-exchange-alt"></i></div>
+        <h3>সদস্য স্থানান্তর</h3>
+        <p>সদস্য আইডি বা মোবাইল দিয়ে সার্চ করুন</p>
+    </div>`;
+    
+    const input = document.getElementById('transferSearchInput');
+    if (input) {
+        input.value = '';
+        if (!input.dataset.transferListener) {
+            input.dataset.transferListener = 'true';
+            input.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') searchMemberForTransfer();
+            });
+        }
+    }
+}
+
+async function searchMemberForTransfer() {
+    const c = document.getElementById('transferContent');
+    if (!c || !supabaseClient || !BRANCH_ID) {
+        if (c) c.innerHTML = `<div class="text-center p-4" style="color:var(--danger);">❌ সংযোগ নেই</div>`;
         return;
     }
-    c.innerHTML = `<div class="text-center py-4"><div class="loading-spinner"></div></div>`;
-    setTimeout(() => {
-        c.innerHTML = `<div class="empty-state" style="padding:40px 20px;"><div class="empty-icon"><i class="fas fa-exchange-alt"></i></div><h3>স্থানান্তর ফিচার</h3><p>শীঘ্রই আসছে</p></div>`;
-    }, 800);
+    
+    const query = document.getElementById('transferSearchInput').value.trim();
+    if (!query) {
+        c.innerHTML = `<div class="empty-state" style="padding:40px 20px;">
+            <div class="empty-icon"><i class="fas fa-exchange-alt"></i></div>
+            <h3>সদস্য স্থানান্তর</h3>
+            <p>সদস্য আইডি বা মোবাইল লিখুন</p>
+        </div>`;
+        return;
+    }
+    
+    c.innerHTML = `<div class="text-center py-8">
+        <div class="loading-spinner"></div>
+        <p class="mt-2" style="color:var(--text-muted);">সার্চ করা হচ্ছে...</p>
+    </div>`;
+    
+    try {
+        const { data: members, error } = await safeQuery(
+            supabaseClient.from('members').select('*')
+                .or(`member_id.eq.${query},mobile.eq.${query}`).limit(1),
+            'transfer-search'
+        );
+        
+        if (error || !members?.length) {
+            c.innerHTML = `<div class="empty-state" style="padding:40px 20px;">
+                <div class="empty-icon" style="background:linear-gradient(135deg,#fee2e2,#fecaca); color:#dc2626;">
+                    <i class="fas fa-user-slash"></i>
+                </div>
+                <h3>সদস্য পাওয়া যায়নি</h3>
+                <p>আইডি বা মোবাইল চেক করুন</p>
+            </div>`;
+            return;
+        }
+        
+        const member = members[0];
+        const isFromMyBranch = await verifyMemberInBranch(member.member_id);
+        
+        const { data: branches } = await safeQuery(
+            supabaseClient.from('branches').select('id, branch_name, branch_code')
+                .neq('id', BRANCH_ID).order('branch_name'),
+            'transfer-branches'
+        );
+        
+        c.innerHTML = `
+            <div class="card" style="border:2px solid var(--primary-200);">
+                <div class="card-header">
+                    <h3><i class="fas fa-user"></i> ${member.full_name || 'Unknown'}</h3>
+                    ${isFromMyBranch 
+                        ? '<span class="status-badge status-active">✅ আপনার ব্রাঞ্চে আছে</span>' 
+                        : '<span class="status-badge status-pending">⚠️ আপনার ব্রাঞ্চে নেই</span>'}
+                </div>
+                <div class="card-body">
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                        <div class="p-3 rounded-lg" style="background:var(--bg-secondary);">
+                            <p class="text-xs" style="color:var(--text-muted);">সদস্য আইডি</p>
+                            <p class="font-bold" style="color:var(--text-primary);">${member.member_id}</p>
+                        </div>
+                        <div class="p-3 rounded-lg" style="background:var(--bg-secondary);">
+                            <p class="text-xs" style="color:var(--text-muted);">মোবাইল</p>
+                            <p class="font-bold" style="color:var(--text-primary);">${member.mobile || '-'}</p>
+                        </div>
+                        <div class="p-3 rounded-lg" style="background:var(--bg-secondary);">
+                            <p class="text-xs" style="color:var(--text-muted);">ব্যালেন্স</p>
+                            <p class="font-bold number" style="color:var(--primary-600);">${formatAmountWithText(member.balance || 0)}</p>
+                        </div>
+                        <div class="p-3 rounded-lg" style="background:var(--bg-secondary);">
+                            <p class="text-xs" style="color:var(--text-muted);">বর্তমান ব্রাঞ্চ</p>
+                            <p class="font-bold" style="color:var(--text-primary);">${member.branch_id ? 'Branch #' + member.branch_id : 'Unknown'}</p>
+                        </div>
+                    </div>
+                    
+                    ${isFromMyBranch ? `
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium mb-2" style="color:var(--text-secondary);">
+                                🎯 কোন ব্রাঞ্চে স্থানান্তর করবেন?
+                            </label>
+                            <select id="transferTargetBranch" class="form-select">
+                                <option value="">-- ব্রাঞ্চ নির্বাচন করুন --</option>
+                                ${(branches || []).map(b => `
+                                    <option value="${b.id}">${b.branch_name}${b.branch_code ? ' (' + b.branch_code + ')' : ''}</option>
+                                `).join('')}
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium mb-2" style="color:var(--text-secondary);">
+                                📝 কারণ (ঐচ্ছিক)
+                            </label>
+                            <textarea id="transferReason" class="form-input" rows="2" 
+                                placeholder="স্থানান্তরের কারণ..."></textarea>
+                        </div>
+                        <button onclick="performMemberTransfer('${member.member_id}')" 
+                            class="btn btn-success w-full py-2">
+                            <i class="fas fa-exchange-alt mr-2"></i> স্থানান্তর করুন
+                        </button>
+                    ` : `
+                        <div class="p-3 rounded-lg" style="background:#fef3c7; border:1px solid #fcd34d;">
+                            <p class="text-sm" style="color:#92400e;">
+                                ⚠️ এই সদস্য আপনার ব্রাঞ্চে নেই — স্থানান্তর করা যাবে না।
+                            </p>
+                        </div>
+                    `}
+                </div>
+            </div>
+        `;
+    } catch(e) {
+        console.error('❌ Transfer search error:', e);
+        c.innerHTML = `<div class="empty-state" style="padding:40px 20px;">
+            <div class="empty-icon" style="background:linear-gradient(135deg,#fee2e2,#fecaca); color:#dc2626;">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            <h3>সমস্যা হয়েছে</h3>
+            <p>${e.message}</p>
+        </div>`;
+    }
+}
+
+async function performMemberTransfer(memberId) {
+    const targetBranchEl = document.getElementById('transferTargetBranch');
+    const reasonEl = document.getElementById('transferReason');
+    
+    if (!targetBranchEl || !targetBranchEl.value) {
+        showToast('⚠️ ব্রাঞ্চ নির্বাচন করুন!', 'warning');
+        return;
+    }
+    
+    const targetBranchId = targetBranchEl.value;
+    const reason = reasonEl?.value.trim() || '';
+    
+    if (!confirm('স্থানান্তর নিশ্চিত করুন?')) return;
+    if (!supabaseClient || !BRANCH_ID) return;
+    
+    try {
+        // 1. branch_members আপডেট
+        await supabaseClient.from('branch_members')
+            .update({ branch_id: targetBranchId, status: 'pending' })
+            .eq('member_id', memberId)
+            .eq('branch_id', BRANCH_ID);
+        
+        // 2. members আপডেট
+        await supabaseClient.from('members')
+            .update({ branch_id: targetBranchId })
+            .eq('member_id', memberId);
+        
+        // 3. transfer log
+        try {
+            await supabaseClient.from('branch_transfer_logs').insert([{
+                member_id: memberId,
+                from_branch_id: BRANCH_ID,
+                from_branch_name: BRANCH_NAME,
+                to_branch_id: parseInt(targetBranchId),
+                reason: reason || null,
+                transferred_by: ADMIN_NAME,
+                transferred_at: new Date().toISOString()
+            }]);
+        } catch(e) { console.warn('Transfer log skip:', e); }
+        
+        // 4. audit log
+        try {
+            await supabaseClient.from('audit_logs').insert([{
+                admin_name: ADMIN_NAME,
+                branch_id: BRANCH_ID,
+                action: 'TRANSFER_MEMBER',
+                table_name: 'members',
+                record_id: memberId,
+                description: `Transferred from ${BRANCH_NAME} to branch #${targetBranchId}`,
+                created_at: new Date().toISOString()
+            }]);
+        } catch(e) {}
+        
+        showToast('✅ স্থানান্তর সম্পূর্ণ!', 'success');
+        invalidateMemberCache();
+        loadMembers();
+        loadMemberTransfer();
+        updateBadges();
+    } catch(e) {
+        console.error('❌ Transfer error:', e);
+        showToast('❌ স্থানান্তর ব্যর্থ: ' + e.message, 'error');
+    }
 }
 
 // ============================================================
@@ -4898,6 +5096,7 @@ Object.assign(window, {
     hasPermission, formatAmount, formatAmountWithText, showPermissionDenied,
     closePermissionDenied, updateBadges, checkAuth, refreshPermissions,
     generateBranchMenu, updatePermCount, searchMember, searchMemberForTransfer,
+    performMemberTransfer,   // ✅ নতুন যোগ
     addNewMember, approveMember, rejectMember, approvePayment, rejectPayment,
     approveWithdrawal, rejectWithdrawal, approveLoan, rejectLoan,
     approveLoanPayment, rejectLoanPayment, submitLoan, directDeposit,
