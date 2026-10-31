@@ -13084,54 +13084,40 @@ async function approvePayment(paymentId) {
             // ✅ এখানে থামবেন না, পেমেন্ট status আপডেট করুন
         }
         
-        // ============================================================
-        // ✅ STEP 3: Payment status আপডেট (parseInt + select চেক)
-        // ============================================================
-        console.log('🔍 STEP 3: ID টাইপ:', typeof id, '| মান:', id, '| parseInt:', parseInt(id, 10));
-        
-        // ✅ প্রথমে চেক করুন payment টি আছে কিনা
-        const { data: checkPayment, error: checkError } = await client
-            .from('payments')
-            .select('id, status, member_id')
-            .eq('id', parseInt(id, 10))
-            .maybeSingle();
-        
-        console.log('🔍 STEP 3: Payment চেক ফলাফল:', checkPayment);
-        console.log('🔍 STEP 3: Payment চেক এরর:', checkError);
-        
-        if (!checkPayment) {
-            console.error('❌ STEP 3: Payment পাওয়া যায়নি! ID:', id);
-            showToast(`❌ Payment #${id} পাওয়া যায়নি!`, 'error');
-            return;
-        }
-        
-        // ✅ এখন UPDATE করুন
-        const { data: updateResult, error: statusError } = await client
-            .from('payments')
-            .update({
-                status: 'approved',
-                approved_by: currentAdmin?.username || currentAdmin?.full_name || 'সুপার অ্যাডমিন',
-                approved_at: getBangladeshTime(),
-                updated_at: getBangladeshTime()
-            })
-            .eq('id', parseInt(id, 10))
-            .select();
-        
-        console.log('🔍 STEP 3: Update ফলাফল:', updateResult);
-        console.log('🔍 STEP 3: Update এরর:', statusError);
-        
-        if (statusError) {
-            console.error('❌ STEP 3: Payment status update ব্যর্থ:', statusError);
-            throw statusError;
-        }
-        
-        if (!updateResult || updateResult.length === 0) {
-            console.error('❌ STEP 3: Payment status আপডেট হয়নি! (0 rows affected)');
-            showToast(`❌ Payment #${id} status আপডেট ব্যর্থ`, 'error');
-            return;
-        }
-        
-        console.log('✅ STEP 3: Payment status আপডেট সম্পূর্ণ:', updateResult[0].status);
+
+    // ============================================================
+// ✅ STEP 3: Payment status আপডেট (RPC দিয়ে)
+// ============================================================
+const adminName = currentAdmin?.username 
+              || currentAdmin?.full_name 
+              || 'সুপার অ্যাডমিন';
+
+console.log('🔍 STEP 3: RPC কল — payment_id:', parseInt(id, 10));
+
+const { data: rpcResult, error: rpcError } = await client.rpc(
+    'approve_payment_admin',
+    {
+        p_payment_id: parseInt(id, 10),
+        p_approved_by: adminName
+    }
+);
+
+console.log('🔍 STEP 3: RPC ফলাফল:', rpcResult);
+console.log('🔍 STEP 3: RPC এরর:', rpcError);
+
+if (rpcError) {
+    console.error('❌ STEP 3: RPC error:', rpcError);
+    showToast('❌ Payment status আপডেট ব্যর্থ: ' + rpcError.message, 'error');
+    throw rpcError;
+}
+
+if (!rpcResult || rpcResult.success !== true) {
+    console.error('❌ STEP 3: RPC failed:', rpcResult);
+    showToast('❌ ' + (rpcResult?.message || 'Payment status আপডেট ব্যর্থ'), 'error');
+    return;
+}
+
+console.log('✅ STEP 3: Payment status আপডেট সম্পূর্ণ:', rpcResult.message);
         
         // ============================================================
         // ✅ STEP 4: Referral Bonus Distribution (ব্যর্থ হলেও পেমেন্ট approve থাকবে)
