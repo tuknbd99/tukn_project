@@ -12594,7 +12594,12 @@ async function updateAllBadges() {
 }
 
 // ============================================================
-// ✅ loadPendingPayments() — Numeric ID → Formatted ID Match
+// ✅ FINAL v2: loadPendingPayments() — Multi-Layer Matching
+// ✅ PRIORITY 1: formatted member_id (exact)
+// ✅ PRIORITY 2: numeric id (exact)
+// ✅ PRIORITY 3: mobile + last 4 digits (combined — 가장 নির্ভুল)
+// ✅ PRIORITY 4: mobile (exact) — fallback
+// ✅ PRIORITY 5: last 4 digits (শুধু unique হলে)
 // ============================================================
 async function loadPendingPayments() {
     const loadingDiv = document.getElementById('paymentLoading');
@@ -12611,7 +12616,7 @@ async function loadPendingPayments() {
     try {
         console.log('🔍 loadPendingPayments() START');
         
-        // ✅ STEP 1: সব pending payment লোড (কোনো filter ছাড়া)
+        // ✅ STEP 1: সব pending payment লোড
         const { data: payments, error } = await client
             .from('payments')
             .select('*')
@@ -12632,35 +12637,138 @@ async function loadPendingPayments() {
             return;
         }
         
-        // ✅ STEP 2: Numeric IDs বের করুন
-        const numericIds = payments
-            .map(p => parseInt(p.member_id, 10))
-            .filter(id => !isNaN(id));
-        
-        console.log('🔢 Numeric IDs:', numericIds);
-        
-        // ✅ STEP 3: Members লোড (numeric id দিয়ে)
+        // ✅ STEP 2: সব সদস্য লোড করুন
         const { data: members, error: memberError } = await client
             .from('members')
-            .select('id, member_id, full_name, mobile, present_district, status')
-            .in('id', numericIds);
+            .select('id, member_id, full_name, mobile, present_district, status');
         
         if (memberError) {
             console.warn('⚠️ Member load warning:', memberError);
         }
         
-        console.log(`👥 ${members?.length || 0} টি member পাওয়া গেছে`);
+        const allMembers = members || [];
+        console.log(`👥 ${allMembers.length} টি member লোড হয়েছে`);
         
-        // ✅ STEP 4: Member Map তৈরি (numeric id → member data)
-        const memberMap = {};
-        (members || []).forEach(m => {
-            memberMap[String(m.id)] = m;
+        // ✅ STEP 3: Lookup Maps তৈরি করুন
+        const memberByIdMap = {};              // numeric id
+        const memberByMemberIdMap = {};        // formatted member_id
+        const memberByMobileMap = {};          // mobile (exact)
+        const memberByMobileLast4Map = {};     // "mobile|last4" → member[] (combined key)
+        const memberByLast4Map = {};           // last4 → member[]
+        
+        allMembers.forEach(m => {
+            // ✅ Numeric ID
+            if (m.id) {
+                memberByIdMap[String(m.id)] = m;
+            }
+            
+            // ✅ Formatted member_id
+            if (m.member_id) {
+                memberByMemberIdMap[String(m.member_id)] = m;
+                
+                // ✅ Last 4 digits (member_id থেকে)
+                const digits = String(m.member_id).replace(/\D/g, '');
+                if (digits.length >= 4) {
+                    const last4 = digits.slice(-4);
+                    if (!memberByLast4Map[last4]) {
+                        memberByLast4Map[last4] = [];
+                    }
+                    memberByLast4Map[last4].push(m);
+                }
+            }
+            
+            // ✅ Mobile (exact)
+            if (m.mobile) {
+                const cleanMobile = String(m.mobile).replace(/\D/g, '');
+                if (cleanMobile) {
+                    memberByMobileMap[cleanMobile] = m;
+                    
+                    // ✅ Combined key: "mobile|last4"
+                    if (m.member_id) {
+                        const digits = String(m.member_id).replace(/\D/g, '');
+                        if (digits.length >= 4) {
+                            const last4 = digits.slice(-4);
+                            const combinedKey = `${cleanMobile}|${last4}`;
+                            if (!memberByMobileLast4Map[combinedKey]) {
+                                memberByMobileLast4Map[combinedKey] = [];
+                            }
+                            memberByMobileLast4Map[combinedKey].push(m);
+                        }
+                    }
+                }
+            }
         });
         
-        // ✅ STEP 5: Payment + Member Merge
+        console.log(`📋 Lookup Maps তৈরি:`);
+        console.log(`   - By ID: ${Object.keys(memberByIdMap).length}`);
+        console.log(`   - By Member ID: ${Object.keys(memberByMemberIdMap).length}`);
+        console.log(`   - By Mobile: ${Object.keys(memberByMobileMap).length}`);
+        console.log(`   - By Mobile+Last4: ${Object.keys(memberByMobileLast4Map).length}`);
+        console.log(`   - By Last 4: ${Object.keys(memberByLast4Map).length}`);
+        
+        // ✅ STEP 4: প্রতিটি Payment-এর জন্য Multi-Layer Lookup
         pendingPaymentsData = payments.map(p => {
-            const numericId = String(p.member_id || '').trim();
-            const member = memberMap[numericId];
+            const rawMemberId = String(p.member_id || '').trim();
+            const rawMobile = String(p.mobile || '').trim();
+            const cleanMobile = rawMobile.replace(/\D/g, '');
+            
+            let member = null;
+            let matchMethod = '';
+            
+            // ✅ PRIORITY 1: Formatted member_id (exact)
+            if (rawMemberId && memberByMemberIdMap[rawMemberId]) {
+                member = memberByMemberIdMap[rawMemberId];
+                matchMethod = '🆔 member_id';
+            }
+            
+            // ✅ PRIORITY 2: Numeric id (exact)
+            if (!member) {
+                const numericId = parseInt(rawMemberId, 10);
+                if (!isNaN(numericId) && memberByIdMap[String(numericId)]) {
+                    member = memberByIdMap[String(numericId)];
+                    matchMethod = '🔢 numeric id';
+                }
+            }
+            
+            // ✅ PRIORITY 3: Mobile + Last 4 digits (combined — সবচেয়ে নির্ভুল)
+            if (!member && cleanMobile && rawMemberId) {
+                const paymentDigits = rawMemberId.replace(/\D/g, '');
+                if (paymentDigits.length >= 4) {
+                    const last4 = paymentDigits.slice(-4);
+                    const combinedKey = `${cleanMobile}|${last4}`;
+                    const candidates = memberByMobileLast4Map[combinedKey];
+                    
+                    // ✅ যদি ঠিক একজন member পাওয়া যায়
+                    if (candidates && candidates.length === 1) {
+                        member = candidates[0];
+                        matchMethod = '📱+🔢 mobile+last4';
+                    } else if (candidates && candidates.length > 1) {
+                        console.warn(`⚠️ Payment #${p.id}: Mobile+Last4 "${combinedKey}" এ ${candidates.length} টি member - ambiguous, skip`);
+                    }
+                }
+            }
+            
+            // ✅ PRIORITY 4: Mobile (exact) — fallback
+            if (!member && cleanMobile && memberByMobileMap[cleanMobile]) {
+                member = memberByMobileMap[cleanMobile];
+                matchMethod = '📱 mobile';
+            }
+            
+            // ✅ PRIORITY 5: Last 4 digits (শুধু যদি unique হয়)
+            if (!member && rawMemberId) {
+                const paymentDigits = rawMemberId.replace(/\D/g, '');
+                if (paymentDigits.length >= 4) {
+                    const last4 = paymentDigits.slice(-4);
+                    const candidates = memberByLast4Map[last4];
+                    
+                    if (candidates && candidates.length === 1) {
+                        member = candidates[0];
+                        matchMethod = '🔢 last4';
+                    } else if (candidates && candidates.length > 1) {
+                        console.warn(`⚠️ Payment #${p.id}: Last4 "${last4}" এ ${candidates.length} টি member - ambiguous, skip`);
+                    }
+                }
+            }
             
             if (member) {
                 return {
@@ -12671,24 +12779,27 @@ async function loadPendingPayments() {
                     _realDistrict: member.present_district,
                     _realMemberStatus: member.status,
                     _numericId: member.id,
-                    _matched: true
+                    _matched: true,
+                    _matchMethod: matchMethod
                 };
             } else {
                 return {
                     ...p,
                     _realMemberId: p.member_id,
                     _realFullName: p.member_name || 'অজানা',
-                    _realMobile: '',
-                    _matched: false
+                    _realMobile: p.mobile || '',
+                    _matched: false,
+                    _matchMethod: '❌ none'
                 };
             }
         });
         
+        // ✅ STEP 5: Report
         const matchedCount = pendingPaymentsData.filter(p => p._matched).length;
         console.log(`✅ ${matchedCount}/${pendingPaymentsData.length} টি payment match হয়েছে`);
         
         pendingPaymentsData.forEach(p => {
-            console.log(`   ${p._matched ? '✅' : '⚠️'} #${p.id}: "${p.member_id}" → "${p._realMemberId}" (${p._realFullName})`);
+            console.log(`   ${p._matched ? '✅' : '⚠️'} #${p.id}: "${p.member_id}" (mobile: ${p.mobile || '-'}) → "${p._realMemberId}" (${p._realFullName}) [${p._matchMethod}]`);
         });
         
         if (loadingDiv) loadingDiv.style.display = 'none';
