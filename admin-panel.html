@@ -12882,11 +12882,12 @@ async function approvePayment(paymentId) {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
         // ============================================================
-        // ✅ STEP 1: সদস্য খোঁজা (member_id → mobile)
+        // ✅ STEP 1: সদস্য খোঁজা (formatted member_id → numeric id → mobile)
         // ============================================================
         let member = null;
         let matchMethod = '';
         
+        // ✅ PRIORITY 1: Formatted member_id দিয়ে (সবচেয়ে নির্ভুল)
         if (payment.member_id && payment.member_id.trim() !== '') {
             const { data: byId } = await client
                 .from('members')
@@ -12895,10 +12896,29 @@ async function approvePayment(paymentId) {
                 .maybeSingle();
             if (byId) {
                 member = byId;
-                matchMethod = '🆔 member_id';
+                matchMethod = '🆔 formatted member_id';
+                console.log(`✅ STEP 1: Formatted ID দিয়ে সদস্য পাওয়া গেছে: ${member.full_name}`);
             }
         }
         
+        // ✅ PRIORITY 2: Numeric ID দিয়ে (পুরনো ডেটার জন্য)
+        if (!member) {
+            const numericId = parseInt(payment.member_id, 10);
+            if (!isNaN(numericId)) {
+                const { data: byNumericId } = await client
+                    .from('members')
+                    .select('member_id, full_name, mobile, status, referral_bonus, referral_count')
+                    .eq('id', numericId)
+                    .maybeSingle();
+                if (byNumericId) {
+                    member = byNumericId;
+                    matchMethod = '🔢 numeric id';
+                    console.log(`✅ STEP 1: Numeric ID (${numericId}) দিয়ে সদস্য পাওয়া গেছে: ${member.full_name}`);
+                }
+            }
+        }
+        
+        // ✅ PRIORITY 3: Mobile দিয়ে (ফলব্যাক)
         if (!member && payment.mobile && payment.mobile.trim() !== '') {
             const { data: byMobile } = await client
                 .from('members')
@@ -12908,11 +12928,12 @@ async function approvePayment(paymentId) {
             if (byMobile) {
                 member = byMobile;
                 matchMethod = '📱 mobile';
+                console.log(`✅ STEP 1: Mobile দিয়ে সদস্য পাওয়া গেছে: ${member.full_name}`);
             }
         }
         
         if (!member) {
-            showToast('❌ সদস্য পাওয়া যায়নি!', 'error');
+            showToast(`❌ সদস্য পাওয়া যায়নি! (member_id: ${payment.member_id}, mobile: ${payment.mobile})`, 'error');
             return;
         }
         
@@ -12922,7 +12943,8 @@ async function approvePayment(paymentId) {
         }
         
         console.log(`✅ সদস্য: ${member.full_name} (${matchMethod})`);
-        
+                
+    
         // ============================================================
         // ✅ STEP 2: main_ledger এ entry তৈরি (Trigger balance বাড়াবে)
         // ============================================================
