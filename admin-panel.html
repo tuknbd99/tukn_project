@@ -13058,25 +13058,31 @@ async function approvePayment(paymentId) {
     
         // ============================================================
         // ✅ STEP 2: main_ledger এ entry তৈরি (Trigger balance বাড়াবে)
+        // ✅ এটি সবার আগে চালান — ব্যালেন্স আপডেট নিশ্চিত করতে
         // ============================================================
-        await recordTransaction({
-            member_id: member.member_id,
-            member_name: member.full_name,
-            account: 'savings',
-            action: 'credit',
-            amount: Number(payment.amount),
-            source: 'monthly_savings',
-            description: `পেমেন্ট অনুমোদিত — ${payment.month || ''} ${payment.year || ''} (${payment.payment_method || 'cash'})`,
-            reference_id: String(payment.id),
-            metadata: {
-                payment_id: payment.id,
-                payment_method: payment.payment_method,
-                transaction_id: payment.transaction_id,
-                approved_by: currentAdmin?.username
-            }
-        });
-        
-        console.log('✅ STEP 2: main_ledger এ entry তৈরি');
+        try {
+            await recordTransaction({
+                member_id: member.member_id,
+                member_name: member.full_name,
+                account: 'savings',
+                action: 'credit',
+                amount: Number(payment.amount),
+                source: 'monthly_savings',
+                description: `পেমেন্ট অনুমোদিত — ${payment.month || ''} ${payment.year || ''} (${payment.payment_method || 'cash'})`,
+                reference_id: String(payment.id),
+                metadata: {
+                    payment_id: payment.id,
+                    payment_method: payment.payment_method,
+                    transaction_id: payment.transaction_id,
+                    approved_by: currentAdmin?.username
+                }
+            });
+            console.log('✅ STEP 2: main_ledger এ entry তৈরি সম্পূর্ণ');
+        } catch(ledgerError) {
+            console.error('❌ STEP 2: main_ledger entry ব্যর্থ:', ledgerError);
+            showToast('❌ ব্যালেন্স আপডেট ব্যর্থ: ' + ledgerError.message, 'error');
+            // ✅ এখানে থামবেন না, পেমেন্ট status আপডেট করুন
+        }
         
         // ============================================================
         // ✅ STEP 3: Payment status আপডেট
@@ -13091,13 +13097,14 @@ async function approvePayment(paymentId) {
             })
             .eq('id', id);
         
-        if (statusError) throw statusError;
-        
-        console.log('✅ STEP 3: Payment status আপডেট');
+        if (statusError) {
+            console.error('❌ STEP 3: Payment status update ব্যর্থ:', statusError);
+            throw statusError;
+        }
+        console.log('✅ STEP 3: Payment status আপডেট সম্পূর্ণ');
         
         // ============================================================
-        // ✅ STEP 4: Referral Bonus Distribution (NEW!)
-        // ✅ প্রথম Approved Payment হলে সব Level-এ Bonus বিতরণ
+        // ✅ STEP 4: Referral Bonus Distribution (ব্যর্থ হলেও পেমেন্ট approve থাকবে)
         // ============================================================
         let bonusResult = null;
         try {
@@ -13129,19 +13136,21 @@ async function approvePayment(paymentId) {
             console.warn('⚠️ Referral bonus warning (payment approve হয়েছে):', bonusError);
             // ✅ Bonus fail হলেও payment approve থাকবে
         }
-        // ============================================================
-        // 🆕 End Referral Bonus
-        // ============================================================
+        console.log('✅ STEP 4: Referral bonus প্রসেস সম্পূর্ণ');
         
         // ============================================================
         // ✅ STEP 5: UI রিফ্রেশ
         // ============================================================
         pendingPaymentsData = pendingPaymentsData.filter(p => p.id !== id);
         
+        // ✅ বিলম্ব যোগ করুন (Supabase sync-এর জন্য)
+        await new Promise(resolve => setTimeout(resolve, 800));
+        
         await loadPendingPayments();
         await loadRealDashboard();
         await updateAllBadges();
         await loadMembers();
+        console.log('✅ STEP 5: UI রিফ্রেশ সম্পূর্ণ');
         
         // ============================================================
         // ✅ STEP 6: Broadcast (Cross-tab sync)
