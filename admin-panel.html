@@ -13483,10 +13483,10 @@ function renderPendingPaymentsList() {
 }
 
 // ============================================================
-// ✅ FIXED: approvePayment() — সম্পূর্ণ ঠিক করা ভার্সন
-// ✅ STEP 2 (main_ledger) শুধু RPC success হলে
-// ✅ RPC fail হলে কিছুই হবে না
-// ✅ Duplicate prevention
+// ✅ FINAL approvePayment() — RPC only (সব কাজ RPC করে)
+// ✅ STEP 3 (recordTransaction) সরানো হয়েছে
+// ✅ Double-click prevent
+// ✅ Error visible
 // ============================================================
 async function approvePayment(paymentId) {
     const id = parseInt(paymentId, 10);
@@ -13501,7 +13501,7 @@ async function approvePayment(paymentId) {
         return; 
     }
     
-    if (!confirm(`${payment.member_name} এর ${formatAmount(payment.amount)} টাকা পেমেন্ট অনুমোদন দেবেন?`)) return;
+    if (!confirm(`${payment.member_name} এর ৳${formatAmount(payment.amount)} approve করবেন?`)) return;
     
     const client = initSupabaseClient();
     if (!client) { 
@@ -13509,7 +13509,7 @@ async function approvePayment(paymentId) {
         return; 
     }
     
-    // ✅ বাটন disable
+    // ✅ Button disable
     const btns = document.querySelectorAll(`[onclick*="approvePayment('${paymentId}')"]`);
     btns.forEach(btn => {
         btn.disabled = true;
@@ -13517,81 +13517,16 @@ async function approvePayment(paymentId) {
     });
     
     try {
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('🔄 পেমেন্ট অনুমোদন শুরু:', id);
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        
-        // ============================================================
-        // ✅ STEP 1: সদস্য খোঁজা
-        // ============================================================
-        let member = null;
-        let matchMethod = '';
-        
-        // PRIORITY 1: Formatted member_id
-        if (payment.member_id && String(payment.member_id).trim() !== '') {
-            const { data: byId } = await client
-                .from('members')
-                .select('member_id, full_name, mobile, status, referral_bonus, referral_count')
-                .eq('member_id', String(payment.member_id).trim())
-                .maybeSingle();
-            if (byId) {
-                member = byId;
-                matchMethod = '🆔 member_id';
-            }
-        }
-        
-        // PRIORITY 2: Numeric ID
-        if (!member) {
-            const numericId = parseInt(payment.member_id, 10);
-            if (!isNaN(numericId)) {
-                const { data: byNumericId } = await client
-                    .from('members')
-                    .select('member_id, full_name, mobile, status, referral_bonus, referral_count')
-                    .eq('id', numericId)
-                    .maybeSingle();
-                if (byNumericId) {
-                    member = byNumericId;
-                    matchMethod = '🔢 numeric id';
-                }
-            }
-        }
-        
-        // PRIORITY 3: Mobile
-        if (!member && payment.mobile && String(payment.mobile).trim() !== '') {
-            const { data: byMobile } = await client
-                .from('members')
-                .select('member_id, full_name, mobile, status, referral_bonus, referral_count')
-                .eq('mobile', String(payment.mobile).trim())
-                .maybeSingle();
-            if (byMobile) {
-                member = byMobile;
-                matchMethod = '📱 mobile';
-            }
-        }
-        
-        if (!member) {
-            showToast(`❌ সদস্য পাওয়া যায়নি! (member_id: ${payment.member_id}, mobile: ${payment.mobile})`, 'error');
-            return;
-        }
-        
-        if (member.status !== 'active' && member.status !== 'approved') {
-            showToast(`⚠️ সদস্য সক্রিয় নয়: ${member.status}`, 'error');
-            return;
-        }
-        
-        console.log(`✅ সদস্য: ${member.full_name} (${matchMethod})`);
-        
-        // ============================================================
-        // ✅ STEP 2: RPC দিয়ে Payment status আপডেট (আগে!)
-        // ✅ এটা fail হলে main_ledger-এ কিছুই যাবে না
-        // ============================================================
         const adminName = currentAdmin?.username 
                        || currentAdmin?.full_name 
                        || currentAdmin?.name
                        || 'সুপার অ্যাডমিন';
         
-        console.log(`🔍 STEP 2: RPC call — payment_id: ${id}, admin: ${adminName}`);
+        console.log('🔄 Approving payment:', id);
         
+        // ============================================================
+        // ✅ RPC: approve + ledger + balance (সব একসাথে)
+        // ============================================================
         const { data: rpcResult, error: rpcError } = await client.rpc(
             'approve_payment_admin',
             {
@@ -13600,158 +13535,59 @@ async function approvePayment(paymentId) {
             }
         );
         
-        console.log('🔍 RPC Result:', rpcResult);
-        console.log('🔍 RPC Error:', rpcError);
-        
-        // ✅ RPC error handle
         if (rpcError) {
             console.error('❌ RPC Error:', rpcError);
-            showToast(`❌ Payment status আপডেট ব্যর্থ: ${rpcError.message}`, 'error');
+            showToast(`❌ Approve ব্যর্থ: ${rpcError.message}`, 'error');
             return;
         }
         
-        // ✅ RPC success check
         if (!rpcResult || rpcResult.success !== true) {
-            const msg = rpcResult?.message || 'Payment status আপডেট ব্যর্থ';
-            console.error('❌ RPC Failed:', msg);
-            showToast(`❌ ${msg}`, 'error');
+            showToast(`❌ ${rpcResult?.message || 'Approve ব্যর্থ'}`, 'error');
             return;
         }
         
-        console.log('✅ STEP 2: Payment status আপডেট সম্পূর্ণ —', rpcResult.message);
+        console.log('✅ RPC Success:', rpcResult);
         
         // ============================================================
-        // ✅ STEP 3: main_ledger এ entry (শুধু RPC success হলে)
-        // ✅ এটা fail হলেও payment approve থাকবে
-        // ✅ Trigger balance বাড়াবে
+        // ✅ Referral bonus (optional)
         // ============================================================
         try {
-            // ✅ Duplicate check — main_ledger এ আগেই entry আছে কিনা
-            const { data: existingLedger } = await client
-                .from('main_ledger')
-                .select('id')
-                .eq('reference_id', String(payment.id))
-                .eq('source', 'monthly_savings')
-                .limit(1)
-                .maybeSingle();
-            
-            if (existingLedger) {
-                console.log('ℹ️ STEP 3: main_ledger এ entry আগেই আছে — skip');
-            } else {
-                await recordTransaction({
-                    member_id: member.member_id,
-                    member_name: member.full_name,
-                    account: 'savings',
-                    action: 'credit',
-                    amount: Number(payment.amount),
-                    source: 'monthly_savings',
-                    description: `পেমেন্ট অনুমোদিত — ${payment.month || ''} ${payment.year || ''} (${payment.payment_method || 'cash'})`,
-                    reference_id: String(payment.id),
-                    metadata: {
-                        payment_id: payment.id,
-                        payment_method: payment.payment_method,
-                        transaction_id: payment.transaction_id,
-                        approved_by: adminName
-                    }
-                });
-                console.log('✅ STEP 3: main_ledger এ entry তৈরি সম্পূর্ণ');
-            }
-        } catch(ledgerError) {
-            // ✅ Ledger fail হলেও payment approve আছে — warning দেখান
-            console.error('⚠️ STEP 3: main_ledger entry ব্যর্থ:', ledgerError);
-            console.warn('⚠️ Payment approve হয়েছে কিন্তু ledger entry fail — manual check করুন!');
-        }
-        
-        // ============================================================
-        // ✅ STEP 4: Referral Bonus (backup — RPC already handles)
-        // ============================================================
-        let bonusResult = null;
-        try {
-            console.log('🎁 Referral bonus চেক করা হচ্ছে...');
-            
-            bonusResult = await processAllLevelBonuses({
+            await processAllLevelBonuses({
                 id: payment.id,
-                member_id: member.member_id,
-                member_name: member.full_name,
-                mobile: member.mobile,
+                member_id: payment.member_id,
+                member_name: payment.member_name,
+                mobile: payment.mobile,
                 amount: payment.amount,
                 month: payment.month,
-                year: payment.year,
-                payment_method: payment.payment_method,
-                transaction_id: payment.transaction_id
+                year: payment.year
             });
-            
-            if (bonusResult?.isFirstPayment && bonusResult.totalBonusPaid > 0) {
-                console.log(`🎁 Referral Bonus: ৳${bonusResult.totalBonusPaid}`);
-            }
         } catch(bonusError) {
-            console.warn('⚠️ Referral bonus warning:', bonusError);
+            console.warn('⚠️ Bonus warning:', bonusError);
         }
         
         // ============================================================
-        // ✅ STEP 5: UI থেকে সরান (তাৎক্ষণিক)
+        // ✅ UI refresh
         // ============================================================
         pendingPaymentsData = pendingPaymentsData.filter(p => Number(p.id) !== id);
         renderPendingPaymentsList();
         updateAllBadges();
         
-        // ✅ Badge আপডেট
-        const badge = document.getElementById('pendingPaymentBadge');
-        if (badge) {
-            badge.innerText = pendingPaymentsData.length;
-            badge.style.display = pendingPaymentsData.length > 0 ? 'flex' : 'none';
-        }
-        
-        console.log(`✅ STEP 5: UI update — বাকি pending: ${pendingPaymentsData.length}`);
-        
-        // ============================================================
-        // ✅ STEP 6: Database থেকে রিফ্রেশ (১.৫ সেকেন্ড পর)
-        // ============================================================
         setTimeout(async () => {
-            try {
-                console.log('🔄 STEP 6: Database থেকে রিফ্রেশ...');
-                await loadPendingPayments();
-                await loadRealDashboard();
-                await loadMembers();
-                await updateAllBadges();
-                console.log('✅ STEP 6: রিফ্রেশ সম্পূর্ণ');
-            } catch(refreshError) {
-                console.warn('⚠️ Refresh warning:', refreshError);
-            }
-        }, 1500);
+            await loadPendingPayments();
+            await loadRealDashboard();
+            await loadMembers();
+        }, 1000);
         
-        // ============================================================
-        // ✅ STEP 7: Broadcast (cross-tab sync)
-        // ============================================================
-        try {
-            const bc = new BroadcastChannel('tuknbd_updates');
-            bc.postMessage({
-                type: 'payment_approved',
-                memberId: member.member_id,
-                amount: payment.amount,
-                timestamp: new Date().toISOString()
-            });
-            setTimeout(() => { try { bc.close(); } catch(e) {} }, 1000);
-        } catch(e) {}
-        
-        // ============================================================
-        // ✅ STEP 8: সফল মেসেজ
-        // ============================================================
-        let successMsg = `✅ ${member.full_name} এর ৳${formatAmount(payment.amount)} পেমেন্ট অনুমোদিত!`;
-        
-        if (bonusResult?.isFirstPayment && bonusResult.totalBonusPaid > 0) {
-            successMsg += `\n🎁 রেফারেল বোনাস: ৳${bonusResult.totalBonusPaid}`;
-        }
-        
-        showToast(successMsg, 'success');
-        
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('✅ পেমেন্ট অনুমোদন সম্পূর্ণ!');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        // ✅ Success message
+        showToast(
+            `✅ ${payment.member_name} এর ৳${formatAmount(payment.amount)} approve সফল!\n` +
+            `💰 Balance: ৳${formatAmount(rpcResult.old_balance)} → ৳${formatAmount(rpcResult.new_balance)}`,
+            'success'
+        );
         
     } catch(e) {
         console.error('❌ approvePayment error:', e);
-        showToast(`❌ অনুমোদন ব্যর্থ: ${e.message || 'অজানা ত্রুটি'}`, 'error');
+        showToast(`❌ Approve ব্যর্থ: ${e.message}`, 'error');
     } finally {
         btns.forEach(btn => {
             btn.disabled = false;
