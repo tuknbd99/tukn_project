@@ -4761,78 +4761,60 @@ async function updateProfitCard() {
 }
 
    // ═══════════════════════════════════════════════════════
-// 🏦 TOTAL FUND CARD Update Function — FIXED VERSION
+// 🏦 TOTAL FUND CARD — উত্তোলিত সহ, debt বাদ
 // মোট তহবিল = সঞ্চয় + লভ্যাংশ + বোনাস - উত্তোলন
 // ═══════════════════════════════════════════════════════
 async function updateTotalFundCard() {
-    // ✅ Element গুলো একবারে নিন
     const totalEl = document.getElementById('totalFundAmount');
     const savingsEl = document.getElementById('fundSavingsValue');
     const profitEl = document.getElementById('fundProfitValue');
     const bonusEl = document.getElementById('fundBonusValue');
     const withdrawEl = document.getElementById('fundWithdrawnValue');
     
-    // ✅ Safety check
-    if (!totalEl) {
-        console.warn('⚠️ totalFundAmount element পাওয়া যায়নি!');
-        return;
-    }
+    if (!totalEl) return;
+    
+    const client = await initSupabase();
+    if (!client || !currentUser) return;
     
     try {
-        // ============================================================
-        // ১. Values সংগ্রহ
-        // ============================================================
+        // ১. সঞ্চয়
         const savings = Number(userFunds?.monthlySavings) || 0;
+        
+        // ২. লভ্যাংশ
         const savingsProfit = Number(userFunds?.savingsProfit) || 0;
         const investmentProfit = Number(userFunds?.investmentProfit) || 0;
         const referralProfit = Number(userFunds?.referralProfit) || 0;
         const totalProfit = savingsProfit + investmentProfit + referralProfit;
-        const bonus = Number(window._liveReferralBonus) || Number(userFunds?.referralBonus) || 0;
         
-        // ============================================================
-        // ২. উত্তোলিত পরিমাণ — approved withdrawals থেকে
-        // ============================================================
-        let withdrawn = 0;
-        try {
-            const client = await initSupabase();
-            if (client && currentUser?.id) {
-                const { data: approvedWithdrawals, error } = await client
-                    .from('withdrawals')
-                    .select('amount')
-                    .eq('member_id', currentUser.id)
-                    .eq('status', 'approved');
-                
-                if (!error && approvedWithdrawals && approvedWithdrawals.length > 0) {
-                    withdrawn = approvedWithdrawals.reduce(
-                        (sum, w) => sum + (Number(w.amount) || 0), 0
-                    );
-                }
-            }
-        } catch(e) {
-            console.warn('⚠️ Withdrawn calculation error:', e);
-        }
+        // ৩. বোনাস
+        const { data: bonusLogs } = await client
+            .from('referral_bonus_log')
+            .select('amount, level')
+            .eq('member_id', currentUser.id)
+            .gte('level', 1)
+            .lte('level', 10);
         
-        // ============================================================
-        // ৩. মোট তহবিল হিসাব
-        //    = সঞ্চয় + লভ্যাংশ + বোনাস - উত্তোলিত
-        // ============================================================
+        const bonus = (bonusLogs || []).reduce(
+            (sum, log) => sum + Number(log.amount || 0), 0
+        );
+        
+        // ৪. উত্তোলিত — main_ledger থেকে
+        const { data: withdrawals } = await client
+            .from('main_ledger')
+            .select('amount')
+            .eq('member_id', currentUser.id)
+            .eq('account', 'referral_bonus')
+            .eq('action', 'debit')
+            .eq('source', 'withdrawal');
+        
+        const withdrawn = (withdrawals || []).reduce(
+            (sum, w) => sum + Number(w.amount || 0), 0
+        );
+        
+        // ৫. ✅ মোট তহবিল = সঞ্চয় + লভ্যাংশ + বোনাস - উত্তোলিত
         const totalFund = Math.max(0, savings + totalProfit + bonus - withdrawn);
         
-        // ============================================================
-        // ৪. Debug log — সমস্যা ধরার জন্য
-        // ============================================================
-        console.log('🏦 Total Fund Calculation:', {
-            savings: savings,
-            totalProfit: totalProfit,
-            bonus: bonus,
-            withdrawn: withdrawn,
-            'সূত্র': `${savings} + ${totalProfit} + ${bonus} - ${withdrawn} = ${totalFund}`,
-            totalFund: totalFund
-        });
-        
-        // ============================================================
-        // ৫. Format helper
-        // ============================================================
+        // ৬. Format
         const formatVal = (v) => {
             const num = Number(v) || 0;
             return num.toLocaleString('en-US', {
@@ -4841,87 +4823,42 @@ async function updateTotalFundCard() {
             });
         };
         
-        const formattedTotal = '৳ ' + formatVal(totalFund);
-        
-        // ============================================================
-        // ৬. Total amount আপডেট (fallback সহ)
-        // ============================================================
-        const oldText = totalEl.textContent || '৳ ০.০০';
-        const oldValue = parseFloat(oldText.replace(/[^\d.]/g, '')) || 0;
-        
-        // ✅ animateBalanceCounter থাকলে animation, না হলে সরাসরি
-        if (typeof animateBalanceCounter === 'function' && oldValue !== totalFund) {
-            try {
-                animateBalanceCounter(totalEl, oldValue, totalFund, 1200);
-            } catch(animErr) {
-                console.warn('⚠️ Animation failed, setting directly:', animErr);
-                totalEl.textContent = formattedTotal;
-            }
-        } else {
-            totalEl.textContent = formattedTotal;
-        }
-        
-        // ✅ নিশ্চিত করুন যে অবশেষে সঠিক text আছে (animation শেষে)
-        setTimeout(() => {
-            const finalText = totalEl.textContent || '';
-            const finalVal = parseFloat(finalText.replace(/[^\d.]/g, '')) || 0;
-            if (Math.abs(finalVal - totalFund) > 0.01) {
-                totalEl.textContent = formattedTotal;
-                console.log('🔧 Force-corrected total fund amount');
-            }
-        }, 1500);
-        
-        // ============================================================
-        // ৭. Breakdown values আপডেট
-        // ============================================================
+        // ৭. Update
+        totalEl.textContent = '৳ ' + formatVal(totalFund);
         if (savingsEl) savingsEl.textContent = '৳ ' + formatVal(savings);
         if (profitEl) profitEl.textContent = '৳ ' + formatVal(totalProfit);
         if (bonusEl) bonusEl.textContent = '৳ ' + formatVal(bonus);
-        if (withdrawEl) withdrawEl.textContent = '৳ ' + formatVal(withdrawn);
         
-        // ============================================================
-        // ৮. userFunds-এ সেভ করুন
-        // ============================================================
+        // ✅ উত্তোলিত দেখান
+        if (withdrawEl) {
+            withdrawEl.textContent = '৳ ' + formatVal(withdrawn);
+            // উত্তোলিত থাকলে রঙ পরিবর্তন
+            if (withdrawn > 0) {
+                withdrawEl.classList.add('text-red-600', 'font-bold');
+            }
+        }
+        
+        // ৮. State
         userFunds.totalWithdrawn = withdrawn;
         userFunds.totalFundBalance = totalFund;
+        userFunds.referralBonus = bonus;
         
-        console.log('✅ Total Fund Card updated:', {
-            display: formattedTotal,
-            breakdown: {
-                savings: '৳ ' + formatVal(savings),
-                profit: '৳ ' + formatVal(totalProfit),
-                bonus: '৳ ' + formatVal(bonus),
-                withdrawn: '৳ ' + formatVal(withdrawn)
-            }
+        console.log('🏦 Total Fund:', {
+            savings,
+            totalProfit,
+            bonus,
+            withdrawn,
+            totalFund,
+            'সূত্র': `${savings} + ${totalProfit} + ${bonus} - ${withdrawn} = ${totalFund}`
         });
         
     } catch(e) {
         console.error('❌ updateTotalFundCard error:', e);
-        
-        // ✅ Fallback — শুধু সঠিক মান বসান
-        try {
-            const savings = Number(userFunds?.monthlySavings) || 0;
-            const savingsProfit = Number(userFunds?.savingsProfit) || 0;
-            const investmentProfit = Number(userFunds?.investmentProfit) || 0;
-            const referralProfit = Number(userFunds?.referralProfit) || 0;
-            const totalProfit = savingsProfit + investmentProfit + referralProfit;
-            const bonus = Number(window._liveReferralBonus) || Number(userFunds?.referralBonus) || 0;
-            const totalFund = Math.max(0, savings + totalProfit + bonus);
-            
-            totalEl.textContent = '৳ ' + totalFund.toLocaleString('en-US', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-            });
-        } catch(fallbackErr) {
-            console.error('❌ Fallback also failed:', fallbackErr);
-        }
     }
 }
 
-// ✅ Global Expose
 window.updateTotalFundCard = updateTotalFundCard;
-
-console.log('✅ TOTAL FUND CARD loaded (FIXED VERSION)!');
+console.log('✅ updateTotalFundCard() loaded!');
 
 // ✅ Global Expose
 window.updateProfitCard = updateProfitCard;
@@ -12268,109 +12205,6 @@ async function insertReferralBonusLog(memberId, amount, level, note, fromMemberI
     }
 }
 
-    // ============================================================
-// 🎁 updateReferralBonusSummary() — Home Tab Summary Card
-// ═══════════════════════════════════════════════════════════
-function updateReferralBonusSummary() {
-    const container = document.getElementById('referralBonusSummary');
-    if (!container) {
-        console.warn('⚠️ referralBonusSummary element পাওয়া যায়নি');
-        return;
-    }
-    
-    // Data সংগ্রহ
-    const totalEarned = Number(userFunds.referralBonusTotal) || 0;
-    const withdrawn = Number(userFunds.referralBonusWithdrawn) || 0;
-    const available = Number(window._liveReferralBonus) || Number(userFunds.referralBonus) || 0;
-    const count = Number(window._liveReferralCount) || Number(userFunds.referralCount) || 0;
-    
-    console.log('🎁 updateReferralBonusSummary:');
-    console.log('   Total Earned:', totalEarned);
-    console.log('   Count:', count);
-    
-    // কোনো Referral না থাকলে Card লুকান
-    if (totalEarned === 0 && count === 0) {
-        container.classList.add('hidden');
-        container.innerHTML = '';
-        console.log('   ℹ️ No data — hidden');
-        return;
-    }
-    
-    // Progress
-    const withdrawalProgress = totalEarned > 0 
-        ? Math.round((withdrawn / totalEarned) * 100) 
-        : 0;
-    
-    // Card Render
-    container.classList.remove('hidden');
-    container.innerHTML = `
-        <div class="bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 rounded-2xl p-4 shadow-md border-2 border-amber-200 hover:border-amber-400 transition-all">
-            
-            <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-                <div class="flex items-center gap-2">
-                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-md">
-                        <i class="fas fa-gift text-white text-lg"></i>
-                    </div>
-                    <div>
-                        <h3 class="text-base font-bold text-amber-800">🎁 Referral Bonus</h3>
-                        <p class="text-[10px] text-amber-600">${bnToEn(count)} জন সক্রিয় রেফারেল</p>
-                    </div>
-                </div>
-                <span class="bg-amber-500 text-white text-[10px] font-bold px-3 py-1 rounded-full">Level 1-10</span>
-            </div>
-            
-            <div class="grid grid-cols-3 gap-2 mb-3">
-                <div class="bg-white rounded-xl p-3 border-2 border-emerald-200">
-                    <p class="text-[9px] text-gray-500 font-semibold mb-1">💰 মোট রেফারেল আয়</p>
-                    <p class="text-lg font-extrabold text-emerald-700">৳${bnToEn(totalEarned.toLocaleString('en-US'))}</p>
-                </div>
-                <div class="bg-white rounded-xl p-3 border-2 border-red-200">
-                    <p class="text-[9px] text-gray-500 font-semibold mb-1">📤 উত্তোলিত</p>
-                    <p class="text-lg font-extrabold text-red-700">৳${bnToEn(withdrawn.toLocaleString('en-US'))}</p>
-                </div>
-                <div class="bg-gradient-to-br from-emerald-100 to-green-100 rounded-xl p-3 border-2 border-emerald-400">
-                    <p class="text-[9px] text-gray-600 font-semibold mb-1">✅ উপলব্ধ</p>
-                    <p class="text-lg font-extrabold text-emerald-800">৳${bnToEn(available.toLocaleString('en-US'))}</p>
-                </div>
-            </div>
-            
-            ${totalEarned > 0 ? `
-                <div class="mb-3">
-                    <div class="flex justify-between items-center mb-1">
-                        <p class="text-[10px] text-gray-500 font-semibold">উত্তোলন Progress</p>
-                        <p class="text-[10px] font-bold text-amber-700">${bnToEn(withdrawalProgress)}%</p>
-                    </div>
-                    <div class="w-full bg-amber-200 rounded-full h-2 overflow-hidden">
-                        <div class="h-full bg-gradient-to-r from-amber-400 to-orange-500 rounded-full" style="width: ${withdrawalProgress}%"></div>
-                    </div>
-                </div>
-            ` : ''}
-            
-            <div class="flex gap-2">
-                <button onclick="goToBonusHistory()" 
-                        class="flex-1 bg-white text-amber-700 border-2 border-amber-400 py-2 rounded-lg text-xs font-bold hover:bg-amber-50 transition flex items-center justify-center gap-1">
-                    <i class="fas fa-history"></i>
-                    <span>Bonus History</span>
-                </button>
-                ${available > 0 ? `
-                    <button onclick="openWithdrawModal('bonus')" 
-                            class="flex-1 bg-gradient-to-r from-amber-500 to-orange-500 text-white py-2 rounded-lg text-xs font-bold hover:from-amber-600 hover:to-orange-600 transition flex items-center justify-center gap-1 shadow-md">
-                        <i class="fas fa-hand-holding-usd"></i>
-                        <span>উত্তোলন</span>
-                    </button>
-                ` : `
-                    <button disabled class="flex-1 bg-gray-300 text-gray-500 py-2 rounded-lg text-xs font-bold cursor-not-allowed flex items-center justify-center gap-1">
-                        <i class="fas fa-ban"></i>
-                        <span>ব্যালেন্স নেই</span>
-                    </button>
-                `}
-            </div>
-        </div>
-    `;
-    
-    console.log('   ✅ Card rendered');
-}
-
 // ============================================================
 // 🎯 goToBonusHistory() — Referral Tab-এ Bonus History-তে যাওয়া
 // ═══════════════════════════════════════════════════════════
@@ -12396,15 +12230,15 @@ function goToBonusHistory() {
         }
     }, 500);
 }
-    // ============================================================
-// ✅ Referral Bonus Summary — debt সহ
+
+    
+
+// ============================================================
+// ✅ Referral Bonus Summary — উত্তোলিত সহ
 // ============================================================
 async function updateReferralBonusSummary() {
     const container = document.getElementById('referralBonusSummary');
-    if (!container) {
-        console.warn('⚠️ referralBonusSummary element পাওয়া যায়নি');
-        return;
-    }
+    if (!container) return;
     
     const client = await initSupabase();
     if (!client || !currentUser) return;
@@ -12431,36 +12265,38 @@ async function updateReferralBonusSummary() {
             (sum, w) => sum + Number(w.amount || 0), 0
         );
         
-        // ✅ Debt চেক
+        // Debt
         const { data: debtData } = await client
             .from('referral_bonus_debt')
-            .select('excess_amount, original_excess, adjusted_amount')
+            .select('excess_amount')
             .eq('member_id', currentUser.id)
             .maybeSingle();
         
         const debt = Number(debtData?.excess_amount) || 0;
-        const originalDebt = Number(debtData?.original_excess) || 0;
-        const adjustedDebt = Number(debtData?.adjusted_amount) || 0;
         
         // উপলব্ধ
         const available = Math.max(0, totalEarned - totalWithdrawn - debt);
         
-        // Count
         const count = Number(window._liveReferralCount) || 0;
         
-        // Progress
         const withdrawalProgress = totalEarned > 0 
             ? Math.round((totalWithdrawn / totalEarned) * 100) 
             : 0;
         
-        // কোনো data না থাকলে লুকান
         if (totalEarned === 0 && count === 0 && debt === 0) {
             container.classList.add('hidden');
             container.innerHTML = '';
             return;
         }
         
-        // Card Render
+        const formatVal = (v) => {
+            const num = Number(v) || 0;
+            return num.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        };
+        
         container.classList.remove('hidden');
         container.innerHTML = `
             <div class="bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 rounded-2xl p-4 shadow-md border-2 border-amber-200">
@@ -12480,44 +12316,36 @@ async function updateReferralBonusSummary() {
                 <div class="grid grid-cols-3 gap-2 mb-3">
                     <div class="bg-white rounded-xl p-3 border-2 border-emerald-200">
                         <p class="text-[9px] text-gray-500 font-semibold mb-1">💰 মোট আয়</p>
-                        <p class="text-lg font-extrabold text-emerald-700">৳${bnToEn(totalEarned.toLocaleString('en-US'))}</p>
+                        <p class="text-lg font-extrabold text-emerald-700">৳${bnToEn(formatVal(totalEarned))}</p>
                     </div>
                     <div class="bg-white rounded-xl p-3 border-2 border-red-200">
                         <p class="text-[9px] text-gray-500 font-semibold mb-1">📤 উত্তোলিত</p>
-                        <p class="text-lg font-extrabold text-red-700">৳${bnToEn(totalWithdrawn.toLocaleString('en-US'))}</p>
+                        <p class="text-lg font-extrabold text-red-700">৳${bnToEn(formatVal(totalWithdrawn))}</p>
                     </div>
                     <div class="bg-gradient-to-br from-emerald-100 to-green-100 rounded-xl p-3 border-2 border-emerald-400">
                         <p class="text-[9px] text-gray-600 font-semibold mb-1">✅ উপলব্ধ</p>
-                        <p class="text-lg font-extrabold text-emerald-800">৳${bnToEn(available.toLocaleString('en-US'))}</p>
+                        <p class="text-lg font-extrabold text-emerald-800">৳${bnToEn(formatVal(available))}</p>
                     </div>
                 </div>
+                
+                ${totalWithdrawn > 0 ? `
+                    <div class="bg-blue-50 border border-blue-300 rounded-lg p-2 mb-3">
+                        <p class="text-xs text-blue-700">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            আপনি <strong>৳${bnToEn(formatVal(totalWithdrawn))}</strong> উত্তোলন করেছেন।
+                        </p>
+                    </div>
+                ` : ''}
                 
                 ${debt > 0 ? `
                     <div class="bg-red-50 border-2 border-red-300 rounded-lg p-2 mb-3">
                         <p class="text-xs text-red-700 font-semibold">
                             <i class="fas fa-exclamation-triangle mr-1"></i>
-                            ⚠️ ঋণ: ৳${bnToEn(debt.toLocaleString('en-US'))}
+                            ⚠️ ঋণ: ৳${bnToEn(formatVal(debt))}
                         </p>
                         <p class="text-[10px] text-red-600 mt-1">
                             পূর্বের অতিরিক্ত উত্তোলন — পরবর্তী বোনাস থেকে কেটে নেওয়া হবে
                         </p>
-                        ${adjustedDebt > 0 ? `
-                            <p class="text-[10px] text-gray-600 mt-1">
-                                ইতিমধ্যে সমন্বয়: ৳${bnToEn(adjustedDebt.toLocaleString('en-US'))}
-                            </p>
-                        ` : ''}
-                    </div>
-                ` : ''}
-                
-                ${totalEarned > 0 ? `
-                    <div class="mb-3">
-                        <div class="flex justify-between items-center mb-1">
-                            <p class="text-[10px] text-gray-500 font-semibold">উত্তোলন Progress</p>
-                            <p class="text-[10px] font-bold text-amber-700">${bnToEn(withdrawalProgress)}%</p>
-                        </div>
-                        <div class="w-full bg-amber-200 rounded-full h-2 overflow-hidden">
-                            <div class="h-full bg-gradient-to-r from-amber-400 to-orange-500 rounded-full" style="width: ${Math.min(100, withdrawalProgress)}%"></div>
-                        </div>
                     </div>
                 ` : ''}
                 
@@ -12547,10 +12375,94 @@ async function updateReferralBonusSummary() {
         console.error('❌ updateReferralBonusSummary error:', e);
     }
 }
-
+    
 window.updateReferralBonusSummary = updateReferralBonusSummary;
-
 console.log('✅ updateReferralBonusSummary() loaded!');
+
+    // ============================================================
+// ⚠️ Debt Notice — যারা বেশি উত্তোলন করেছে
+// ============================================================
+async function showDebtNotice() {
+    const container = document.getElementById('debtNoticeContainer');
+    if (!container) return;
+    
+    const client = await initSupabase();
+    if (!client || !currentUser) return;
+    
+    try {
+        const { data: debtData } = await client
+            .from('referral_bonus_debt')
+            .select('excess_amount, original_excess, adjusted_amount')
+            .eq('member_id', currentUser.id)
+            .maybeSingle();
+        
+        const debt = Number(debtData?.excess_amount) || 0;
+        const originalDebt = Number(debtData?.original_excess) || 0;
+        const adjustedDebt = Number(debtData?.adjusted_amount) || 0;
+        
+        if (debt <= 0) {
+            container.classList.add('hidden');
+            container.innerHTML = '';
+            return;
+        }
+        
+        const formatVal = (v) => {
+            const num = Number(v) || 0;
+            return num.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        };
+        
+        container.classList.remove('hidden');
+        container.innerHTML = `
+            <div class="bg-gradient-to-r from-red-50 to-orange-50 border-2 border-red-400 rounded-xl p-4 mb-4 shadow-md">
+                <div class="flex items-start gap-3">
+                    <div class="w-10 h-10 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-exclamation-triangle text-white text-lg"></i>
+                    </div>
+                    <div class="flex-1">
+                        <p class="font-bold text-red-800 text-base mb-1">
+                            ⚠️ অতিরিক্ত উত্তোলনের নোটিশ
+                        </p>
+                        <p class="text-sm text-red-700 mb-2">
+                            আপনি পূর্বে <strong>৳${formatVal(originalDebt)}</strong> বেশি উত্তোলন করেছেন।
+                        </p>
+                        <div class="bg-white rounded-lg p-3 border border-red-200 mb-2">
+                            <div class="flex justify-between items-center mb-1">
+                                <span class="text-xs text-gray-600">মোট অতিরিক্ত উত্তোলন:</span>
+                                <span class="text-sm font-bold text-red-700">৳${formatVal(originalDebt)}</span>
+                            </div>
+                            ${adjustedDebt > 0 ? `
+                            <div class="flex justify-between items-center mb-1">
+                                <span class="text-xs text-gray-600">ইতিমধ্যে সমন্বয়:</span>
+                                <span class="text-sm font-bold text-green-700">৳${formatVal(adjustedDebt)}</span>
+                            </div>
+                            ` : ''}
+                            <div class="flex justify-between items-center border-t border-red-200 pt-1 mt-1">
+                                <span class="text-xs font-bold text-gray-800">অবশিষ্ট ঋণ:</span>
+                                <span class="text-base font-extrabold text-red-700">৳${formatVal(debt)}</span>
+                            </div>
+                        </div>
+                        <div class="bg-amber-50 border border-amber-300 rounded-lg p-2">
+                            <p class="text-xs text-amber-800">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                <strong>এই ঋণ পরবর্তী রেফারেল বোনাস থেকে স্বয়ংক্রিয়ভাবে কেটে নেওয়া হবে।</strong>
+                                আপনার মূল সঞ্চয় থেকে কোনো টাকা কাটা হবে না।
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+    } catch(e) {
+        console.error('❌ showDebtNotice error:', e);
+    }
+}
+
+window.showDebtNotice = showDebtNotice;
+console.log('✅ showDebtNotice() loaded!');
 
   // ============================================================
 // 🎁 updateBonusHistorySection() — Bonus History UI Update
