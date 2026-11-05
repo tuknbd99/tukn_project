@@ -4778,7 +4778,15 @@ async function updateTotalFundCard() {
     
     try {
         // ১. সঞ্চয়
-        const savings = Number(userFunds?.monthlySavings) || 0;
+        let savings = Number(userFunds?.monthlySavings) || 0;
+        if (savings === 0) {
+            const { data: memberData } = await client
+                .from('members')
+                .select('balance')
+                .eq('member_id', currentUser.id)
+                .single();
+            savings = Number(memberData?.balance) || 0;
+        }
         
         // ২. লভ্যাংশ
         const savingsProfit = Number(userFunds?.savingsProfit) || 0;
@@ -4786,20 +4794,33 @@ async function updateTotalFundCard() {
         const referralProfit = Number(userFunds?.referralProfit) || 0;
         const totalProfit = savingsProfit + investmentProfit + referralProfit;
         
-        // ৩. বোনাস — সরাসরি DB থেকে
-        const { data: bonusLogs } = await client
+        // ৩. ✅ বোনাস — DB থেকে সব আনুন, JS-এ ফিল্টার করুন
+        const { data: bonusLogs, error: bonusErr } = await client
             .from('referral_bonus_log')
-            .select('amount, level')
-            .eq('member_id', currentUser.id)
-            .gte('level', 1)
-            .lte('level', 10);
+            .select('amount, level, member_id')
+            .eq('member_id', currentUser.id);
         
-        const bonus = (bonusLogs || []).reduce(
+        if (bonusErr) console.error('❌ Bonus error:', bonusErr);
+        
+        // ✅ JS-এ Level 1-10 ফিল্টার
+        const validBonusLogs = (bonusLogs || []).filter(log => {
+            const lvl = Number(log.level);
+            return lvl >= 1 && lvl <= 10;
+        });
+        
+        const bonus = validBonusLogs.reduce(
             (sum, log) => sum + Number(log.amount || 0), 0
         );
         
-        // ৪. উত্তোলিত — সরাসরি DB থেকে
-        const { data: withdrawals } = await client
+        console.log('🔍 Bonus Debug:', {
+            totalLogs: (bonusLogs || []).length,
+            validLogs: validBonusLogs.length,
+            bonusTotal: bonus,
+            sampleLevels: (bonusLogs || []).map(l => l.level)
+        });
+        
+        // ৪. উত্তোলিত
+        const { data: withdrawals, error: wErr } = await client
             .from('main_ledger')
             .select('amount')
             .eq('member_id', currentUser.id)
@@ -4807,12 +4828,28 @@ async function updateTotalFundCard() {
             .eq('action', 'debit')
             .eq('source', 'withdrawal');
         
+        if (wErr) console.error('❌ Withdrawal error:', wErr);
+        
         const withdrawn = (withdrawals || []).reduce(
             (sum, w) => sum + Number(w.amount || 0), 0
         );
         
-        // ৫. মোট তহবিল
+        console.log('🔍 Withdrawal Debug:', {
+            count: (withdrawals || []).length,
+            total: withdrawn
+        });
+        
+        // ৫. ✅ মোট তহবিল
         const totalFund = Math.max(0, savings + totalProfit + bonus - withdrawn);
+        
+        console.log('🏦 Total Fund Calculation:', {
+            savings,
+            totalProfit,
+            bonus,
+            withdrawn,
+            totalFund,
+            'সূত্র': `${savings} + ${totalProfit} + ${bonus} - ${withdrawn} = ${totalFund}`
+        });
         
         // ৬. Format
         const formatVal = (v) => {
@@ -4838,10 +4875,7 @@ async function updateTotalFundCard() {
         userFunds.totalFundBalance = totalFund;
         userFunds.referralBonus = bonus;
         
-        console.log('🏦 Total Fund:', {
-            savings, totalProfit, bonus, withdrawn, totalFund,
-            'সূত্র': `${savings} + ${totalProfit} + ${bonus} - ${withdrawn} = ${totalFund}`
-        });
+        console.log('✅ Total Fund Card updated:', '৳ ' + formatVal(totalFund));
         
     } catch(e) {
         console.error('❌ updateTotalFundCard error:', e);
