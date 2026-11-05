@@ -8214,63 +8214,103 @@ function shareSlipWhatsApp() {
 }
 
 // ============================================================
-// পেমেন্ট মডাল - মাস লক সহ (ড্যাশবোর্ডের জন্য)
+// পেমেন্ট মডাল - মাস লক সহ (সাল অনুযায়ী আলাদা লক)
 // ============================================================
-
 async function populateYearAndMonths() {
     const yearSelect = document.getElementById('paymentYear');
-    if(yearSelect) {
-        yearSelect.innerHTML = '<option value="">সাল নির্বাচন করুন</option>';
-        for(let year=2026; year<=2036; year++) yearSelect.innerHTML += `<option value="${year}">${year}</option>`;
-    }
     const monthsContainer = document.getElementById('monthsContainer');
-    if(monthsContainer) {
+    
+    if (!yearSelect || !monthsContainer) return;
+    
+    // ============================================================
+    // ১. সাল dropdown পপুলেট (আগের মতোই)
+    // ============================================================
+    yearSelect.innerHTML = '<option value="">সাল নির্বাচন করুন</option>';
+    for (let year = 2026; year <= 2036; year++) {
+        yearSelect.innerHTML += `<option value="${year}">${year}</option>`;
+    }
+    
+    // ডিফল্ট = চলতি বছর
+    const currentYear = new Date().getFullYear();
+    yearSelect.value = currentYear;
+    
+    // ============================================================
+    // ২. Approved মাস একবার লোড করুন
+    // ============================================================
+    const approvedMonths = await getApprovedMonths();  // ["জানুয়ারি-2026", ...]
+    
+    // ============================================================
+    // ৩. Helper — নির্দিষ্ট বছরের মাসগুলো রেন্ডার
+    // ============================================================
+    const renderMonthsForYear = (selectedYear) => {
         monthsContainer.innerHTML = '';
         
-        // ডাটাবেস থেকে সদস্যের সব approved পেমেন্ট লোড করুন
-        const approvedMonths = await getApprovedMonths();
-        const currentYear = new Date().getFullYear();
-        
-        banglaMonths.forEach((month, index) => {
-            const monthYear = `${month}-${currentYear}`;
-            const isApproved = approvedMonths.includes(monthYear);
+        banglaMonths.forEach((month) => {
+            const monthYearKey = `${month}-${selectedYear}`;  // ← নির্দিষ্ট বছর ব্যবহার
+            const isApproved = approvedMonths.includes(monthYearKey);
             
-            let statusHtml = '';
-            let disabledAttr = '';
-            let labelStyle = '';
-            
-            if (isApproved) {
-                statusHtml = ` <span style="color:#059669; font-size:10px; font-weight:600;"><i class="fas fa-check-circle"></i> জমা আছে</span>`;
-                disabledAttr = 'disabled';
-                labelStyle = 'opacity:0.6; cursor:not-allowed; background:#f3f4f6; border-color:#d1d5db;';
-            }
+            const disabledAttr = isApproved ? 'disabled' : '';
+            const labelStyle = isApproved
+                ? 'opacity:0.6; cursor:not-allowed; background:#f9fafb; border-color:#d1d5db;'
+                : 'background:white;';
+            const textColor = isApproved ? 'color:#6b7280;' : 'color:#1f2937;';
+            const statusHtml = isApproved
+                ? `<span style="color:#059669; font-size:10px; font-weight:600;"><i class="fas fa-check-circle"></i> জমা আছে</span>`
+                : '';
+            const lockIcon = isApproved
+                ? `<i class="fas fa-lock" style="color:#9ca3af; font-size:12px; margin-left:auto;"></i>`
+                : '';
             
             monthsContainer.innerHTML += `
-                <label style="${labelStyle} display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid ${isApproved ? '#d1d5db' : '#e5e7eb'}; border-radius:10px; ${isApproved ? 'background:#f9fafb;' : 'background:white;'}">
+                <label style="${labelStyle} display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid ${isApproved ? '#d1d5db' : '#e5e7eb'}; border-radius:10px;">
                     <input type="checkbox" value="${month}" class="month-cb" ${disabledAttr}>
-                    <span style="${isApproved ? 'color:#6b7280;' : 'color:#1f2937;'}">${month}</span>
+                    <span style="${textColor}">${month} ${selectedYear}</span>
                     ${statusHtml}
-                    ${isApproved ? '<i class="fas fa-lock" style="color:#9ca3af; font-size:12px; margin-left:auto;"></i>' : ''}
+                    ${lockIcon}
                 </label>
             `;
         });
         
-        document.querySelectorAll('.month-cb:not(:disabled)').forEach(cb => cb.addEventListener('change', updateTotalAmount));
+        // ✅ ইভেন্ট লিসেনার
+        document.querySelectorAll('.month-cb:not(:disabled)').forEach(cb => {
+            cb.addEventListener('change', updateTotalAmount);
+        });
         
-        // টোটাল আপডেট করুন
+        // ✅ টোটাল আপডেট
         updateTotalAmount();
-    }
+        
+        console.log(`✅ রেন্ডার সম্পূর্ণ: ${selectedYear} (${approvedMonths.filter(m => m.endsWith('-' + selectedYear)).length} মাস লক)`);
+    };
+    
+    // ============================================================
+    // ৪. প্রাথমিক রেন্ডার
+    // ============================================================
+    renderMonthsForYear(currentYear);
+    
+    // ============================================================
+    // ৫. ⚡ সাল পরিবর্তন হলে নতুন করে রেন্ডার — এটিই মূল ফিক্স
+    // ============================================================
+    yearSelect.onchange = () => {
+        const selectedYear = parseInt(yearSelect.value);
+        if (selectedYear) {
+            renderMonthsForYear(selectedYear);
+        } else {
+            monthsContainer.innerHTML = '<p class="text-center text-gray-400 text-xs py-4">সাল নির্বাচন করুন</p>';
+            const totalEl = document.getElementById('totalAmountDisplay');
+            if (totalEl) totalEl.innerHTML = '০ টাকা';
+        }
+    };
 }
 
+// ============================================================
+// ✅ টোটাল আপডেট (নির্বাচিত মাস অনুযায়ী)
+// ============================================================
 function updateTotalAmount() {
     const selected = document.querySelectorAll('.month-cb:checked');
     const totalAmount = selected.length * (currentUser?.monthlySavings || 500);
-    document.getElementById('totalAmountDisplay').innerHTML = totalAmount.toLocaleString() + ' টাকা';
+    const el = document.getElementById('totalAmountDisplay');
+    if (el) el.innerHTML = totalAmount.toLocaleString() + ' টাকা';
 }
-
-// ============================================================
-// পেমেন্ট মডাল খোলা - আপডেটেড (মাস লক সহ)
-// ============================================================
 
 // ============================================================
 // পেমেন্ট মডাল খোলা - কারেন্ট/মেয়াদী চেক সহ
