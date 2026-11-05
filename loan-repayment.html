@@ -1,0 +1,1125 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>লোন পরিশোধ | TUKNBD</title>
+    <link rel="icon" type="image/png" href="images/logo.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <style>
+        * { font-family: 'Noto Sans Bengali', sans-serif; }
+        
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #059669;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .toast-notification {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 20px;
+            border-radius: 12px;
+            color: white;
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            max-width: 400px;
+            word-wrap: break-word;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        /* EMI Table */
+        .emi-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .emi-table th {
+            background: #0d7c38;
+            color: white;
+            padding: 8px;
+            font-size: 11px;
+        }
+        .emi-table td {
+            border: 1px solid #e5e7eb;
+            padding: 6px 8px;
+            text-align: center;
+            font-size: 11px;
+        }
+        .emi-paid { color: #16a34a; font-weight: bold; }
+        .emi-pending { color: #eab308; font-weight: bold; }
+        .emi-overdue { color: #dc2626; font-weight: bold; }
+        
+        /* Slip */
+        .loan-slip-container {
+            max-width: 650px;
+            margin: 0 auto;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .loan-slip-header {
+            background: linear-gradient(135deg, #064e3b, #059669);
+            padding: 16px 20px;
+            text-align: center;
+            color: white;
+            border-bottom: 3px solid #fcd34d;
+        }
+        .loan-slip-body { padding: 16px; }
+        .slip-detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        .slip-detail-row:last-child { border-bottom: none; }
+        .slip-detail-label {
+            font-weight: 600;
+            color: #4b5563;
+            font-size: 13px;
+        }
+        .slip-detail-value {
+            font-weight: 500;
+            color: #1f2937;
+            font-size: 13px;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-50">
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- 🆕 TOP BAR / HEADER                                         -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <header class="bg-gradient-to-r from-emerald-800 to-emerald-600 text-white shadow-lg sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <button onclick="goBack()" 
+                        class="w-10 h-10 rounded-lg bg-white/20 hover:bg-white/30 transition flex items-center justify-center">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <div>
+                    <h1 class="text-lg font-bold">💳 লোন পরিশোধ</h1>
+                    <p class="text-xs opacity-90" id="headerUserName">লোড হচ্ছে...</p>
+                </div>
+            </div>
+            <img src="images/logo.png" 
+                 alt="TUKNBD" 
+                 class="w-10 h-10 rounded-lg bg-white/20 p-1"
+                 onerror="this.src='https://placehold.co/40x40/059669/white?text=T'">
+        </div>
+    </header>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- 🆕 MAIN CONTENT                                             -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <main class="max-w-4xl mx-auto px-3 py-4 pb-8">
+
+        <!-- লোডিং state -->
+        <div id="mainLoading" class="text-center py-20">
+            <div class="loading-spinner" style="width: 40px; height: 40px; border-width: 4px;"></div>
+            <p class="text-gray-500 mt-4">লোন তথ্য লোড হচ্ছে...</p>
+        </div>
+
+        <!-- No loan state -->
+        <div id="noLoanState" class="hidden bg-white rounded-2xl shadow-md p-8 text-center">
+            <i class="fas fa-inbox text-6xl text-gray-300 mb-4"></i>
+            <h2 class="text-xl font-bold text-gray-700 mb-2">কোনো সক্রিয় লোন নেই</h2>
+            <p class="text-gray-500 mb-4">আপনার কোনো অনুমোদিত লোন নেই।</p>
+            <button onclick="goBack()" class="bg-emerald-600 text-white px-6 py-2 rounded-lg hover:bg-emerald-700 transition">
+                <i class="fas fa-arrow-left mr-2"></i>ড্যাশবোর্ডে ফিরুন
+            </button>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!-- 💳 LOAN REPAYMENT CONTENT                                  -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <div id="repaymentContent" class="hidden">
+            
+            <!-- ═══ Loan Summary Card ═══ -->
+            <div class="bg-gradient-to-br from-rose-50 to-red-50 rounded-2xl shadow-lg border-2 border-rose-200 p-5 mb-4">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-rose-500 to-red-600 flex items-center justify-center">
+                        <i class="fas fa-hand-holding-usd text-white text-xl"></i>
+                    </div>
+                    <div class="flex-1">
+                        <h2 class="text-lg font-bold text-gray-800" id="loanTypeDisplay">লোন</h2>
+                        <p class="text-xs text-gray-500" id="loanAppNo">অ্যাপ্লিকেশন নং: -</p>
+                    </div>
+                    <span class="bg-emerald-500 text-white text-xs font-bold px-3 py-1 rounded-full">
+                        <i class="fas fa-check-circle mr-1"></i>অনুমোদিত
+                    </span>
+                </div>
+                
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div class="bg-white rounded-xl p-3 border border-rose-200">
+                        <p class="text-[10px] text-gray-500">মোট লোন</p>
+                        <p class="text-lg font-bold text-emerald-600" id="summaryTotalLoan">৳ ০</p>
+                    </div>
+                    <div class="bg-white rounded-xl p-3 border border-rose-200">
+                        <p class="text-[10px] text-gray-500">পরিশোধিত</p>
+                        <p class="text-lg font-bold text-blue-600" id="summaryPaid">৳ ০</p>
+                    </div>
+                    <div class="bg-white rounded-xl p-3 border border-rose-200">
+                        <p class="text-[10px] text-gray-500">বাকি ব্যালেন্স</p>
+                        <p class="text-lg font-bold text-red-600" id="summaryRemaining">৳ ০</p>
+                    </div>
+                    <div class="bg-white rounded-xl p-3 border border-rose-200">
+                        <p class="text-[10px] text-gray-500">প্রতি কিস্তি</p>
+                        <p class="text-lg font-bold text-rose-600" id="summaryEmi">৳ ০</p>
+                    </div>
+                </div>
+                
+                <div class="mt-3 pt-3 border-t border-rose-200 grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+                    <div><span class="text-gray-500">মেয়াদ:</span> <span class="font-semibold" id="summaryDuration">-</span></div>
+                    <div><span class="text-gray-500">বিলম্ব ফি:</span> <span class="font-semibold text-red-600" id="summaryLateFee">-</span></div>
+                    <div><span class="text-gray-500">শুরুর তারিখ:</span> <span class="font-semibold" id="summaryStartDate">-</span></div>
+                </div>
+            </div>
+
+            <!-- ═══ EMI Selection ═══ -->
+            <div class="bg-white rounded-2xl shadow-md p-4 mb-4">
+                <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <h3 class="font-bold text-gray-800">
+                        <i class="fas fa-calendar-alt text-emerald-600 mr-2"></i>
+                        কিস্তি নির্বাচন করুন
+                    </h3>
+                    <div class="flex gap-2 flex-wrap">
+                        <button onclick="selectAllPending()" class="text-xs bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg hover:bg-emerald-200 transition font-semibold">
+                            <i class="fas fa-check-double mr-1"></i>সব বাকি
+                        </button>
+                        <button onclick="deselectAll()" class="text-xs bg-gray-100 text-gray-700 px-3 py-1.5 rounded-lg hover:bg-gray-200 transition font-semibold">
+                            <i class="fas fa-times mr-1"></i>সব বাদ
+                        </button>
+                    </div>
+                </div>
+                
+                <div id="installmentsList" class="space-y-2 max-h-96 overflow-y-auto">
+                    <!-- JS দিয়ে populate হবে -->
+                </div>
+            </div>
+
+            <!-- ═══ Payment Method ═══ -->
+            <div id="paymentSection" class="hidden bg-white rounded-2xl shadow-md p-4 mb-4">
+                <h3 class="font-bold text-gray-800 mb-3">
+                    <i class="fas fa-credit-card text-blue-600 mr-2"></i>
+                    পেমেন্ট তথ্য
+                </h3>
+                
+                <div class="mb-3">
+                    <label class="block text-gray-700 font-semibold mb-2 text-sm">
+                        পেমেন্ট মাধ্যম <span class="text-red-500">*</span>
+                    </label>
+                    <select id="paymentMethod" 
+                            class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-emerald-500 focus:outline-none"
+                            onchange="togglePaymentFields()">
+                        <option value="">-- নির্বাচন করুন --</option>
+                        <option value="bKash">💚 বিকাশ (bKash)</option>
+                        <option value="Nagad">🧡 নগদ (Nagad)</option>
+                        <option value="Rocket">💜 রকেট (Rocket)</option>
+                        <option value="bank">🏦 ব্যাংক</option>
+                        <option value="cash">💵 ক্যাশ</option>
+                    </select>
+                </div>
+                
+                <!-- Mobile Money Fields -->
+                <div id="mobileFields" class="hidden space-y-3">
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-1 text-sm">
+                            যে নম্বর থেকে পাঠিয়েছেন <span class="text-red-500">*</span>
+                        </label>
+                        <input type="tel" 
+                               id="senderMobile" 
+                               placeholder="01XXXXXXXXX" 
+                               class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-emerald-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-1 text-sm">
+                            ট্রানজেকশন আইডি <span class="text-red-500">*</span>
+                        </label>
+                        <input type="text" 
+                               id="transactionId" 
+                               placeholder="আপনার সদস্য আইডির শেষ ৪ সংখ্যা" 
+                               class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-emerald-500 focus:outline-none">
+                    </div>
+                </div>
+                
+                <!-- Bank Fields -->
+                <div id="bankFields" class="hidden space-y-3">
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-1 text-sm">
+                            ব্যাংকের নাম <span class="text-red-500">*</span>
+                        </label>
+                        <input type="text" id="bankName" placeholder="ব্যাংকের নাম" 
+                               class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-emerald-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-1 text-sm">শাখার নাম</label>
+                        <input type="text" id="branchName" placeholder="শাখার নাম" 
+                               class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-emerald-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-1 text-sm">
+                            একাউন্ট নম্বর <span class="text-red-500">*</span>
+                        </label>
+                        <input type="text" id="accountNo" placeholder="একাউন্ট নম্বর" 
+                               class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-emerald-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-1 text-sm">একাউন্টের নাম</label>
+                        <input type="text" id="accountName" placeholder="একাউন্টের নাম" 
+                               class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-emerald-500 focus:outline-none">
+                    </div>
+                </div>
+                
+                <!-- Cash Info -->
+                <div id="cashInfo" class="hidden bg-amber-50 border border-amber-200 p-3 rounded-lg">
+                    <p class="text-sm text-amber-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        ক্যাশ পেমেন্টের জন্য অফিসে যোগাযোগ করুন।
+                    </p>
+                </div>
+            </div>
+
+            <!-- ═══ Summary & Submit ═══ -->
+            <div id="summarySection" class="hidden bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl shadow-md border-2 border-amber-200 p-4 mb-4">
+                <h3 class="font-bold text-amber-800 mb-3">
+                    <i class="fas fa-clipboard-list mr-2"></i>পরিশোধ সারাংশ
+                </h3>
+                
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+                    <div class="bg-white rounded-lg p-3">
+                        <p class="text-[10px] text-gray-500">নির্বাচিত কিস্তি</p>
+                        <p class="text-lg font-bold text-gray-800" id="selectedCount">০</p>
+                    </div>
+                    <div class="bg-white rounded-lg p-3">
+                        <p class="text-[10px] text-gray-500">মূল কিস্তি</p>
+                        <p class="text-lg font-bold text-emerald-600" id="totalEmi">৳ ০</p>
+                    </div>
+                    <div class="bg-white rounded-lg p-3">
+                        <p class="text-[10px] text-gray-500">বিলম্ব ফি</p>
+                        <p class="text-lg font-bold text-red-600" id="totalLateFee">৳ ০</p>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-xl p-4 border-2 border-amber-300">
+                    <p class="text-xs text-gray-500 mb-1">মোট পরিশোধ্য</p>
+                    <p class="text-3xl font-extrabold text-rose-700" id="totalAmount">৳ ০</p>
+                </div>
+            </div>
+
+            <!-- Submit Button -->
+            <button onclick="submitRepayment()" 
+                    id="submitBtn"
+                    disabled
+                    class="w-full bg-gradient-to-r from-rose-600 to-red-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:from-rose-700 hover:to-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                <i class="fas fa-check-circle mr-2"></i>
+                <span id="submitBtnText">লোন পরিশোধ করুন</span>
+            </button>
+            
+            <p class="text-center text-xs text-gray-500 mt-3">
+                <i class="fas fa-info-circle mr-1"></i>
+                পরিশোধের পর Admin approve করলে আপনার লোন আপডেট হবে
+            </p>
+        </div>
+
+    </main>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- 🧾 SLIP MODAL                                               -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <div id="slipModal" 
+         class="fixed inset-0 z-50 hidden items-center justify-center p-4 overflow-y-auto"
+         style="background: rgba(0,0,0,0.7);"
+         onclick="closeSlipModalOnOverlay(event)">
+        <div class="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" 
+             onclick="event.stopPropagation()">
+            <div class="sticky top-0 bg-white border-b p-4 flex justify-between items-center z-10">
+                <h2 class="text-xl font-bold text-emerald-700">
+                    <i class="fas fa-receipt mr-2"></i>পরিশোধ স্লিপ
+                </h2>
+                <button onclick="closeSlipModal()" 
+                        class="text-gray-500 hover:text-red-500 text-2xl">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="p-4" id="slipContent"></div>
+            <div class="p-4 border-t flex gap-2 justify-center flex-wrap">
+                <button onclick="printSlip()" class="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 transition">
+                    <i class="fas fa-print mr-1"></i>প্রিন্ট
+                </button>
+                <button onclick="closeSlipModal()" class="bg-red-500 text-white px-5 py-2 rounded-lg hover:bg-red-600 transition">
+                    <i class="fas fa-times mr-1"></i>বন্ধ
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- 🔧 JAVASCRIPT                                               -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <script>
+        // ============================================================
+        // 🔧 Configuration
+        // ============================================================
+        const SUPABASE_URL = 'https://bffomfsffrtfgxyetzvm.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_A0BluIVwJ4M3Zd3JWpBoPg_NJSRu81D';
+        
+        let supabaseClient = null;
+        let currentUser = null;
+        let loanData = null;
+        let emiData = [];
+        let selectedInstallments = [];
+        
+        // ============================================================
+        // 🔧 Utility Functions
+        // ============================================================
+        function showToast(message, type = 'info') {
+            const colors = {
+                success: 'bg-green-600',
+                error: 'bg-red-600',
+                warning: 'bg-amber-600',
+                info: 'bg-blue-600'
+            };
+            const toast = document.createElement('div');
+            toast.className = `toast-notification ${colors[type] || colors.info}`;
+            toast.innerHTML = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
+        }
+        
+        function formatAmount(amt) {
+            const num = Number(amt) || 0;
+            return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        
+        function formatDateBD(dateString) {
+            if (!dateString) return '-';
+            try {
+                const d = new Date(dateString);
+                if (isNaN(d.getTime())) return '-';
+                return d.toLocaleDateString('bn-BD', {
+                    year: 'numeric', month: 'long', day: 'numeric'
+                });
+            } catch(e) { return '-'; }
+        }
+        
+        async function initSupabase() {
+            if (supabaseClient) return supabaseClient;
+            try {
+                supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                return supabaseClient;
+            } catch(e) {
+                console.error('Supabase init error:', e);
+                return null;
+            }
+        }
+        
+        function goBack() {
+            window.location.href = 'member-dashboard.html';
+        }
+        
+        // ============================================================
+        // 🚀 Initialization
+        // ============================================================
+        (function checkAuth() {
+            const userData = sessionStorage.getItem('tukn_logged_member');
+            
+            if (!userData) {
+                alert('আপনি লগইন করেননি!');
+                window.location.href = 'login.html';
+                return;
+            }
+            
+            const parsed = JSON.parse(userData);
+            
+            if (parsed.status !== 'active' && parsed.status !== 'approved') {
+                alert('আপনার একাউন্ট অনুমোদিত নয়!');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            currentUser = {
+                id: parsed.member_id || parsed.id,
+                name: parsed.full_name || parsed.name,
+                mobile: parsed.mobile
+            };
+            
+            console.log('✅ Logged in:', currentUser);
+            
+            // Header update
+            const headerName = document.getElementById('headerUserName');
+            if (headerName) {
+                headerName.textContent = `স্বাগতম, ${currentUser.name}`;
+            }
+        })();
+        
+        // ============================================================
+        // 📊 Load Loan Data
+        // ============================================================
+        async function loadLoanData() {
+            const client = await initSupabase();
+            if (!client) {
+                showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+                document.getElementById('mainLoading').classList.add('hidden');
+                return;
+            }
+            
+            try {
+                // ১. অনুমোদিত লোন লোড
+                const { data: loans, error: loanError } = await client
+                    .from('loan_applications')
+                    .select('*')
+                    .eq('member_id', currentUser.id)
+                    .eq('status', 'approved')
+                    .order('approved_at', { ascending: false });
+                
+                if (loanError) throw loanError;
+                
+                if (!loans || loans.length === 0) {
+                    document.getElementById('mainLoading').classList.add('hidden');
+                    document.getElementById('noLoanState').classList.remove('hidden');
+                    return;
+                }
+                
+                loanData = loans[0];
+                console.log('✅ Loan loaded:', loanData);
+                
+                // ২. Loan payments লোড
+                const { data: payments, error: payError } = await client
+                    .from('loan_payments')
+                    .select('*')
+                    .eq('loan_id', loanData.id)
+                    .order('installment_no', { ascending: true });
+                
+                if (payError) {
+                    console.warn('⚠️ Payments load warning:', payError);
+                }
+                
+                console.log('✅ Payments loaded:', payments?.length || 0);
+                
+                // ৩. EMI schedule তৈরি
+                generateEMISchedule(loanData, payments || []);
+                
+                // ৪. UI দেখান
+                document.getElementById('mainLoading').classList.add('hidden');
+                document.getElementById('repaymentContent').classList.remove('hidden');
+                
+                // ৫. Summary আপডেট
+                updateLoanSummary();
+                
+            } catch(e) {
+                console.error('❌ Load error:', e);
+                showToast('❌ লোন তথ্য লোড করতে সমস্যা: ' + e.message, 'error');
+                document.getElementById('mainLoading').classList.add('hidden');
+            }
+        }
+        
+        // ============================================================
+        // 📅 Generate EMI Schedule
+        // ============================================================
+        function generateEMISchedule(loan, payments) {
+            emiData = [];
+            
+            const emiAmount = loan.emi_amount || (loan.amount / loan.duration_months);
+            const totalEmi = loan.duration_months || 12;
+            const startDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
+            const gracePeriod = loan.grace_period_days || 5;
+            const lateFeePercent = loan.late_fee_percent || 0;
+            
+            const paymentMap = {};
+            payments.forEach(p => {
+                paymentMap[p.installment_no] = p;
+            });
+            
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            
+            for (let i = 1; i <= totalEmi; i++) {
+                const dueDate = new Date(startDate);
+                dueDate.setMonth(startDate.getMonth() + i);
+                dueDate.setHours(0, 0, 0, 0);
+                
+                const payment = paymentMap[i];
+                
+                let status = 'pending';
+                let lateFee = 0;
+                let isPaid = false;
+                let isLocked = false;
+                let isWaived = false;
+                
+                if (payment) {
+                    status = payment.status || 'pending';
+                    lateFee = Number(payment.late_fee) || 0;
+                    isLocked = payment.late_fee_locked === true;
+                    isWaived = payment.installment_waived === true;
+                    
+                    if (status === 'approved' || status === 'paid') {
+                        isPaid = true;
+                    }
+                }
+                
+                // লাইভ late fee হিসাব (শুধু pending + not locked)
+                if (!isPaid && !isLocked && !isWaived && status !== 'pending_verification') {
+                    const graceEndDate = new Date(dueDate);
+                    graceEndDate.setDate(dueDate.getDate() + gracePeriod);
+                    
+                    if (today > graceEndDate) {
+                        const daysOverdue = Math.floor((today - graceEndDate) / (1000 * 60 * 60 * 24));
+                        const monthsOverdue = Math.max(1, Math.ceil(daysOverdue / 30));
+                        lateFee = Math.max(0, emiAmount * (lateFeePercent / 100) * monthsOverdue);
+                    }
+                }
+                
+                emiData.push({
+                    installmentNo: i,
+                    dueDate: dueDate,
+                    dueDateStr: formatDateBD(dueDate.toISOString()),
+                    emiAmount: emiAmount,
+                    lateFee: lateFee,
+                    totalAmount: emiAmount + lateFee,
+                    status: status,
+                    isPaid: isPaid,
+                    isLocked: isLocked,
+                    isWaived: isWaived,
+                    payment: payment
+                });
+            }
+            
+            renderInstallments();
+        }
+        
+        // ============================================================
+        // 🎨 Render Installments
+        // ============================================================
+        function renderInstallments() {
+            const container = document.getElementById('installmentsList');
+            if (!container) return;
+            
+            if (emiData.length === 0) {
+                container.innerHTML = '<p class="text-center text-gray-400 py-4">কোনো কিস্তি নেই</p>';
+                return;
+            }
+            
+            container.innerHTML = emiData.map(emi => {
+                const isDisabled = emi.isPaid || emi.isWaived || emi.status === 'pending_verification';
+                
+                let statusBadge = '';
+                if (emi.isPaid) {
+                    statusBadge = '<span class="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full">✅ পরিশোধিত</span>';
+                } else if (emi.isWaived) {
+                    statusBadge = '<span class="bg-green-100 text-green-700 text-[10px] font-bold px-2 py-0.5 rounded-full">🎁 মওকুফ</span>';
+                } else if (emi.status === 'pending_verification') {
+                    statusBadge = '<span class="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full">⏳ যাচাইকরণে</span>';
+                } else {
+                    const today = new Date();
+                    today.setHours(0,0,0,0);
+                    if (today > emi.dueDate) {
+                        statusBadge = '<span class="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-0.5 rounded-full">⚠️ বিলম্বিত</span>';
+                    } else {
+                        statusBadge = '<span class="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded-full">⏳ অপেক্ষমান</span>';
+                    }
+                }
+                
+                return `
+                    <label class="flex items-start gap-3 p-3 border-2 rounded-xl cursor-pointer transition
+                        ${isDisabled ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed' : 'bg-white border-gray-200 hover:border-emerald-400 hover:bg-emerald-50'}">
+                        
+                        <input type="checkbox" 
+                               class="installment-cb mt-1 w-5 h-5 rounded" 
+                               value="${emi.installmentNo}"
+                               data-emi="${emi.emiAmount}"
+                               data-latefee="${emi.lateFee}"
+                               data-total="${emi.totalAmount}"
+                               ${isDisabled ? 'disabled' : ''}
+                               onchange="handleInstallmentChange()">
+                        
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center justify-between gap-2 flex-wrap">
+                                <div class="flex items-center gap-2">
+                                    <span class="font-bold text-gray-800">কিস্তি #${emi.installmentNo}</span>
+                                    ${statusBadge}
+                                </div>
+                                <span class="text-lg font-bold text-emerald-600">৳${formatAmount(emi.emiAmount)}</span>
+                            </div>
+                            
+                            <div class="mt-1 grid grid-cols-2 gap-2 text-xs text-gray-500">
+                                <div><i class="fas fa-calendar mr-1"></i>${emi.dueDateStr}</div>
+                                ${emi.lateFee > 0 ? `
+                                    <div class="text-red-600 font-semibold">
+                                        <i class="fas fa-exclamation-triangle mr-1"></i>বিলম্ব ফি: ৳${formatAmount(emi.lateFee)}
+                                    </div>
+                                ` : ''}
+                            </div>
+                            
+                            ${emi.lateFee > 0 ? `
+                                <div class="mt-1 text-xs text-blue-600 font-semibold">
+                                    মোট: ৳${formatAmount(emi.totalAmount)}
+                                </div>
+                            ` : ''}
+                        </div>
+                    </label>
+                `;
+            }).join('');
+        }
+        
+        // ============================================================
+        // 🔄 Handle Installment Change
+        // ============================================================
+        function handleInstallmentChange() {
+            const checkboxes = document.querySelectorAll('.installment-cb:checked');
+            selectedInstallments = Array.from(checkboxes).map(cb => parseInt(cb.value));
+            
+            if (selectedInstallments.length === 0) {
+                document.getElementById('paymentSection').classList.add('hidden');
+                document.getElementById('summarySection').classList.add('hidden');
+                document.getElementById('submitBtn').disabled = true;
+                return;
+            }
+            
+            // Payment section দেখান
+            document.getElementById('paymentSection').classList.remove('hidden');
+            document.getElementById('summarySection').classList.remove('hidden');
+            
+            // Summary calculate
+            let totalEmi = 0;
+            let totalLateFee = 0;
+            let totalAmount = 0;
+            
+            checkboxes.forEach(cb => {
+                totalEmi += parseFloat(cb.dataset.emi) || 0;
+                totalLateFee += parseFloat(cb.dataset.latefee) || 0;
+                totalAmount += parseFloat(cb.dataset.total) || 0;
+            });
+            
+            document.getElementById('selectedCount').textContent = selectedInstallments.length;
+            document.getElementById('totalEmi').textContent = '৳ ' + formatAmount(totalEmi);
+            document.getElementById('totalLateFee').textContent = '৳ ' + formatAmount(totalLateFee);
+            document.getElementById('totalAmount').textContent = '৳ ' + formatAmount(totalAmount);
+            
+            // Submit enable (payment method select করলে)
+            validateSubmitButton();
+        }
+        
+        // ============================================================
+        // 🎛️ Select/Deselect All
+        // ============================================================
+        function selectAllPending() {
+            document.querySelectorAll('.installment-cb:not(:disabled)').forEach(cb => {
+                cb.checked = true;
+            });
+            handleInstallmentChange();
+        }
+        
+        function deselectAll() {
+            document.querySelectorAll('.installment-cb').forEach(cb => {
+                cb.checked = false;
+            });
+            handleInstallmentChange();
+        }
+        
+        // ============================================================
+        // 💳 Toggle Payment Fields
+        // ============================================================
+        function togglePaymentFields() {
+            const method = document.getElementById('paymentMethod').value;
+            
+            document.getElementById('mobileFields').classList.add('hidden');
+            document.getElementById('bankFields').classList.add('hidden');
+            document.getElementById('cashInfo').classList.add('hidden');
+            
+            if (method === 'bKash' || method === 'Nagad' || method === 'Rocket') {
+                document.getElementById('mobileFields').classList.remove('hidden');
+            } else if (method === 'bank') {
+                document.getElementById('bankFields').classList.remove('hidden');
+            } else if (method === 'cash') {
+                document.getElementById('cashInfo').classList.remove('hidden');
+            }
+            
+            validateSubmitButton();
+        }
+        
+        // ============================================================
+        // ✅ Validate Submit Button
+        // ============================================================
+        function validateSubmitButton() {
+            const btn = document.getElementById('submitBtn');
+            const method = document.getElementById('paymentMethod').value;
+            
+            if (selectedInstallments.length === 0 || !method) {
+                btn.disabled = true;
+                return;
+            }
+            
+            // Mobile money validation
+            if (method === 'bKash' || method === 'Nagad' || method === 'Rocket') {
+                const sender = document.getElementById('senderMobile').value.trim();
+                const txid = document.getElementById('transactionId').value.trim();
+                if (!sender || !txid) {
+                    btn.disabled = true;
+                    return;
+                }
+            }
+            
+            // Bank validation
+            if (method === 'bank') {
+                const bankName = document.getElementById('bankName').value.trim();
+                const accountNo = document.getElementById('accountNo').value.trim();
+                if (!bankName || !accountNo) {
+                    btn.disabled = true;
+                    return;
+                }
+            }
+            
+            btn.disabled = false;
+        }
+        
+        // Payment method এর input গুলোতে listener যোগ করুন
+        document.addEventListener('input', function(e) {
+            if (['senderMobile', 'transactionId', 'bankName', 'accountNo'].includes(e.target.id)) {
+                validateSubmitButton();
+            }
+        });
+        
+        // ============================================================
+        // 📊 Update Loan Summary
+        // ============================================================
+        function updateLoanSummary() {
+            if (!loanData) return;
+            
+            const totalPaid = emiData
+                .filter(e => e.isPaid)
+                .reduce((sum, e) => sum + e.emiAmount, 0);
+            
+            const remaining = (loanData.amount || 0) - totalPaid;
+            
+            document.getElementById('loanTypeDisplay').textContent = loanData.loan_type || 'সাধারণ লোন';
+            document.getElementById('loanAppNo').textContent = 'অ্যাপ্লিকেশন নং: ' + (loanData.application_no || '-');
+            document.getElementById('summaryTotalLoan').textContent = '৳ ' + formatAmount(loanData.amount);
+            document.getElementById('summaryPaid').textContent = '৳ ' + formatAmount(totalPaid);
+            document.getElementById('summaryRemaining').textContent = '৳ ' + formatAmount(remaining);
+            document.getElementById('summaryEmi').textContent = '৳ ' + formatAmount(loanData.emi_amount || 0);
+            document.getElementById('summaryDuration').textContent = (loanData.duration_months || 0) + ' মাস';
+            document.getElementById('summaryLateFee').textContent = (loanData.late_fee_percent || 0) + '%';
+            document.getElementById('summaryStartDate').textContent = formatDateBD(loanData.approved_at);
+        }
+        
+        // ============================================================
+        // 💳 SUBMIT Repayment
+        // ============================================================
+        async function submitRepayment() {
+            console.log('💳 Submit started');
+            
+            // ১. Validation
+            if (selectedInstallments.length === 0) {
+                showToast('❌ কমপক্ষে একটি কিস্তি নির্বাচন করুন!', 'error');
+                return;
+            }
+            
+            const method = document.getElementById('paymentMethod').value;
+            if (!method) {
+                showToast('❌ পেমেন্ট মাধ্যম নির্বাচন করুন!', 'error');
+                return;
+            }
+            
+            const senderMobile = document.getElementById('senderMobile')?.value.trim();
+            const transactionId = document.getElementById('transactionId')?.value.trim();
+            const bankName = document.getElementById('bankName')?.value.trim();
+            const branchName = document.getElementById('branchName')?.value.trim();
+            const accountNo = document.getElementById('accountNo')?.value.trim();
+            const accountName = document.getElementById('accountName')?.value.trim();
+            
+            if ((method === 'bKash' || method === 'Nagad' || method === 'Rocket') && (!senderMobile || !transactionId)) {
+                showToast('❌ সেন্ডার মোবাইল এবং ট্রানজেকশন আইডি দিন!', 'error');
+                return;
+            }
+            
+            if (method === 'bank' && (!bankName || !accountNo)) {
+                showToast('❌ ব্যাংকের নাম এবং একাউন্ট নম্বর দিন!', 'error');
+                return;
+            }
+            
+            // ২. Selection থেকে পরিমাণ হিসাব
+            const checkboxes = document.querySelectorAll('.installment-cb:checked');
+            let totalEmi = 0;
+            let totalLateFee = 0;
+            
+            checkboxes.forEach(cb => {
+                totalEmi += parseFloat(cb.dataset.emi) || 0;
+                totalLateFee += parseFloat(cb.dataset.latefee) || 0;
+            });
+            
+            const totalAmount = totalEmi + totalLateFee;
+            
+            // ৩. Confirm
+            const confirmMsg = 
+                `✅ নিশ্চিতকরণ\n` +
+                `━━━━━━━━━━━━━━━━━━━━━\n` +
+                `📋 কিস্তি: ${selectedInstallments.join(', ')}\n` +
+                `💰 মূল কিস্তি: ৳${formatAmount(totalEmi)}\n` +
+                (totalLateFee > 0 ? `⚠️ বিলম্ব ফি: ৳${formatAmount(totalLateFee)}\n` : '') +
+                `💳 মোট: ৳${formatAmount(totalAmount)}\n` +
+                `🏦 মাধ্যম: ${method}\n` +
+                `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `লোন পরিশোধ করতে চান?`;
+            
+            if (!confirm(confirmMsg)) return;
+            
+            // ৪. Submit
+            const btn = document.getElementById('submitBtn');
+            const btnText = document.getElementById('submitBtnText');
+            const originalText = btnText.textContent;
+            
+            btn.disabled = true;
+            btnText.innerHTML = '<span class="loading-spinner"></span> প্রসেসিং...';
+            
+            const client = await initSupabase();
+            if (!client) {
+                showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+                btn.disabled = false;
+                btnText.textContent = originalText;
+                return;
+            }
+            
+            try {
+                const now = new Date();
+                const txid = transactionId || `EMI-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+                let successCount = 0;
+                let failedInstallments = [];
+                
+                for (const installmentNo of selectedInstallments) {
+                    const emiItem = emiData.find(e => e.installmentNo === installmentNo);
+                    if (!emiItem) continue;
+                    
+                    const paymentRecord = {
+                        loan_id: loanData.id,
+                        installment_no: installmentNo,
+                        emi_amount: emiItem.emiAmount,
+                        late_fee: emiItem.lateFee,
+                        total_amount: emiItem.totalAmount,
+                        due_date: emiItem.dueDate.toISOString().split('T')[0],
+                        payment_date: now.toISOString(),
+                        status: 'pending_verification',
+                        transaction_id: txid,
+                        payment_method: method,
+                        sender_mobile: senderMobile || null,
+                        bank_name: bankName || null,
+                        branch_name: branchName || null,
+                        account_number: accountNo || null,
+                        account_name: accountName || null
+                    };
+                    
+                    // Existing চেক
+                    const { data: existing } = await client
+                        .from('loan_payments')
+                        .select('id')
+                        .eq('loan_id', loanData.id)
+                        .eq('installment_no', installmentNo)
+                        .maybeSingle();
+                    
+                    let dbError;
+                    if (existing) {
+                        const { error } = await client
+                            .from('loan_payments')
+                            .update(paymentRecord)
+                            .eq('id', existing.id);
+                        dbError = error;
+                    } else {
+                        const { error } = await client
+                            .from('loan_payments')
+                            .insert([paymentRecord]);
+                        dbError = error;
+                    }
+                    
+                    if (dbError) {
+                        console.error(`❌ Installment #${installmentNo}:`, dbError);
+                        failedInstallments.push(installmentNo);
+                    } else {
+                        successCount++;
+                        console.log(`✅ Installment #${installmentNo} success`);
+                    }
+                }
+                
+                if (successCount === 0) {
+                    showToast('❌ কোনো কিস্তি পরিশোধ হয়নি! আবার চেষ্টা করুন।', 'error');
+                    return;
+                }
+                
+                // Success message
+                if (failedInstallments.length > 0) {
+                    showToast(`⚠️ ${successCount}টি সফল, ${failedInstallments.length}টি ব্যর্থ!`, 'warning');
+                } else {
+                    showToast(`✅ ${successCount}টি কিস্তি পরিশোধের অনুরোধ জমা হয়েছে!\n⏳ Admin approve করলে আপডেট হবে।`, 'success');
+                }
+                
+                // নতুন balance আপডেট
+                const newRemaining = Math.max(0, (loanData.remaining_balance || loanData.amount) - totalEmi);
+                await client
+                    .from('loan_applications')
+                    .update({ remaining_balance: newRemaining })
+                    .eq('id', loanData.id);
+                
+                // Slip দেখান
+                showSlip(selectedInstallments, totalEmi, totalLateFee, method, txid);
+                
+                // Reload data
+                setTimeout(() => {
+                    loadLoanData();
+                }, 2000);
+                
+            } catch(e) {
+                console.error('❌ Submit error:', e);
+                showToast('❌ পরিশোধ করতে ব্যর্থ: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btnText.textContent = originalText;
+            }
+        }
+        
+        // ============================================================
+        // 🧾 Show Slip
+        // ============================================================
+        function showSlip(installments, totalEmi, totalLateFee, method, txid) {
+            const now = new Date();
+            const slipContent = document.getElementById('slipContent');
+            
+            slipContent.innerHTML = `
+                <div class="loan-slip-container">
+                    <div class="loan-slip-header">
+                        <img src="images/logo.png" 
+                             alt="TUKNBD" 
+                             style="width:55px;height:55px;border-radius:50%;border:2px solid rgba(255,255,255,0.3);object-fit:cover;margin-bottom:6px;"
+                             onerror="this.src='https://placehold.co/55x55/059669/white?text=T'">
+                        <h3 style="font-size:17px;margin:0;">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক</h3>
+                        <p style="font-size:11px;margin:3px 0 0;opacity:0.9;">লোন পরিশোধ স্লিপ</p>
+                    </div>
+                    
+                    <div class="loan-slip-body">
+                        <div class="slip-detail-row">
+                            <span class="slip-detail-label">স্লিপ নং</span>
+                            <span class="slip-detail-value" style="color:#059669;font-weight:bold;">${txid}</span>
+                        </div>
+                        <div class="slip-detail-row">
+                            <span class="slip-detail-label">সদস্য</span>
+                            <span class="slip-detail-value">${currentUser.name} (${currentUser.id})</span>
+                        </div>
+                        <div class="slip-detail-row">
+                            <span class="slip-detail-label">কিস্তি নম্বর</span>
+                            <span class="slip-detail-value">${installments.join(', ')}</span>
+                        </div>
+                        <div class="slip-detail-row">
+                            <span class="slip-detail-label">মূল কিস্তি</span>
+                            <span class="slip-detail-value">৳${formatAmount(totalEmi)}</span>
+                        </div>
+                        ${totalLateFee > 0 ? `
+                        <div class="slip-detail-row">
+                            <span class="slip-detail-label">বিলম্ব ফি</span>
+                            <span class="slip-detail-value" style="color:#dc2626;">৳${formatAmount(totalLateFee)}</span>
+                        </div>
+                        ` : ''}
+                        <div class="slip-detail-row">
+                            <span class="slip-detail-label" style="font-weight:bold;">মোট পরিশোধ</span>
+                            <span class="slip-detail-value" style="color:#059669;font-weight:bold;font-size:16px;">৳${formatAmount(totalEmi + totalLateFee)}</span>
+                        </div>
+                        <div class="slip-detail-row">
+                            <span class="slip-detail-label">মাধ্যম</span>
+                            <span class="slip-detail-value">${method}</span>
+                        </div>
+                        <div class="slip-detail-row">
+                            <span class="slip-detail-label">তারিখ</span>
+                            <span class="slip-detail-value">${formatDateBD(now.toISOString())}</span>
+                        </div>
+                        <div class="slip-detail-row">
+                            <span class="slip-detail-label">স্ট্যাটাস</span>
+                            <span class="slip-detail-value" style="background:#fed7aa;color:#9a3412;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">⏳ যাচাইকরণে</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('slipModal').classList.remove('hidden');
+            document.getElementById('slipModal').classList.add('flex');
+        }
+        
+        function closeSlipModal() {
+            document.getElementById('slipModal').classList.add('hidden');
+            document.getElementById('slipModal').classList.remove('flex');
+        }
+        
+        function closeSlipModalOnOverlay(e) {
+            if (e.target.id === 'slipModal') closeSlipModal();
+        }
+        
+        function printSlip() {
+            const content = document.getElementById('slipContent').innerHTML;
+            const win = window.open('', '_blank');
+            win.document.write(`
+                <html>
+                <head>
+                    <title>লোন পরিশোধ স্লিপ | TUKNBD</title>
+                    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+                    <style>
+                        * { font-family: 'Noto Sans Bengali', sans-serif; }
+                        body { padding: 20px; background: white; }
+                        .loan-slip-container { max-width: 650px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
+                        .loan-slip-header { background: linear-gradient(135deg, #064e3b, #059669); padding: 16px 20px; text-align: center; color: white; border-bottom: 3px solid #fcd34d; }
+                        .loan-slip-body { padding: 16px; }
+                        .slip-detail-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f3f4f6; }
+                        .slip-detail-label { font-weight: 600; color: #4b5563; font-size: 13px; }
+                        .slip-detail-value { font-weight: 500; color: #1f2937; font-size: 13px; }
+                    </style>
+                </head>
+                <body>
+                    ${content}
+                    <div style="text-align:center;margin-top:15px;">
+                        <button onclick="window.print()" style="background:#059669;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;">🖨️ প্রিন্ট</button>
+                    </div>
+                </body>
+                </html>
+            `);
+            win.document.close();
+            setTimeout(() => win.print(), 500);
+        }
+        
+        // ============================================================
+        // 🚀 Start
+        // ============================================================
+        document.addEventListener('DOMContentLoaded', function() {
+            if (!currentUser) return;
+            loadLoanData();
+        });
+        
+        // Global expose
+        window.goBack = goBack;
+        window.handleInstallmentChange = handleInstallmentChange;
+        window.selectAllPending = selectAllPending;
+        window.deselectAll = deselectAll;
+        window.togglePaymentFields = togglePaymentFields;
+        window.submitRepayment = submitRepayment;
+        window.closeSlipModal = closeSlipModal;
+        window.closeSlipModalOnOverlay = closeSlipModalOnOverlay;
+        window.printSlip = printSlip;
+        
+    </script>
+</body>
+</html>
