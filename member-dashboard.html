@@ -4466,6 +4466,45 @@ body.dark-mode .total-fund-card {
     </div>
 </div>
 
+        <!-- ═══════════════════════════════════════════════════════════ -->
+<!-- 🧾 WITHDRAWAL SLIP MODAL                                    -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<div id="withdrawalSlipModal" 
+     class="fixed inset-0 z-50 items-center justify-center p-4 bg-black/50 overflow-y-auto" 
+     style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:99999;" 
+     onclick="closeWithdrawalSlipModalOnOverlay(event)">
+    <div class="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" 
+         style="margin:auto; position:relative; z-index:100000;">
+        <div class="sticky top-0 bg-white border-b p-4 flex justify-between items-center">
+            <h2 class="text-2xl font-bold text-emerald-700">
+                <i class="fas fa-receipt mr-2"></i>উত্তোলন স্লিপ
+            </h2>
+            <button onclick="closeWithdrawalSlipModal()" 
+                    class="text-gray-500 hover:text-red-500 text-2xl modal-close-btn">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="p-6">
+            <div id="withdrawalSlipPrintArea"></div>
+        </div>
+        <div class="flex gap-3 justify-center p-4 no-print border-t flex-wrap">
+            <button onclick="downloadWithdrawalSlipPDF()" class="bg-emerald-600 text-white px-5 py-2 rounded-lg hover:bg-emerald-700 transition">
+                <i class="fas fa-file-pdf mr-1"></i>পিডিএফ
+            </button>
+            <button onclick="printWithdrawalSlip()" class="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 transition">
+                <i class="fas fa-print mr-1"></i>প্রিন্ট
+            </button>
+            <button onclick="shareWithdrawalSlipWhatsApp()" class="bg-green-600 text-white px-5 py-2 rounded-lg hover:bg-green-700 transition">
+                <i class="fab fa-whatsapp mr-1"></i>হোয়াটসঅ্যাপ
+            </button>
+            <button onclick="closeWithdrawalSlipModal()" class="bg-red-500 text-white px-5 py-2 rounded-lg hover:bg-red-600 transition">
+                <i class="fas fa-times mr-1"></i>বন্ধ
+            </button>
+        </div>
+    </div>
+</div>
+<!-- ═══ END WITHDRAWAL SLIP MODAL ═══ -->
+
 <!-- Password Change Modal -->
 <div id="passwordChangeModal" class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-black/50">
     <div class="bg-white rounded-2xl max-w-md w-full p-5"><h3 class="text-xl font-bold text-emerald-700 mb-4">পাসওয়ার্ড পরিবর্তন</h3><input type="password" id="currentPassword" placeholder="বর্তমান পাসওয়ার্ড" class="w-full p-2 border rounded-lg mb-2"><input type="password" id="newPassword" placeholder="নতুন পাসওয়ার্ড" class="w-full p-2 border rounded-lg mb-2"><input type="password" id="confirmPassword" placeholder="নতুন পাসওয়ার্ড নিশ্চিত করুন" class="w-full p-2 border rounded-lg mb-2"><button onclick="processChangePassword()" class="w-full bg-emerald-600 text-white py-2 rounded-lg">পরিবর্তন করুন</button></div>
@@ -15124,18 +15163,40 @@ async function checkAndFixBalanceMismatch() {
     showToast('✅ ব্যালেন্স রিফ্রেশ করা হয়েছে!', 'success');
 };
 
+    async function viewWithdrawalSlip(withdrawalId) {
+    console.log('🔍 viewWithdrawalSlip called:', withdrawalId);
+    
     // ============================================================
-// ===== WITHDRAWAL SLIP FUNCTIONS (NEW) =====
-// ============================================================
-
-let currentWithdrawalSlipData = null;
-
-async function viewWithdrawalSlip(withdrawalId) {
-    if (!withdrawalId) {
-        showToast('উত্তোলন আইডি পাওয়া যায়নি!', 'error');
+    // ✅ SAFETY CHECK ১: Modal & PrintArea আছে কিনা
+    // ============================================================
+    const modal = document.getElementById('withdrawalSlipModal');
+    const printArea = document.getElementById('withdrawalSlipPrintArea');
+    
+    if (!modal || !printArea) {
+        console.error('❌ withdrawalSlipModal বা withdrawalSlipPrintArea HTML এ নেই!');
+        showToast('⚠️ স্লিপ সুবিধা এখন উপলব্ধ নেই। অ্যাডমিনের সাথে যোগাযোগ করুন।', 'warning');
         return;
     }
     
+    // ============================================================
+    // ✅ SAFETY CHECK ২: withdrawalId আছে কিনা
+    // ============================================================
+    if (!withdrawalId) {
+        showToast('উত্তোলন আইডি পাওয়া যায়নি!', 'error');
+        return;
+    }
+    
+    // ============================================================
+    // ✅ SAFETY CHECK ৩: currentUser আছে কিনা
+    // ============================================================
+    if (!currentUser || !currentUser.id) {
+        showToast('সেশন এক্সপায়ার! পেজ রিলোড করুন।', 'error');
+        return;
+    }
+    
+    // ============================================================
+    // ✅ Supabase client
+    // ============================================================
     const client = await initSupabase();
     if (!client) {
         showToast('সার্ভার সংযোগ সমস্যা!', 'error');
@@ -15143,6 +15204,9 @@ async function viewWithdrawalSlip(withdrawalId) {
     }
     
     try {
+        // ============================================================
+        // 📥 Database থেকে withdrawal তথ্য লোড
+        // ============================================================
         const { data: withdrawal, error } = await client
             .from('withdrawals')
             .select('*')
@@ -15150,11 +15214,20 @@ async function viewWithdrawalSlip(withdrawalId) {
             .single();
             
         if (error || !withdrawal) {
-            showToast('উত্তোলন তথ্য পাওয়া যায়নি!', 'error');
+            console.error('❌ Withdrawal load error:', error);
+            showToast('উত্তোলন তথ্য পাওয়া যায়নি!', 'error');
             return;
         }
         
-        const now = getCurrentBangladeshTime();
+        console.log('✅ Withdrawal loaded:', withdrawal.id);
+        
+        // ============================================================
+        // 📅 তারিখ ও সময়
+        // ============================================================
+        const now = (typeof getCurrentBangladeshTime === 'function') 
+            ? getCurrentBangladeshTime() 
+            : new Date();
+            
         const slipDate = now.toLocaleDateString('bn-BD', {
             year: 'numeric',
             month: 'long',
@@ -15169,6 +15242,9 @@ async function viewWithdrawalSlip(withdrawalId) {
         
         const slipNumber = `WTH-${String(withdrawal.id).padStart(6, '0')}-${Date.now().toString().slice(-4)}`;
         
+        // ============================================================
+        // 🎨 Status নির্ধারণ
+        // ============================================================
         let statusText = 'বিচারাধীন';
         let statusIcon = '⏳';
         let statusBg = '#fed7aa';
@@ -15186,37 +15262,50 @@ async function viewWithdrawalSlip(withdrawalId) {
             statusColor = '#991b1b';
         }
         
-        let cleanType = withdrawal.type ? withdrawal.type.replace(/ উত্তোলন/g, '') : 'উত্তোলন';
+        // ============================================================
+        // 🏷️ Type ক্লিন
+        // ============================================================
+        let cleanType = withdrawal.type 
+            ? withdrawal.type.replace(/ উত্তোলন/g, '') 
+            : 'উত্তোলন';
         
+        // ============================================================
+        // 💳 Payment method
+        // ============================================================
         let methodDisplay = withdrawal.payment_method || '-';
         let methodIcon = '';
-        if(methodDisplay === 'bkash' || methodDisplay === 'bKash') {
+        
+        const methodLower = methodDisplay.toLowerCase();
+        if (methodLower === 'bkash') {
             methodIcon = '💚';
             methodDisplay = 'bKash';
-        } else if(methodDisplay === 'nagad' || methodDisplay === 'Nagad') {
+        } else if (methodLower === 'nagad') {
             methodIcon = '🧡';
             methodDisplay = 'Nagad';
-        } else if(methodDisplay === 'rocket' || methodDisplay === 'Rocket') {
+        } else if (methodLower === 'rocket') {
             methodIcon = '💜';
             methodDisplay = 'Rocket';
-        } else if(methodDisplay === 'bank' || methodDisplay === 'ব্যাংক') {
+        } else if (methodLower === 'bank' || methodLower === 'ব্যাংক') {
             methodIcon = '🏦';
             methodDisplay = 'ব্যাংক';
-        } else if(methodDisplay === 'cash' || methodDisplay === 'ক্যাশ') {
+        } else if (methodLower === 'cash' || methodLower === 'ক্যাশ') {
             methodIcon = '💵';
             methodDisplay = 'ক্যাশ';
         }
         
+        // ============================================================
+        // 📋 Payment details HTML
+        // ============================================================
         let paymentDetailsHtml = '';
-        if (withdrawal.payment_method === 'bkash' || withdrawal.payment_method === 'nagad' || withdrawal.payment_method === 'rocket' || 
-            withdrawal.payment_method === 'bKash' || withdrawal.payment_method === 'Nagad' || withdrawal.payment_method === 'Rocket') {
+        
+        if (['bkash', 'nagad', 'rocket', 'bKash', 'Nagad', 'Rocket'].includes(withdrawal.payment_method)) {
             paymentDetailsHtml = `
                 <div class="slip-detail-row">
                     <span class="slip-detail-label">📱 সেন্ডার মোবাইল</span>
                     <span class="slip-detail-value">${withdrawal.sender_mobile || '-'}</span>
                 </div>
             `;
-        } else if (withdrawal.payment_method === 'bank' || withdrawal.payment_method === 'ব্যাংক') {
+        } else if (['bank', 'ব্যাংক'].includes(withdrawal.payment_method)) {
             paymentDetailsHtml = `
                 <div class="slip-detail-row">
                     <span class="slip-detail-label">🏦 ব্যাংকের নাম</span>
@@ -15231,7 +15320,7 @@ async function viewWithdrawalSlip(withdrawalId) {
                     <span class="slip-detail-value">${withdrawal.account_name || '-'}</span>
                 </div>
             `;
-        } else if (withdrawal.payment_method === 'cash' || withdrawal.payment_method === 'ক্যাশ') {
+        } else if (['cash', 'ক্যাশ'].includes(withdrawal.payment_method)) {
             paymentDetailsHtml = `
                 <div class="slip-detail-row">
                     <span class="slip-detail-label">👤 গ্রহীতার নাম</span>
@@ -15248,6 +15337,9 @@ async function viewWithdrawalSlip(withdrawalId) {
             `;
         }
         
+        // ============================================================
+        // ❌ Rejection reason
+        // ============================================================
         let rejectionHtml = '';
         if (withdrawal.status === 'rejected' && withdrawal.rejection_reason) {
             rejectionHtml = `
@@ -15260,6 +15352,9 @@ async function viewWithdrawalSlip(withdrawalId) {
             `;
         }
         
+        // ============================================================
+        // 📝 Note
+        // ============================================================
         let noteHtml = '';
         if (withdrawal.note) {
             noteHtml = `
@@ -15270,6 +15365,9 @@ async function viewWithdrawalSlip(withdrawalId) {
             `;
         }
         
+        // ============================================================
+        // 🧾 Slip HTML তৈরি
+        // ============================================================
         const slipHTML = `
         <div style="max-width:550px; margin:0 auto; background:white; border:1px solid #e5e7eb; position:relative; overflow:hidden; font-family:'Noto Sans Bengali', sans-serif;">
             <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%) rotate(-30deg); font-size:80px; font-weight:800; color:rgba(5,150,105,0.04); white-space:nowrap; pointer-events:none; z-index:0; font-family:Arial,sans-serif;">TUKNBD</div>
@@ -15286,7 +15384,7 @@ async function viewWithdrawalSlip(withdrawalId) {
                 <div><span style="font-weight:600;">স্লিপ নং</span> <span style="color:#059669; font-weight:bold;">${slipNumber}</span></div>
                 <div><span style="font-weight:600;">উত্তোলনের তারিখ</span> <span>${withdrawal.requested_at ? formatDateTimeBD(withdrawal.requested_at) : '-'}</span></div>
                 <div><span style="font-weight:600;">জেনারেটের তারিখ</span> <span>${slipDate}</span></div>
-                <div><span style="font-weight:600;">জেনারেটের সময়</span> <span>${slipTime}</span></div>
+                <div><span style="font-weight:600;">জেনারেটের সময়</span> <span>${slipTime}</span></div>
                 ${withdrawal.approved_at ? `<div><span style="font-weight:600;">অনুমোদনের তারিখ</span> <span>${formatDateTimeBD(withdrawal.approved_at)}</span></div>` : ''}
             </div>
             
@@ -15335,6 +15433,9 @@ async function viewWithdrawalSlip(withdrawalId) {
         </div>
         `;
         
+        // ============================================================
+        // 🎨 Style tag
+        // ============================================================
         const styleTag = document.createElement('style');
         styleTag.id = 'withdrawalSlipStyle';
         styleTag.innerHTML = `
@@ -15359,9 +15460,14 @@ async function viewWithdrawalSlip(withdrawalId) {
             }
         `;
         
-        const printArea = document.getElementById('withdrawalSlipPrintArea');
+        // ============================================================
+        // ✅ Slip inject (Safety check এর পরে নিশ্চিত)
+        // ============================================================
         printArea.innerHTML = styleTag.outerHTML + slipHTML;
         
+        // ============================================================
+        // 💾 Global data save (PDF/WhatsApp এর জন্য)
+        // ============================================================
         currentWithdrawalSlipData = {
             slipNumber: slipNumber,
             withdrawalId: withdrawal.id,
@@ -15372,46 +15478,48 @@ async function viewWithdrawalSlip(withdrawalId) {
             status: withdrawal.status
         };
         
-        const modal = document.getElementById('withdrawalSlipModal');
-        if (modal) {
-            modal.style.display = 'flex';
-            modal.style.visibility = 'visible';
-            modal.style.opacity = '1';
-            modal.style.zIndex = '99999';
-            modal.style.position = 'fixed';
-            modal.style.top = '0';
-            modal.style.left = '0';
-            modal.style.right = '0';
-            modal.style.bottom = '0';
-            modal.style.backgroundColor = 'rgba(0,0,0,0.7)';
-            modal.style.overflowY = 'auto';
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            
-            const content = modal.querySelector('.bg-white');
-            if (content) {
-                content.style.display = 'block';
-                content.style.visibility = 'visible';
-                content.style.opacity = '1';
-                content.style.margin = 'auto';
-                content.style.maxHeight = '90vh';
-                content.style.overflowY = 'auto';
-                content.style.position = 'relative';
-                content.style.zIndex = '100000';
-                content.style.width = '100%';
-                content.style.maxWidth = '56rem';
-            }
-            document.body.style.overflow = 'hidden';
+        // ============================================================
+        // 🎬 Modal দেখান
+        // ============================================================
+        modal.style.display = 'flex';
+        modal.style.visibility = 'visible';
+        modal.style.opacity = '1';
+        modal.style.zIndex = '99999';
+        modal.style.position = 'fixed';
+        modal.style.top = '0';
+        modal.style.left = '0';
+        modal.style.right = '0';
+        modal.style.bottom = '0';
+        modal.style.backgroundColor = 'rgba(0,0,0,0.7)';
+        modal.style.overflowY = 'auto';
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        
+        const content = modal.querySelector('.bg-white');
+        if (content) {
+            content.style.display = 'block';
+            content.style.visibility = 'visible';
+            content.style.opacity = '1';
+            content.style.margin = 'auto';
+            content.style.maxHeight = '90vh';
+            content.style.overflowY = 'auto';
+            content.style.position = 'relative';
+            content.style.zIndex = '100000';
+            content.style.width = '100%';
+            content.style.maxWidth = '56rem';
         }
+        
+        document.body.style.overflow = 'hidden';
+        
         showToast('✅ উত্তোলন স্লিপ লোড সম্পূর্ণ!', 'success');
         
     } catch(e) {
         console.error('❌ viewWithdrawalSlip error:', e);
-        showToast('স্লিপ লোড করতে ব্যর্থ!', 'error');
+        showToast('স্লিপ লোড করতে ব্যর্থ: ' + (e.message || 'অজানা ত্রুটি'), 'error');
     }
 }
 
-function closeWithdrawalSlipModal() {
+    function closeWithdrawalSlipModal() {
     const modal = document.getElementById('withdrawalSlipModal');
     if(modal) {
         modal.style.display = 'none';
@@ -15422,7 +15530,8 @@ function closeWithdrawalSlipModal() {
         modal.classList.remove('flex');
         document.body.style.overflow = '';
     }
-    document.getElementById('withdrawalSlipPrintArea').innerHTML = '';
+    const printArea = document.getElementById('withdrawalSlipPrintArea');
+    if (printArea) printArea.innerHTML = '';
     currentWithdrawalSlipData = null;
 }
 
@@ -15444,10 +15553,8 @@ function downloadWithdrawalSlipPDF() {
         <style>
             body { font-family: 'Noto Sans Bengali', sans-serif; padding: 20px; background: white; }
             .slip-detail-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #f3f4f6; }
-            .slip-detail-row:last-child { border-bottom: none; }
             .slip-detail-label { font-weight: 600; color: #4b5563; font-size: 13px; }
             .slip-detail-value { font-weight: 500; color: #1f2937; font-size: 13px; }
-            @media print { body * { visibility: visible; } }
         </style>
     `;
     
@@ -15464,7 +15571,7 @@ function downloadWithdrawalSlipPDF() {
         jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
     }).from(element).save();
     
-    showToast('✅ পিডিএফ ডাউনলোড শুরু হয়েছে!', 'success');
+    showToast('✅ পিডিএফ ডাউনলোড শুরু হয়েছে!', 'success');
 }
 
 function printWithdrawalSlip() {
@@ -15484,7 +15591,6 @@ function printWithdrawalSlip() {
                 * { font-family: 'Noto Sans Bengali', sans-serif; }
                 body { padding: 20px; background: white; }
                 .slip-detail-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #f3f4f6; }
-                .slip-detail-row:last-child { border-bottom: none; }
                 .slip-detail-label { font-weight: 600; color: #4b5563; font-size: 13px; }
                 .slip-detail-value { font-weight: 500; color: #1f2937; font-size: 13px; }
                 @media print { body { padding: 0.1in; } .no-print { display: none !important; } }
@@ -15493,8 +15599,7 @@ function printWithdrawalSlip() {
         <body>
             ${content.innerHTML}
             <div class="no-print" style="text-align:center; margin-top:10px;">
-                <button onclick="window.print()" style="background:#059669; color:white; border:none; padding:8px 20px; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600;">🖨️ প্রিন্ট করুন</button>
-                <button onclick="window.close()" style="background:#6b7280; color:white; border:none; padding:8px 20px; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600; margin-left:10px;">❌ বন্ধ করুন</button>
+                <button onclick="window.print()" style="background:#059669; color:white; border:none; padding:8px 20px; border-radius:6px; cursor:pointer;">🖨️ প্রিন্ট</button>
             </div>
         </body>
         </html>
@@ -15510,7 +15615,7 @@ function shareWithdrawalSlipWhatsApp() {
         return;
     }
     
-    const text = `📄 TUKNBD উত্তোলন স্লিপ\n━━━━━━━━━━━━━━━━━━━\n🆔 স্লিপ নং: ${data.slipNumber}\n👤 সদস্য: ${data.memberName} (${data.memberId})\n💰 পরিমাণ: ${Number(data.amount || 0).toLocaleString()} টাকা\n📋 ধরন: ${data.type}\n📅 তারিখ: ${new Date().toLocaleDateString('bn-BD')}\n━━━━━━━━━━━━━━━━━━━\n🔗 TUKNBD - ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ`;
+    const text = `📄 TUKNBD উত্তোলন স্লিপ\n━━━━━━━━━━━━━━━━━━━\n🆔 স্লিপ নং: ${data.slipNumber}\n👤 সদস্য: ${data.memberName} (${data.memberId})\n💰 পরিমাণ: ${Number(data.amount || 0).toLocaleString()} টাকা\n📋 ধরন: ${data.type}\n📅 তারিখ: ${new Date().toLocaleDateString('bn-BD')}\n━━━━━━━━━━━━━━━━━━━\n🔗 TUKNBD - ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
 }
   
