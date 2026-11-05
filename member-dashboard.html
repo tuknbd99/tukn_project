@@ -4759,21 +4759,28 @@ async function updateProfitCard() {
     }
 }
 
-    // ═══════════════════════════════════════════════════════
-// 🏦 TOTAL FUND CARD Update Function
+   // ═══════════════════════════════════════════════════════
+// 🏦 TOTAL FUND CARD Update Function — FIXED VERSION
 // মোট তহবিল = সঞ্চয় + লভ্যাংশ + বোনাস - উত্তোলন
 // ═══════════════════════════════════════════════════════
 async function updateTotalFundCard() {
+    // ✅ Element গুলো একবারে নিন
     const totalEl = document.getElementById('totalFundAmount');
     const savingsEl = document.getElementById('fundSavingsValue');
     const profitEl = document.getElementById('fundProfitValue');
     const bonusEl = document.getElementById('fundBonusValue');
     const withdrawEl = document.getElementById('fundWithdrawnValue');
     
-    if (!totalEl) return;
+    // ✅ Safety check
+    if (!totalEl) {
+        console.warn('⚠️ totalFundAmount element পাওয়া যায়নি!');
+        return;
+    }
     
     try {
-        // ✅ Values নিন
+        // ============================================================
+        // ১. Values সংগ্রহ
+        // ============================================================
         const savings = Number(userFunds?.monthlySavings) || 0;
         const savingsProfit = Number(userFunds?.savingsProfit) || 0;
         const investmentProfit = Number(userFunds?.investmentProfit) || 0;
@@ -4781,20 +4788,22 @@ async function updateTotalFundCard() {
         const totalProfit = savingsProfit + investmentProfit + referralProfit;
         const bonus = Number(window._liveReferralBonus) || Number(userFunds?.referralBonus) || 0;
         
-        // ✅ উত্তোলনের পরিমাণ (approved withdrawals থেকে)
+        // ============================================================
+        // ২. উত্তোলিত পরিমাণ — approved withdrawals থেকে
+        // ============================================================
         let withdrawn = 0;
         try {
             const client = await initSupabase();
             if (client && currentUser?.id) {
-                const { data: approvedWithdrawals } = await client
+                const { data: approvedWithdrawals, error } = await client
                     .from('withdrawals')
                     .select('amount')
                     .eq('member_id', currentUser.id)
                     .eq('status', 'approved');
                 
-                if (approvedWithdrawals && approvedWithdrawals.length > 0) {
-                    withdrawn = approvedWithdrawals.reduce((sum, w) => 
-                        sum + (Number(w.amount) || 0), 0
+                if (!error && approvedWithdrawals && approvedWithdrawals.length > 0) {
+                    withdrawn = approvedWithdrawals.reduce(
+                        (sum, w) => sum + (Number(w.amount) || 0), 0
                     );
                 }
             }
@@ -4802,57 +4811,116 @@ async function updateTotalFundCard() {
             console.warn('⚠️ Withdrawn calculation error:', e);
         }
         
-        // ✅ মোট তহবিল calculation
-        const totalFund = savings + totalProfit + bonus - withdrawn;
+        // ============================================================
+        // ৩. মোট তহবিল হিসাব
+        //    = সঞ্চয় + লভ্যাংশ + বোনাস - উত্তোলিত
+        // ============================================================
+        const totalFund = Math.max(0, savings + totalProfit + bonus - withdrawn);
         
+        // ============================================================
+        // ৪. Debug log — সমস্যা ধরার জন্য
+        // ============================================================
         console.log('🏦 Total Fund Calculation:', {
-            savings,
-            totalProfit,
-            bonus,
-            withdrawn,
-            totalFund: Math.max(0, totalFund)
+            savings: savings,
+            totalProfit: totalProfit,
+            bonus: bonus,
+            withdrawn: withdrawn,
+            'সূত্র': `${savings} + ${totalProfit} + ${bonus} - ${withdrawn} = ${totalFund}`,
+            totalFund: totalFund
         });
         
-        // ✅ Animation সহ update
+        // ============================================================
+        // ৫. Format helper
+        // ============================================================
+        const formatVal = (v) => {
+            const num = Number(v) || 0;
+            return num.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        };
+        
+        const formattedTotal = '৳ ' + formatVal(totalFund);
+        
+        // ============================================================
+        // ৬. Total amount আপডেট (fallback সহ)
+        // ============================================================
         const oldText = totalEl.textContent || '৳ ০.০০';
         const oldValue = parseFloat(oldText.replace(/[^\d.]/g, '')) || 0;
-        const finalValue = Math.max(0, totalFund);
         
-        if (oldValue !== finalValue && typeof animateBalanceCounter === 'function') {
-            animateBalanceCounter(totalEl, oldValue, finalValue, 1200);
+        // ✅ animateBalanceCounter থাকলে animation, না হলে সরাসরি
+        if (typeof animateBalanceCounter === 'function' && oldValue !== totalFund) {
+            try {
+                animateBalanceCounter(totalEl, oldValue, totalFund, 1200);
+            } catch(animErr) {
+                console.warn('⚠️ Animation failed, setting directly:', animErr);
+                totalEl.textContent = formattedTotal;
+            }
         } else {
-            totalEl.textContent = '৳ ' + finalValue.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+            totalEl.textContent = formattedTotal;
         }
         
-        // ✅ Breakdown values update
-        const formatVal = (v) => '৳ ' + v.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        // ✅ নিশ্চিত করুন যে অবশেষে সঠিক text আছে (animation শেষে)
+        setTimeout(() => {
+            const finalText = totalEl.textContent || '';
+            const finalVal = parseFloat(finalText.replace(/[^\d.]/g, '')) || 0;
+            if (Math.abs(finalVal - totalFund) > 0.01) {
+                totalEl.textContent = formattedTotal;
+                console.log('🔧 Force-corrected total fund amount');
+            }
+        }, 1500);
         
-        if (savingsEl) savingsEl.textContent = formatVal(savings);
-        if (profitEl) profitEl.textContent = formatVal(totalProfit);
-        if (bonusEl) bonusEl.textContent = formatVal(bonus);
-        if (withdrawEl) withdrawEl.textContent = formatVal(withdrawn);
+        // ============================================================
+        // ৭. Breakdown values আপডেট
+        // ============================================================
+        if (savingsEl) savingsEl.textContent = '৳ ' + formatVal(savings);
+        if (profitEl) profitEl.textContent = '৳ ' + formatVal(totalProfit);
+        if (bonusEl) bonusEl.textContent = '৳ ' + formatVal(bonus);
+        if (withdrawEl) withdrawEl.textContent = '৳ ' + formatVal(withdrawn);
         
-        // ✅ userFunds এ withdrawn সেভ করুন
+        // ============================================================
+        // ৮. userFunds-এ সেভ করুন
+        // ============================================================
         userFunds.totalWithdrawn = withdrawn;
-        userFunds.totalFundBalance = finalValue;
+        userFunds.totalFundBalance = totalFund;
         
         console.log('✅ Total Fund Card updated:', {
-            savings: formatVal(savings),
-            profit: formatVal(totalProfit),
-            bonus: formatVal(bonus),
-            withdrawn: formatVal(withdrawn),
-            total: formatVal(finalValue)
+            display: formattedTotal,
+            breakdown: {
+                savings: '৳ ' + formatVal(savings),
+                profit: '৳ ' + formatVal(totalProfit),
+                bonus: '৳ ' + formatVal(bonus),
+                withdrawn: '৳ ' + formatVal(withdrawn)
+            }
         });
         
     } catch(e) {
         console.error('❌ updateTotalFundCard error:', e);
+        
+        // ✅ Fallback — শুধু সঠিক মান বসান
+        try {
+            const savings = Number(userFunds?.monthlySavings) || 0;
+            const savingsProfit = Number(userFunds?.savingsProfit) || 0;
+            const investmentProfit = Number(userFunds?.investmentProfit) || 0;
+            const referralProfit = Number(userFunds?.referralProfit) || 0;
+            const totalProfit = savingsProfit + investmentProfit + referralProfit;
+            const bonus = Number(window._liveReferralBonus) || Number(userFunds?.referralBonus) || 0;
+            const totalFund = Math.max(0, savings + totalProfit + bonus);
+            
+            totalEl.textContent = '৳ ' + totalFund.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        } catch(fallbackErr) {
+            console.error('❌ Fallback also failed:', fallbackErr);
+        }
     }
 }
 
 // ✅ Global Expose
 window.updateTotalFundCard = updateTotalFundCard;
 
-console.log('✅ TOTAL FUND CARD loaded!');
+console.log('✅ TOTAL FUND CARD loaded (FIXED VERSION)!');
 
 // ✅ Global Expose
 window.updateProfitCard = updateProfitCard;
