@@ -12584,22 +12584,32 @@ function filterBonusHistory(filterType) {
 
 // ═══════════════════════════════════════════════════════════
 // ✅ findBonusesForMember() — Mobile → Name → ID Priority
+// ✅ Level 1-10 ফিল্টার (নিরাপত্তার জন্য)
 // ═══════════════════════════════════════════════════════════
 function findBonusesForMember(member) {
     if (!member) return [];
     
     const map = window._bonusMap || { byMobile: {}, byName: {}, byId: {} };
     
+    // ✅ Helper — Level 1-10 ফিল্টার
+    const filterLevel = (logs) => {
+        if (!logs || !Array.isArray(logs)) return [];
+        return logs.filter(log => {
+            const lvl = Number(log.level);
+            return lvl >= 1 && lvl <= 10;
+        });
+    };
+    
     // Priority 1: Mobile
     const mobile = String(member.mobile || '').replace(/\D/g, '');
     if (mobile && map.byMobile && map.byMobile[mobile]) {
-        return map.byMobile[mobile];
+        return filterLevel(map.byMobile[mobile]);
     }
     
     // Priority 2: Name
     const nameKey = String(member.full_name || '').trim().toLowerCase();
     if (nameKey && map.byName && map.byName[nameKey]) {
-        return map.byName[nameKey];
+        return filterLevel(map.byName[nameKey]);
     }
     
     // Priority 3: ID (multiple formats)
@@ -12616,7 +12626,7 @@ function findBonusesForMember(member) {
         
         for (const k of idKeys) {
             if (map.byId[k] && map.byId[k].length > 0) {
-                return map.byId[k];
+                return filterLevel(map.byId[k]);
             }
         }
     }
@@ -13726,48 +13736,55 @@ function copyReferId() {
     showToast('রেফার আইডি কপি করা হয়েছে!','success'); 
 }
 
-// ============================================================
-// সঞ্চয় ট্রান্সফার ফাংশন
-// ============================================================
-// ============================================================
-// ট্রান্সফার মডাল - মাস লক সহ
-// ============================================================
-
 async function populateTransferMonths() {
     const container = document.getElementById('transferMonthsContainer');
-    if(container) {
+    if (!container) return;
+    
+    const currentYear = new Date().getFullYear();
+    const approvedMonths = await getApprovedMonths();
+    
+    const renderTransferMonths = (selectedYear) => {
         container.innerHTML = '';
         
-        // ডাটাবেস থেকে সদস্যের সব approved পেমেন্ট লোড করুন
-        const approvedMonths = await getApprovedMonths();
-        const currentYear = new Date().getFullYear();
-        
-        banglaMonths.forEach((month, index) => {
-            const monthYear = `${month}-${currentYear}`;
-            const isApproved = approvedMonths.includes(monthYear);
+        banglaMonths.forEach((month) => {
+            const monthYearKey = `${month}-${selectedYear}`;
+            const isApproved = approvedMonths.includes(monthYearKey);
             
-            let statusHtml = '';
-            let disabledAttr = '';
-            let labelStyle = '';
-            
-            if (isApproved) {
-                statusHtml = ` <span style="color:#059669; font-size:10px; font-weight:600;"><i class="fas fa-check-circle"></i> জমা আছে</span>`;
-                disabledAttr = 'disabled';
-                labelStyle = 'opacity:0.6; cursor:not-allowed; background:#f3f4f6; border-color:#d1d5db;';
-            }
+            const disabledAttr = isApproved ? 'disabled' : '';
+            const labelStyle = isApproved
+                ? 'opacity:0.6; cursor:not-allowed; background:#f9fafb; border-color:#d1d5db;'
+                : 'background:white;';
+            const textColor = isApproved ? 'color:#6b7280;' : 'color:#1f2937;';
+            const statusHtml = isApproved
+                ? `<span style="color:#059669; font-size:10px; font-weight:600;"><i class="fas fa-check-circle"></i> জমা আছে</span>`
+                : '';
+            const lockIcon = isApproved
+                ? `<i class="fas fa-lock" style="color:#9ca3af; font-size:12px; margin-left:auto;"></i>`
+                : '';
             
             container.innerHTML += `
-                <label style="${labelStyle} display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid ${isApproved ? '#d1d5db' : '#e5e7eb'}; border-radius:10px; ${isApproved ? 'background:#f9fafb;' : 'background:white;'}">
-                    <input type="checkbox" value="${month}" class="transfer-month-cb" ${disabledAttr} ${!isApproved ? 'onchange="updateTransferTotalAmount()"' : ''}>
-                    <span style="${isApproved ? 'color:#6b7280;' : 'color:#1f2937;'}">${month}</span>
+                <label style="${labelStyle} display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid ${isApproved ? '#d1d5db' : '#e5e7eb'}; border-radius:10px;">
+                    <input type="checkbox" value="${month}" class="transfer-month-cb" ${disabledAttr}
+                           ${!isApproved ? 'onchange="updateTransferTotalAmount()"' : ''}>
+                    <span style="${textColor}">${month} ${selectedYear}</span>
                     ${statusHtml}
-                    ${isApproved ? '<i class="fas fa-lock" style="color:#9ca3af; font-size:12px; margin-left:auto;"></i>' : ''}
+                    ${lockIcon}
                 </label>
             `;
         });
         
-        // ট্রান্সফার টোটাল আপডেট করুন
         updateTransferTotalAmount();
+    };
+    
+    renderTransferMonths(currentYear);
+    
+    // যদি ট্রান্সফার মডালে year selector থাকে
+    const transferYearSelect = document.getElementById('transferYearSelect');
+    if (transferYearSelect) {
+        transferYearSelect.onchange = () => {
+            const selectedYear = parseInt(transferYearSelect.value);
+            if (selectedYear) renderTransferMonths(selectedYear);
+        };
     }
 }
 
