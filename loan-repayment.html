@@ -642,60 +642,74 @@
             }
         })();
         
-        // ============================================================
-        // Load Loan Data
-        // ============================================================
         async function loadLoanData() {
-            const client = await initSupabase();
-            if (!client) {
-                showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        const client = await initSupabase();
+        if (!client) {
+            showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+            document.getElementById('mainLoading').classList.add('hidden');
+            return;
+        }
+        
+        try {
+            const { data: loans, error: loanError } = await client
+                .from('loan_applications')
+                .select('*')
+                .eq('member_id', currentUser.id)
+                .in('status', ['approved', 'active', 'completed'])
+                .order('approved_at', { ascending: false });
+            
+            if (loanError) throw loanError;
+            
+            if (!loans || loans.length === 0) {
                 document.getElementById('mainLoading').classList.add('hidden');
+                document.getElementById('noLoanState').classList.remove('hidden');
                 return;
             }
             
-            try {
-                const { data: loans, error: loanError } = await client
-                    .from('loan_applications')
-                    .select('*')
-                    .eq('member_id', currentUser.id)
-                    .eq('status', 'approved')
-                    .order('approved_at', { ascending: false });
-                
-                if (loanError) throw loanError;
-                
-                if (!loans || loans.length === 0) {
-                    document.getElementById('mainLoading').classList.add('hidden');
-                    document.getElementById('noLoanState').classList.remove('hidden');
-                    return;
-                }
-                
-                loanData = loans[0];
-                
-                const { data: payments, error: payError } = await client
-                    .from('loan_payments')
-                    .select('*')
-                    .eq('loan_id', loanData.id)
-                    .order('installment_no', { ascending: true });
-                
-                if (payError) console.warn('⚠️ Payments warning:', payError);
-                
-                // Save approved count for auto-refresh
-                lastApprovedCount = (payments || []).filter(p => p.status === 'approved' || p.status === 'paid').length;
-                
-                generateEMISchedule(loanData, payments || []);
-                
-                document.getElementById('mainLoading').classList.add('hidden');
-                document.getElementById('repaymentContent').classList.remove('hidden');
-                
+            loanData = loans[0];
+            
+            // ============================================================
+            // ✅ চেক করুন EMI তৈরি হয়েছে কিনা
+            // ============================================================
+            const profitPaid = loanData.profit_paid === true;
+            const servicePaid = loanData.service_charge_paid === true;
+            const emiCreated = loanData.emi_created === true;
+            
+            document.getElementById('mainLoading').classList.add('hidden');
+            document.getElementById('repaymentContent').classList.remove('hidden');
+            
+            if (!emiCreated) {
+                // ⏳ EMI এখনো তৈরি হয়নি → শুধু summary দেখান
+                showInitialPaymentPending();
                 updateLoanSummary();
-                loadPaymentHistory();
-                
-            } catch(e) {
-                console.error('❌ Load error:', e);
-                showToast('❌ লোন তথ্য লোড করতে সমস্যা: ' + e.message, 'error');
-                document.getElementById('mainLoading').classList.add('hidden');
+                return;
             }
+            
+            // ✅ EMI তৈরি → স্বাভাবিক flow
+            const { data: payments, error: payError } = await client
+                .from('loan_payments')
+                .select('*')
+                .eq('loan_id', loanData.id)
+                .order('installment_no', { ascending: true });
+            
+            if (payError) console.warn('⚠️ Payments warning:', payError);
+            
+            // EMI তালিকা দেখান
+            document.getElementById('installmentsList').style.display = 'block';
+            document.getElementById('paymentSection').style.display = 'block';
+            document.getElementById('summarySection').style.display = 'block';
+            document.getElementById('submitBtn').style.display = 'block';
+            
+            generateEMISchedule(loanData, payments || []);
+            updateLoanSummary();
+            loadPaymentHistory();
+            
+        } catch(e) {
+            console.error('❌ Load error:', e);
+            showToast('❌ লোন তথ্য লোড করতে সমস্যা: ' + e.message, 'error');
+            document.getElementById('mainLoading').classList.add('hidden');
         }
+    }
         
         // ============================================================
         // Generate EMI Schedule
@@ -703,7 +717,8 @@
         function generateEMISchedule(loan, payments) {
             emiData = [];
             
-            const emiAmount = loan.emi_amount || (loan.amount / loan.duration_months);
+            // ✅ শুধু মূল টাকার EMI (লভ্যাংশ/সার্ভিস বাদ)
+            const emiAmount = Number(loan.emi_amount) || (Number(loan.amount) / (loan.duration_months || 12));
             const totalEmi = loan.duration_months || 12;
             const startDate = loan.approved_at ? new Date(loan.approved_at) : new Date();
             const gracePeriod = loan.grace_period_days || 5;
@@ -974,77 +989,189 @@
             }
         });
         
-        // ============================================================
-        // Update Loan Summary (সব উন্নতি সহ)
-        // ============================================================
         function updateLoanSummary() {
-            if (!loanData) return;
+    if (!loanData) return;
+    
+    // ============================================================
+    // ১. মূল তথ্য
+    // ============================================================
+    const principalAmount = Number(loanData.amount) || 0;
+    const profitAmount = Number(loanData.profit_amount) || 0;
+    const serviceCharge = Number(loanData.service_charge) || 0;
+    
+    // পরিশোধের অবস্থা
+    const profitPaid = loanData.profit_paid === true;
+    const serviceChargePaid = loanData.service_charge_paid === true;
+    const emiCreated = loanData.emi_created === true;
+    
+    // মোট আদায়যোগ্য
+    const totalPayable = principalAmount + profitAmount + serviceCharge;
+    
+    // ============================================================
+    // ২. পরিশোধিত হিসাব
+    // ============================================================
+    
+    // লভ্যাংশ পরিশোধিত
+    const paidProfit = profitPaid ? profitAmount : 0;
+    // সার্ভিস পরিশোধিত
+    const paidService = serviceChargePaid ? serviceCharge : 0;
+    // EMI পরিশোধিত (শুধু মূল টাকা)
+    const paidPrincipal = emiData
+        .filter(e => e.isPaid)
+        .reduce((sum, e) => sum + e.emiAmount, 0);
+    
+    const totalPaid = paidProfit + paidService + paidPrincipal;
+    const remaining = Math.max(0, totalPayable - totalPaid);
+    
+    // কিস্তি কাউন্ট
+    const paidCount = emiData.filter(e => e.isPaid).length;
+    const pendingCount = emiData.filter(e => !e.isPaid && !e.isWaived).length;
+    const totalCount = emiData.length;
+    
+    const totalLateFee = emiData
+        .filter(e => e.isPaid)
+        .reduce((sum, e) => sum + e.lateFee, 0);
+    
+    // ============================================================
+    // ৩. UI Update — মূল তথ্য
+    // ============================================================
+    document.getElementById('loanTypeDisplay').textContent = loanData.loan_type || 'সাধারণ লোন';
+    document.getElementById('detailLoanType').textContent = loanData.loan_type || 'সাধারণ লোন';
+    document.getElementById('loanAppNo').textContent = 'অ্যাপ্লিকেশন নং: ' + (loanData.application_no || '-');
+    
+    document.getElementById('summaryTotalLoan').textContent = '৳ ' + formatAmount(totalPayable);
+    document.getElementById('summaryPaid').textContent = '৳ ' + formatAmount(totalPaid);
+    document.getElementById('summaryRemaining').textContent = '৳ ' + formatAmount(remaining);
+    document.getElementById('summaryEmi').textContent = '৳ ' + formatAmount(loanData.emi_amount || 0);
+    
+    // ============================================================
+    // ৪. হিসাবের বিবরণ
+    // ============================================================
+    document.getElementById('calcPrincipal').textContent = '৳ ' + formatAmount(principalAmount);
+    
+    // লভ্যাংশ — স্ট্যাটাস সহ
+    const profitEl = document.getElementById('calcProfit');
+    if (profitEl) {
+        profitEl.innerHTML = profitPaid 
+            ? `<span class="text-emerald-600">৳${formatAmount(profitAmount)} ✅</span>`
+            : `<span class="text-purple-600">৳${formatAmount(profitAmount)} <span class="text-red-500">❌</span></span>`;
+    }
+    
+    // সার্ভিস — স্ট্যাটাস সহ
+    const serviceEl = document.getElementById('calcService');
+    if (serviceEl) {
+        serviceEl.innerHTML = serviceChargePaid 
+            ? `<span class="text-emerald-600">৳${formatAmount(serviceCharge)} ✅</span>`
+            : `<span class="text-orange-600">৳${formatAmount(serviceCharge)} <span class="text-red-500">❌</span></span>`;
+    }
+    
+    document.getElementById('calcTotal').textContent = '৳ ' + formatAmount(totalPayable);
+    document.getElementById('calcEmi').textContent = 
+        emiCreated 
+            ? `৳${formatAmount(loanData.emi_amount || 0)} × ${loanData.duration_months || 0} মাস`
+            : '⏳ EMI এখনো তৈরি হয়নি';
+    
+    // ============================================================
+    // ৫. Progress Bar
+    // ============================================================
+    const progressPercent = totalPayable > 0 
+        ? Math.min(100, Math.round((totalPaid / totalPayable) * 100))
+        : 0;
+    
+    document.getElementById('progressPercent').textContent = progressPercent + '%';
+    document.getElementById('progressBar').style.width = progressPercent + '%';
+    document.getElementById('progressPaidText').textContent = '৳ ' + formatAmount(totalPaid) + ' পরিশোধিত';
+    document.getElementById('progressTotalText').textContent = '৳ ' + formatAmount(totalPayable) + ' মোট';
+    
+    // ============================================================
+    // ৬. বিস্তারিত তথ্য
+    // ============================================================
+    document.getElementById('summaryDuration').textContent = (loanData.duration_months || 0) + ' মাস';
+    document.getElementById('summaryLateFee').textContent = (loanData.late_fee_percent || 0) + '%';
+    document.getElementById('summaryStartDate').textContent = formatDateBD(loanData.approved_at);
+    document.getElementById('summaryPurpose').textContent = loanData.purpose || 'উল্লেখ নেই';
+    
+    // Counts
+    document.getElementById('summaryTotalCount').textContent = totalCount + 'টি';
+    document.getElementById('summaryPaidCount').textContent = paidCount + 'টি';
+    document.getElementById('summaryPendingCount').textContent = pendingCount + 'টি';
+    document.getElementById('summaryTotalLateFee').textContent = '৳ ' + formatAmount(totalLateFee);
+    
+    // Loan-specific data
+    renderLoanSpecificData();
+}
+
+        // ============================================================
+        // ✅ EMI তৈরি না হলে message দেখানো
+        // ============================================================
+        function showInitialPaymentPending() {
+            const profitPaid = loanData.profit_paid === true;
+            const serviceChargePaid = loanData.service_charge_paid === true;
             
-            const principalAmount = Number(loanData.amount) || 0;
-            const profitAmount = Number(loanData.profit_amount) || 0;
-            const serviceCharge = Number(loanData.service_charge) || 0;
+            const installmentsList = document.getElementById('installmentsList');
+            if (installmentsList) {
+                installmentsList.innerHTML = `
+                    <div class="bg-amber-50 border-2 border-amber-300 p-5 rounded-xl">
+                        <div class="text-center mb-3">
+                            <i class="fas fa-clock text-4xl text-amber-600 mb-2"></i>
+                            <p class="text-amber-800 font-bold text-lg">⏳ কিস্তি এখনো তৈরি হয়নি</p>
+                            <p class="text-sm text-amber-700 mt-1">
+                                প্রথমে <strong>লভ্যাংশ</strong> ও <strong>সার্ভিস চার্জ</strong> পরিশোধ করতে হবে
+                            </p>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-3 mt-4">
+                            <!-- লভ্যাংশ Status -->
+                            <div class="bg-white rounded-lg p-3 border-2 ${profitPaid ? 'border-emerald-400' : 'border-red-300'}">
+                                <p class="text-xs text-gray-500 mb-1">লভ্যাংশ (${loanData.profit_rate || 0}%)</p>
+                                <p class="text-xl font-bold ${profitPaid ? 'text-emerald-600' : 'text-purple-600'}">
+                                    ৳${formatAmount(loanData.profit_amount)}
+                                </p>
+                                <p class="text-xs mt-1 font-bold ${profitPaid ? 'text-emerald-600' : 'text-red-600'}">
+                                    ${profitPaid ? '✅ পরিশোধিত' : '❌ বাকি আছে'}
+                                </p>
+                            </div>
+                            
+                            <!-- সার্ভিস Status -->
+                            <div class="bg-white rounded-lg p-3 border-2 ${serviceChargePaid ? 'border-emerald-400' : 'border-red-300'}">
+                                <p class="text-xs text-gray-500 mb-1">সার্ভিস চার্জ (১%)</p>
+                                <p class="text-xl font-bold ${serviceChargePaid ? 'text-emerald-600' : 'text-orange-600'}">
+                                    ৳${formatAmount(loanData.service_charge)}
+                                </p>
+                                <p class="text-xs mt-1 font-bold ${serviceChargePaid ? 'text-emerald-600' : 'text-red-600'}">
+                                    ${serviceChargePaid ? '✅ পরিশোধিত' : '❌ বাকি আছে'}
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                            <p class="text-xs text-blue-700 text-center">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                উভয় পরিশোধ হলে অটোমেটিক <strong>কিস্তি তৈরি</strong> হবে
+                            </p>
+                        </div>
+                        
+                        <div class="mt-3 text-center">
+                            <p class="text-xs text-gray-600">
+                                <i class="fas fa-phone mr-1"></i> যোগাযোগ: <strong>01518-912499</strong>
+                            </p>
+                        </div>
+                    </div>
+                `;
+            }
             
-            const totalPayable = Number(loanData.total_payable) || 
-                                 Number(loanData.total_amount) || 
-                                 (principalAmount + profitAmount + serviceCharge);
+            // EMI Section এবং Submit বাটন লুকান
+            ['paymentSection', 'summarySection'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.classList.add('hidden');
+            });
             
-            const totalPaid = emiData
-                .filter(e => e.isPaid)
-                .reduce((sum, e) => sum + e.emiAmount, 0);
+            const submitBtn = document.getElementById('submitBtn');
+            if (submitBtn) submitBtn.classList.add('hidden');
             
-            const totalLateFee = emiData
-                .filter(e => e.isPaid)
-                .reduce((sum, e) => sum + e.lateFee, 0);
-            
-            const remaining = Math.max(0, totalPayable - totalPaid);
-            
-            const paidCount = emiData.filter(e => e.isPaid).length;
-            const pendingCount = emiData.filter(e => !e.isPaid && !e.isWaived).length;
-            const totalCount = emiData.length;
-            
-            // Main info
-            document.getElementById('loanTypeDisplay').textContent = loanData.loan_type || 'সাধারণ লোন';
-            document.getElementById('detailLoanType').textContent = loanData.loan_type || 'সাধারণ লোন';
-            document.getElementById('loanAppNo').textContent = 'অ্যাপ্লিকেশন নং: ' + (loanData.application_no || '-');
-            
-            document.getElementById('summaryTotalLoan').textContent = '৳ ' + formatAmount(totalPayable);
-            document.getElementById('summaryPaid').textContent = '৳ ' + formatAmount(totalPaid);
-            document.getElementById('summaryRemaining').textContent = '৳ ' + formatAmount(remaining);
-            document.getElementById('summaryEmi').textContent = '৳ ' + formatAmount(loanData.emi_amount || 0);
-            
-            // Calculation breakdown
-            document.getElementById('calcPrincipal').textContent = '৳ ' + formatAmount(principalAmount);
-            document.getElementById('calcProfit').textContent = '৳ ' + formatAmount(profitAmount);
-            document.getElementById('calcService').textContent = '৳ ' + formatAmount(serviceCharge);
-            document.getElementById('calcTotal').textContent = '৳ ' + formatAmount(totalPayable);
-            document.getElementById('calcEmi').textContent = 
-                '৳ ' + formatAmount(loanData.emi_amount || 0) + 
-                ' × ' + (loanData.duration_months || 0) + ' মাস';
-            
-            // Progress Bar
-            const progressPercent = totalPayable > 0 
-                ? Math.min(100, Math.round((totalPaid / totalPayable) * 100))
-                : 0;
-            
-            document.getElementById('progressPercent').textContent = progressPercent + '%';
-            document.getElementById('progressBar').style.width = progressPercent + '%';
-            document.getElementById('progressPaidText').textContent = '৳ ' + formatAmount(totalPaid) + ' পরিশোধিত';
-            document.getElementById('progressTotalText').textContent = '৳ ' + formatAmount(totalPayable) + ' মোট';
-            
-            // Details
-            document.getElementById('summaryDuration').textContent = (loanData.duration_months || 0) + ' মাস';
-            document.getElementById('summaryLateFee').textContent = (loanData.late_fee_percent || 0) + '%';
-            document.getElementById('summaryStartDate').textContent = formatDateBD(loanData.approved_at);
-            document.getElementById('summaryPurpose').textContent = loanData.purpose || 'উল্লেখ নেই';
-            
-            // Counts
-            document.getElementById('summaryTotalCount').textContent = totalCount + 'টি';
-            document.getElementById('summaryPaidCount').textContent = paidCount + 'টি';
-            document.getElementById('summaryPendingCount').textContent = pendingCount + 'টি';
-            document.getElementById('summaryTotalLateFee').textContent = '৳ ' + formatAmount(totalLateFee);
-            
-            // ✅ Loan-specific data
-            renderLoanSpecificData();
+            // Print EMI বাটন লুকান
+            const printBtn = document.querySelector('button[onclick*="printEmiSchedule"]');
+            if (printBtn) printBtn.classList.add('hidden');
         }
 
         // ============================================================
