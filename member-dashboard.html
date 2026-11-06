@@ -15117,10 +15117,21 @@ console.log('✅ PROFIT NOTIFICATION (Collapsible) loaded!');
 let currentInternalTransferType = null;
 
 // ═══════════════════════════════════════════════════════════
-// 1️⃣ OPEN MODAL
+// 1️⃣ OPEN MODAL — মেয়াদী সদস্যের মাস সিলেকশন সহ
 // ═══════════════════════════════════════════════════════════
-function openInternalTransferModal(type) {
+async function openInternalTransferModal(type) {
     currentInternalTransferType = type;
+    
+    if (!currentUser) {
+        showToast('সেশন এক্সপায়ার! পেজ রিলোড করুন।', 'error');
+        return;
+    }
+    
+    const client = await initSupabase();
+    if (!client) {
+        showToast('সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
     
     let title = '';
     let availableBalance = 0;
@@ -15162,7 +15173,9 @@ function openInternalTransferModal(type) {
             return;
     }
     
-    // মেয়াদী সদস্যের সতর্কতা
+    // ============================================================
+    // মেয়াদী সদস্য কিনা চেক
+    // ============================================================
     const isTermMember = parseInt(currentUser.memberTerm) > 0;
     let termWarning = '';
     
@@ -15198,26 +15211,110 @@ function openInternalTransferModal(type) {
         }
     }
     
-    document.getElementById('internalTransferTitle').innerHTML = title;
-    document.getElementById('internalTransferContent').innerHTML = `
-        ${termWarning}
+    // ============================================================
+    // মেয়াদী সদস্যের জন্য মাস তালিকা
+    // ============================================================
+    let monthsSectionHtml = '';
+    let amountSectionHtml = '';
+    
+    if (isTermMember && availableBalance > 0) {
+        // ✅ Approved মাসগুলো লোড
+        const { data: approvedPayments } = await client
+            .from('payments')
+            .select('month, year')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'approved');
         
-        <div class="bg-gradient-to-r ${bgGradient} p-4 rounded-xl mb-4 text-white relative overflow-hidden">
-            <div class="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full" 
-                 style="transform: translate(30%, -30%);"></div>
-            <p class="text-xs opacity-90 mb-1">${sourceLabel} ব্যালেন্স</p>
-            <p class="text-3xl font-extrabold">৳ ${availableBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
-            <p class="text-xs opacity-75 mt-1">
-                <i class="fas fa-arrow-right mr-1"></i>সঞ্চয় (মূলধন)-এ যোগ হবে
-            </p>
-        </div>
+        const approvedMonths = (approvedPayments || []).map(
+            p => `${p.month}-${p.year}`
+        );
         
-        ${availableBalance === 0 
-            ? `<div class="bg-red-50 border-2 border-red-300 p-4 rounded-lg mb-3 text-center">
-                <i class="fas fa-ban text-red-500 text-3xl block mb-2"></i>
-                <p class="text-red-700 text-sm font-bold">এই ফান্ডে কোনো ব্যালেন্স নেই!</p>
-               </div>` 
-            : `
+        // ✅ join date থেকে মাস তালিকা
+        const joinDate = currentUser.approved_at 
+            ? new Date(currentUser.approved_at) 
+            : new Date(currentUser.joinDate);
+        
+        const now = new Date();
+        const monthsList = [];
+        
+        let current = new Date(joinDate.getFullYear(), joinDate.getMonth(), 1);
+        const end = new Date(now.getFullYear(), now.getMonth(), 1);
+        
+        while (current <= end) {
+            const monthIndex = current.getMonth();
+            const monthName = banglaMonths[monthIndex];
+            const year = current.getFullYear();
+            const monthYearKey = `${monthName}-${year}`;
+            const isApproved = approvedMonths.includes(monthYearKey);
+            
+            monthsList.push({
+                monthName,
+                year,
+                monthYearKey,
+                isApproved
+            });
+            
+            current.setMonth(current.getMonth() + 1);
+        }
+        
+        // ✅ মাস HTML
+        let monthsCheckboxes = '';
+        monthsList.forEach((m) => {
+            const disabledAttr = m.isApproved ? 'disabled' : '';
+            const labelStyle = m.isApproved
+                ? 'opacity:0.6; cursor:not-allowed; background:#f3f4f6; border-color:#d1d5db;'
+                : 'background:white;';
+            const textColor = m.isApproved ? 'color:#6b7280;' : 'color:#1f2937;';
+            const statusHtml = m.isApproved
+                ? `<span style="color:#059669; font-size:10px; font-weight:600;"><i class="fas fa-check-circle"></i> জমা আছে</span>`
+                : '';
+            const lockIcon = m.isApproved
+                ? `<i class="fas fa-lock" style="color:#9ca3af; font-size:12px; margin-left:auto;"></i>`
+                : '';
+            
+            monthsCheckboxes += `
+                <label style="${labelStyle} display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid ${m.isApproved ? '#d1d5db' : '#e5e7eb'}; border-radius:10px;">
+                    <input type="checkbox" 
+                           value="${m.monthName}" 
+                           data-year="${m.year}"
+                           data-month-key="${m.monthYearKey}"
+                           class="internal-transfer-month-cb" 
+                           ${disabledAttr}
+                           ${!m.isApproved ? 'onchange="updateInternalTransferTotalAmount()"' : ''}>
+                    <span style="${textColor}">${m.monthName} ${m.year}</span>
+                    ${statusHtml}
+                    ${lockIcon}
+                </label>
+            `;
+        });
+        
+        monthsSectionHtml = `
+            <div class="mb-3">
+                <label class="block text-gray-700 font-semibold mb-2 text-sm">
+                    মাস নির্বাচন করুন <span class="text-red-500">*</span>
+                </label>
+                <p class="text-xs text-gray-500 mb-2">
+                    <i class="fas fa-info-circle"></i>
+                    যেসব মাস ইতিমধ্যে জমা হয়েছে সেগুলো লক করা আছে।
+                </p>
+                <div class="month-checkbox-group" style="max-height: 250px; overflow-y: auto;">
+                    ${monthsCheckboxes}
+                </div>
+                <div class="flex gap-2 mt-2">
+                    <button type="button" onclick="selectAllInternalTransferMonths()" class="text-sm text-emerald-600 hover:text-emerald-700">সব নির্বাচন</button>
+                    <button type="button" onclick="deselectAllInternalTransferMonths()" class="text-sm text-red-500 hover:text-red-600">সব বাদ দিন</button>
+                </div>
+                <div class="mt-2 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                    <p class="text-xs text-amber-700">
+                        <i class="fas fa-calculator mr-1"></i>
+                        প্রতি মাসের সঞ্চয়: ৳${(currentUser.monthlySavings || 500).toLocaleString()}
+                    </p>
+                </div>
+            </div>
+        `;
+    } else if (!isTermMember && availableBalance > 0) {
+        // ✅ মেয়াদহীন সদস্য — টাকার ইনপুট
+        amountSectionHtml = `
             <div class="mb-3">
                 <label class="block text-gray-700 font-semibold mb-2 text-sm">
                     কত টাকা সঞ্চয়ে যোগ করবেন?
@@ -15259,6 +15356,34 @@ function openInternalTransferModal(type) {
                     </div>
                 </div>
             </div>
+        `;
+    }
+    
+    // ============================================================
+    // Modal HTML
+    // ============================================================
+    document.getElementById('internalTransferTitle').innerHTML = title;
+    document.getElementById('internalTransferContent').innerHTML = `
+        ${termWarning}
+        
+        <div class="bg-gradient-to-r ${bgGradient} p-4 rounded-xl mb-4 text-white relative overflow-hidden">
+            <div class="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full" 
+                 style="transform: translate(30%, -30%);"></div>
+            <p class="text-xs opacity-90 mb-1">${sourceLabel} ব্যালেন্স</p>
+            <p class="text-3xl font-extrabold">৳ ${availableBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+            <p class="text-xs opacity-75 mt-1">
+                <i class="fas fa-arrow-right mr-1"></i>সঞ্চয় (মূলধন)-এ যোগ হবে
+            </p>
+        </div>
+        
+        ${availableBalance === 0 
+            ? `<div class="bg-red-50 border-2 border-red-300 p-4 rounded-lg mb-3 text-center">
+                <i class="fas fa-ban text-red-500 text-3xl block mb-2"></i>
+                <p class="text-red-700 text-sm font-bold">এই ফান্ডে কোনো ব্যালেন্স নেই!</p>
+               </div>` 
+            : `
+            ${monthsSectionHtml}
+            ${amountSectionHtml}
             
             <div class="bg-emerald-50 border-2 border-emerald-200 rounded-lg p-3 mb-3">
                 <div class="flex items-start gap-2">
@@ -15274,9 +15399,10 @@ function openInternalTransferModal(type) {
             
             <button onclick="submitInternalTransfer()" 
                     id="internalTransferSubmitBtn"
-                    class="w-full bg-gradient-to-r ${bgGradient} text-white py-3 rounded-lg font-bold hover:shadow-lg transition">
+                    class="w-full bg-gradient-to-r ${bgGradient} text-white py-3 rounded-lg font-bold hover:shadow-lg transition"
+                    ${isTermMember ? 'disabled' : ''}>
                 <i class="fas fa-arrow-right mr-2"></i>
-                সঞ্চয়ে যোগ করুন
+                ${isTermMember ? 'মাস নির্বাচন করুন' : 'সঞ্চয়ে যোগ করুন'}
             </button>
             `}
         
@@ -15296,6 +15422,53 @@ function openInternalTransferModal(type) {
         const input = document.getElementById('internalTransferAmount');
         if (input) input.focus();
     }, 100);
+}
+
+// ============================================================
+// ✅ মাস সিলেকশন হেল্পার
+// ============================================================
+function selectAllInternalTransferMonths() {
+    document.querySelectorAll('.internal-transfer-month-cb:not(:disabled)').forEach(cb => cb.checked = true);
+    updateInternalTransferTotalAmount();
+}
+
+function deselectAllInternalTransferMonths() {
+    document.querySelectorAll('.internal-transfer-month-cb').forEach(cb => cb.checked = false);
+    updateInternalTransferTotalAmount();
+}
+
+function updateInternalTransferTotalAmount() {
+    const selected = document.querySelectorAll('.internal-transfer-month-cb:checked');
+    const monthlySavings = currentUser.monthlySavings || 500;
+    const totalAmount = selected.length * monthlySavings;
+    
+    const submitBtn = document.getElementById('internalTransferSubmitBtn');
+    
+    // ✅ Available balance
+    let availableBalance = 0;
+    switch(currentInternalTransferType) {
+        case 'bonus': availableBalance = Number(window._liveReferralBonus) || Number(userFunds.referralBonus) || 0; break;
+        case 'savingsProfit': availableBalance = Number(userFunds.savingsProfit) || 0; break;
+        case 'investmentProfit': availableBalance = Number(userFunds.investmentProfit) || 0; break;
+        case 'referralProfit': availableBalance = Number(userFunds.referralProfit) || 0; break;
+    }
+    
+    if (totalAmount > availableBalance) {
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<i class="fas fa-exclamation-triangle mr-2"></i> অপর্যাপ্ত ব্যালেন্স (৳${availableBalance.toLocaleString()})`;
+        }
+    } else if (totalAmount > 0) {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = `<i class="fas fa-arrow-right mr-2"></i> ৳${totalAmount.toLocaleString()} সঞ্চয়ে যোগ করুন`;
+        }
+    } else {
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<i class="fas fa-hand mr-2"></i> মাস নির্বাচন করুন`;
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -15372,14 +15545,41 @@ function closeInternalTransferModalOnOverlay(event) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 5️⃣ SUBMIT
+// 5️⃣ SUBMIT — মেয়াদী সদস্যের মাস সহ
 // ═══════════════════════════════════════════════════════════
 async function submitInternalTransfer() {
-    const amount = parseFloat(document.getElementById('internalTransferAmount')?.value);
+    const isTermMember = parseInt(currentUser.memberTerm) > 0;
     
-    if (!amount || amount <= 0) {
-        showToast('❌ সঠিক পরিমাণ দিন!', 'error');
-        return;
+    let amount = 0;
+    let selectedMonths = [];
+    
+    // ============================================================
+    // মেয়াদী সদস্য — মাস থেকে পরিমাণ
+    // ============================================================
+    if (isTermMember) {
+        selectedMonths = Array.from(document.querySelectorAll('.internal-transfer-month-cb:checked')).map(cb => ({
+            month: cb.value,
+            year: cb.dataset.year,
+            monthKey: cb.dataset.monthKey
+        }));
+        
+        if (selectedMonths.length === 0) {
+            showToast('❌ কমপক্ষে একটি মাস নির্বাচন করুন!', 'error');
+            return;
+        }
+        
+        const monthlySavings = currentUser.monthlySavings || 500;
+        amount = selectedMonths.length * monthlySavings;
+    } else {
+        // ============================================================
+        // মেয়াদহীন — সরাসরি পরিমাণ
+        // ============================================================
+        amount = parseFloat(document.getElementById('internalTransferAmount')?.value);
+        
+        if (!amount || amount <= 0) {
+            showToast('❌ সঠিক পরিমাণ দিন!', 'error');
+            return;
+        }
     }
     
     if (!currentInternalTransferType) {
@@ -15387,10 +15587,17 @@ async function submitInternalTransfer() {
         return;
     }
     
-    const isTermMember = parseInt(currentUser.memberTerm) > 0;
+    // ============================================================
+    // কনফার্মেশন
+    // ============================================================
     let confirmMsg = `✅ নিশ্চিতকরণ\n━━━━━━━━━━━━━━━━━━━━━\n`;
     confirmMsg += `💰 পরিমাণ: ৳${amount.toLocaleString()}\n`;
     confirmMsg += `📂 ফান্ড: ${currentInternalTransferType}\n`;
+    
+    if (isTermMember && selectedMonths.length > 0) {
+        confirmMsg += `📅 মাস: ${selectedMonths.map(m => `${m.month} ${m.year}`).join(', ')}\n`;
+    }
+    
     confirmMsg += `➡️ গন্তব্য: সঞ্চয় (মূলধন)\n`;
     confirmMsg += `━━━━━━━━━━━━━━━━━━━━━\n`;
     
@@ -15430,6 +15637,38 @@ async function submitInternalTransfer() {
         }
         
         if (data && data.success) {
+            // ============================================================
+            // ✅ মেয়াদী সদস্যের জন্য payments টেবিলে entry তৈরি
+            // ============================================================
+            if (isTermMember && selectedMonths.length > 0) {
+                for (const m of selectedMonths) {
+                    const slipNumber = `TUK${String(Date.now()).slice(-6)}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
+                    
+                    const paymentData = {
+                        member_id: currentUser.id,
+                        member_name: currentUser.name,
+                        mobile: currentUser.mobile,
+                        month: m.month,
+                        year: m.year,
+                        amount: currentUser.monthlySavings || 500,
+                        payment_method: 'internal_transfer',
+                        status: 'approved',
+                        submitted_at: new Date().toISOString(),
+                        approved_at: new Date().toISOString(),
+                        voucher_slip_no: slipNumber,
+                        note: `Internal transfer from ${currentInternalTransferType}`
+                    };
+                    
+                    const { error: payErr } = await client
+                        .from('payments')
+                        .insert([paymentData]);
+                    
+                    if (payErr) {
+                        console.error('❌ Payment insert error:', payErr);
+                    }
+                }
+            }
+            
             showToast(
                 `✅ সফলভাবে ৳${amount.toLocaleString()} টাকা সঞ্চয়ে যোগ হয়েছে!\n` +
                 `💰 নতুন সঞ্চয় ব্যালেন্স: ৳${(data.new_balance || 0).toLocaleString()}`,
@@ -15442,6 +15681,7 @@ async function submitInternalTransfer() {
             updateFundsDisplay();
             if (typeof updateTotalFundCard === 'function') updateTotalFundCard();
             if (typeof updateProfitCard === 'function') updateProfitCard();
+            if (typeof populateYearAndMonths === 'function') populateYearAndMonths();
         } else {
             showToast('❌ ' + (data?.message || 'ট্রান্সফার ব্যর্থ!'), 'error');
         }
@@ -15465,6 +15705,9 @@ window.closeInternalTransferModalOnOverlay = closeInternalTransferModalOnOverlay
 window.submitInternalTransfer = submitInternalTransfer;
 window.setInternalTransferAmount = setInternalTransferAmount;
 window.validateInternalTransferAmount = validateInternalTransferAmount;
+window.selectAllInternalTransferMonths = selectAllInternalTransferMonths;
+window.deselectAllInternalTransferMonths = deselectAllInternalTransferMonths;
+window.updateInternalTransferTotalAmount = updateInternalTransferTotalAmount;
 
 console.log('✅ INTERNAL FUND TRANSFER SYSTEM loaded (clean version)!');
 
