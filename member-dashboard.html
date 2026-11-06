@@ -8616,8 +8616,8 @@ async function openCurrentMemberPaymentModal() {
 }
 
 // ============================================================
-// ✅ submitCurrentMemberPayment() — First Deposit Validation
-// ═══════════════════════════════════════════════════════════
+// ✅ submitCurrentMemberPayment() — পেন্ডিং জমা চেক সহ
+// ============================================================
 async function submitCurrentMemberPayment() {
     const paymentMethod = document.getElementById('paymentMethod').value;
     const senderMobile = document.getElementById('senderMobile').value;
@@ -8626,7 +8626,7 @@ async function submitCurrentMemberPayment() {
     const customAmount = parseFloat(document.getElementById('customAmountInput').value);
     
     // ============================================================
-    // 🆕 First Payment Validation
+    // 🆕 পেন্ডিং জমা চেক
     // ============================================================
     const client = await initSupabase();
     if (!client) {
@@ -8634,7 +8634,33 @@ async function submitCurrentMemberPayment() {
         return;
     }
     
-    // Check if first payment
+    const { data: pendingPayments, error: pendingErr } = await client
+        .from('payments')
+        .select('id, amount, submitted_at, note')
+        .eq('member_id', currentUser.id)
+        .eq('status', 'pending')
+        .order('submitted_at', { ascending: false });
+    
+    if (pendingErr) {
+        console.error('❌ Pending payment check error:', pendingErr);
+    }
+    
+    if (pendingPayments && pendingPayments.length > 0) {
+        const p = pendingPayments[0];
+        const dateStr = formatDateTimeBD(p.submitted_at);
+        showToast(
+            `⚠️ আপনার ইতিমধ্যে একটি পেন্ডিং জমার অনুরোধ রয়েছে!\n\n` +
+            `📅 তারিখ: ${dateStr}\n` +
+            `💰 পরিমাণ: ৳${Number(p.amount).toLocaleString()}\n\n` +
+            `⏳ অনুমোদনের জন্য অপেক্ষা করুন।`,
+            'error'
+        );
+        return;
+    }
+    
+    // ============================================================
+    // প্রথম জমার ভ্যালিডেশন
+    // ============================================================
     const { data: approvedPayments } = await client
         .from('payments')
         .select('id')
@@ -8644,7 +8670,6 @@ async function submitCurrentMemberPayment() {
     const isFirstPayment = !approvedPayments || approvedPayments.length === 0;
     
     if (isFirstPayment) {
-        // Get minimum amount
         const { data: memberData } = await client
             .from('members')
             .select('current_initial_deposit')
@@ -8653,7 +8678,6 @@ async function submitCurrentMemberPayment() {
         
         const minimumAmount = Number(memberData?.current_initial_deposit) || 100;
         
-        // Validate
         if (!customAmount || customAmount < minimumAmount) {
             showToast(
                 `❌ প্রথম জমায় কমপক্ষে ৳${minimumAmount.toLocaleString()} টাকা দিতে হবে!\n` +
@@ -8665,7 +8689,7 @@ async function submitCurrentMemberPayment() {
     }
     
     // ============================================================
-    // Regular Validation
+    // রেগুলার ভ্যালিডেশন
     // ============================================================
     if (!paymentMethod) {
         showToast('পেমেন্ট মাধ্যম নির্বাচন করুন!', 'error');
@@ -8685,7 +8709,6 @@ async function submitCurrentMemberPayment() {
         return;
     }
     
-    // Button state
     const btn = document.querySelector('#paymentModal button[onclick*="submitPayment"]');
     if (!btn) {
         showToast('❌ সাবমিট বাটন পাওয়া যায়নি!', 'error');
@@ -8698,13 +8721,6 @@ async function submitCurrentMemberPayment() {
     try {
         const now = getCurrentBangladeshTime();
         const submittedAt = now.toISOString();
-        const banglaDate = now.toLocaleDateString('bn-BD', {
-            year: 'numeric', month: 'long', day: 'numeric'
-        });
-        const banglaTime = now.toLocaleTimeString('bn-BD', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        
         const slipNumber = `TUK${String(Date.now()).slice(-6)}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
         
         const paymentData = {
@@ -8721,11 +8737,9 @@ async function submitCurrentMemberPayment() {
             submitted_at: submittedAt,
             voucher_slip_no: slipNumber,
             member_type: 'current',
-            is_first_payment: isFirstPayment,
-            note: `${isFirstPayment ? 'প্রথম জমা' : 'কারেন্ট সদস্য জমা'} - ${banglaDate} ${banglaTime}`
+            is_first_payment: isFirstPayment
         };
         
-        // Bank/Cash extra fields
         if (paymentMethod === 'bank') {
             paymentData.bank_name = document.getElementById('bankName')?.value || null;
             paymentData.branch_name = document.getElementById('branchName')?.value || null;
@@ -8738,56 +8752,53 @@ async function submitCurrentMemberPayment() {
             paymentData.receiver_mobile = document.getElementById('receiverMobile')?.value || null;
         }
         
-        // user_uuid যোগ করুন — sessionStorage থেকে
-const memberData = JSON.parse(sessionStorage.getItem('tukn_logged_member') || '{}');
-paymentData.user_uuid = memberData.user_uuid;
-
-console.log('📤 Payment Data:', paymentData);
-
-// Insert
-const { error } = await client
-    .from('payments')
-    .insert([paymentData])
-    .select();
-
-if (error) {
-    console.error('❌ Payment error:', error);
-    showToast('❌ পেমেন্ট জমা দিতে ব্যর্থ: ' + error.message, 'error');
-    return;
-}
-
-// Success
-showToast(
-    `✅ ৳${customAmount.toLocaleString()} টাকা ${isFirstPayment ? 'প্রথম জমা' : 'জমা'} সফল!\n` +
-    `⏳ Admin Approve-এর জন্য অপেক্ষা করুন।`, 
-    'success'
-);
-
-closePaymentModal();
-
-// Reset fields
-document.getElementById('senderMobile').value = '';
-document.getElementById('transactionId').value = '';
-document.getElementById('paymentYear').value = '';
-document.getElementById('customAmountInput').value = '';
-document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
-
-// Refresh
-await loadPaymentHistory();
-await loadUserFunds();
-await refreshMemberDataFromSupabase();
-await checkDueNotifications();
-
-} catch (e) {
-    console.error('❌ Payment error:', e);
-    showToast('পেমেন্ট জমা দিতে ব্যর্থ: ' + e.message, 'error');
-} finally {
-    if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = originalText;
+        // user_uuid যোগ
+        const memberData = JSON.parse(sessionStorage.getItem('tukn_logged_member') || '{}');
+        paymentData.user_uuid = memberData.user_uuid;
+        
+        console.log('📤 Payment Data:', paymentData);
+        
+        const { error } = await client
+            .from('payments')
+            .insert([paymentData])
+            .select();
+        
+        if (error) {
+            console.error('❌ Payment error:', error);
+            showToast('❌ পেমেন্ট জমা দিতে ব্যর্থ: ' + error.message, 'error');
+            return;
+        }
+        
+        showToast(
+            `✅ ৳${customAmount.toLocaleString()} টাকা ${isFirstPayment ? 'প্রথম জমা' : 'জমা'} সফল!\n` +
+            `⏳ Admin Approve-এর জন্য অপেক্ষা করুন।`,
+            'success'
+        );
+        
+        closePaymentModal();
+        
+        document.getElementById('senderMobile').value = '';
+        document.getElementById('transactionId').value = '';
+        document.getElementById('paymentYear').value = '';
+        document.getElementById('customAmountInput').value = '';
+        document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
+        
+        await loadPaymentHistory();
+        await loadUserFunds();
+        await refreshMemberDataFromSupabase();
+        await checkDueNotifications();
+        
+    } catch (e) {
+        console.error('❌ Payment error:', e);
+        showToast('পেমেন্ট জমা দিতে ব্যর্থ: ' + e.message, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
     }
 }
-}
+    
 // ============================================================
 // সদস্যের সব approved পেমেন্টের মাস লিস্ট ফেরত দেয়
 // ============================================================
@@ -8821,6 +8832,9 @@ async function getApprovedMonths() {
     }
 }
 
+// ============================================================
+// ✅ submitPayment() — পেন্ডিং জমা চেক সহ
+// ============================================================
 async function submitPayment() {
     const paymentMethod = document.getElementById('paymentMethod').value;
     const senderMobile = document.getElementById('senderMobile').value;
@@ -8828,29 +8842,65 @@ async function submitPayment() {
     const year = document.getElementById('paymentYear').value;
     const selectedMonths = Array.from(document.querySelectorAll('.month-cb:checked')).map(cb => cb.value);
     
-    if(!paymentMethod || !year || selectedMonths.length === 0) {
+    // ============================================================
+    // 🆕 পেন্ডিং জমা চেক
+    // ============================================================
+    const client = await initSupabase();
+    if (!client) {
+        showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+        return;
+    }
+    
+    const { data: pendingPayments, error: pendingErr } = await client
+        .from('payments')
+        .select('id, month, year, amount, submitted_at')
+        .eq('member_id', currentUser.id)
+        .eq('status', 'pending')
+        .order('submitted_at', { ascending: false });
+    
+    if (pendingErr) {
+        console.error('❌ Pending payment check error:', pendingErr);
+    }
+    
+    if (pendingPayments && pendingPayments.length > 0) {
+        const p = pendingPayments[0];
+        const dateStr = formatDateTimeBD(p.submitted_at);
+        showToast(
+            `⚠️ আপনার ইতিমধ্যে একটি পেন্ডিং জমার অনুরোধ রয়েছে!\n\n` +
+            `📅 তারিখ: ${dateStr}\n` +
+            `💰 পরিমাণ: ৳${Number(p.amount).toLocaleString()}\n` +
+            `📋 মাস: ${p.month} ${p.year}\n\n` +
+            `⏳ অনুমোদনের জন্য অপেক্ষা করুন।`,
+            'error'
+        );
+        return;
+    }
+    
+    // ============================================================
+    // ভ্যালিডেশন
+    // ============================================================
+    if (!paymentMethod || !year || selectedMonths.length === 0) {
         showToast('সব তথ্য সঠিকভাবে পূরণ করুন!', 'error');
         return;
     }
-    if((paymentMethod === 'bKash' || paymentMethod === 'Nagad' || paymentMethod === 'Rocket') && (!senderMobile || !transactionId)) {
+    if ((paymentMethod === 'bKash' || paymentMethod === 'Nagad' || paymentMethod === 'Rocket') 
+        && (!senderMobile || !transactionId)) {
         showToast('যে নম্বর থেকে টাকা পাঠিয়েছেন সেটি এবং আপনার সদস্য আইডির শেষ 4 সংখ্যা দিন!', 'error');
         return;
     }
-    const client = await initSupabase();
-    if(!client) { 
-        showToast('সার্ভার সংযোগ সমস্যা!', 'error'); 
-        return; 
-    }
+    
     const btn = document.querySelector('#paymentModal .bg-emerald-600');
     const originalText = btn?.innerHTML;
-    if(btn) {
+    if (btn) {
         btn.disabled = true;
         btn.innerHTML = '<span class="loading-spinner"></span> জমা হচ্ছে...';
     }
+    
     try {
         let successCount = 0;
         let errorMessages = [];
-        for(const month of selectedMonths) {
+        
+        for (const month of selectedMonths) {
             const slipNumber = `TUK${String(Date.now()).slice(-6)}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
             
             const paymentData = {
@@ -8867,27 +8917,31 @@ async function submitPayment() {
                 submitted_at: new Date().toISOString(),
                 voucher_slip_no: slipNumber
             };
-            if(paymentMethod === 'bank') {
+            
+            if (paymentMethod === 'bank') {
                 paymentData.bank_name = document.getElementById('bankName')?.value || null;
                 paymentData.branch_name = document.getElementById('branchName')?.value || null;
                 paymentData.account_number = document.getElementById('accountNo')?.value || null;
                 paymentData.account_name = document.getElementById('accountName')?.value || null;
                 paymentData.bank_phone = document.getElementById('bankPhone')?.value || null;
-            } else if(paymentMethod === 'cash') {
+            } else if (paymentMethod === 'cash') {
                 paymentData.receiver_id = document.getElementById('receiverId')?.value || null;
                 paymentData.receiver_name = document.getElementById('receiverName')?.value || null;
                 paymentData.receiver_mobile = document.getElementById('receiverMobile')?.value || null;
             }
+            
             const { data, error } = await client
                 .from('payments')
                 .insert([paymentData])
                 .select();
+            
             if (error) {
                 errorMessages.push(`${month}: ${error.message}`);
                 continue;
             }
             successCount++;
         }
+        
         if (errorMessages.length > 0) {
             showToast(`❌ ${errorMessages.length} মাসের পেমেন্ট ব্যর্থ: ${errorMessages[0]}`, 'error');
             return;
@@ -8897,7 +8951,7 @@ async function submitPayment() {
             return;
         }
         
-        showToast(`✅ ${successCount} মাসের পেমেন্ট সফলভাবে জমা হয়েছে!`, 'success');
+        showToast(`✅ ${successCount} মাসের পেমেন্ট সফলভাবে জমা হয়েছে!`, 'success');
         closePaymentModal();
         document.getElementById('senderMobile').value = '';
         document.getElementById('transactionId').value = '';
@@ -8905,23 +8959,19 @@ async function submitPayment() {
         document.querySelectorAll('.month-cb').forEach(cb => cb.checked = false);
         document.getElementById('totalAmountDisplay').innerHTML = '০ টাকা';
         
-        // ================================================
-        // ✅ গুরুত্বপূর্ণ: পেমেন্টের পর ব্যালেন্স রিফ্রেশ করুন
-        // ================================================
         await loadPaymentHistory();
         await loadUserFunds();
         await loadSavingsData();
         await refreshMemberDataFromSupabase();
         await checkDueNotifications();
-              
-        // UI তে ব্যালেন্স আপডেট দেখানোর জন্য
+        
         console.log('✅ পেমেন্টের পর ব্যালেন্স রিফ্রেশ সম্পন্ন!');
         
-    } catch(e) { 
-        console.error('❌ পেমেন্ট এরর:', e); 
-        showToast('পেমেন্ট জমা দিতে ব্যর্থ: ' + e.message, 'error'); 
+    } catch(e) {
+        console.error('❌ পেমেন্ট এরর:', e);
+        showToast('পেমেন্ট জমা দিতে ব্যর্থ: ' + e.message, 'error');
     } finally {
-        if(btn) {
+        if (btn) {
             btn.disabled = false;
             btn.innerHTML = originalText || 'জমা দিন';
         }
@@ -9415,237 +9465,272 @@ function openWithdrawAllModal() {
 }
 
 // ============================================================
-// ✅ submitWithdraw() — Lock-in Safety Check সহ (সম্পূর্ণ)
+// ✅ submitWithdraw() — পেন্ডিং উত্তোলন চেক সহ
 // ============================================================
 function submitWithdraw(type) {
     
     // ============================================================
-    // 🆕 Safety Check — কারেন্ট সদস্য Lock-in Period
+    // 🆕 পেন্ডিং উত্তোলন চেক (async wrapper)
     // ============================================================
-    const isCurrentMember = parseInt(currentUser.memberTerm) === 0;
-    const isCapitalWithdrawal = (type === 'capital');
-    
-    if (isCurrentMember && isCapitalWithdrawal) {
-        let lockInEndDate = null;
+    (async () => {
+        const client = await initSupabase();
+        if (!client) {
+            showToast('❌ সার্ভার সংযোগ সমস্যা!', 'error');
+            return;
+        }
         
-        if (currentUser.lockin_end_date) {
-            lockInEndDate = new Date(currentUser.lockin_end_date);
-        } else {
-            let joinDate = null;
-            if (currentUser.approved_at && 
-                currentUser.approved_at !== 'null' && 
-                currentUser.approved_at !== 'undefined') {
-                joinDate = new Date(currentUser.approved_at);
-            } else if (currentUser.joinDate) {
-                joinDate = new Date(currentUser.joinDate);
+        const { data: pendingWithdrawals, error: pendingErr } = await client
+            .from('withdrawals')
+            .select('id, type, amount, requested_at')
+            .eq('member_id', currentUser.id)
+            .eq('status', 'pending')
+            .order('requested_at', { ascending: false });
+        
+        if (pendingErr) {
+            console.error('❌ Pending withdrawal check error:', pendingErr);
+        }
+        
+        if (pendingWithdrawals && pendingWithdrawals.length > 0) {
+            const w = pendingWithdrawals[0];
+            const cleanType = (w.type || 'উত্তোলন').replace(/ উত্তোলন/g, '');
+            const dateStr = formatDateTimeBD(w.requested_at);
+            showToast(
+                `⚠️ আপনার ইতিমধ্যে একটি পেন্ডিং উত্তোলনের অনুরোধ রয়েছে!\n\n` +
+                `📋 ধরন: ${cleanType}\n` +
+                `💰 পরিমাণ: ৳${Number(w.amount).toLocaleString()}\n` +
+                `📅 তারিখ: ${dateStr}\n\n` +
+                `⏳ অনুমোদনের জন্য অপেক্ষা করুন।`,
+                'error'
+            );
+            return;
+        }
+        
+        // ============================================================
+        // Safety Check — কারেন্ট সদস্য Lock-in Period
+        // ============================================================
+        const isCurrentMember = parseInt(currentUser.memberTerm) === 0;
+        const isCapitalWithdrawal = (type === 'capital');
+        
+        if (isCurrentMember && isCapitalWithdrawal) {
+            let lockInEndDate = null;
+            
+            if (currentUser.lockin_end_date) {
+                lockInEndDate = new Date(currentUser.lockin_end_date);
+            } else {
+                let joinDate = null;
+                if (currentUser.approved_at && 
+                    currentUser.approved_at !== 'null' && 
+                    currentUser.approved_at !== 'undefined') {
+                    joinDate = new Date(currentUser.approved_at);
+                } else if (currentUser.joinDate) {
+                    joinDate = new Date(currentUser.joinDate);
+                }
+                
+                if (joinDate && !isNaN(joinDate.getTime())) {
+                    lockInEndDate = new Date(joinDate);
+                    lockInEndDate.setMonth(joinDate.getMonth() + 3);
+                }
             }
             
-            if (joinDate && !isNaN(joinDate.getTime())) {
-                lockInEndDate = new Date(joinDate);
-                lockInEndDate.setMonth(joinDate.getMonth() + 3);
+            if (lockInEndDate && !isNaN(lockInEndDate.getTime())) {
+                const now = new Date();
+                
+                if (now < lockInEndDate) {
+                    const diffMs = lockInEndDate - now;
+                    const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+                    const diffMonths = Math.floor(diffDays / 30);
+                    const remainingDays = diffDays % 30;
+                    const unlockDate = lockInEndDate.toLocaleDateString('bn-BD', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                    });
+                    
+                    let timeLeft = '';
+                    if (diffMonths > 0) timeLeft += `${diffMonths} মাস `;
+                    if (remainingDays > 0) timeLeft += `${remainingDays} দিন`;
+                    if (!timeLeft) timeLeft = 'শেষ পর্যায়ে';
+                    
+                    showToast(
+                        `🔒 দুঃখিত! আপনি এখনো ৩ মাসের Lock-in period এ আছেন।\n\n` +
+                        `📅 উত্তোলন চালু হবে: ${unlockDate}\n` +
+                        `⏳ বাকি আছে: ${timeLeft}`,
+                        'error'
+                    );
+                    return;
+                }
             }
         }
         
-        if (lockInEndDate && !isNaN(lockInEndDate.getTime())) {
-            const now = new Date();
+        // ============================================================
+        // মেয়াদী সদস্য Safety Check
+        // ============================================================
+        let isTermMember = parseInt(currentUser.memberTerm) > 0;
+        let isCapitalWithdrawalTerm = (type === 'capital');
+        
+        if (isTermMember && isCapitalWithdrawalTerm) {
+            let startDate = null;
+            if (currentUser.approved_at && currentUser.approved_at !== 'null' && currentUser.approved_at !== 'undefined') {
+                startDate = new Date(currentUser.approved_at);
+            } else if (currentUser.joinDate) {
+                startDate = new Date(currentUser.joinDate);
+            }
             
-            if (now < lockInEndDate) {
-                const diffMs = lockInEndDate - now;
-                const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-                const diffMonths = Math.floor(diffDays / 30);
-                const remainingDays = diffDays % 30;
-                const unlockDate = lockInEndDate.toLocaleDateString('bn-BD', {
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric'
-                });
-                
-                let timeLeft = '';
-                if (diffMonths > 0) timeLeft += `${diffMonths} মাস `;
-                if (remainingDays > 0) timeLeft += `${remainingDays} দিন`;
-                if (!timeLeft) timeLeft = 'শেষ পর্যায়ে';
-                
-                showToast(
-                    `🔒 দুঃখিত! আপনি এখনো ৩ মাসের Lock-in period এ আছেন।\n\n` +
-                    `📅 উত্তোলন চালু হবে: ${unlockDate}\n` +
-                    `⏳ বাকি আছে: ${timeLeft}`,
-                    'error'
-                );
+            let expiryDate = null;
+            if (startDate && !isNaN(startDate.getTime())) {
+                expiryDate = new Date(startDate);
+                expiryDate.setFullYear(startDate.getFullYear() + parseInt(currentUser.memberTerm));
+            }
+            
+            let timeLeft = '';
+            if (expiryDate) {
+                const now = new Date();
+                if (now < expiryDate) {
+                    let years = expiryDate.getFullYear() - now.getFullYear();
+                    let months = expiryDate.getMonth() - now.getMonth();
+                    let days = expiryDate.getDate() - now.getDate();
+                    
+                    if (days < 0) {
+                        months--;
+                        const prevMonth = new Date(expiryDate.getFullYear(), expiryDate.getMonth(), 0);
+                        days += prevMonth.getDate();
+                    }
+                    if (months < 0) {
+                        years--;
+                        months += 12;
+                    }
+                    if (years < 0) years = 0;
+                    if (months < 0) months = 0;
+                    if (days < 0) days = 0;
+                    
+                    let parts = [];
+                    if (years > 0) parts.push(`${years} বছর`);
+                    if (months > 0) parts.push(`${months} মাস`);
+                    if (days > 0) parts.push(`${days} দিন`);
+                    timeLeft = parts.join(', ');
+                } else {
+                    timeLeft = 'মেয়াদ শেষ হয়েছে';
+                }
+            }
+            
+            showToast(
+                `❌ আপনি একজন মেয়াদী সদস্য!\n\n` +
+                `⏳ মেয়াদ শেষ হতে বাকি: ${timeLeft}\n\n` +
+                `⚠️ মেয়াদ শেষ হওয়ার আগে মূলধন উত্তোলন করতে পারবেন না।\n\n` +
+                `✅ তবে আপনি লভ্যাংশ ও বোনাস উত্তোলন করতে পারবেন।`,
+                'error'
+            );
+            return;
+        }
+        
+        // ============================================================
+        // ১. উত্তোলনের মাধ্যম ও পরিমাণ
+        // ============================================================
+        const method = document.getElementById('withdrawMethod')?.value;
+        const amount = parseFloat(document.getElementById('withdrawAmount')?.value || 0);
+        
+        if (!method) {
+            showToast('উত্তোলনের মাধ্যম নির্বাচন করুন!', 'error');
+            return;
+        }
+        if (!amount || amount <= 0) {
+            showToast('সঠিক টাকার পরিমাণ দিন!', 'error');
+            return;
+        }
+        
+        // ============================================================
+        // ২. সর্বোচ্চ ব্যালেন্স
+        // ============================================================
+        let maxBalance = 0;
+        let typeName = '';
+        
+        if (type === 'bonus') {
+            maxBalance = userFunds.referralBonus || 0;
+            typeName = 'রেফারেল বোনাস';
+        }
+        else if (type === 'savingsProfit') {
+            maxBalance = userFunds.savingsProfit || 0;
+            typeName = 'সঞ্চয় লভ্যাংশ';
+        }
+        else if (type === 'investmentProfit') {
+            maxBalance = userFunds.investmentProfit || 0;
+            typeName = 'বিনিয়োগ লভ্যাংশ';
+        }
+        else if (type === 'referralProfit') {
+            maxBalance = userFunds.referralProfit || 0;
+            typeName = 'রেফারেল লভ্যাংশ';
+        }
+        else if (type === 'capital') {
+            maxBalance = userFunds.monthlySavings || 0;
+            typeName = 'মূলধন';
+        }
+        else if (type === 'all') {
+            maxBalance = (userFunds.savingsProfit || 0) + (userFunds.investmentProfit || 0) + (userFunds.referralProfit || 0);
+            typeName = 'সব লভ্যাংশ';
+        }
+        
+        if (amount > maxBalance) {
+            showToast(`আপনার ব্যালেন্স ${maxBalance.toFixed(2)} টাকা, আপনি ${amount.toFixed(2)} টাকা উত্তোলন করতে পারবেন না!`, 'error');
+            return;
+        }
+        
+        // ============================================================
+        // ৩. গ্রহীতার তথ্য
+        // ============================================================
+        let receiverInfo = '';
+        let receiverDetails = {};
+        
+        if (method === 'cash') {
+            const receiverName = document.getElementById('withdrawReceiverName')?.value.trim();
+            const receiverMobile = document.getElementById('withdrawReceiverMobile')?.value.trim();
+            const receiverId = document.getElementById('withdrawReceiverId')?.value.trim();
+            
+            if (!receiverName || !receiverMobile) {
+                showToast('গ্রহীতার নাম ও মোবাইল নম্বর দিন!', 'error');
                 return;
             }
-        }
-    }
-    
-    // ============================================================
-    // মেয়াদী সদস্য Safety Check
-    // ============================================================
-    let isTermMember = parseInt(currentUser.memberTerm) > 0;
-    let isCapitalWithdrawalTerm = (type === 'capital');
-    
-    if (isTermMember && isCapitalWithdrawalTerm) {
-        let startDate = null;
-        if (currentUser.approved_at && currentUser.approved_at !== 'null' && currentUser.approved_at !== 'undefined') {
-            startDate = new Date(currentUser.approved_at);
-        } else if (currentUser.joinDate) {
-            startDate = new Date(currentUser.joinDate);
-        }
-        
-        let expiryDate = null;
-        if (startDate && !isNaN(startDate.getTime())) {
-            expiryDate = new Date(startDate);
-            expiryDate.setFullYear(startDate.getFullYear() + parseInt(currentUser.memberTerm));
-        }
-        
-        let timeLeft = '';
-        if (expiryDate) {
-            const now = new Date();
-            if (now < expiryDate) {
-                let years = expiryDate.getFullYear() - now.getFullYear();
-                let months = expiryDate.getMonth() - now.getMonth();
-                let days = expiryDate.getDate() - now.getDate();
-                
-                if (days < 0) {
-                    months--;
-                    const prevMonth = new Date(expiryDate.getFullYear(), expiryDate.getMonth(), 0);
-                    days += prevMonth.getDate();
-                }
-                if (months < 0) {
-                    years--;
-                    months += 12;
-                }
-                if (years < 0) years = 0;
-                if (months < 0) months = 0;
-                if (days < 0) days = 0;
-                
-                let parts = [];
-                if (years > 0) parts.push(`${years} বছর`);
-                if (months > 0) parts.push(`${months} মাস`);
-                if (days > 0) parts.push(`${days} দিন`);
-                timeLeft = parts.join(', ');
-            } else {
-                timeLeft = 'মেয়াদ শেষ হয়েছে';
+            if (!/^01[3-9]\d{8}$/.test(receiverMobile)) {
+                showToast('সঠিক মোবাইল নম্বর দিন (01XXXXXXXXX)', 'error');
+                return;
             }
+            
+            receiverInfo = `ক্যাশ গ্রহীতা: ${receiverName}, মোবাইল: ${receiverMobile}${receiverId ? ', আইডি: ' + receiverId : ''}`;
+            receiverDetails = { receiverName, receiverMobile, receiverId: receiverId || null, method: 'cash' };
+            
+        } else if (method === 'bank') {
+            const bankName = document.getElementById('withdrawBankName')?.value.trim();
+            const accountNo = document.getElementById('withdrawAccountNo')?.value.trim();
+            const accountName = document.getElementById('withdrawAccountName')?.value.trim();
+            
+            if (!bankName || !accountNo || !accountName) {
+                showToast('ব্যাংকের সকল তথ্য পূরণ করুন!', 'error');
+                return;
+            }
+            receiverInfo = `ব্যাংক: ${bankName}, একাউন্ট: ${accountNo}, নাম: ${accountName}`;
+            receiverDetails = { bankName, accountNo, accountName, method: 'bank' };
+            
+        } else {
+            const mobile = document.getElementById('withdrawMobileNumber')?.value.trim();
+            if (!mobile) {
+                showToast('মোবাইল নম্বর দিন!', 'error');
+                return;
+            }
+            if (!/^01[3-9]\d{8}$/.test(mobile)) {
+                showToast('সঠিক মোবাইল নম্বর দিন (01XXXXXXXXX)', 'error');
+                return;
+            }
+            receiverInfo = `মোবাইল: ${mobile} (${method.toUpperCase()})`;
+            receiverDetails = { mobile, method };
         }
         
-        showToast(`
-❌ আপনি একজন মেয়াদী সদস্য!
-
-⏳ মেয়াদ শেষ হতে বাকি: ${timeLeft}
-
-⚠️ মেয়াদ শেষ হওয়ার আগে মূলধন উত্তোলন করতে পারবেন না।
-
-✅ তবে আপনি লভ্যাংশ ও বোনাস উত্তোলন করতে পারবেন।`,
-            'error'
-        );
-        return;
-    }
-    
-    // ============================================================
-    // ১. উত্তোলনের মাধ্যম ও পরিমাণ নিন
-    // ============================================================
-    const method = document.getElementById('withdrawMethod')?.value;
-    const amount = parseFloat(document.getElementById('withdrawAmount')?.value || 0);
-    
-    if(!method) { 
-        showToast('উত্তোলনের মাধ্যম নির্বাচন করুন!', 'error'); 
-        return; 
-    }
-    if(!amount || amount <= 0) { 
-        showToast('সঠিক টাকার পরিমাণ দিন!', 'error'); 
-        return; 
-    }
-    
-    // ============================================================
-    // ২. সর্বোচ্চ ব্যালেন্স নির্ধারণ
-    // ============================================================
-    let maxBalance = 0;
-    let typeName = '';
-
-    if(type === 'bonus') { 
-        maxBalance = userFunds.referralBonus || 0; 
-        typeName = 'রেফারেল বোনাস';
-    }
-    else if(type === 'savingsProfit') { 
-        maxBalance = userFunds.savingsProfit || 0; 
-        typeName = 'সঞ্চয় লভ্যাংশ';
-    }
-    else if(type === 'investmentProfit') { 
-        maxBalance = userFunds.investmentProfit || 0; 
-        typeName = 'বিনিয়োগ লভ্যাংশ';
-    }
-    else if(type === 'referralProfit') { 
-        maxBalance = userFunds.referralProfit || 0; 
-        typeName = 'রেফারেল লভ্যাংশ';
-    }
-    else if(type === 'capital') { 
-        maxBalance = userFunds.monthlySavings || 0; 
-        typeName = 'মূলধন';
-    }
-    else if(type === 'all') {
-        maxBalance = (userFunds.savingsProfit || 0) + (userFunds.investmentProfit || 0) + (userFunds.referralProfit || 0);
-        typeName = 'সব লভ্যাংশ';
-    }
-    
-    // ============================================================
-    // ৩. ব্যালেন্স চেক
-    // ============================================================
-    if(amount > maxBalance) {
-        showToast(`আপনার ব্যালেন্স ${maxBalance.toFixed(2)} টাকা, আপনি ${amount.toFixed(2)} টাকা উত্তোলন করতে পারবেন না!`, 'error');
-        return;
-    }
-    
-    // ============================================================
-    // ৪. গ্রহীতার তথ্য সংগ্রহ
-    // ============================================================
-    let receiverInfo = '';
-    let receiverDetails = {};
-    
-    if (method === 'cash') {
-        const receiverName = document.getElementById('withdrawReceiverName')?.value.trim();
-        const receiverMobile = document.getElementById('withdrawReceiverMobile')?.value.trim();
-        const receiverId = document.getElementById('withdrawReceiverId')?.value.trim();
-        
-        if (!receiverName || !receiverMobile) {
-            showToast('গ্রহীতার নাম ও মোবাইল নম্বর দিন!', 'error');
-            return;
+        // ============================================================
+        // ৪. কনফার্মেশন
+        // ============================================================
+        if (confirm(`আপনি কি ${amount.toFixed(2)} টাকা ${typeName} থেকে উত্তোলন করতে চান?\n\nগ্রহীতা: ${receiverInfo}`)) {
+            saveWithdrawRequest(typeName, amount, method, receiverDetails, typeName);
         }
-        if (!/^01[3-9]\d{8}$/.test(receiverMobile)) {
-            showToast('সঠিক মোবাইল নম্বর দিন (01XXXXXXXXX)', 'error');
-            return;
-        }
-        
-        receiverInfo = `ক্যাশ গ্রহীতা: ${receiverName}, মোবাইল: ${receiverMobile}${receiverId ? ', আইডি: ' + receiverId : ''}`;
-        receiverDetails = { receiverName, receiverMobile, receiverId: receiverId || null, method: 'cash' };
-        
-    } else if (method === 'bank') {
-        const bankName = document.getElementById('withdrawBankName')?.value.trim();
-        const accountNo = document.getElementById('withdrawAccountNo')?.value.trim();
-        const accountName = document.getElementById('withdrawAccountName')?.value.trim();
-        
-        if(!bankName || !accountNo || !accountName) {
-            showToast('ব্যাংকের সকল তথ্য পূরণ করুন!', 'error');
-            return;
-        }
-        receiverInfo = `ব্যাংক: ${bankName}, একাউন্ট: ${accountNo}, নাম: ${accountName}`;
-        receiverDetails = { bankName, accountNo, accountName, method: 'bank' };
-        
-    } else {
-        const mobile = document.getElementById('withdrawMobileNumber')?.value.trim();
-        if(!mobile) { showToast('মোবাইল নম্বর দিন!', 'error'); return; }
-        if(!/^01[3-9]\d{8}$/.test(mobile)) { showToast('সঠিক মোবাইল নম্বর দিন (01XXXXXXXXX)', 'error'); return; }
-        receiverInfo = `মোবাইল: ${mobile} (${method.toUpperCase()})`;
-        receiverDetails = { mobile, method };
-    }
-    
-    // ============================================================
-    // ৫. কনফার্মেশন
-    // ============================================================
-    if(confirm(`আপনি কি ${amount.toFixed(2)} টাকা ${typeName} থেকে উত্তোলন করতে চান?\n\nগ্রহীতা: ${receiverInfo}`)) {
-        saveWithdrawRequest(typeName, amount, method, receiverDetails, typeName);
-    }
-}
-
-    
+    })();
+}  
 
 // ============================================================
 // ✅ FIXED: saveWithdrawRequest() — type safely normalized
@@ -14199,6 +14284,9 @@ function deselectAllTransferMonths() {
     updateTransferTotalAmount();
 }
 
+// ============================================================
+// ✅ searchReceiverForTransfer() — মাস লক সহ
+// ============================================================
 async function searchReceiverForTransfer() {
     const searchQuery = document.getElementById('transferReceiverSearch').value.trim();
     if (!searchQuery) {
@@ -14222,25 +14310,23 @@ async function searchReceiverForTransfer() {
     try {
         let data = null;
         
-        const { data: mobileData, error: mobileError } = await client
+        // মোবাইল দিয়ে খুঁজুন
+        const { data: mobileData } = await client
             .from('members')
-            .select('member_id, full_name, mobile, member_term, monthly_savings, status')
+            .select('member_id, full_name, mobile, member_term, monthly_savings, status, refer_code, join_date, approved_at')
             .eq('mobile', searchQuery)
             .maybeSingle();
         
-        if (mobileData) {
-            data = mobileData;
-        }
+        if (mobileData) data = mobileData;
         
+        // আইডি দিয়ে খুঁজুন
         if (!data) {
-            const { data: idData, error: idError } = await client
+            const { data: idData } = await client
                 .from('members')
-                .select('member_id, full_name, mobile, member_term, monthly_savings, status')
+                .select('member_id, full_name, mobile, member_term, monthly_savings, status, refer_code, join_date, approved_at')
                 .eq('member_id', searchQuery)
                 .maybeSingle();
-            if (idData) {
-                data = idData;
-            }
+            if (idData) data = idData;
         }
         
         const receiverInfo = document.getElementById('transferReceiverInfo');
@@ -14261,7 +14347,7 @@ async function searchReceiverForTransfer() {
                 if (errorDiv) {
                     errorDiv.classList.remove('hidden');
                     const errorTextEl = document.getElementById('transferReceiverErrorText');
-                    if (errorTextEl) errorTextEl.innerHTML = 'গ্রহীতা অনুমোদিত নন, ট্রান্সফার সম্ভব নয়!';
+                    if (errorTextEl) errorTextEl.innerHTML = 'গ্রহীতা অনুমোদিত নন, ট্রান্সফার সম্ভব নয়!';
                 }
                 return;
             }
@@ -14270,6 +14356,7 @@ async function searchReceiverForTransfer() {
             const monthlyDue = data.monthly_savings || 500;
             const termText = isTermMember ? data.member_term + ' বছর' : 'মেয়াদহীন';
             
+            // ✅ UI আপডেট
             const nameEl = document.getElementById('transferReceiverName');
             if (nameEl) nameEl.innerHTML = data.full_name || 'নাম নেই';
             
@@ -14289,32 +14376,112 @@ async function searchReceiverForTransfer() {
                 receiverInfo.dataset.receiverMonthlyDue = monthlyDue;
                 receiverInfo.dataset.isTermMember = isTermMember;
                 receiverInfo.dataset.receiverStatus = data.status;
+                receiverInfo.dataset.receiverJoinDate = data.join_date || data.approved_at || '';
                 receiverInfo.classList.remove('hidden');
             }
             
+            // ============================================================
+            // ✅ মেয়াদী সদস্যের জন্য মাস লক সহ তালিকা
+            // ============================================================
             if (isTermMember) {
                 document.getElementById('transferMonthsSection').classList.remove('hidden');
                 document.getElementById('transferCustomAmountSection').classList.add('hidden');
+                
                 const calcNote = document.getElementById('transferCalculationNote');
                 if (calcNote) {
                     calcNote.innerHTML = `* প্রতি মাসের ধার্য: ${monthlyDue} টাকা × নির্বাচিত মাস সংখ্যা`;
                 }
-                document.querySelectorAll('.transfer-month-cb').forEach(cb => cb.checked = false);
-                document.getElementById('transferCustomAmount').value = '';
-                showToast(`✅ গ্রহীতা মেয়াদী সদস্য, মাস নির্বাচন করে ট্রান্সফার করুন`, 'info');
+                
+                // ✅ গ্রহীতার approved মাসগুলো লোড করুন
+                const { data: approvedPayments } = await client
+                    .from('payments')
+                    .select('month, year')
+                    .eq('member_id', data.member_id)
+                    .eq('status', 'approved');
+                
+                const approvedMonths = (approvedPayments || []).map(
+                    p => `${p.month}-${p.year}`
+                );
+                
+                // ✅ মাস তালিকা তৈরি (join date থেকে শুরু)
+                const joinDate = data.approved_at 
+                    ? new Date(data.approved_at) 
+                    : (data.join_date ? new Date(data.join_date) : new Date());
+                
+                const now = new Date();
+                const monthsList = [];
+                
+                let current = new Date(joinDate.getFullYear(), joinDate.getMonth(), 1);
+                const end = new Date(now.getFullYear(), now.getMonth(), 1);
+                
+                while (current <= end) {
+                    const monthIndex = current.getMonth();
+                    const monthName = banglaMonths[monthIndex];
+                    const year = current.getFullYear();
+                    const monthYearKey = `${monthName}-${year}`;
+                    const isApproved = approvedMonths.includes(monthYearKey);
+                    
+                    monthsList.push({
+                        monthName,
+                        year,
+                        monthYearKey,
+                        isApproved
+                    });
+                    
+                    current.setMonth(current.getMonth() + 1);
+                }
+                
+                // ✅ HTML তৈরি
+                const container = document.getElementById('transferMonthsContainer');
+                if (container) {
+                    container.innerHTML = '';
+                    
+                    monthsList.forEach((m) => {
+                        const disabledAttr = m.isApproved ? 'disabled' : '';
+                        const labelStyle = m.isApproved
+                            ? 'opacity:0.6; cursor:not-allowed; background:#f3f4f6; border-color:#d1d5db;'
+                            : 'background:white;';
+                        const textColor = m.isApproved ? 'color:#6b7280;' : 'color:#1f2937;';
+                        const statusHtml = m.isApproved
+                            ? `<span style="color:#059669; font-size:10px; font-weight:600;"><i class="fas fa-check-circle"></i> জমা আছে</span>`
+                            : '';
+                        const lockIcon = m.isApproved
+                            ? `<i class="fas fa-lock" style="color:#9ca3af; font-size:12px; margin-left:auto;"></i>`
+                            : '';
+                        
+                        container.innerHTML += `
+                            <label style="${labelStyle} display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid ${m.isApproved ? '#d1d5db' : '#e5e7eb'}; border-radius:10px;">
+                                <input type="checkbox" 
+                                       value="${m.monthName}" 
+                                       data-year="${m.year}"
+                                       data-month-key="${m.monthYearKey}"
+                                       class="transfer-month-cb" 
+                                       ${disabledAttr}
+                                       ${!m.isApproved ? 'onchange="updateTransferTotalAmount()"' : ''}>
+                                <span style="${textColor}">${m.monthName} ${m.year}</span>
+                                ${statusHtml}
+                                ${lockIcon}
+                            </label>
+                        `;
+                    });
+                }
+                
+                updateTransferTotalAmount();
+                showToast(`✅ গ্রহীতা মেয়াদী সদস্য — ${monthsList.length}টি মাস দেখানো হচ্ছে (${approvedMonths.length}টি লক)`, 'info');
+                
             } else {
+                // মেয়াদহীন গ্রহীতা
                 document.getElementById('transferMonthsSection').classList.add('hidden');
                 document.getElementById('transferCustomAmountSection').classList.remove('hidden');
                 const calcNote = document.getElementById('transferCalculationNote');
                 if (calcNote) {
                     calcNote.innerHTML = `* আপনি ইচ্ছামতো যেকোনো পরিমাণ টাকা ট্রান্সফার করতে পারেন`;
                 }
-                document.querySelectorAll('.transfer-month-cb').forEach(cb => cb.checked = false);
-                showToast(`✅ গ্রহীতা মেয়াদহীন সদস্য, ইচ্ছামতো টাকা ইনপুট দিন`, 'info');
+                showToast(`✅ গ্রহীতা মেয়াদহীন সদস্য, ইচ্ছামতো টাকা ইনপুট দিন`, 'info');
             }
             
             updateTransferTotalAmount();
-            showToast(`✅ গ্রহীতা পাওয়া গেছে: ${data.full_name}`, 'success');
+            showToast(`✅ গ্রহীতা পাওয়া গেছে: ${data.full_name}`, 'success');
         } else {
             if (notFound) notFound.classList.remove('hidden');
             if (receiverInfo) {
@@ -14328,7 +14495,7 @@ async function searchReceiverForTransfer() {
             document.getElementById('transferCalculationNote').innerHTML = '* প্রথমে গ্রহীতা সার্চ করুন';
             document.getElementById('transferSubmitBtn').disabled = true;
             document.getElementById('transferSubmitBtn').innerHTML = '<i class="fas fa-hand mr-1"></i> প্রথমে গ্রহীতা সার্চ করুন';
-            showToast('❌ এই সদস্য পাওয়া যায়নি!', 'error');
+            showToast('❌ এই সদস্য পাওয়া যায়নি!', 'error');
         }
     } catch(e) {
         console.error('❌ সার্চ error:', e);
