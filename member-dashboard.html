@@ -12290,56 +12290,57 @@ function goToBonusHistory() {
 }
 
   // ============================================================
-// ✅ Referral Bonus Summary — সম্পূর্ণ DB থেকে (উত্তোলিত + debt সহ)
+// ✅ Referral Bonus Summary — transfer সহ
 // ============================================================
 async function updateReferralBonusSummary() {
     const container = document.getElementById('referralBonusSummary');
     if (!container) return;
     
-    // ✅ currentUser চেক
     if (!currentUser || !currentUser.id) {
-        console.warn('⚠️ currentUser নেই');
         container.classList.add('hidden');
         return;
     }
     
     const client = await initSupabase();
-    if (!client) {
-        console.warn('⚠️ Supabase client নেই');
-        return;
-    }
+    if (!client) return;
     
     try {
-        // ১. মোট আয় — সরাসরি DB থেকে
-        const { data: bonusLogs, error: bonusErr } = await client
+        // ============================================================
+        // ১. মোট আয় — log থেকে
+        // ============================================================
+        const { data: bonusLogs } = await client
             .from('referral_bonus_log')
             .select('amount, level')
-            .eq('member_id', currentUser.id)
-            .gte('level', 1)
-            .lte('level', 10);
+            .eq('member_id', currentUser.id);
         
-        if (bonusErr) console.error('❌ Bonus logs error:', bonusErr);
+        const totalEarned = (bonusLogs || [])
+            .filter(log => {
+                const lvl = Number(log.level);
+                return lvl >= 1 && lvl <= 10;
+            })
+            .reduce((sum, log) => sum + Number(log.amount || 0), 0);
         
-        const totalEarned = (bonusLogs || []).reduce(
-            (sum, log) => sum + Number(log.amount || 0), 0
-        );
-        
-        // ২. মোট উত্তোলন — সরাসরি DB থেকে
-        const { data: withdrawals, error: wErr } = await client
+        // ============================================================
+        // ২. ✅ সব debit — withdrawal + internal_transfer
+        // ============================================================
+        const { data: debits } = await client
             .from('main_ledger')
-            .select('amount')
+            .select('amount, source')
             .eq('member_id', currentUser.id)
             .eq('account', 'referral_bonus')
-            .eq('action', 'debit')
-            .eq('source', 'withdrawal');
+            .eq('action', 'debit');
         
-        if (wErr) console.error('❌ Withdrawals error:', wErr);
+        const totalWithdrawn = (debits || [])
+            .filter(d => d.source === 'withdrawal')
+            .reduce((sum, d) => sum + Number(d.amount || 0), 0);
         
-        const totalWithdrawn = (withdrawals || []).reduce(
-            (sum, w) => sum + Number(w.amount || 0), 0
-        );
+        const totalTransferred = (debits || [])
+            .filter(d => d.source === 'internal_transfer')
+            .reduce((sum, d) => sum + Number(d.amount || 0), 0);
         
-        // ৩. Debt চেক
+        // ============================================================
+        // ৩. Debt
+        // ============================================================
         const { data: debtData } = await client
             .from('referral_bonus_debt')
             .select('excess_amount')
@@ -12348,10 +12349,14 @@ async function updateReferralBonusSummary() {
         
         const debt = Number(debtData?.excess_amount) || 0;
         
-        // ৪. উপলব্ধ
-        const available = Math.max(0, totalEarned - totalWithdrawn - debt);
+        // ============================================================
+        // ৪. ✅ উপলব্ধ — transfer বাদ
+        // ============================================================
+        const available = Math.max(0, totalEarned - totalWithdrawn - totalTransferred - debt);
         
-        // ৫. Count — সরাসরি DB থেকে
+        // ============================================================
+        // ৫. Count
+        // ============================================================
         const { data: downlines } = await client
             .from('members')
             .select('member_id')
@@ -12359,18 +12364,27 @@ async function updateReferralBonusSummary() {
         
         const count = (downlines || []).length;
         
+        // ============================================================
         // ৬. Progress
+        // ============================================================
+        const totalDebit = totalWithdrawn + totalTransferred;
         const withdrawalProgress = totalEarned > 0 
-            ? Math.round((totalWithdrawn / totalEarned) * 100) 
+            ? Math.round((totalDebit / totalEarned) * 100) 
             : 0;
         
         console.log('🎁 Referral Bonus Summary:', {
-            totalEarned, totalWithdrawn, debt, available, count,
-            bonusLogsCount: (bonusLogs || []).length,
-            withdrawalsCount: (withdrawals || []).length
+            totalEarned,
+            totalWithdrawn,
+            totalTransferred,
+            debt,
+            available,
+            count,
+            totalDebit
         });
         
-        // কোনো data না থাকলে লুকান
+        // ============================================================
+        // ৭. কোনো data না থাকলে লুকান
+        // ============================================================
         if (totalEarned === 0 && count === 0 && debt === 0) {
             container.classList.add('hidden');
             container.innerHTML = '';
@@ -12385,7 +12399,9 @@ async function updateReferralBonusSummary() {
             });
         };
         
-        // Card Render
+        // ============================================================
+        // ৮. Card Render
+        // ============================================================
         container.classList.remove('hidden');
         container.innerHTML = `
             <div class="bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 rounded-2xl p-4 shadow-md border-2 border-amber-200">
@@ -12416,6 +12432,15 @@ async function updateReferralBonusSummary() {
                         <p class="text-lg font-extrabold text-emerald-800">৳${bnToEn(formatVal(available))}</p>
                     </div>
                 </div>
+                
+                ${totalTransferred > 0 ? `
+                    <div class="bg-purple-50 border border-purple-300 rounded-lg p-2 mb-3">
+                        <p class="text-xs text-purple-700">
+                            <i class="fas fa-exchange-alt mr-1"></i>
+                            আপনি <strong>৳${bnToEn(formatVal(totalTransferred))}</strong> সঞ্চয় ফান্ডে ট্রান্সফার করেছেন।
+                        </p>
+                    </div>
+                ` : ''}
                 
                 ${totalWithdrawn > 0 ? `
                     <div class="bg-blue-50 border border-blue-300 rounded-lg p-2 mb-3">
@@ -12478,7 +12503,7 @@ async function updateReferralBonusSummary() {
 }
 
 window.updateReferralBonusSummary = updateReferralBonusSummary;
-console.log('✅ updateReferralBonusSummary() loaded!');  
+console.log('✅ updateReferralBonusSummary() loaded!');
 
  // ============================================================
 // ⚠️ Debt Notice — যারা বেশি উত্তোলন করেছে
