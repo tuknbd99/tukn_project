@@ -128,13 +128,20 @@
             <h3 class="font-bold text-emerald-700 mb-3"><i class="fas fa-chart-pie mr-2"></i>বন্টন সারাংশ</h3>
             <div class="summary-grid" id="summaryGrid">
                 <div class="summary-item"><div class="label">📊 মোট লাভ</div><div class="value green" id="sumTotalProfit">০</div></div>
-                <div class="summary-item"><div class="label">🏦 কল্যাণ তহবিল</div><div class="value orange" id="sumWelfare">০</div></div>
+                <div class="summary-item"><div class="label">🏦 কল্যাণ তহবিল (%)</div><div class="value orange" id="sumWelfare">০</div></div>
                 <div class="summary-item"><div class="label">📤 বিতরণযোগ্য টাকা</div><div class="value purple" id="sumDistributable">০</div></div>
                 <div class="summary-item"><div class="label">💰 সদস্যদের মোট ফান্ড</div><div class="value green" id="sumTotalFund">০</div></div>
                 <div class="summary-item"><div class="label">📈 প্রতি টাকার লভ্যাংশ</div><div class="value purple" id="sumPerTaka">০</div></div>
                 <div class="summary-item"><div class="label">✅ মোট বিতরণকৃত</div><div class="value green" id="sumTotalDistributed">০</div></div>
                 <div class="summary-item"><div class="label">👥 যোগ্য সদস্য</div><div class="value blue" id="sumEligibleMembers">০</div></div>
                 <div class="summary-item"><div class="label">🚫 বাদ পড়া সদস্য</div><div class="value red" id="sumExcludedMembers">০</div></div>
+
+                <!-- ✅ নতুন ৫টি কার্ড -->
+                <div class="summary-item"><div class="label">🏦 ঋণ সার্ভিস (১%)</div><div class="value orange" id="sumLoanService">০</div></div>
+                <div class="summary-item"><div class="label">⏰ আদায়কৃত বিলম্ব ফি</div><div class="value blue" id="sumLateFee">০</div></div>
+                <div class="summary-item"><div class="label">🚫 মওকুফ বিলম্ব ফি</div><div class="value red" id="sumLateFeeWaived">০</div></div>
+                <div class="summary-item"><div class="label">💰 লভ্যাংশ কল্যাণ</div><div class="value green" id="sumWelfareFromProfit">০</div></div>
+                <div class="summary-item"><div class="label">🏛️ সর্বমোট কল্যাণ</div><div class="value purple" id="sumWelfareTotal">০</div></div>
             </div>
         </div>
     </div>
@@ -348,7 +355,6 @@ async function calculateProfitDistribution(totalProfit, welfarePercent, month, y
     const results = memberFunds.map(m => {
         const profitShare = perTakaProfit * m.totalFund;
         totalDistributed += profitShare;
-        // ✅ লভ্যাংশের ধরন অনুযায়ী ভাগ
         const ratioSavings = m.totalFund > 0 ? (m.totalSavings + m.profitSavings) / m.totalFund : 1;
         return {
             ...m,
@@ -392,6 +398,8 @@ async function calculateAndPreview() {
         const client = initSupabase();
         if (!client) { showToast('Supabase সংযোগ সমস্যা!', 'error'); return; }
 
+        const monthIdx = getMonthIndex(month);
+
         // মাস্টার ডুপ্লিকেট চেক
         const { data: existingMaster } = await client
             .from('profit_distributions')
@@ -411,12 +419,52 @@ async function calculateAndPreview() {
             return;
         }
 
+        // ✅✅✅ ঋণ সার্ভিস চার্জ
+        const { data: loanTotal } = await client.rpc('get_monthly_loan_disbursed', {
+            p_month: monthIdx + 1, p_year: year
+        });
+        const totalLoanDisbursed = parseFloat(loanTotal) || 0;
+        const loanServiceCharge = totalLoanDisbursed * 0.01;
+
+        // ✅✅✅ আদায়কৃত বিলম্ব ফি
+        const { data: lateFeeCollected } = await client.rpc('get_monthly_late_fee_collected', {
+            p_month: monthIdx + 1, p_year: year
+        });
+        const totalLateFeeCollected = parseFloat(lateFeeCollected) || 0;
+
+        // ✅✅✅ মওকুফকৃত বিলম্ব ফি
+        const { data: lateFeeWaived } = await client.rpc('get_monthly_late_fee_waived', {
+            p_month: monthIdx + 1, p_year: year
+        });
+        const totalLateFeeWaived = parseFloat(lateFeeWaived) || 0;
+
+        // ✅✅✅ লভ্যাংশের ৩০%
+        const welfareFromProfit = totalProfit * (welfarePercent / 100);
+
+        // ✅✅✅ সর্বমোট কল্যাণ
+        const welfareTotal = loanServiceCharge + totalLateFeeCollected + welfareFromProfit;
+
+        console.log('📊 কল্যাণ ফান্ড:');
+        console.log('ঋণ সার্ভিস:', loanServiceCharge);
+        console.log('বিলম্ব ফি আদায়:', totalLateFeeCollected);
+        console.log('বিলম্ব ফি মওকুফ:', totalLateFeeWaived);
+        console.log('লভ্যাংশ কল্যাণ:', welfareFromProfit);
+        console.log('সর্বমোট:', welfareTotal);
+
         const result = await calculateProfitDistribution(totalProfit, welfarePercent, month, year);
 
         if (!result || result.memberCount === 0) {
             showToast(`কোনো যোগ্য সদস্য নেই! (${month} ${year})`, 'error');
             return;
         }
+
+        // ✅ result-এ নতুন ফিল্ড
+        result.loanServiceCharge = loanServiceCharge;
+        result.totalLateFeeCollected = totalLateFeeCollected;
+        result.totalLateFeeWaived = totalLateFeeWaived;
+        result.welfareFromProfit = welfareFromProfit;
+        result.welfareTotal = welfareTotal;
+        result.totalLoanDisbursed = totalLoanDisbursed;
 
         previewData = result;
 
@@ -429,6 +477,13 @@ async function calculateAndPreview() {
         document.getElementById('sumTotalDistributed').innerHTML = formatAmountText(result.totalDistributed);
         document.getElementById('sumEligibleMembers').innerHTML = result.memberCount + ' জন';
         document.getElementById('sumExcludedMembers').innerHTML = result.excludedCount + ' জন';
+
+        // ✅ নতুন ৫টি সারাংশ আপডেট
+        document.getElementById('sumLoanService').innerHTML = formatAmountText(result.loanServiceCharge);
+        document.getElementById('sumLateFee').innerHTML = formatAmountText(result.totalLateFeeCollected);
+        document.getElementById('sumLateFeeWaived').innerHTML = formatAmountText(result.totalLateFeeWaived);
+        document.getElementById('sumWelfareFromProfit').innerHTML = formatAmountText(result.welfareFromProfit);
+        document.getElementById('sumWelfareTotal').innerHTML = formatAmountText(result.welfareTotal);
 
         document.getElementById('membersSection').style.display = 'block';
         document.getElementById('memberCount').innerHTML = `
@@ -468,6 +523,12 @@ async function calculateAndPreview() {
                 <i class="fas fa-check-circle mr-2"></i>
                 <strong>${result.memberCount}</strong> জন সদস্যের মধ্যে <strong>${formatAmountText(result.distributableAmount)}</strong> বিতরণ হবে।
                 প্রতি টাকার লভ্যাংশ: <strong>${result.perTakaProfit.toFixed(4)}</strong> টাকা
+                <br><span class="text-sm mt-1 block">
+                    🏛️ সর্বমোট কল্যাণ: <strong>${formatAmountText(result.welfareTotal)}</strong>
+                    (ঋণ: ${formatAmountText(result.loanServiceCharge)} + 
+                    বিলম্ব ফি: ${formatAmountText(result.totalLateFeeCollected)} + 
+                    লভ্যাংশ: ${formatAmountText(result.welfareFromProfit)})
+                </span>
                 ${result.excludedCount > 0 ? `<br><span class="text-amber-600">⚠️ ${result.excludedCount} জন বাদ পড়েছেন</span>` : ''}
             </div>`;
 
@@ -497,13 +558,16 @@ async function confirmDistribution() {
 📊 বন্টন সারাংশ:
 মাস: ${month} ${year}
 মোট লাভ: ${formatAmountText(totalProfit)}
-কল্যাণ তহবিল (${welfarePercent}%): ${formatAmountText(previewData.welfareAmount)}
 বিতরণযোগ্য: ${formatAmountText(previewData.distributableAmount)}
 যোগ্য সদস্য: ${previewData.memberCount} জন
-বাদ পড়া: ${previewData.excludedCount} জন
-প্রতি টাকার লভ্যাংশ: ${previewData.perTakaProfit.toFixed(4)} টাকা
 
-আপনি কি এই লভ্যাংশ বন্টন নিশ্চিত করছেন?`;
+🏛️ কল্যাণ ফান্ড:
+- ঋণ সার্ভিস (১%): ${formatAmountText(previewData.loanServiceCharge)}
+- আদায়কৃত বিলম্ব ফি: ${formatAmountText(previewData.totalLateFeeCollected)}
+- লভ্যাংশ (${welfarePercent}%): ${formatAmountText(previewData.welfareFromProfit)}
+- সর্বমোট: ${formatAmountText(previewData.welfareTotal)}
+
+আপনি কি এই বন্টন নিশ্চিত করছেন?`;
 
     if (!confirm(confirmMsg)) return;
 
@@ -525,7 +589,7 @@ async function confirmDistribution() {
         if (finalCheck && finalCheck.length > 0) {
             const existing = finalCheck[0];
             const date = existing.distributed_at ? new Date(existing.distributed_at).toLocaleString('bn-BD') : 'অজানা';
-            showToast(`🚨 ডুপ্লিকেট!\n${month} ${year} এ ইতিমধ্যে বন্টন হয়েছে\nতারিখ: ${date}\nবিতরণ: ${formatAmountText(existing.totaldistributed)}`, 'error');
+            showToast(`🚨 ডুপ্লিকেট!\n${month} ${year} এ ইতিমধ্যে বন্টন হয়েছে\nতারিখ: ${date}`, 'error');
             return;
         }
 
@@ -539,7 +603,12 @@ async function confirmDistribution() {
                 deductionamount: previewData.welfareAmount,
                 totaldistributed: previewData.distributableAmount,
                 eligiblemembers: previewData.memberCount,
-                welfarefundadded: previewData.welfareAmount,
+                welfarefundadded: previewData.welfareTotal,
+                total_loan_disbursed: previewData.totalLoanDisbursed,
+                loan_service_charge: previewData.loanServiceCharge,
+                welfare_from_loan: previewData.loanServiceCharge,
+                welfare_from_profit: previewData.welfareFromProfit,
+                welfare_total: previewData.welfareTotal,
                 status: 'approved',
                 distributed_at: new Date().toISOString()
             }])
@@ -555,18 +624,68 @@ async function confirmDistribution() {
         const distributionId = masterData[0].id;
         console.log('✅ Master entry:', distributionId);
 
-        // ২. কল্যাণ তহবিল
-        if (previewData.welfareAmount > 0) {
-            const { error: wErr } = await client
-                .from('welfare_fund')
-                .insert([{
-                    total: previewData.welfareAmount,
-                    month: month, year: year,
-                    distribution_id_bigint: distributionId,   // ✅ bigint কলাম
-                    note: `${month} ${year} লভ্যাংশ থেকে ${welfarePercent}%`,
-                    created_at: new Date().toISOString()
-                }]);
+        // ২. কল্যাণ তহবিল — ৪টি উৎস
+        const welfareEntries = [];
+
+        if (previewData.loanServiceCharge > 0) {
+            welfareEntries.push({
+                total: previewData.loanServiceCharge,
+                source: 'loan_service',
+                loan_amount: previewData.totalLoanDisbursed,
+                service_charge: previewData.loanServiceCharge,
+                month: month, year: year,
+                distribution_id_bigint: distributionId,
+                note: `${month} ${year} — ঋণের ১% সার্ভিস চার্জ (মোট ঋণ: ${previewData.totalLoanDisbursed})`,
+                created_at: new Date().toISOString()
+            });
+        }
+
+        if (previewData.totalLateFeeCollected > 0) {
+            welfareEntries.push({
+                total: previewData.totalLateFeeCollected,
+                source: 'late_fee',
+                late_fee_collected: previewData.totalLateFeeCollected,
+                late_fee_waived: previewData.totalLateFeeWaived,
+                month: month, year: year,
+                distribution_id_bigint: distributionId,
+                note: `${month} ${year} — আদায়কৃত বিলম্ব ফি (মওকুফ: ${previewData.totalLateFeeWaived})`,
+                created_at: new Date().toISOString()
+            });
+        }
+
+        if (previewData.welfareFromProfit > 0) {
+            welfareEntries.push({
+                total: previewData.welfareFromProfit,
+                source: 'profit',
+                profit_welfare: previewData.welfareFromProfit,
+                month: month, year: year,
+                distribution_id_bigint: distributionId,
+                note: `${month} ${year} — লভ্যাংশের ${welfarePercent}%`,
+                created_at: new Date().toISOString()
+            });
+        }
+
+        if (previewData.welfareTotal > 0) {
+            welfareEntries.push({
+                total: previewData.welfareTotal,
+                source: 'total',
+                total_combined: previewData.welfareTotal,
+                late_fee_collected: previewData.totalLateFeeCollected,
+                late_fee_waived: previewData.totalLateFeeWaived,
+                loan_amount: previewData.totalLoanDisbursed,
+                service_charge: previewData.loanServiceCharge,
+                profit_welfare: previewData.welfareFromProfit,
+                month: month, year: year,
+                distribution_id_bigint: distributionId,
+                note: `${month} ${year} — সর্বমোট কল্যাণ (ঋণ + বিলম্ব ফি + লভ্যাংশ)`,
+                created_at: new Date().toISOString()
+            });
+        }
+
+        if (welfareEntries.length > 0) {
+            const { error: wErr } = await client.from('welfare_fund').insert(welfareEntries);
             if (wErr) console.error('Welfare insert error:', wErr);
+            else console.log(`✅ ${welfareEntries.length} welfare entries inserted`);
         }
 
         // ৩. সেফটি চেক + আপডেট
@@ -607,7 +726,6 @@ async function confirmDistribution() {
 
             while (!success && retries < MAX_RETRIES) {
                 try {
-                    // ✅ RPC দিয়ে atomic আপডেট
                     const { error: updateError } = await client.rpc('add_profit_balance', {
                         p_member_id: m.member_id,
                         p_amount: m.profitShare
@@ -720,9 +838,9 @@ async function loadDistributionHistory() {
             <tr>
                 <td>${d.distributed_at ? new Date(d.distributed_at).toLocaleDateString('bn-BD') : '-'}</td>
                 <td>${d.month || ''} ${d.year || ''}</td>
-                <td>${formatAmountText(d.totalprofit || d.total_profit || 0)}</td>
+                <td>${formatAmountText(d.totalprofit || 0)}</td>
                 <td>${formatAmountText(d.deductionamount || 0)}</td>
-                <td>${formatAmountText(d.totaldistributed || d.distributed_amount || 0)}</td>
+                <td>${formatAmountText(d.totaldistributed || 0)}</td>
                 <td>${d.eligiblemembers || 0} জন</td>
                 <td><span class="badge badge-success">✅ অনুমোদিত</span></td>
                 <td><button onclick="viewDistributionDetail('${d.id}')" class="btn-success text-xs"><i class="fas fa-eye"></i></button></td>
@@ -795,7 +913,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('totalProfit').addEventListener('keypress', function(e) {
         if (e.key === 'Enter') document.getElementById('previewBtn').click();
     });
-    console.log('✅ লভ্যাংশ বন্টন সিস্টেম লোড হয়েছে (RPC + approved_at ভিত্তিক)');
+    console.log('✅ লভ্যাংশ বন্টন সিস্টেম লোড হয়েছে (৪ উৎস কল্যাণ + বিলম্ব ফি)');
 });
 
 window.calculateAndPreview = calculateAndPreview;
