@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>সকল লেনদেন | TUKNBD</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase-config.js"></script>
+    <style>
+        * { font-family: 'Noto Sans Bengali', sans-serif; }
+        body { background: #f0fdf4; padding: 20px; }
+        .tx-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 10px; font-weight: 600; }
+        .tx-badge.savings { background: #d1fae5; color: #065f46; }
+        .tx-badge.loan { background: #dbeafe; color: #1e40af; }
+        .tx-badge.withdrawal { background: #fee2e2; color: #991b1b; }
+        .tx-badge.referral { background: #fef3c7; color: #92400e; }
+        .tx-badge.profit { background: #ede9fe; color: #5b21b6; }
+        .summary-card { background: white; padding: 16px; border-radius: 12px; border: 1px solid #e5e7eb; text-align: center; }
+        .summary-card .amount { font-size: 22px; font-weight: 700; color: #059669; }
+        .summary-card .label { font-size: 12px; color: #6b7280; }
+        .data-table th { background: #f8fafc; padding: 12px; text-align: left; border-bottom: 2px solid #e5e7eb; font-size: 12px;}
+        .data-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px;}
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 16px; }
+        .modal-overlay.active { display: flex; }
+        .modal-container { background: white; border-radius: 16px; max-width: 700px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 24px; }
+    </style>
+</head>
+<body>
+
+<div class="max-w-7xl mx-auto">
+    <div class="flex justify-between items-center mb-4">
+        <h2 class="text-2xl font-bold text-emerald-700"><i class="fas fa-list mr-2"></i>সকল লেনদেন</h2>
+        <button onclick="window.location.href='admin-panel.html'" class="btn bg-gray-200 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-300">← ড্যাশবোর্ডে ফিরে যান</button>
+    </div>
+
+    <!-- সার্চ ও ফিল্টার -->
+    <div class="bg-white p-3 rounded-lg shadow-sm border mb-4 flex flex-wrap gap-2 items-center">
+        <input type="text" id="txMemberSearch" placeholder="🔍 নাম / মোবাইল / আইডি / শেষ ৪ সংখ্যা..." class="border-2 border-gray-200 rounded-lg p-2 text-sm flex-1 min-w-[200px]" onkeypress="if(event.key==='Enter') loadAllTransactions()">
+        <input type="date" id="txFromDate" class="border p-2 rounded-lg text-sm">
+        <span class="text-gray-400 text-sm">থেকে</span>
+        <input type="date" id="txToDate" class="border p-2 rounded-lg text-sm">
+        
+        <select id="txTypeFilter" class="border-2 border-gray-200 rounded-lg p-2 text-sm font-medium text-gray-700 bg-gray-50">
+            <option value="">সব ধরন</option>
+            <option value="payment">💰 সঞ্চয় জমা</option>
+            <option value="loan">🏦 লোন প্রদান</option>
+            <option value="loan_payment">📥 ঋণ আদায়</option>
+            <option value="withdrawal">💸 সব উত্তোলন</option>
+        </select>
+        
+        <button onclick="loadAllTransactions()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-emerald-700"><i class="fas fa-filter"></i> ফিল্টার</button>
+        <button onclick="window.print()" class="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-purple-700"><i class="fas fa-print"></i> প্রিন্ট</button>
+    </div>
+
+    <!-- সিস্টেমের আসল ব্যালেন্স -->
+    <div class="bg-gradient-to-r from-blue-50 to-indigo-50 p-3 rounded-lg border-2 border-blue-200 flex flex-wrap gap-3 items-center justify-between mb-4">
+        <div class="text-sm font-bold text-gray-700"><i class="fas fa-shield-alt text-blue-600 mr-1"></i> সিস্টেমের আসল ব্যালেন্স:</div>
+        <div class="flex gap-4 flex-wrap">
+            <div class="text-center"><div class="text-xs text-gray-500">মোট সম্পদ</div><div class="font-bold text-blue-700" id="sysTotalAssets">৳ ০</div></div>
+            <div class="text-center"><div class="text-xs text-gray-500">লোন বকেয়া</div><div class="font-bold text-red-600" id="sysLoanDue">৳ ০</div></div>
+            <div class="text-center"><div class="text-xs text-gray-500">মোট উত্তোলন</div><div class="font-bold text-red-600" id="sysWithdrawals">৳ ০</div></div>
+            <div class="text-center bg-white px-3 rounded border-2 border-blue-300"><div class="text-xs text-gray-500">💎 আসল নীট ব্যালেন্স</div><div class="font-extrabold text-blue-800 text-lg" id="sysNetBalance">৳ ০</div></div>
+        </div>
+    </div>
+
+    <!-- সামারি কার্ড -->
+    <div id="txSummary" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+
+    <!-- লেনদেনের টেবিল -->
+    <div class="bg-white rounded-lg border shadow-sm p-4">
+        <div class="overflow-x-auto" id="allTransactionsContainer">
+            <div class="text-center text-gray-500 py-12"><i class="fas fa-spinner fa-spin text-3xl mb-3"></i><p>লোড হচ্ছে...</p></div>
+        </div>
+    </div>
+</div>
+
+<!-- ডিটেইল মডাল -->
+<div id="transactionDetailModal" class="modal-overlay" onclick="if(event.target===this) closeTxDetailModal()">
+    <div class="modal-container">
+        <div class="flex justify-between items-center border-b pb-3 mb-4">
+            <h3 class="text-xl font-bold text-emerald-700"><i class="fas fa-receipt mr-2"></i>লেনদেনের বিস্তারিত</h3>
+            <button onclick="closeTxDetailModal()" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
+        </div>
+        <div id="txDetailContent"></div>
+        <div class="flex gap-2 justify-center mt-4 pt-3 border-t">
+            <button onclick="printTxDetail()" class="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-bold"><i class="fas fa-print"></i> প্রিন্ট</button>
+            <button onclick="closeTxDetailModal()" class="bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-bold">বন্ধ</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ডামি ফাংশন (মেইন প্যানেলের ফাংশনগুলোর বিকল্প)
+const formatAmountWithText = (num) => (Number(num) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' টাকা';
+const formatAmount = (num) => (Number(num) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const formatDateBD = (date) => {
+    if (!date) return '-';
+    return new Date(date).toLocaleDateString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric' });
+};
+const formatDateTimeBD = (date) => {
+    if (!date) return '-';
+    return new Date(date).toLocaleString('bn-BD', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+function initSupabaseClient() {
+    if (typeof getSupabaseClient === 'function') return getSupabaseClient();
+    if (typeof window._supabaseClient !== 'undefined' && window._supabaseClient) return window._supabaseClient;
+    return null;
+}
+
+// আপনার দেওয়া loadAllTransactions, loadTxSystemSummary, showTxDetail ইত্যাদি ফাংশনগুলো এখানে বসবে
+// (আমি নিচে সেগুলো হুবহু কপি করে দিচ্ছি)
+
+// ============================================================
+// ✅ loadAllTransactions()
+// ============================================================
+async function loadAllTransactions() {
+    const fromDate = document.getElementById('txFromDate')?.value || '';
+    const toDate = document.getElementById('txToDate')?.value || '';
+    const searchTerm = document.getElementById('txMemberSearch')?.value?.trim() || '';
+    const typeFilter = document.getElementById('txTypeFilter')?.value || '';
+    
+    const container = document.getElementById('allTransactionsContainer');
+    const summaryContainer = document.getElementById('txSummary');
+    if (!container) return;
+    
+    container.innerHTML = `<div class="text-center py-8"><div class="loading-spinner mx-auto"></div><p>লোড হচ্ছে...</p></div>`;
+    const client = initSupabaseClient();
+    if (!client) { container.innerHTML = '<div class="text-red-500 p-4 text-center">❌ সংযোগ সমস্যা!</div>'; return; }
+    
+    try {
+        await loadTxSystemSummary();
+        const transactions = [];
+        const startDate = fromDate ? `${fromDate}T00:00:00Z` : '2000-01-01T00:00:00Z';
+        const endDate = toDate ? `${toDate}T23:59:59Z` : new Date().toISOString();
+        
+        // ১. পেমেন্ট
+        if (!typeFilter || typeFilter === 'payment') {
+            const { data } = await client.from('payments').select('*').eq('status', 'approved').gte('submitted_at', startDate).lte('submitted_at', endDate);
+            (data || []).forEach(p => transactions.push({ id: p.id, date: p.approved_at || p.submitted_at, type: 'সঞ্চয় জমা', typeClass: 'savings', member_id: p.member_id, fallback_name: p.member_name, mobile: p.mobile, amount: Number(p.amount) || 0, note: `${p.month || ''} ${p.year || ''} • ${p.payment_method || 'cash'}`, voucher: p.voucher_slip_no, isCredit: true, filterKey: 'payment', raw: p }));
+        }
+        // ২. লোন
+        if (!typeFilter || typeFilter === 'loan') {
+            const { data } = await client.from('loan_applications').select('*').eq('status', 'approved').gte('approved_at', startDate).lte('approved_at', endDate);
+            (data || []).forEach(l => transactions.push({ id: l.id, date: l.approved_at || l.submitted_at, type: 'লোন প্রদান', typeClass: 'loan', member_id: l.member_id, fallback_name: l.member_name, amount: Number(l.amount) || 0, note: l.loan_type || 'লোন', voucher: `LOAN-${l.id}`, isCredit: true, filterKey: 'loan', raw: l }));
+        }
+        // ৩. উত্তোলন
+        if (!typeFilter || typeFilter === 'withdrawal') {
+            const { data } = await client.from('withdrawals').select('*').eq('status', 'approved').gte('approved_at', startDate).lte('approved_at', endDate);
+            (data || []).forEach(w => {
+                const cleanType = (w.type || w.fund_type || 'মূলধন').replace(/ উত্তোলন/g, '').trim();
+                let displayType = cleanType.includes('রেফারেল') || cleanType.includes('লভ্যাংশ') ? `${cleanType} উত্তোলন` : 'মূলধন উত্তোলন';
+                transactions.push({ id: w.id, date: w.approved_at || w.requested_at, type: displayType, typeClass: 'withdrawal', member_id: w.member_id, fallback_name: w.member_name, mobile: w.mobile, amount: Number(w.amount) || 0, note: `${w.payment_method || 'cash'} • ${w.note || ''}`.trim(), voucher: w.voucher_no, isCredit: false, filterKey: 'withdrawal', raw: w });
+            });
+        }
+        // ৪. ঋণ আদায়
+        if (!typeFilter || typeFilter === 'loan_payment') {
+            const { data } = await client.from('loan_payments').select('*').eq('status', 'approved').gte('payment_date', startDate).lte('payment_date', endDate);
+            const loanIds = [...new Set((data || []).map(lp => lp.loan_id).filter(Boolean))];
+            let loanInfoMap = {};
+            if (loanIds.length > 0) {
+                const { data: loanInfos } = await client.from('loan_applications').select('id, member_id, member_name').in('id', loanIds);
+                (loanInfos || []).forEach(li => loanInfoMap[li.id] = li);
+            }
+            (data || []).forEach(lp => {
+                const loanInfo = loanInfoMap[lp.loan_id] || {};
+                transactions.push({ id: lp.id, date: lp.payment_date, type: 'ঋণ আদায়', typeClass: 'loan', member_id: lp.member_id || loanInfo.member_id, fallback_name: loanInfo.member_name, amount: Number(lp.total_amount || lp.emi_amount) || 0, note: `কিস্তি #${lp.installment_no || '-'} • ${lp.payment_method || 'cash'}`, voucher: lp.voucher_no || lp.transaction_id, isCredit: true, filterKey: 'loan_payment', raw: lp });
+            });
+        }
+        // ৫. রেফারেল বোনাস
+        if (!typeFilter || typeFilter === 'referral_bonus') {
+            const { data } = await client.from('referral_bonus_log').select('*').gte('created_at', startDate).lte('created_at', endDate);
+            (data || []).forEach(log => transactions.push({ id: log.id, date: log.created_at, type: 'রেফারেল বোনাস', typeClass: 'referral', member_id: log.member_id, fallback_name: '', amount: Number(log.amount) || 0, note: `লেভেল L${log.level || 1}`, voucher: `REF-${log.id}`, isCredit: true, filterKey: 'referral_bonus', raw: log }));
+        }
+        // ৬. লভ্যাংশ
+        if (!typeFilter || typeFilter === 'profit') {
+            const { data } = await client.from('profit_distribution_history').select('*').gte('created_at', startDate).lte('created_at', endDate);
+            (data || []).forEach(pr => {
+                const pt = pr.profit_type || 'savings';
+                transactions.push({ id: pr.id, date: pr.created_at || pr.distributed_at, type: pt === 'savings' ? 'সঞ্চয় লভ্যাংশ' : pt === 'investment' ? 'বিনিয়োগ লভ্যাংশ' : 'রেফারেল লভ্যাংশ', typeClass: 'profit', member_id: pr.member_id, fallback_name: '', amount: Number(pr.amount) || 0, note: `Profit Distribution`, voucher: `PROFIT-${pr.id}`, isCredit: true, filterKey: 'profit', raw: pr });
+            });
+        }
+        // ৭. সমন্বয়
+        if (!typeFilter || typeFilter === 'adjustment') {
+            const { data } = await client.from('admin_balance_adjustments').select('*').gte('created_at', startDate).lte('created_at', endDate);
+            (data || []).forEach(adj => {
+                const isDeduct = adj.adjustment_direction === 'deduct';
+                transactions.push({ id: adj.id, date: adj.created_at, type: isDeduct ? 'সমন্বয় (কমানো)' : 'সমন্বয় (বাড়ানো)', typeClass: isDeduct ? 'withdrawal' : 'savings', member_id: adj.member_id, fallback_name: adj.member_name, amount: Number(adj.amount) || 0, note: `${adj.adjustment_type || ''} • ${adj.reason || ''}`, voucher: adj.voucher_no, isCredit: !isDeduct, filterKey: 'adjustment', raw: adj });
+            });
+        }
+        
+        // সদস্যদের নাম লোড
+        const uniqueMemberIds = [...new Set(transactions.map(t => t.member_id).filter(Boolean))];
+        let memberLookup = {};
+        for (let i = 0; i < uniqueMemberIds.length; i += 100) {
+            const batch = uniqueMemberIds.slice(i, i + 100);
+            const { data: md } = await client.from('members').select('member_id, full_name, mobile').in('member_id', batch);
+            (md || []).forEach(m => memberLookup[m.member_id] = { name: m.full_name || '', mobile: m.mobile || '' });
+        }
+        transactions.forEach(t => {
+            const m = memberLookup[t.member_id] || {};
+            t.member_name = m.name || t.fallback_name || 'অজানা';
+            t.member_mobile = m.mobile || t.mobile || '';
+        });
+        
+        // সার্চ ফিল্টার
+        let filtered = transactions;
+        if (searchTerm) {
+            const term = searchTerm.toLowerCase().trim();
+            const digits = term.replace(/\D/g, '');
+            filtered = transactions.filter(t => {
+                const name = String(t.member_name).toLowerCase();
+                const id = String(t.member_id).toLowerCase();
+                const mobile = String(t.member_mobile).replace(/\D/g, '');
+                return name.includes(term) || id.includes(term) || (digits && mobile.includes(digits)) ||
+                    (digits.length >= 3 && (id.replace(/\D/g, '').endsWith(digits) || mobile.endsWith(digits)));
+            });
+        }
+        filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        // সামারি
+        let credit = 0, debit = 0;
+        filtered.forEach(t => { if (t.isCredit && !t.type.includes('লোন প্রদান')) credit += t.amount; else debit += t.amount; });
+        summaryContainer.innerHTML = `
+            <div class="summary-card"><div class="label">📋 মোট লেনদেন</div><div class="amount">${filtered.length}</div></div>
+            <div class="summary-card"><div class="label">💰 মোট জমা</div><div class="amount text-emerald-600">${formatAmountWithText(credit)}</div></div>
+            <div class="summary-card"><div class="label">💸 মোট খরচ</div><div class="amount text-red-600">${formatAmountWithText(debit)}</div></div>
+            <div class="summary-card"><div class="label">📊 নীট ব্যালেন্স</div><div class="amount text-blue-600">${formatAmountWithText(credit - debit)}</div></div>
+        `;
+        
+        if (filtered.length === 0) { container.innerHTML = `<div class="text-center py-8 text-gray-500">কোনো লেনদেন নেই</div>`; return; }
+        window._txData = filtered;
+        
+        let html = `<table class="data-table w-full"><thead><tr><th>তারিখ</th><th>ধরন</th><th>সদস্য</th><th>আইডি</th><th class="text-right">পরিমাণ</th><th>বিবরণ</th><th>ভাউচার</th></tr></thead><tbody>`;
+        filtered.forEach((t, idx) => {
+            const sign = t.isCredit ? '+' : '−';
+            const color = t.isCredit ? 'text-emerald-600' : 'text-red-600';
+            const badge = t.typeClass === 'savings' ? 'tx-badge savings' : t.typeClass === 'loan' ? 'tx-badge loan' : t.typeClass === 'withdrawal' ? 'tx-badge withdrawal' : t.typeClass === 'referral' ? 'tx-badge referral' : 'tx-badge profit';
+            html += `<tr class="hover:bg-emerald-50 cursor-pointer transition" onclick="showTxDetail(${idx})">
+                <td class="text-xs whitespace-nowrap">${formatDateBD(t.date)}</td>
+                <td><span class="${badge}">${t.type}</span></td>
+                <td><div class="font-medium text-sm">${t.member_name}</div>${t.member_mobile ? `<span class="text-[10px] text-gray-400 block">📱 ${t.member_mobile}</span>` : ''}</td>
+                <td class="text-xs font-mono">${t.member_id || '-'}</td>
+                <td class="text-right font-bold ${color}">${sign} ${formatAmountWithText(t.amount)}</td>
+                <td class="text-xs max-w-xs truncate">${t.note || '-'}</td>
+                <td class="text-xs font-mono">${t.voucher || '-'}</td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+    } catch(e) { console.error(e); container.innerHTML = `<div class="text-red-500 text-center p-4">❌ এরর: ${e.message}</div>`; }
+}
+
+// সিস্টেম সামারি
+async function loadTxSystemSummary() {
+    const client = initSupabaseClient();
+    if (!client) return;
+    try {
+        const { data: members } = await client.from('members').select('balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral').in('status', ['active', 'approved']);
+        let assets = 0;
+        (members || []).forEach(m => assets += (Number(m.balance)||0) + (Number(m.referral_bonus)||0) + (Number(m.profit_balance_savings)||0) + (Number(m.profit_balance_investment)||0) + (Number(m.profit_balance_referral)||0));
+        
+        const { data: welfare } = await client.from('welfare_fund').select('total');
+        const welfareTotal = (welfare || []).reduce((s, w) => s + (Number(w.total)||0), 0);
+        
+        const { data: loans } = await client.from('loan_applications').select('amount').eq('status', 'approved');
+        const totalLoans = (loans || []).reduce((s, l) => s + (Number(l.amount)||0), 0);
+        
+        const { data: loanPays } = await client.from('loan_payments').select('total_amount, emi_amount').eq('status', 'approved');
+        const totalLoanPaid = (loanPays || []).reduce((s, p) => s + (Number(p.total_amount || p.emi_amount)||0), 0);
+        const loanDue = Math.max(0, totalLoans - totalLoanPaid);
+        
+        const { data: wds } = await client.from('withdrawals').select('amount').eq('status', 'approved');
+        const totalWDs = (wds || []).reduce((s, w) => s + (Number(w.amount)||0), 0);
+        
+        const totalAssets = assets + welfareTotal;
+        const realNetBalance = totalAssets - loanDue - totalWDs;
+        
+        document.getElementById('sysTotalAssets').textContent = formatAmountWithText(totalAssets);
+        document.getElementById('sysLoanDue').textContent = formatAmountWithText(loanDue);
+        document.getElementById('sysWithdrawals').textContent = formatAmountWithText(totalWDs);
+        document.getElementById('sysNetBalance').textContent = formatAmountWithText(realNetBalance);
+    } catch(e) { console.warn(e); }
+}
+
+// বিস্তারিত মডাল
+window.showTxDetail = function(idx) {
+    const t = window._txData?.[idx];
+    if (!t) return;
+    const isCredit = t.isCredit;
+    const amountColor = isCredit ? '#059669' : '#dc2626';
+    const sign = isCredit ? '+' : '−';
+    const bg = t.typeClass === 'savings' ? '#d1fae5' : t.typeClass === 'loan' ? '#dbeafe' : t.typeClass === 'withdrawal' ? '#fee2e2' : t.typeClass === 'referral' ? '#fef3c7' : '#ede9fe';
+    
+    document.getElementById('txDetailContent').innerHTML = `
+        <div style="background:${bg}; padding:20px; border-radius:12px; margin-bottom:16px; text-align:center;">
+            <div class="text-sm font-semibold text-gray-600">${t.type}</div>
+            <div style="font-size:32px; font-weight:900; color:${amountColor}; font-family:monospace; margin-top:4px;">${sign} ৳ ${formatAmount(t.amount)}</div>
+            <div class="text-xs text-gray-500 mt-2">${formatDateTimeBD(t.date)}</div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <div class="bg-white p-3 rounded-lg border"><div class="text-xs text-gray-500">👤 সদস্য</div><div class="font-semibold mt-1">${t.member_name}</div></div>
+            <div class="bg-white p-3 rounded-lg border"><div class="text-xs text-gray-500">🆔 আইডি</div><div class="font-semibold mt-1 font-mono text-sm">${t.member_id || '-'}</div></div>
+            ${t.member_mobile ? `<div class="bg-white p-3 rounded-lg border"><div class="text-xs text-gray-500">📱 মোবাইল</div><div class="font-semibold mt-1">${t.member_mobile}</div></div>` : ''}
+            <div class="bg-white p-3 rounded-lg border"><div class="text-xs text-gray-500">🎫 ভাউচার</div><div class="font-semibold mt-1 font-mono text-sm">${t.voucher || '-'}</div></div>
+        </div>
+        ${t.note ? `<div class="bg-amber-50 p-3 rounded-lg border border-amber-200"><div class="text-xs text-amber-600 font-semibold">📝 বিবরণ</div><div class="text-sm text-gray-700 mt-1">${t.note}</div></div>` : ''}
+    `;
+    document.getElementById('transactionDetailModal').classList.add('active');
+};
+
+window.closeTxDetailModal = function() { document.getElementById('transactionDetailModal').classList.remove('active'); };
+
+window.printTxDetail = function() {
+    const content = document.getElementById('txDetailContent').innerHTML;
+    const win = window.open('', '_blank', 'width=800,height=700');
+    win.document.write(`<!DOCTYPE html><html><head><title>বিস্তারিত</title><link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet"><style>body{font-family:'Noto Sans Bengali',sans-serif;padding:30px;}</style></head><body>${content}<script>setTimeout(()=>window.print(),400);</script></body></html>`);
+    win.document.close();
+};
+
+document.addEventListener('DOMContentLoaded', loadAllTransactions);
+</script>
+</body>
+</html>
