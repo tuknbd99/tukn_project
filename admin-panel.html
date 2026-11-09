@@ -19349,48 +19349,50 @@ async function loadAllTransactions() {
             });
         }
         
-        // ═══════════════════════════════════════════════════════
         // ৪. ঋণ আদায় (loan_payment)
-        // ═══════════════════════════════════════════════════════
         if (!typeFilter || typeFilter.includes('loan_payment')) {
-            // ✅ আলাদা ডেট ফরম্যাট (Z) ব্যবহার করা হলো
             const pStart = fromDate ? `${fromDate}T00:00:00Z` : '2000-01-01T00:00:00Z';
             const pEnd = toDate ? `${toDate}T23:59:59Z` : new Date().toISOString();
-
-            const { data: loanPayments } = await client
+        
+            // ✅ সব কলাম চেক না করে শুধু নিশ্চিত কলামগুলো নেওয়া হলো
+            const { data: loanPayments, error: lpError } = await client
                 .from('loan_payments')
-                .select('id, loan_id, member_id, emi_amount, total_amount, payment_date, payment_method, installment_no, voucher_no, transaction_id, source, status')
+                .select('*') // ← '*' দিলে যত কলাম আছে সব আসবে, কোনো এরর হবে না
                 .eq('status', 'approved')
                 .gte('payment_date', pStart)
                 .lte('payment_date', pEnd);
-            
-            const loanIds = [...new Set((loanPayments || []).map(lp => lp.loan_id).filter(Boolean))];
-            let loanInfoMap = {};
-            if (loanIds.length > 0) {
-                const { data: loanInfos } = await client.from('loan_applications').select('id, member_id, member_name').in('id', loanIds);
-                (loanInfos || []).forEach(li => { loanInfoMap[li.id] = li; });
-            }
-            
-            (loanPayments || []).forEach(lp => {
-                const loanInfo = loanInfoMap[lp.loan_id] || {};
-                const memberId = lp.member_id || loanInfo.member_id || '';
-                const memberName = loanInfo.member_name || '';
-                const amount = Number(lp.total_amount || lp.emi_amount || 0);
-                const sourceLabel = lp.source === 'internal' ? 'ব্যালেন্স থেকে' : 'বাইরে থেকে';
+        
+            if (lpError) {
+                console.warn('⚠️ loan_payments লোড এরর:', lpError.message);
+            } else {
+                const loanIds = [...new Set((loanPayments || []).map(lp => lp.loan_id).filter(Boolean))];
+                let loanInfoMap = {};
+                if (loanIds.length > 0) {
+                    const { data: loanInfos } = await client.from('loan_applications').select('id, member_id, member_name').in('id', loanIds);
+                    (loanInfos || []).forEach(li => { loanInfoMap[li.id] = li; });
+                }
                 
-                transactions.push({
-                    date: lp.payment_date,
-                    type: 'ঋণ আদায়',
-                    typeClass: 'loan',
-                    member_id: memberId,
-                    fallback_name: memberName,
-                    amount: amount,
-                    note: `কিস্তি #${lp.installment_no || '-'} • ${lp.payment_method || 'cash'} • ${sourceLabel}`,
-                    voucher: lp.voucher_no || lp.transaction_id,
-                    isCredit: true,
-                    filterKey: 'loan_payment'
+                (loanPayments || []).forEach(lp => {
+                    const loanInfo = loanInfoMap[lp.loan_id] || {};
+                    const memberId = lp.member_id || loanInfo.member_id || '';
+                    const memberName = loanInfo.member_name || '';
+                    const amount = Number(lp.total_amount || lp.emi_amount || 0);
+                    const sourceLabel = lp.source === 'internal' ? 'ব্যালেন্স থেকে' : 'বাইরে থেকে';
+                    
+                    transactions.push({
+                        date: lp.payment_date,
+                        type: 'ঋণ আদায়',
+                        typeClass: 'loan',
+                        member_id: memberId,
+                        fallback_name: memberName,
+                        amount: amount,
+                        note: `কিস্তি #${lp.installment_no || '-'} • ${lp.payment_method || 'cash'} • ${sourceLabel}`,
+                        voucher: lp.voucher_no || lp.transaction_id,
+                        isCredit: true,
+                        filterKey: 'loan_payment'
+                    });
                 });
-            });
+            }
         }
         
         // ═══════════════════════════════════════════════════════
@@ -19419,34 +19421,38 @@ async function loadAllTransactions() {
             });
         }
         
-        // ═══════════════════════════════════════════════════════
-        // ৬. লভ্যাংশ (profit) — member_name বাদ দেওয়া হলো
-        // ═══════════════════════════════════════════════════════
-        if (!typeFilter || typeFilter.includes('profit')) {
-            const { data: profits } = await client
-                .from('profit_distribution_history')
-                .select('id, member_id, amount, created_at, profit_type') // ← এখানে member_name নেই
-                .gte('created_at', startDate)
-                .lte('created_at', endDate);
+        // ৬. লভ্যাংশ (profit)
+if (!typeFilter || typeFilter.includes('profit')) {
+    // ✅ '*' ব্যবহার করা হলো যাতে কলামের নাম ভুল থাকলেও এরর না আসে
+    const { data: profits, error: prError } = await client
+        .from('profit_distribution_history')
+        .select('*') 
+        .gte('created_at', startDate)
+        .lte('created_at', endDate);
+
+    if (prError) {
+        console.warn('⚠️ profit_distribution_history লোড এরর:', prError.message);
+    } else {
+        (profits || []).forEach(pr => {
+            const profitType = pr.profit_type || 'savings';
+            const typeLabel = profitType === 'savings' ? 'সঞ্চয় লভ্যাংশ' : profitType === 'investment' ? 'বিনিয়োগ লভ্যাংশ' : 'রেফারেল লভ্যাংশ';
+            const prDate = pr.created_at || pr.distributed_at || pr.date || new Date().toISOString(); // যেকোনো একটি থাকলেই হবে
             
-            (profits || []).forEach(pr => {
-                const profitType = pr.profit_type || 'savings';
-                const typeLabel = profitType === 'savings' ? 'সঞ্চয় লভ্যাংশ' : profitType === 'investment' ? 'বিনিয়োগ লভ্যাংশ' : 'রেফারেল লভ্যাংশ';
-                
-                transactions.push({
-                    date: pr.created_at,
-                    type: typeLabel,
-                    typeClass: 'profit',
-                    member_id: pr.member_id,
-                    fallback_name: '', // ← নাম ব্যাকগ্রাউন্ডে লোড হবে
-                    amount: Number(pr.amount) || 0,
-                    note: `Profit Distribution`,
-                    voucher: `PROFIT-${pr.id}`,
-                    isCredit: true,
-                    filterKey: 'profit'
-                });
+            transactions.push({
+                date: prDate,
+                type: typeLabel,
+                typeClass: 'profit',
+                member_id: pr.member_id,
+                fallback_name: '',
+                amount: Number(pr.amount) || 0,
+                note: `Profit Distribution`,
+                voucher: `PROFIT-${pr.id}`,
+                isCredit: true,
+                filterKey: 'profit'
             });
-        }
+        });
+    }
+}
         
         // ═══════════════════════════════════════════════════════
         // ৭. ব্যালেন্স সমন্বয় (adjustment)
