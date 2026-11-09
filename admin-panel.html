@@ -19214,8 +19214,9 @@ function updateTxFilterLabel() {
     }
 }
     
-// ============================================================
-// ✅ loadAllTransactions() — Multi-Filter + Advanced Search + Summary
+
+    // ============================================================
+// ✅ loadAllTransactions() — সম্পূর্ণ ঠিক করা ভার্সন (নাম ও মোবাইলসহ)
 // ============================================================
 async function loadAllTransactions() {
     const fromDate = document.getElementById('txFromDate')?.value || '';
@@ -19244,8 +19245,10 @@ async function loadAllTransactions() {
     
     try {
         const transactions = [];
-        const startDate = fromDate ? `${fromDate}T00:00:00+06:00` : '2000-01-01T00:00:00+06:00';
-        const endDate = toDate ? `${toDate}T23:59:59+06:00` : new Date().toISOString();
+        
+        // ✅ ডেট ফরম্যাট ফিক্স (UTC ব্যবহার করা হলো 400 এরর এড়াতে)
+        const startDate = fromDate ? `${fromDate}T00:00:00Z` : '2000-01-01T00:00:00Z';
+        const endDate = toDate ? `${toDate}T23:59:59Z` : new Date().toISOString();
         
         // ═══════════════════════════════════════════════════════
         // ১. সঞ্চয় পেমেন্ট (payment)
@@ -19297,7 +19300,7 @@ async function loadAllTransactions() {
                     amount: Number(l.amount) || 0,
                     note: l.loan_type || 'লোন',
                     voucher: `LOAN-${l.id}`,
-                    isCredit: true, // সিস্টেমের জন্য ট্র্যাকিং
+                    isCredit: true,
                     filterKey: 'loan'
                 });
             });
@@ -19320,13 +19323,12 @@ async function loadAllTransactions() {
                 const isProfit = cleanType.includes('লভ্যাংশ');
                 const isCapital = !isReferral && !isProfit;
                 
-                // মাল্টি-ফিল্টার ম্যাচিং
                 let match = false;
                 if (typeFilter) {
                     if (typeFilter.includes('withdrawal_capital') && isCapital) match = true;
                     if (typeFilter.includes('withdrawal_referral') && isReferral) match = true;
                     if (typeFilter.includes('withdrawal_profit') && isProfit) match = true;
-                    if (!match) return; // কোনো ফিল্টার না মিললে বাদ
+                    if (!match) return;
                 }
                 
                 let displayType = isCapital ? 'মূলধন উত্তোলন' : `${cleanType} উত্তোলন`;
@@ -19351,12 +19353,16 @@ async function loadAllTransactions() {
         // ৪. ঋণ আদায় (loan_payment)
         // ═══════════════════════════════════════════════════════
         if (!typeFilter || typeFilter.includes('loan_payment')) {
+            // ✅ আলাদা ডেট ফরম্যাট (Z) ব্যবহার করা হলো
+            const pStart = fromDate ? `${fromDate}T00:00:00Z` : '2000-01-01T00:00:00Z';
+            const pEnd = toDate ? `${toDate}T23:59:59Z` : new Date().toISOString();
+
             const { data: loanPayments } = await client
                 .from('loan_payments')
                 .select('id, loan_id, member_id, emi_amount, total_amount, payment_date, payment_method, installment_no, voucher_no, transaction_id, source, status')
                 .eq('status', 'approved')
-                .gte('payment_date', startDate)
-                .lte('payment_date', endDate);
+                .gte('payment_date', pStart)
+                .lte('payment_date', pEnd);
             
             const loanIds = [...new Set((loanPayments || []).map(lp => lp.loan_id).filter(Boolean))];
             let loanInfoMap = {};
@@ -19414,12 +19420,12 @@ async function loadAllTransactions() {
         }
         
         // ═══════════════════════════════════════════════════════
-        // ৬. লভ্যাংশ (profit)
+        // ৬. লভ্যাংশ (profit) — member_name বাদ দেওয়া হলো
         // ═══════════════════════════════════════════════════════
         if (!typeFilter || typeFilter.includes('profit')) {
             const { data: profits } = await client
                 .from('profit_distribution_history')
-                .select('id, member_id, member_name, amount, created_at, profit_type')
+                .select('id, member_id, amount, created_at, profit_type') // ← এখানে member_name নেই
                 .gte('created_at', startDate)
                 .lte('created_at', endDate);
             
@@ -19432,7 +19438,7 @@ async function loadAllTransactions() {
                     type: typeLabel,
                     typeClass: 'profit',
                     member_id: pr.member_id,
-                    fallback_name: pr.member_name,
+                    fallback_name: '', // ← নাম ব্যাকগ্রাউন্ডে লোড হবে
                     amount: Number(pr.amount) || 0,
                     note: `Profit Distribution`,
                     voucher: `PROFIT-${pr.id}`,
@@ -19478,16 +19484,22 @@ async function loadAllTransactions() {
         let memberLookup = {};
         
         if (uniqueMemberIds.length > 0) {
+            // ১০০টি করে ব্যাচে লোড করা হচ্ছে (যাতে Supabase limit এড়ানো যায়)
             for (let i = 0; i < uniqueMemberIds.length; i += 100) {
                 const batch = uniqueMemberIds.slice(i, i + 100);
                 const { data: membersData } = await client.from('members').select('member_id, full_name, mobile, present_district').in('member_id', batch);
+                
                 (membersData || []).forEach(m => {
-                    memberLookup[m.member_id] = { name: m.full_name || '', mobile: m.mobile || '', district: m.present_district || '' };
+                    memberLookup[m.member_id] = { 
+                        name: m.full_name || '', 
+                        mobile: m.mobile || '', 
+                        district: m.present_district || '' 
+                    };
                 });
             }
         }
         
-        // নাম বসানো
+        // ✅ প্রতিটি ট্রানজেকশনে সঠিক নাম ও মোবাইল বসানো
         transactions.forEach(t => {
             const member = memberLookup[t.member_id] || {};
             t.member_name = member.name || t.fallback_name || 'অজানা';
@@ -19528,12 +19540,13 @@ async function loadAllTransactions() {
         filteredTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
         
         // ═══════════════════════════════════════════════════════
-        // ✅ সঠিক হিসাব
+        // ✅ সঠিক হিসাব (Summary)
         // ═══════════════════════════════════════════════════════
         let totalCredit = 0;
         let totalDebit = 0;
         
         filteredTransactions.forEach(t => {
+            // লোন প্রদান এবং যেকোনো কমানো (Debit) বাদে সব জমা হিসেবে ধরা হবে
             if (t.isCredit && !t.type.includes('লোন প্রদান')) {
                 totalCredit += t.amount;
             } else {
@@ -19548,7 +19561,7 @@ async function loadAllTransactions() {
             summaryContainer.innerHTML = `
                 <div class="summary-card total"><div class="label">📋 মোট লেনদেন</div><div class="amount">${filteredTransactions.length}</div></div>
                 <div class="summary-card savings"><div class="label">💰 মোট জমা</div><div class="amount">${formatAmountWithText(totalCredit)}</div></div>
-                <div class="summary-card due"><div class="label">💸 মোট খরচ</div><div class="amount">${formatAmountWithText(totalDebit)}</div></div>
+                <div class="summary-card due"><div class="label">💸 মোট খরচ / উত্তোলন</div><div class="amount">${formatAmountWithText(totalDebit)}</div></div>
                 <div class="summary-card ${netBalance >= 0 ? 'total' : 'due'}"><div class="label">📊 নীট ব্যালেন্স</div><div class="amount">${formatAmountWithText(netBalance)}</div></div>
             `;
         }
@@ -19613,7 +19626,7 @@ async function loadAllTransactions() {
     }
 }
 
-// ✅ Global expose
+    // ✅ Global expose
 window.loadAllTransactions = loadAllTransactions;
 console.log('✅ loadAllTransactions() loaded successfully');
 
