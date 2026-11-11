@@ -264,7 +264,7 @@
 
 <div class="container mx-auto px-4 py-6 max-w-7xl">
 
-    <!-- ✅ Navigation Bar (Admin Panel + Dark Mode + Refresh) -->
+    <!-- ✅ Navigation Bar -->
     <div class="flex flex-wrap justify-between items-center mb-4 gap-3 no-print embedded-hide">
         <a href="#" id="backLink" class="back-link">
             <i class="fas fa-arrow-left"></i>
@@ -419,6 +419,21 @@
                 <button class="filter-chip" data-quick="no-library" onclick="applyQuickFilter('no-library')">
                     🏢 লাইব্রেরী নেই
                 </button>
+            </div>
+
+            <!-- ✅ Book Orders Section (NEW) -->
+            <div class="section-title mt-2 no-print">
+                <i class="fas fa-shopping-cart"></i>
+                🛒 বুক অর্ডার সমূহ
+                <button onclick="loadBookOrders()" class="btn btn-sm btn-outline ml-auto">
+                    <i class="fas fa-sync-alt"></i> রিফ্রেশ
+                </button>
+            </div>
+            <div id="bookOrdersContainer" class="bg-gray-50 rounded-lg p-4 border border-gray-200 mb-6" style="max-height: 400px; overflow-y: auto;">
+                <div class="text-center text-gray-400 py-4">
+                    <i class="fas fa-spinner fa-spin text-2xl block mb-2"></i>
+                    <p>অর্ডার লোড হচ্ছে...</p>
+                </div>
             </div>
 
             <!-- ✅ Book List -->
@@ -1060,30 +1075,24 @@ let broadcastChannel = null;
 async function init() {
     console.log('🚀 Book Management Loading...');
 
-    // ✅ 1. URL Params থেকে info নিন
     parseUrlParams();
 
-    // ✅ 2. Admin session চেক
     if (!checkAdminSession()) return;
-
-    // ✅ 3. Permission check
     if (!checkBookPermission()) return;
 
-    // ✅ 4. Setup UI
     setupBackLink();
     setupKeyboardShortcuts();
     setupBroadcastChannel();
     updateAdminBadge();
 
-    // ✅ 5. ডেটা লোড
     await loadConfig();
     await loadLibraries();
     await loadCategories();
     await loadBooksFromSupabase();
+    await loadBookOrders();           // ✅ বুক অর্ডার লোড
     await renderAuditLogs();
     await renderCategories();
 
-    // ✅ 6. Config field সেট
     const pp = document.getElementById('profitPercent');
     if (pp) pp.value = config.profit_percent;
     const sc = document.getElementById('serviceChargePercent');
@@ -1093,7 +1102,6 @@ async function init() {
     const dmax = document.getElementById('deliveryChargeMax');
     if (dmax) dmax.value = config.delivery_charge_max || 150;
 
-    // ✅ 7. Last update time
     updateLastUpdateBadge();
 
     console.log('✅ Book Management Loaded!');
@@ -1108,7 +1116,6 @@ function parseUrlParams() {
         document.body.classList.add('embedded-mode');
     }
 
-    // ✅ Admin info URL থেকে নিন বা storage থেকে
     const adminStr = localStorage.getItem('currentAdmin') || sessionStorage.getItem('currentAdmin');
     if (adminStr) {
         try {
@@ -1116,7 +1123,6 @@ function parseUrlParams() {
         } catch(e) {}
     }
 
-    // URL params priority
     if (params.get('full_name')) {
         currentAdminInfo = currentAdminInfo || {};
         currentAdminInfo.full_name = params.get('full_name');
@@ -1145,14 +1151,13 @@ function checkAdminSession() {
 }
 
 function checkBookPermission() {
-    // ✅ Super admin সব allowed
-    if (currentAdminInfo.role === 'super_admin' || currentAdminInfo.role === 'সুপার অ্যাডমিন') {
-        return true;
-    }
+    if (!currentAdminInfo) return false;
+    const role = (currentAdminInfo.role || '').toLowerCase();
+    const isSuperAdmin = role === 'super_admin' || role === 'superadmin' || role === 'সুপার অ্যাডমিন' || role === 'সুপার এডমিন';
+    if (isSuperAdmin) return true;
 
-    // ✅ bookManagement permission
     const perms = currentAdminInfo.permissions || {};
-    if (perms.bookManagement === false) {
+    if (perms.bookManagement === false || perms.book_management === false) {
         document.body.innerHTML = `
             <div class="flex items-center justify-center min-h-screen bg-red-50 p-4">
                 <div class="text-center p-8 bg-white rounded-2xl shadow-xl max-w-md w-full">
@@ -1182,7 +1187,6 @@ function updateAdminBadge() {
 function setupBackLink() {
     const backLink = document.getElementById('backLink');
     const backText = document.getElementById('backLinkText');
-
     if (!backLink) return;
 
     backLink.onclick = function(e) {
@@ -1201,21 +1205,17 @@ function setupBackLink() {
 
 function goBackToAdminPanel() {
     if (isEmbedded) {
-        // ✅ Iframe-এ থাকলে parent-কে signal
         window.parent.postMessage({ action: 'close-book-management' }, '*');
     } else if (window.opener && !window.opener.closed) {
-        // ✅ নতুন ট্যাবে থাকলে বন্ধ করে parent-এ ফোকাস
         window.close();
         try { window.opener.focus(); } catch(e) {}
     } else {
-        // ✅ সরাসরি admin-panel-এ যান
         window.location.href = 'admin-panel.html';
     }
 }
 
 function setupKeyboardShortcuts() {
     document.addEventListener('keydown', function(e) {
-        // Ctrl+N = নতুন কিতাব
         if (e.ctrlKey && e.key === 'n') {
             e.preventDefault();
             const addModal = document.getElementById('addBookModal');
@@ -1223,25 +1223,16 @@ function setupKeyboardShortcuts() {
                 openAddBookModal();
             }
         }
-
-        // Ctrl+F = সার্চ
         if (e.ctrlKey && e.key === 'f') {
             e.preventDefault();
             const searchInput = document.getElementById('searchInput');
-            if (searchInput) {
-                searchInput.focus();
-                searchInput.select();
-            }
+            if (searchInput) { searchInput.focus(); searchInput.select(); }
         }
-
-        // Esc = সব মডাল বন্ধ
         if (e.key === 'Escape') {
             document.querySelectorAll('.modal-overlay.active').forEach(m => {
                 m.classList.remove('active');
             });
         }
-
-        // Ctrl+S = Save (edit/add modal-এ থাকলে)
         if (e.ctrlKey && e.key === 's') {
             const addModal = document.getElementById('addBookModal');
             const editModal = document.getElementById('editBookModal');
@@ -1263,6 +1254,7 @@ function setupBroadcastChannel() {
             console.log('📡 Broadcast received:', event.data);
             if (event.data?.type === 'book_updated') {
                 loadBooksFromSupabase();
+                loadBookOrders();
             }
         };
     } catch(e) {
@@ -1307,11 +1299,6 @@ function formatAmountWithText(amt) {
     return formatAmount(amt) + ' টাকা';
 }
 
-function getBangladeshTime() {
-    const now = new Date();
-    return now.toISOString();
-}
-
 function getCurrentUser() {
     return currentAdminInfo || { name: 'admin', role: 'super_admin' };
 }
@@ -1351,7 +1338,6 @@ const debouncedFilterBooks = debounce(filterBooks, 250);
 // ═══════════════════════════════════════════════════════════════
 function showToast(message, type = 'success') {
     document.querySelectorAll('.toast').forEach(t => t.remove());
-
     const toast = document.createElement('div');
     const className = type === 'success' ? 'toast-success'
                     : type === 'error' ? 'toast-error'
@@ -1398,7 +1384,6 @@ function loadDarkModePreference() {
 async function saveAuditLog(tableName, recordId, action, oldData, newData) {
     const sb = await initSupabase();
     if (!sb) return;
-
     const user = getCurrentUser();
     try {
         let ip = 'unknown';
@@ -1419,7 +1404,6 @@ async function saveAuditLog(tableName, recordId, action, oldData, newData) {
             user_agent: navigator.userAgent || 'unknown',
             created_at: new Date().toISOString()
         }]);
-
         if (error) console.error('❌ অডিট লগ error:', error);
     } catch(e) {
         console.error('❌ Audit log exception:', e);
@@ -1653,6 +1637,92 @@ async function loadBooksFromSupabase() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// 🛒 BOOK ORDERS (NEW) — সম্পূর্ণ book-management-এ
+// ═══════════════════════════════════════════════════════════════
+async function loadBookOrders() {
+    try {
+        const sb = await initSupabase();
+        if (!sb) {
+            console.warn('⚠️ loadBookOrders: Supabase not ready');
+            return;
+        }
+
+        const { data, error } = await sb
+            .from('book_orders')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(100);
+
+        if (error) {
+            // টেবিল না থাকলে চুপচাপ বেরিয়ে যান
+            console.warn('⚠️ loadBookOrders skipped:', error.message);
+            const container = document.getElementById('bookOrdersContainer');
+            if (container) {
+                container.innerHTML = `
+                    <div class="text-center text-gray-400 py-4">
+                        <i class="fas fa-database text-3xl block mb-2 text-gray-300"></i>
+                        <p>📭 book_orders টেবিল এখনো তৈরি হয়নি</p>
+                        <p class="text-xs mt-1">Supabase-এ book_orders টেবিল তৈরি করুন</p>
+                    </div>`;
+            }
+            return;
+        }
+
+        const container = document.getElementById('bookOrdersContainer');
+        if (!container) {
+            console.log(`📚 ${data?.length || 0} টি বুক অর্ডার পাওয়া গেছে (UI নেই)`);
+            return;
+        }
+
+        if (!data || data.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-gray-400 py-4">
+                    <i class="fas fa-inbox text-3xl block mb-2 text-gray-300"></i>
+                    <p>📭 কোনো বুক অর্ডার নেই</p>
+                </div>`;
+            return;
+        }
+
+        container.innerHTML = data.map(order => {
+            const statusClass = order.status === 'approved' ? 'status-approved' :
+                                order.status === 'completed' ? 'status-completed' :
+                                order.status === 'rejected' ? 'status-rejected' : 'status-pending';
+            const statusText = order.status === 'approved' ? '✅ অনুমোদিত' :
+                               order.status === 'completed' ? '✔️ সম্পন্ন' :
+                               order.status === 'rejected' ? '❌ বাতিল' : '⏳ অপেক্ষমাণ';
+
+            return `
+                <div class="bg-white border border-gray-200 rounded-lg p-3 mb-2 hover:shadow-sm transition">
+                    <div class="flex justify-between items-start flex-wrap gap-2">
+                        <div class="flex-1">
+                            <div class="font-semibold text-gray-800">
+                                ${order.customer_name || order.name || 'অজানা'}
+                            </div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                ${order.phone ? `📞 ${order.phone}` : ''}
+                                ${order.book_name ? ` • 📖 ${order.book_name}` : ''}
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="font-bold text-emerald-600">৳${order.total_amount || 0}</div>
+                            <div class="text-xs text-gray-400">
+                                ${order.created_at ? new Date(order.created_at).toLocaleDateString('bn-BD') : ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <span class="status-badge ${statusClass}">${statusText}</span>
+                    </div>
+                </div>`;
+        }).join('');
+
+        console.log(`✅ ${data.length} টি বুক অর্ডার লোড হয়েছে`);
+    } catch(e) {
+        console.warn('⚠️ loadBookOrders:', e.message);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 🏷️ CATEGORIES
 // ═══════════════════════════════════════════════════════════════
 async function loadCategories() {
@@ -1810,7 +1880,6 @@ function renderBookListItem(book) {
     const code = book.book_code || '';
     const imageUrl = book.image_url || '';
     const stock = parseInt(book.stock) || 0;
-    const stockClass = stock <= 0 ? 'low' : (stock < 5 ? 'medium' : '');
 
     return `
         <div class="book-list-item" data-id="${book.id}">
@@ -1849,7 +1918,6 @@ function filterBooks() {
     const libraryFilter = document.getElementById('filterLibrary')?.value || '';
 
     filteredBooks = books.filter(book => {
-        // Search
         let matchSearch = true;
         if (searchText) {
             const nameMatch = book.name ? book.name.toLowerCase().includes(searchText) : false;
@@ -1857,15 +1925,12 @@ function filterBooks() {
             matchSearch = nameMatch || codeMatch;
         }
 
-        // Category
         let matchCategory = true;
         if (categoryFilter) matchCategory = book.category === categoryFilter;
 
-        // Library
         let matchLibrary = true;
         if (libraryFilter) matchLibrary = book.library === libraryFilter;
 
-        // Quick filter
         let matchQuick = true;
         const stock = parseInt(book.stock) || 0;
         const now = Date.now();
@@ -2177,36 +2242,44 @@ async function uploadImage(file, bookId) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 💰 PROFIT CALCULATORS
+// 💰 PROFIT CALCULATORS (null-safe)
 // ═══════════════════════════════════════════════════════════════
 function calculateProfit() {
-    const purchase = parseFloat(document.getElementById('newPurchasePrice')?.value) || 0;
-    const selling = parseFloat(document.getElementById('newSellingPrice')?.value) || 0;
-    const discount = parseFloat(document.getElementById('newDiscount')?.value) || 0;
+    const purchaseEl = document.getElementById('newPurchasePrice');
+    const sellingEl  = document.getElementById('newSellingPrice');
+    const discountEl = document.getElementById('newDiscount');
+    const profitEl   = document.getElementById('newProfit');
+
+    if (!purchaseEl || !sellingEl || !profitEl) return;
+
+    const purchase = parseFloat(purchaseEl.value) || 0;
+    const selling  = parseFloat(sellingEl.value) || 0;
+    const discount = discountEl ? (parseFloat(discountEl.value) || 0) : 0;
 
     const discountedPrice = selling - (selling * discount / 100);
     const profit = discountedPrice - purchase;
 
-    const pf = document.getElementById('newProfit');
-    if (pf) {
-        pf.value = profit.toFixed(2);
-        pf.style.color = profit >= 0 ? '#059669' : '#dc2626';
-    }
+    profitEl.value = profit.toFixed(2);
+    profitEl.style.color = profit >= 0 ? '#059669' : '#dc2626';
 }
 
 function calculateEditProfit() {
-    const purchase = parseFloat(document.getElementById('editPurchasePrice')?.value) || 0;
-    const selling = parseFloat(document.getElementById('editSellingPrice')?.value) || 0;
-    const discount = parseFloat(document.getElementById('editDiscount')?.value) || 0;
+    const purchaseEl = document.getElementById('editPurchasePrice');
+    const sellingEl  = document.getElementById('editSellingPrice');
+    const discountEl = document.getElementById('editDiscount');
+    const profitEl   = document.getElementById('editProfit');
+
+    if (!purchaseEl || !sellingEl || !profitEl) return;
+
+    const purchase = parseFloat(purchaseEl.value) || 0;
+    const selling  = parseFloat(sellingEl.value) || 0;
+    const discount = discountEl ? (parseFloat(discountEl.value) || 0) : 0;
 
     const discountedPrice = selling - (selling * discount / 100);
     const profit = discountedPrice - purchase;
 
-    const pf = document.getElementById('editProfit');
-    if (pf) {
-        pf.value = profit.toFixed(2);
-        pf.style.color = profit >= 0 ? '#059669' : '#dc2626';
-    }
+    profitEl.value = profit.toFixed(2);
+    profitEl.style.color = profit >= 0 ? '#059669' : '#dc2626';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2315,7 +2388,6 @@ async function addNewBook() {
     const category = document.getElementById('newCategory').value || 'অন্যান্য';
     const library = document.getElementById('newLibrary').value || '';
 
-    // Duplicate check
     const existingBook = checkDuplicateBook(name, category, library);
     if (existingBook) {
         showDuplicateWarning(existingBook);
@@ -3176,19 +3248,10 @@ function exportBooksToExcel() {
     let csv = "নাম,কোড,জামাত,লাইব্রেরী,মাধ্যম,ছাপা,ইবারত,কালার,স্টক,ক্রয়,বিক্রয়,ছাড়%,লাভ\n";
     realBooks.forEach(b => {
         const row = [
-            b.name || '',
-            b.book_code || '',
-            b.category || '',
-            b.library || '',
-            b.medium || '',
-            b.print_type || '',
-            b.ibarat_type || '',
-            b.color_type || '',
-            b.stock || 0,
-            b.purchase_price || 0,
-            b.selling_price || 0,
-            b.discount || 0,
-            b.profit || 0
+            b.name || '', b.book_code || '', b.category || '', b.library || '',
+            b.medium || '', b.print_type || '', b.ibarat_type || '', b.color_type || '',
+            b.stock || 0, b.purchase_price || 0, b.selling_price || 0,
+            b.discount || 0, b.profit || 0
         ];
         csv += row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',') + '\n';
     });
@@ -3234,7 +3297,6 @@ function parseCSVLine(line) {
     const result = [];
     let current = '';
     let inQuotes = false;
-
     for (let i = 0; i < line.length; i++) {
         const char = line[i];
         if (char === '"') {
@@ -3257,7 +3319,6 @@ async function validateAndPreviewBulkImport() {
     const preview = document.getElementById('bulkImportPreview');
 
     let csvText = '';
-
     if (fileInput.files && fileInput.files[0]) {
         csvText = await fileInput.files[0].text();
     } else if (textarea.value.trim()) {
@@ -3274,12 +3335,9 @@ async function validateAndPreviewBulkImport() {
             return;
         }
 
-        // Header check
         const header = parseCSVLine(lines[0]).map(h => h.toLowerCase());
-        const requiredCols = ['name'];
-        const missing = requiredCols.filter(c => !header.includes(c));
-        if (missing.length > 0) {
-            showToast(`❌ প্রয়োজনীয় কলাম: ${missing.join(', ')}`, 'error');
+        if (!header.includes('name')) {
+            showToast(`❌ প্রয়োজনীয় কলাম: name`, 'error');
             return;
         }
 
@@ -3353,14 +3411,11 @@ async function validateAndPreviewBulkImport() {
         if (errors.length > 0) {
             previewHtml += `<div class="mt-2 text-xs text-red-600">${errors.slice(0, 5).join('<br>')}</div>`;
         }
-
         previewHtml += `</div>`;
         preview.innerHTML = previewHtml;
 
         const btn = document.getElementById('bulkImportExecuteBtn');
-        if (parsed.length > 0) {
-            btn.disabled = false;
-        }
+        if (parsed.length > 0) btn.disabled = false;
     } catch(e) {
         console.error('CSV parse error:', e);
         showToast('❌ CSV পার্স ব্যর্থ: ' + e.message, 'error');
@@ -3372,7 +3427,6 @@ async function executeBulkImport() {
         showToast('প্রথমে প্রিভিউ করুন!', 'error');
         return;
     }
-
     if (!confirm(`${bulkImportData.length} টি কিতাব ইমপোর্ট করবেন?\n\n⚠️ এগুলো সরাসরি ডেটাবেসে যোগ হবে!`)) return;
 
     const sb = await initSupabase();
@@ -3415,7 +3469,6 @@ async function executeBulkImport() {
     await loadBooksFromSupabase();
     closeBulkImportModal();
     notifyParent('book_updated', { action: 'BULK_IMPORT' });
-
     showToast(`✅ ইমপোর্ট সম্পন্ন! সফল: ${success}, ব্যর্থ: ${failed}`, success > 0 ? 'success' : 'error');
 }
 
@@ -3425,7 +3478,6 @@ async function executeBulkImport() {
 document.addEventListener('DOMContentLoaded', function() {
     loadDarkModePreference();
 
-    // Price inputs → auto-calculate profit
     ['newPurchasePrice', 'newSellingPrice', 'newDiscount'].forEach(id => {
         document.getElementById(id)?.addEventListener('input', calculateProfit);
     });
@@ -3433,18 +3485,15 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById(id)?.addEventListener('input', calculateEditProfit);
     });
 
-    // Code preview
     document.getElementById('newBookName')?.addEventListener('input', updateCodePreview);
     document.getElementById('newBookCode')?.addEventListener('input', updateCodePreview);
 
-    // File input listeners
     document.getElementById('bulkImportFile')?.addEventListener('change', function() {
         if (this.files && this.files[0]) {
             showToast(`📁 "${this.files[0].name}" নির্বাচিত`, 'info');
         }
     });
 
-    // Init
     init();
 });
 
@@ -3488,12 +3537,15 @@ window.clearFilters = clearFilters;
 window.applyQuickFilter = applyQuickFilter;
 window.setView = setView;
 window.loadBooksFromSupabase = loadBooksFromSupabase;
+window.loadBookOrders = loadBookOrders;
 window.updateConfig = updateConfig;
 window.renderAuditLogs = renderAuditLogs;
 window.clearAuditLogs = clearAuditLogs;
 window.goBackToAdminPanel = goBackToAdminPanel;
+window.calculateProfit = calculateProfit;
+window.calculateEditProfit = calculateEditProfit;
 
-console.log('✅ Book Management System v2.0 loaded successfully!');
+console.log('✅ Book Management System v2.1 loaded successfully!');
 </script>
 </body>
 </html>
