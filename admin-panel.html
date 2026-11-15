@@ -37795,7 +37795,44 @@ async function submitLoanCollection(loanId, memberId, remaining, memberName, mem
                 .eq('id', numericMemberId);
         }
         
-        // ✅ ২. loan_payments insert — numeric member_id + mobile + name
+             // ✅ ২ক. due_date হিসাব (approved_at + installment_no মাস)
+        let dueDate = null;
+        try {
+            const { data: loanInfo, error: loanInfoErr } = await client
+                .from('loan_applications')
+                .select('approved_at, submitted_at')
+                .eq('id', numericLoanId)
+                .single();
+            
+            if (loanInfoErr) {
+                console.warn('⚠️ Loan info error:', loanInfoErr);
+            }
+            
+            console.log('📅 Loan info:', loanInfo);
+            
+            const baseDateStr = loanInfo?.approved_at 
+                || loanInfo?.submitted_at 
+                || new Date().toISOString();
+            
+            const baseDate = new Date(baseDateStr);
+            
+            if (isNaN(baseDate.getTime())) {
+                console.warn('⚠️ Invalid base date:', baseDateStr);
+                dueDate = new Date().toISOString().split('T')[0];
+            } else {
+                const calculatedDate = new Date(baseDate);
+                calculatedDate.setMonth(baseDate.getMonth() + Number(installmentNo));
+                dueDate = calculatedDate.toISOString().split('T')[0];
+            }
+            
+            console.log('📅 Calculated due_date:', dueDate);
+            
+        } catch(e) {
+            console.error('❌ due_date calculation error:', e);
+            dueDate = new Date().toISOString().split('T')[0];
+        }
+        
+        // ✅ ২খ. loan_payments insert — due_date সহ
         const insertPayload = {
             loan_id: numericLoanId,
             member_id: numericMemberId,
@@ -37804,6 +37841,7 @@ async function submitLoanCollection(loanId, memberId, remaining, memberName, mem
             installment_no: Number(installmentNo),
             emi_amount: Number(amount),
             total_amount: Number(amount),
+            due_date: dueDate,                              // ✅ নতুন — সবচেয়ে গুরুত্বপূর্ণ
             payment_method: method,
             transaction_id: transactionId || null,
             voucher_no: voucherNo || null,
@@ -37818,6 +37856,7 @@ async function submitLoanCollection(loanId, memberId, remaining, memberName, mem
         };
         
         console.log('📤 Insert payload:', insertPayload);
+        console.log('📅 due_date CHECK:', insertPayload.due_date);
         
         const { data: inserted, error: insertError } = await client
             .from('loan_payments')
