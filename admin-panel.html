@@ -37113,12 +37113,15 @@ window.retryMissingReferralBonuses = retryMissingReferralBonuses;
 console.log('✅ Referral Bonus System functions exposed');
 console.log('✅ Admin Panel loaded successfully!');
 
-    // ═══════════════════════════════════════════════════════════════════
-// 🏦 ঋণ আদায় সিস্টেম — Cash/Non-Cash সহ সম্পূর্ণ ফাংশন
 // ═══════════════════════════════════════════════════════════════════
-
+// 🏦 ঋণ আদায় মডাল — member_id (numeric) + member_mobile সহ
+// ═══════════════════════════════════════════════════════════════════
 async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount, emiAmount, totalAmount) {
-    console.log('💰 openLoanCollectionModal:', { loanId, memberId, memberName });
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('💰 openLoanCollectionModal');
+    console.log('   loanId:', loanId);
+    console.log('   memberId:', memberId);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
     const client = initSupabaseClient();
     if (!client) {
@@ -37127,16 +37130,43 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
     }
     
     try {
-        // ✅ ১. লোনের পেমেন্ট লোড
-        const { data: payments, error } = await client
+        // ✅ ১. সদস্য লোড — numeric ID + mobile + name + district
+        const { data: member, error: memberErr } = await client
+            .from('members')
+            .select('id, member_id, full_name, mobile, present_district, balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
+            .eq('member_id', memberId)
+            .maybeSingle();
+        
+        if (memberErr || !member) {
+            console.error('❌ Member not found:', memberId, memberErr);
+            showToast(`❌ সদস্য পাওয়া যায়নি! (member_id: ${memberId})`, 'error');
+            return;
+        }
+        
+        const numericMemberId = Number(member.id);
+        if (!Number.isInteger(numericMemberId) || numericMemberId <= 0) {
+            showToast(`❌ সদস্যের numeric ID সঠিক নয়!`, 'error');
+            return;
+        }
+        
+        const memberMobile = String(member.mobile || '').trim();
+        const memberFullName = String(member.full_name || memberName || '').trim();
+        const memberDistrict = String(member.present_district || '').trim();
+        
+        console.log('✅ Numeric ID:', numericMemberId);
+        console.log('✅ Mobile:', memberMobile || '(নেই)');
+        console.log('✅ Name:', memberFullName);
+        
+        // ✅ ২. লোনের পেমেন্ট লোড
+        const { data: payments, error: payErr } = await client
             .from('loan_payments')
             .select('*')
             .eq('loan_id', loanId)
             .order('installment_no', { ascending: true });
         
-        if (error) throw error;
+        if (payErr) throw payErr;
         
-        // ✅ ২. হিসাব
+        // ✅ ৩. হিসাব
         const allPayments = payments || [];
         const paidPayments = allPayments.filter(p => p.status === 'approved');
         const totalPaid = paidPayments.reduce((sum, p) => 
@@ -37145,33 +37175,29 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
         const totalLoan = Number(totalAmount) || Number(loanAmount) || 0;
         const remaining = Math.max(0, totalLoan - totalPaid);
         
-        // ✅ ৩. পরবর্তী কিস্তি নম্বর
         const lastInstallment = allPayments.length > 0 
-            ? Math.max(...allPayments.map(p => p.installment_no || 0))
+            ? Math.max(...allPayments.map(p => Number(p.installment_no) || 0))
             : 0;
         const nextInstallment = lastInstallment + 1;
         
-                // ✅ ৪. সদস্যের ব্যালেন্স
-        const { data: member } = await client
-            .from('members')
-            .select('full_name, mobile, present_district, balance, referral_bonus, profit_balance_savings, profit_balance_investment, profit_balance_referral')
-            .eq('member_id', memberId)
-            .single();
-        
-        // ✅ ভাউচারের জন্য সদস্য ডেটা গ্লোবালি সেভ
-        window._currentLoanCollectionMember = member || {};
-        console.log('✅ _currentLoanCollectionMember সেভ হয়েছে:', member?.full_name, member?.mobile);
-        
-        const memberBalance = Number(member?.balance) || 0;
+        const memberBalance = Number(member.balance) || 0;
         const totalFund = memberBalance + 
-            (Number(member?.referral_bonus) || 0) +
-            (Number(member?.profit_balance_savings) || 0) +
-            (Number(member?.profit_balance_investment) || 0) +
-            (Number(member?.profit_balance_referral) || 0);
+            (Number(member.referral_bonus) || 0) +
+            (Number(member.profit_balance_savings) || 0) +
+            (Number(member.profit_balance_investment) || 0) +
+            (Number(member.profit_balance_referral) || 0);
         
         const fmt = (n) => formatAmountWithText(n || 0);
         
-        // ✅ ৫. HTML তৈরি
+        // ✅ মোবাইল ওয়ার্নিং
+        const mobileDisplay = memberMobile || '<span class="text-red-500">❌ নেই</span>';
+        const mobileWarning = !memberMobile 
+            ? `<div class="mt-1 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+                   ⚠️ এই সদস্যের মোবাইল নম্বর নেই!
+               </div>` 
+            : '';
+        
+        // ✅ ৪. HTML তৈরি
         const html = `
             <div class="space-y-4">
                 <!-- হেডার -->
@@ -37180,9 +37206,15 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
                         <i class="fas fa-hand-holding-usd text-emerald-600 text-3xl"></i>
                         <div class="flex-1">
                             <h5 class="font-bold text-emerald-700 text-lg">🏦 ঋণ আদায়</h5>
-                            <p class="text-sm text-gray-600 mt-1">
-                                <strong>${memberName}</strong> (${memberId})
+                            <p class="text-sm text-gray-700 mt-1">
+                                <strong>${memberFullName}</strong> 
+                                <span class="text-gray-500">(${memberId})</span>
                             </p>
+                            <p class="text-sm text-gray-600 mt-0.5">
+                                📱 ${mobileDisplay}
+                                ${memberDistrict ? ` | 📍 ${memberDistrict}` : ''}
+                            </p>
+                            ${mobileWarning}
                         </div>
                     </div>
                 </div>
@@ -37217,25 +37249,28 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
                     </div>
                 </div>
                 
-                <!-- ✅ পেমেন্ট ফর্ম -->
-                <form id="loanCollectionForm" onsubmit="event.preventDefault(); submitLoanCollection(${loanId}, '${memberId}', ${remaining}, '${(memberName || '').replace(/'/g, "\\'")}');">
+                <!-- ✅ পেমেন্ট ফর্ম — numeric ID + mobile পাস -->
+                <form id="loanCollectionForm" 
+                      onsubmit="event.preventDefault(); submitLoanCollection(
+                          ${Number(loanId)}, 
+                          ${numericMemberId}, 
+                          ${remaining}, 
+                          '${memberFullName.replace(/'/g, "\\'")}', 
+                          '${memberMobile}'
+                      );">
                     <div class="bg-gradient-to-r from-emerald-50 to-green-50 p-4 rounded-lg border-2 border-emerald-300">
                         <h6 class="font-bold text-emerald-700 mb-3">
                             <i class="fas fa-money-bill-wave mr-2"></i>💰 কিস্তি পরিশোধ
                         </h6>
                         
                         <div class="grid md:grid-cols-2 gap-3">
-                            <!-- কিস্তি নম্বর -->
                             <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">
-                                    📅 কিস্তি নম্বর
-                                </label>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">📅 কিস্তি নম্বর</label>
                                 <input type="number" id="collectionInstallmentNo" 
                                        value="${nextInstallment}" min="1"
                                        class="w-full border-2 border-emerald-300 rounded-lg p-2.5 font-bold">
                             </div>
                             
-                            <!-- পরিমাণ -->
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">
                                     💵 পরিমাণ (৳) <span class="text-red-500">*</span>
@@ -37245,16 +37280,11 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
                                        min="1" max="${remaining}" step="0.01"
                                        class="w-full border-2 border-emerald-300 focus:border-emerald-500 rounded-lg p-2.5 font-bold text-lg"
                                        required>
-                                <p class="text-xs text-gray-500 mt-1">
-                                    সর্বোচ্চ: ${fmt(remaining)}
-                                </p>
+                                <p class="text-xs text-gray-500 mt-1">সর্বোচ্চ: ${fmt(remaining)}</p>
                             </div>
                             
-                            <!-- পেমেন্ট পদ্ধতি -->
                             <div class="md:col-span-2">
-                                <label class="block text-sm font-medium text-gray-700 mb-1">
-                                    💳 পেমেন্ট পদ্ধতি
-                                </label>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">💳 পেমেন্ট পদ্ধতি</label>
                                 <select id="collectionMethod" 
                                         class="w-full border-2 border-gray-300 rounded-lg p-2.5"
                                         onchange="onCollectionMethodChange()">
@@ -37267,32 +37297,27 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
                             </div>
                         </div>
                         
-                        <!-- ✅ Non-Cash এর জন্য — Transaction ID -->
                         <div id="collectionTransactionWrapper" class="mt-3" style="display:none;">
-                            <label class="block text-sm font-medium text-gray-700 mb-1">
-                                📝 লেনদেন আইডি
-                            </label>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">📝 লেনদেন আইডি</label>
                             <input type="text" id="collectionTransactionId" 
                                    placeholder="bKash/Nagad/Rocket ID"
                                    class="w-full border-2 border-gray-300 rounded-lg p-2.5 font-mono">
                         </div>
                         
-                        <!-- ✅ Cash হলে শুধু এই ২টি দেখাবে -->
                         <div id="collectionCashFields" class="grid md:grid-cols-2 gap-3 mt-3 p-3 bg-emerald-50 rounded-lg border-2 border-emerald-400">
-                            <!-- সদস্য যাচাই -->
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">
                                     ✅ সদস্য যাচাই <span class="text-red-500">*</span>
                                 </label>
                                 <input type="text" id="collectionMemberVerify" 
-                                       placeholder="সদস্যের নাম বা আইডি লিখুন"
+                                       placeholder="নাম / মোবাইল / আইডি"
                                        class="w-full border-2 border-emerald-300 rounded-lg p-2.5">
                                 <p class="text-xs text-gray-500 mt-1">
-                                    💡 যাচাই: <strong>${memberName}</strong> (${memberId})
+                                    💡 যাচাই: <strong>${memberFullName}</strong>
+                                    ${memberMobile ? ` | 📱 <strong>${memberMobile}</strong>` : ''}
                                 </p>
                             </div>
                             
-                            <!-- ভাউচার নম্বর (ঐচ্ছিক) -->
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">
                                     🧾 ভাউচার নম্বর <span class="text-gray-400 text-xs">(ঐচ্ছিক)</span>
@@ -37302,18 +37327,15 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
                                            placeholder="যেমন: RC-2026-001"
                                            class="flex-1 border-2 border-gray-300 rounded-lg p-2.5 font-mono">
                                     <button type="button" onclick="generateCollectionVoucher()" 
-                                            class="btn btn-info btn-sm" title="অটো জেনারেট">
+                                            class="btn btn-info btn-sm">
                                         <i class="fas fa-sync-alt"></i>
                                     </button>
                                 </div>
                             </div>
                         </div>
                         
-                        <!-- উৎস নির্বাচন -->
                         <div class="mt-4 p-3 bg-white rounded-lg border-2 border-blue-300">
-                            <label class="block text-sm font-bold text-blue-700 mb-2">
-                                💼 পেমেন্টের উৎস
-                            </label>
+                            <label class="block text-sm font-bold text-blue-700 mb-2">💼 পেমেন্টের উৎস</label>
                             <div class="grid grid-cols-2 gap-2">
                                 <label class="cursor-pointer">
                                     <input type="radio" name="collectionSource" value="external" 
@@ -37322,7 +37344,7 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
                                     <div class="p-3 bg-white border-2 border-gray-200 rounded-lg text-center 
                                                 peer-checked:border-blue-500 peer-checked:bg-blue-50 transition">
                                         <div class="font-bold text-sm">💵 বাইরে থেকে</div>
-                                        <div class="text-xs text-gray-500">সদস্য সরাসরি পরিশোধ</div>
+                                        <div class="text-xs text-gray-500">সদস্য সরাসরি</div>
                                     </div>
                                 </label>
                                 
@@ -37333,39 +37355,32 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
                                     <div class="p-3 bg-white border-2 border-gray-200 rounded-lg text-center 
                                                 peer-checked:border-orange-500 peer-checked:bg-orange-50 transition">
                                         <div class="font-bold text-sm">💰 ব্যালেন্স থেকে</div>
-                                        <div class="text-xs text-gray-500">সদস্যের ফান্ড কেটে</div>
+                                        <div class="text-xs text-gray-500">ফান্ড কেটে</div>
                                     </div>
                                 </label>
                             </div>
                             
-                            <!-- ফান্ড সিলেকশন -->
                             <div id="collectionFundSelection" class="hidden mt-3">
-                                <label class="block text-xs font-medium text-gray-600 mb-1">
-                                    কোন ফান্ড থেকে কাটবেন?
-                                </label>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">কোন ফান্ড থেকে কাটবেন?</label>
                                 <select id="collectionFundType" 
                                         class="w-full border-2 border-orange-300 rounded-lg p-2">
                                     <option value="balance">💰 মূলধন (${fmt(memberBalance)})</option>
-                                    <option value="referral_bonus">🎁 রেফারেল (${fmt(member?.referral_bonus)})</option>
-                                    <option value="profit_balance_savings">📈 সঞ্চয় লাভ (${fmt(member?.profit_balance_savings)})</option>
-                                    <option value="profit_balance_investment">📈 বিনিয়োগ লাভ (${fmt(member?.profit_balance_investment)})</option>
-                                    <option value="profit_balance_referral">📈 রেফারেল লাভ (${fmt(member?.profit_balance_referral)})</option>
+                                    <option value="referral_bonus">🎁 রেফারেল (${fmt(member.referral_bonus)})</option>
+                                    <option value="profit_balance_savings">📈 সঞ্চয় লাভ (${fmt(member.profit_balance_savings)})</option>
+                                    <option value="profit_balance_investment">📈 বিনিয়োগ লাভ (${fmt(member.profit_balance_investment)})</option>
+                                    <option value="profit_balance_referral">📈 রেফারেল লাভ (${fmt(member.profit_balance_referral)})</option>
                                 </select>
                             </div>
                         </div>
                         
-                        <!-- নোট -->
                         <div class="mt-3">
-                            <label class="block text-sm font-medium text-gray-700 mb-1">
-                                📝 নোট (ঐচ্ছিক)
-                            </label>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">📝 নোট (ঐচ্ছিক)</label>
                             <textarea id="collectionNote" rows="2"
                                       class="w-full border-2 border-gray-300 rounded-lg p-2"
                                       placeholder="অতিরিক্ত তথ্য..."></textarea>
                         </div>
                     </div>
                     
-                    <!-- প্রিভিউ -->
                     <div class="mt-3 bg-white p-3 rounded-lg border-2 border-gray-200">
                         <h6 class="font-bold text-gray-700 mb-2 text-sm">📊 পেমেন্টের পর অবস্থা</h6>
                         <div class="grid grid-cols-3 gap-2 text-center text-sm">
@@ -37390,7 +37405,6 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
                         </div>
                     </div>
                     
-                    <!-- বাটন -->
                     <div class="flex flex-wrap gap-2 pt-3 border-t mt-3">
                         <button type="submit" class="btn btn-success flex-1 py-3 min-w-[150px]">
                             <i class="fas fa-check-circle mr-2"></i> ✅ ঋণ আদায় নিশ্চিত করুন
@@ -37406,7 +37420,6 @@ async function openLoanCollectionModal(loanId, memberId, memberName, loanAmount,
         
         showCustomModal('🏦 ঋণ আদায়', html);
         
-        // ✅ Initial state — Cash হলে সঠিক ফিল্ড দেখাবে
         setTimeout(() => {
             if (typeof onCollectionMethodChange === 'function') {
                 onCollectionMethodChange();
@@ -37464,9 +37477,32 @@ function generateCollectionVoucher() {
     showToast('✅ ভাউচার নম্বর জেনারেট হয়েছে', 'success');
 }
 
-// ✅ ঋণ আদায় সাবমিট
-async function submitLoanCollection(loanId, memberId, remaining, memberName) {
-    console.log('💰 submitLoanCollection:', { loanId, memberId, remaining });
+// ═══════════════════════════════════════════════════════════════════
+// 💾 submitLoanCollection — numeric member_id + member_mobile সহ
+// ═══════════════════════════════════════════════════════════════════
+async function submitLoanCollection(loanId, memberId, remaining, memberName, memberMobile) {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('💰 submitLoanCollection');
+    console.log('   loanId:', loanId, '| type:', typeof loanId);
+    console.log('   memberId:', memberId, '| type:', typeof memberId);
+    console.log('   remaining:', remaining);
+    console.log('   memberName:', memberName);
+    console.log('   memberMobile:', memberMobile);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    
+    // ✅ Numeric check
+    const numericLoanId = Number(loanId);
+    const numericMemberId = Number(memberId);
+    
+    if (!Number.isInteger(numericLoanId) || numericLoanId <= 0) {
+        showToast(`❌ লোন আইডি সঠিক নয়! পাওয়া গেছে: "${loanId}"`, 'error');
+        return;
+    }
+    
+    if (!Number.isInteger(numericMemberId) || numericMemberId <= 0) {
+        showToast(`❌ সদস্যের numeric ID সঠিক নয়! পাওয়া গেছে: "${memberId}"`, 'error');
+        return;
+    }
     
     const amount = parseFloat(document.getElementById('collectionAmount')?.value) || 0;
     const installmentNo = parseInt(document.getElementById('collectionInstallmentNo')?.value) || 1;
@@ -37475,7 +37511,6 @@ async function submitLoanCollection(loanId, memberId, remaining, memberName) {
     const source = document.querySelector('input[name="collectionSource"]:checked')?.value || 'external';
     const fundType = document.getElementById('collectionFundType')?.value || 'balance';
     
-    // ✅ Cash হলে — verify + voucher, নাহলে transaction ID
     let transactionId = '';
     let voucherNo = '';
     let memberVerify = '';
@@ -37484,29 +37519,35 @@ async function submitLoanCollection(loanId, memberId, remaining, memberName) {
         memberVerify = document.getElementById('collectionMemberVerify')?.value?.trim() || '';
         voucherNo = document.getElementById('collectionVoucherNo')?.value?.trim() || '';
         
-        // ✅ সদস্য যাচাই বাধ্যতামূলক
         if (!memberVerify) {
             showToast('❌ Cash পেমেন্টের জন্য সদস্য যাচাই করুন!', 'error');
             document.getElementById('collectionMemberVerify')?.focus();
             return;
         }
         
-        // ✅ নাম বা আইডি মিলিয়ে দেখুন
-        const nameMatch = memberVerify.toLowerCase().includes((memberName || '').toLowerCase());
-        const idMatch = memberVerify.includes(memberId);
+        // ✅ নাম / মোবাইল / ID — যেকোনোটা মিললেই হবে
+        const verifyLower = memberVerify.toLowerCase();
+        const nameLower = (memberName || '').toLowerCase();
+        const nameMatch = nameLower.includes(verifyLower) || verifyLower.includes(nameLower);
+        const mobileMatch = memberMobile && memberVerify === memberMobile;
+        const idMatch = memberVerify.includes(String(memberId));
         
-        if (!nameMatch && !idMatch) {
-            showToast(`❌ সদস্য মেলেনি!\nসঠিক: ${memberName} (${memberId})`, 'error');
+        if (!nameMatch && !mobileMatch && !idMatch) {
+            showToast(
+                `❌ যাচাই মেলেনি!\n` +
+                `সঠিক নাম: ${memberName}\n` +
+                `মোবাইল: ${memberMobile || 'নেই'}\n` +
+                `আইডি: ${memberId}`, 
+                'error'
+            );
             return;
         }
         
-        console.log('✅ Cash payment verified:', memberVerify);
-        
+        console.log('✅ Verify OK:', memberVerify);
     } else {
         transactionId = document.getElementById('collectionTransactionId')?.value?.trim() || '';
     }
     
-    // ✅ ভ্যালিডেশন
     if (amount <= 0) {
         showToast('❌ সঠিক পরিমাণ দিন!', 'error');
         return;
@@ -37517,15 +37558,18 @@ async function submitLoanCollection(loanId, memberId, remaining, memberName) {
         return;
     }
     
-    // ✅ Confirm
     const sourceLabel = source === 'internal' ? '💰 ব্যালেন্স থেকে' : '💵 বাইরে থেকে';
+    
     if (!confirm(
         `🏦 ঋণ আদায় নিশ্চিতকরণ\n\n` +
+        `👤 ${memberName}\n` +
+        `📱 ${memberMobile || 'নেই'}\n` +
+        `🆔 Numeric ID: ${numericMemberId}\n` +
         `📅 কিস্তি: #${installmentNo}\n` +
         `💵 পরিমাণ: ${formatAmountWithText(amount)}\n` +
         `💳 পদ্ধতি: ${method}\n` +
         `💼 উৎস: ${sourceLabel}\n` +
-        (method === 'cash' && voucherNo ? `🧾 ভাউচার: ${voucherNo}\n` : '') +
+        (voucherNo ? `🧾 ভাউচার: ${voucherNo}\n` : '') +
         `\n"OK" চাপুন নিশ্চিত করতে।`
     )) return;
     
@@ -37547,17 +37591,15 @@ async function submitLoanCollection(loanId, memberId, remaining, memberName) {
         
         // ✅ ১. Internal হলে সদস্যের ব্যালেন্স কমান
         if (source === 'internal') {
-            const { data: member, error: mErr } = await client
+            const { data: memberData, error: mErr } = await client
                 .from('members')
                 .select('*')
-                .eq('member_id', memberId)
+                .eq('id', numericMemberId)
                 .single();
             
-            if (mErr || !member) {
-                throw new Error('সদস্য পাওয়া যায়নি!');
-            }
+            if (mErr || !memberData) throw new Error('সদস্য পাওয়া যায়নি!');
             
-            const currentFund = Number(member[fundType]) || 0;
+            const currentFund = Number(memberData[fundType]) || 0;
             
             if (currentFund < amount) {
                 showToast(`❌ পর্যাপ্ত ব্যালেন্স নেই! আছে: ${formatAmountWithText(currentFund)}`, 'error');
@@ -37566,60 +37608,68 @@ async function submitLoanCollection(loanId, memberId, remaining, memberName) {
             
             await client.from('members')
                 .update({ [fundType]: currentFund - amount, updated_at: getBangladeshTime() })
-                .eq('member_id', memberId);
-            
-            console.log(`✅ ব্যালেন্স কমেছে: ${currentFund} → ${currentFund - amount}`);
+                .eq('id', numericMemberId);
         }
         
-        // ✅ ২. Loan Payment insert
-        const { error: insertError } = await client
+        // ✅ ২. loan_payments insert — numeric member_id + mobile + name
+        const insertPayload = {
+            loan_id: numericLoanId,
+            member_id: numericMemberId,
+            member_mobile: memberMobile || null,
+            member_name: memberName || null,
+            installment_no: Number(installmentNo),
+            emi_amount: Number(amount),
+            total_amount: Number(amount),
+            payment_method: method,
+            transaction_id: transactionId || null,
+            voucher_no: voucherNo || null,
+            member_verified: memberVerify || null,
+            payment_date: getBangladeshTime(),
+            status: 'approved',
+            approved_by: adminName,
+            approved_at: getBangladeshTime(),
+            note: note || `ঋণ আদায় — ${sourceLabel}`,
+            source: source,
+            fund_type: source === 'internal' ? fundType : null
+        };
+        
+        console.log('📤 Insert payload:', insertPayload);
+        
+        const { data: inserted, error: insertError } = await client
             .from('loan_payments')
-            .insert([{
-                loan_id: loanId,
-                member_id: memberId,
-                installment_no: installmentNo,
-                emi_amount: amount,
-                total_amount: amount,
-                payment_method: method,
-                transaction_id: transactionId || null,
-                voucher_no: voucherNo || null,
-                member_verified: memberVerify || null,
-                payment_date: getBangladeshTime(),
-                status: 'approved',
-                approved_by: adminName,
-                approved_at: getBangladeshTime(),
-                note: note || `ঋণ আদায় — ${sourceLabel}`,
-                source: source,
-                fund_type: source === 'internal' ? fundType : null
-            }]);
+            .insert([insertPayload])
+            .select()
+            .single();
         
         if (insertError) throw insertError;
         
-        // ✅ ৩. লোনের remaining_balance আপডেট
-        const { data: loan } = await client
+        console.log('✅ Payment inserted:', inserted?.id);
+        
+        // ✅ ৩. remaining_balance আপডেট
+        const { data: loanData } = await client
             .from('loan_applications')
             .select('amount')
-            .eq('id', loanId)
+            .eq('id', numericLoanId)
             .single();
         
-        if (loan) {
+        if (loanData) {
             const { data: allPayments } = await client
                 .from('loan_payments')
                 .select('total_amount, emi_amount')
-                .eq('loan_id', loanId)
+                .eq('loan_id', numericLoanId)
                 .eq('status', 'approved');
             
             const totalPaidNow = (allPayments || []).reduce((sum, p) => 
                 sum + Number(p.total_amount || p.emi_amount || 0), 0
             );
-            const newRemaining = Math.max(0, Number(loan.amount) - totalPaidNow);
+            const newRemaining = Math.max(0, Number(loanData.amount) - totalPaidNow);
             
             await client.from('loan_applications')
                 .update({ 
                     remaining_balance: newRemaining,
                     updated_at: getBangladeshTime()
                 })
-                .eq('id', loanId);
+                .eq('id', numericLoanId);
         }
         
         // ✅ ৪. Audit log
@@ -37628,29 +37678,29 @@ async function submitLoanCollection(loanId, memberId, remaining, memberName) {
                 admin_name: adminName,
                 action: 'LOAN_COLLECTION',
                 table_name: 'loan_payments',
-                record_id: String(loanId),
+                record_id: String(inserted?.id || numericLoanId),
                 changes: {
                     installment_no: installmentNo,
                     amount: amount,
                     method: method,
                     source: source,
-                    voucher_no: voucherNo || null,
-                    member_verified: memberVerify || null,
-                    fund_type: source === 'internal' ? fundType : null
+                    member_id: numericMemberId,
+                    member_mobile: memberMobile || null,
+                    voucher_no: voucherNo || null
                 },
                 created_at: new Date().toISOString()
             }]);
-        } catch(e) {
-            console.warn('Audit log warning:', e);
+        } catch(e) { 
+            console.warn('Audit warning:', e); 
         }
         
         // ✅ ৫. সফল মেসেজ
         showToast(
             `✅ ঋণ আদায় সফল!\n` +
-            `💵 পরিমাণ: ${formatAmountWithText(amount)}\n` +
-            `📅 কিস্তি: #${installmentNo}\n` +
-            `💼 উৎস: ${sourceLabel}` +
-            (method === 'cash' && voucherNo ? `\n🧾 ভাউচার: ${voucherNo}` : ''),
+            `👤 ${memberName}\n` +
+            `📱 ${memberMobile || 'নেই'}\n` +
+            `💵 ${formatAmountWithText(amount)}\n` +
+            `📅 কিস্তি #${installmentNo}`,
             'success'
         );
         
@@ -37661,35 +37711,31 @@ async function submitLoanCollection(loanId, memberId, remaining, memberName) {
         await loadMembers();
         await updateAllBadges();
         
-        // ✅ ৭. ভাউচার দেখান (নতুন)
+        // ✅ ৭. ভাউচার দেখান
         setTimeout(() => {
-            const memberData = window._currentLoanCollectionMember || {};
             const voucherNum = voucherNo || `LC-${new Date().getFullYear()}${String(new Date().getMonth()+1).padStart(2,'0')}${String(new Date().getDate()).padStart(2,'0')}-${Date.now().toString().slice(-4)}`;
             
             if (typeof showTransactionVoucher === 'function') {
                 showTransactionVoucher({
                     type: 'loan_collection',
                     voucher_no: voucherNum,
-                    member_name: memberData.full_name || memberName || 'সদস্য',
+                    member_name: memberName,
                     member_id: memberId,
-                    member_mobile: memberData.mobile || '',
-                    member_district: memberData.present_district || '',
+                    member_mobile: memberMobile || '',
                     amount: amount,
-                    reason: `লোন কিস্তি #${installmentNo} পরিশোধ — ${sourceLabel}`,
+                    reason: `লোন কিস্তি #${installmentNo} — ${sourceLabel}`,
                     transaction_details: [
-                        { label: '📅 কিস্তি নম্বর', value: '#' + installmentNo },
-                        { label: '💳 পেমেন্ট পদ্ধতি', value: method },
-                        { label: '💼 পেমেন্ট উৎস', value: sourceLabel },
-                        { label: '📊 মোট লোন বাকি ছিল', value: formatAmountWithText(remaining) },
+                        { label: '📅 কিস্তি', value: '#' + installmentNo },
+                        { label: '📱 মোবাইল', value: memberMobile || 'নেই' },
+                        { label: '💳 পদ্ধতি', value: method },
+                        { label: '💼 উৎস', value: sourceLabel },
                         { label: '✅ এখন বাকি', value: formatAmountWithText(Math.max(0, remaining - amount)) },
-                        transactionId ? { label: '📝 লেনদেন আইডি', value: transactionId } : null,
-                        voucherNo ? { label: '🧾 ভাউচার নম্বর', value: voucherNo } : null,
-                        memberVerify ? { label: '✅ সদস্য যাচাই', value: memberVerify } : null
+                        transactionId ? { label: '📝 TxID', value: transactionId } : null,
+                        voucherNo ? { label: '🧾 ভাউচার', value: voucherNo } : null
                     ].filter(Boolean)
                 });
             } else {
                 console.warn('⚠️ showTransactionVoucher ফাংশন নেই!');
-                showToast('⚠️ ভাউচার সিস্টেম লোড হয়নি', 'warning');
             }
         }, 800);
         
@@ -37711,7 +37757,6 @@ window.onCollectionMethodChange = onCollectionMethodChange;
 window.generateCollectionVoucher = generateCollectionVoucher;
 
 console.log('✅ ঋণ আদায় সিস্টেম লোড সম্পূর্ণ!');
-
     // ═══════════════════════════════════════════════════════════════════
 // 💸 দ্রুত উত্তোলন — সদস্য টেবিল থেকে সরাসরি
 // ═══════════════════════════════════════════════════════════════════
