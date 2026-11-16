@@ -1175,6 +1175,20 @@ document.getElementById('signupForm').addEventListener('submit', async function(
         return;
     }
 
+    // ✅ Server-side Referral Code Validation
+    const originalRefFromUrl = new URLSearchParams(window.location.search).get('ref');
+    const currentRefValue = document.getElementById('referCode').value.trim();
+    if (originalRefFromUrl && currentRefValue !== originalRefFromUrl) {
+        showCenterNotification(
+            `❌ রেফারেল কোড পরিবর্তন করা হয়েছে!\n\n` +
+            `মূল কোড: ${originalRefFromUrl}\n` +
+            `বর্তমান: ${currentRefValue || '(খালি)'}\n\n` +
+            `অনুগ্রহ করে পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।`,
+            'error'
+        );
+        return;
+    }
+
     const client = initSupabaseClient();
     if (!client) {
         showCenterNotification('❌ সার্ভার সংযোগে সমস্যা! ইন্টারনেট চেক করে আবার চেষ্টা করুন।', 'error');
@@ -1313,7 +1327,10 @@ document.getElementById('signupForm').addEventListener('submit', async function(
             terms_agreed_at: new Date().toISOString(),
             created_by: null, balance_audited_at: null, balance_audit_note: null,
             last_auto_fix_at: null,
-            updated_at: new Date().toISOString()
+            updated_at: new Date().toISOString(),
+            // 🆕 Referral tracking
+            referral_source_url: window.location.href,
+            referral_captured_at: new Date().toISOString()
         };
 
         let referByName = null;
@@ -1467,6 +1484,202 @@ window.selectMemberType = selectMemberType;
 window.copyText = copyText;
 window.showCenterNotification = showCenterNotification;
 window.checkReferCode = checkReferCode;
+window.initSupabaseClient = initSupabaseClient;
 </script>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- 🔗 Referral Auto-Fill + Lock + Custom Warning Message       -->
+<!-- URL-এ ?ref=XXXXXX থাকলে রেফারেল কোড auto-fill + lock করে    -->
+<!-- কেউ বদলাতে চাইলে referrer-এর নামসহ সতর্কবার্তা দেখায়         -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<script>
+(function() {
+    'use strict';
+    
+    const REF_FIELD_ID = 'referCode';
+    let referrerName = null;
+    let lockedRefCode = null;
+    let warningShown = false;
+    
+    // ─── 🔔 Custom Warning Message ───
+    function showLockWarning() {
+        if (warningShown) return;
+        warningShown = true;
+        setTimeout(() => { warningShown = false; }, 1200);
+        
+        const nameText = referrerName 
+            ? `<strong style="color:#065f46;">${referrerName}</strong>` 
+            : 'একজন সদস্য';
+        
+        if (typeof showCenterNotification === 'function') {
+            showCenterNotification(
+                `🔒 <strong>এই কোডটি পরিবর্তন করতে পারবেন না!</strong>\n\n` +
+                `এটি আপনাকে ${nameText} শেয়ার করেছেন।\n\n` +
+                `✅ আপনার রেফারেল কোড: <strong style="color:#065f46;">${lockedRefCode}</strong>\n\n` +
+                `যদি এটি ভুল হয়, তাহলে সম্পূর্ণ পেজটি রিফ্রেশ করুন অথবা সঠিক লিংক থেকে আবার প্রবেশ করুন।`,
+                'error'
+            );
+        } else {
+            alert(
+                `🔒 এই কোডটি পরিবর্তন করতে পারবেন না!\n\n` +
+                `এটি আপনাকে ${referrerName || 'একজন সদস্য'} শেয়ার করেছেন।\n\n` +
+                `✅ আপনার রেফারেল কোড: ${lockedRefCode}`
+            );
+        }
+        
+        const field = document.getElementById(REF_FIELD_ID);
+        if (field) {
+            field.style.animation = 'shake 0.5s';
+            field.style.borderColor = '#dc2626';
+            setTimeout(() => {
+                field.style.animation = '';
+                field.style.borderColor = '#10b981';
+            }, 800);
+        }
+    }
+    
+    // ─── 🔗 Referrer নাম লোড (Supabase) ───
+    async function fetchReferrerName(refCode) {
+        try {
+            const client = (typeof initSupabaseClient === 'function') 
+                ? initSupabaseClient() 
+                : null;
+            if (!client) return null;
+            
+            const { data, error } = await client.rpc('check_referral_code', { 
+                input_code: refCode 
+            });
+            
+            if (error || !data || data.length === 0) return null;
+            
+            const name = data[0].full_name;
+            console.log('✅ Referrer নাম পাওয়া গেছে:', name);
+            return name;
+        } catch(e) {
+            console.warn('⚠️ Referrer fetch exception:', e);
+            return null;
+        }
+    }
+    
+    // ─── 🔧 Main Function ───
+    async function autoFillReferralCode() {
+        console.log('🔗 Referral auto-fill শুরু...');
+        
+        const urlParams = new URLSearchParams(window.location.search);
+        const refCode = urlParams.get('ref');
+        
+        if (!refCode) {
+            console.log('ℹ️ URL-এ ref নেই');
+            return;
+        }
+        
+        console.log('✅ URL থেকে ref:', refCode);
+        lockedRefCode = refCode;
+        
+        try {
+            localStorage.setItem('tukn_referral_code', refCode);
+            sessionStorage.setItem('tukn_referral_code', refCode);
+        } catch(e) {}
+        
+        const refInput = document.getElementById(REF_FIELD_ID);
+        if (!refInput) {
+            console.error('❌ #' + REF_FIELD_ID + ' পাওয়া যায়নি!');
+            return;
+        }
+        
+        refInput.value = refCode;
+        refInput.setAttribute('value', refCode);
+        refInput.readOnly = true;
+        refInput.setAttribute('readonly', 'readonly');
+        refInput.style.background = '#f0fdf4';
+        refInput.style.borderColor = '#10b981';
+        refInput.style.fontWeight = '700';
+        refInput.style.color = '#065f46';
+        refInput.style.cursor = 'not-allowed';
+        
+        refInput.addEventListener('keydown', function(e) {
+            if (['Tab', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Escape'].includes(e.key)) return;
+            e.preventDefault();
+            showLockWarning();
+        });
+        refInput.addEventListener('paste', function(e) {
+            e.preventDefault();
+            showLockWarning();
+        });
+        refInput.addEventListener('cut', function(e) {
+            e.preventDefault();
+            showLockWarning();
+        });
+        refInput.addEventListener('input', function(e) {
+            if (e.target.value !== refCode) {
+                e.target.value = refCode;
+                showLockWarning();
+            }
+        });
+        refInput.addEventListener('click', function(e) {
+            e.preventDefault();
+            refInput.blur();
+            showLockWarning();
+        });
+        
+        try {
+            if (typeof checkReferCode === 'function') {
+                checkReferCode(refCode);
+            }
+            referrerName = await fetchReferrerName(refCode);
+            if (referrerName) {
+                console.log('✅ Referrer নাম set:', referrerName);
+                const referByName = document.getElementById('referByName');
+                const referByContainer = document.getElementById('referByContainer');
+                if (referByName && referByContainer) {
+                    referByContainer.classList.remove('hidden');
+                    referByName.innerHTML = `<span class="text-emerald-700">✅ ${referrerName}</span>`;
+                }
+                refInput.title = `🔒 এই কোডটি আপনাকে ${referrerName} শেয়ার করেছেন — পরিবর্তন করা যাবে না`;
+            }
+        } catch(e) {
+            console.warn('⚠️ Referrer load problem:', e);
+        }
+        
+        const form = document.getElementById('signupForm');
+        if (form) {
+            form.addEventListener('submit', function() {
+                refInput.value = refCode;
+                refInput.setAttribute('value', refCode);
+            }, true);
+        }
+        
+        if (!document.getElementById('referCodeHidden')) {
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.id = 'referCodeHidden';
+            hidden.name = 'referral_code_hidden';
+            hidden.value = refCode;
+            refInput.parentNode.appendChild(hidden);
+        }
+        
+        console.log('🎉 Auto-fill + Lock সম্পূর্ণ:', refCode);
+    }
+    
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', autoFillReferralCode);
+    } else {
+        autoFillReferralCode();
+    }
+    
+    let attempts = 0;
+    const retryInterval = setInterval(() => {
+        attempts++;
+        const refCode = new URLSearchParams(window.location.search).get('ref');
+        if (!refCode) return clearInterval(retryInterval);
+        const check = document.getElementById(REF_FIELD_ID);
+        if (check && check.value !== refCode) {
+            autoFillReferralCode();
+        }
+        if (attempts >= 10) clearInterval(retryInterval);
+    }, 500);
+})();
+</script>
+
 </body>
 </html>
