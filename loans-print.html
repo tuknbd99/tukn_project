@@ -486,7 +486,6 @@
                 border-top-color: #000000 !important;
             }
 
-            /* ✅ EMI টেবিল প্রিন্ট */
             .emi-table {
                 font-size: 9.5px !important;
                 page-break-inside: auto;
@@ -783,10 +782,10 @@ async function init() {
             branches.forEach(b => { branchMap[b.id] = b; });
         }
 
-        // সদস্য লোড (ছবি ও ঠিকানার জন্য)
+        // ✅ সদস্য লোড (member_type সহ)
         const { data: members } = await client
             .from('members')
-            .select('member_id, full_name, mobile, profile_image, present_village, present_thana, present_district, present_division, member_term, monthly_savings');
+            .select('member_id, full_name, mobile, profile_image, present_village, present_thana, present_district, present_division, member_term, member_type, monthly_savings');
         if (members) {
             members.forEach(m => { membersMap[m.member_id] = m; });
         }
@@ -920,17 +919,30 @@ async function startPrint() {
     
     try {
         const client = initSupabase();
-        const selectedLoanIds = Array.from(selectedIds);
+        const selectedLoanIds = Array.from(selectedIds).map(Number);
         
-        // ✅ selectedId গুলো loan_applications.id (integer)
-        // loan_payments.loan_id এগুলোকে রেফার করে
+        console.log('🔍 Selected Loan IDs:', selectedLoanIds);
+        
+        // ✅ loan_payments লোড
         const { data: payments, error } = await client
             .from('loan_payments')
             .select('*')
             .in('loan_id', selectedLoanIds)
             .order('installment_no', { ascending: true });
         
-        if (error) throw error;
+        if (error) {
+            console.error('❌ Payments load error:', error);
+            throw error;
+        }
+        
+        console.log('✅ Payments loaded:', payments?.length || 0);
+        
+        // প্রতি লোনে কত পেমেন্ট
+        const countByLoan = {};
+        (payments || []).forEach(p => {
+            countByLoan[p.loan_id] = (countByLoan[p.loan_id] || 0) + 1;
+        });
+        console.log('📊 Payments per loan:', countByLoan);
         
         // লোনের সাথে পেমেন্ট গ্রুপ
         const paymentsByLoan = {};
@@ -1021,6 +1033,18 @@ function renderLoanPage1(loan, pageNum, total) {
         'yearly': 'বার্ষিক'
     }[loan.installment_type] || loan.installment_type || '—';
     
+    // ✅ সদস্য পদ — সঠিকভাবে নির্ধারণ
+    let memberPosition = '—';
+    if (member) {
+        if (member.member_type === 'current') {
+            memberPosition = 'কারেন্ট সদস্য';
+        } else if (member.member_term && member.member_term > 0) {
+            memberPosition = toBn(member.member_term) + ' বছর মেয়াদী';
+        } else {
+            memberPosition = 'মেয়াদী সদস্য';
+        }
+    }
+    
     // লোন-নির্দিষ্ট তথ্য (loan_specific_data)
     let specificHtml = '';
     if (loan.loan_specific_data && typeof loan.loan_specific_data === 'object') {
@@ -1104,12 +1128,11 @@ function renderLoanPage1(loan, pageNum, total) {
             <div style="flex:1;">
                 <div class="info-grid">
                     ${item('নাম', loan.member_name, true, true)}
-                    ${item('পিতা/অভিভাবক', '', false)}
                     ${item('সদস্য আইডি', loan.member_id, false, true)}
                     ${item('মোবাইল', loan.member_mobile, false, true)}
+                    ${item('সদস্য পদ', memberPosition)}
                     ${item('ঠিকানা', memberAddress, true)}
                     ${item('ব্রাঞ্চ', branchName)}
-                    ${item('সদস্য পদ', member ? (member.member_term || 0) + ' বছর মেয়াদী' : '—')}
                 </div>
             </div>
             <div style="display:flex; flex-direction:column; align-items:center; gap:2px;">
@@ -1204,6 +1227,61 @@ function renderLoanPage1(loan, pageNum, total) {
 // 📄 পেজ ২: EMI সূচি
 // ═══════════════════════════════════════════════════════════
 function renderLoanPage2(loan, pageNum, total, payments) {
+    // ✅ যদি কোনো পেমেন্ট না থাকে — "EMI তৈরি হয়নি" মেসেজ
+    if (!payments || payments.length === 0) {
+        const instTypeLabel = {
+            'weekly': 'সাপ্তাহিক',
+            'monthly': 'মাসিক',
+            'quarterly': 'ত্রৈমাসিক',
+            'half_yearly': 'অর্ধ-বার্ষিক',
+            'yearly': 'বার্ষিক'
+        }[loan.installment_type] || loan.installment_type || '—';
+        
+        return `
+        <div class="print-page">
+            <div class="page2-header">
+                <div class="left">
+                    <strong>ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</strong><br>
+                    লোন কিস্তি পরিশোধের সময়সূচি (EMI Schedule)
+                </div>
+                <div class="right">
+                    <strong>আবেদন:</strong> ${escapeHtml(loan.application_no || '—')}<br>
+                    <strong>পেজ:</strong> ${toBn(pageNum)}/${toBn(total)}
+                </div>
+            </div>
+            
+            <div class="page2-title">কিস্তি পরিশোধের সময়সূচি</div>
+            
+            <div class="meta-grid" style="margin-bottom:8px;">
+                <div class="meta-item"><strong>ঋণগ্রহীতা:</strong> ${escapeHtml(loan.member_name || '—')}</div>
+                <div class="meta-item"><strong>সদস্য আইডি:</strong> ${escapeHtml(loan.member_id || '—')}</div>
+                <div class="meta-item"><strong>মূল লোন:</strong> ${formatMoney(loan.amount)} টাকা</div>
+                <div class="meta-item"><strong>কিস্তির ধরন:</strong> ${instTypeLabel} • ${toBn(loan.installment_count || 0)} টি</div>
+            </div>
+            
+            <div style="text-align:center; padding:40px 20px; border:2px dashed #f59e0b; border-radius:8px; background:#fffbeb; margin-top:20px;">
+                <i class="fas fa-clock" style="font-size:48px; color:#f59e0b; margin-bottom:12px;"></i>
+                <h3 style="font-size:16px; font-weight:700; color:#92400e; margin-bottom:8px;">
+                    ⏳ কিস্তির সময়সূচি এখনো তৈরি হয়নি
+                </h3>
+                <p style="font-size:12px; color:#78350f; line-height:1.5;">
+                    এই লোনের কিস্তির সময়সূচি (EMI Schedule) এখনো তৈরি করা হয়নি।<br>
+                    অ্যাডমিন অনুমোদন ও EMI তৈরি করার পর এই পেজে সম্পূর্ণ সূচি দেখা যাবে।
+                </p>
+                <p style="font-size:11px; color:#92400e; margin-top:10px; padding-top:8px; border-top:1px dashed #f59e0b;">
+                    <strong>মোট পরিশোধ্য:</strong> ৳ ${formatMoney(loan.total_amount || loan.total_payable || 0)} &nbsp;|&nbsp;
+                    <strong>কিস্তির সংখ্যা:</strong> ${toBn(loan.installment_count || 0)} টি &nbsp;|&nbsp;
+                    <strong>প্রতি কিস্তি:</strong> ৳ ${formatMoney(loan.emi_amount || 0)}
+                </p>
+            </div>
+            
+            <div class="footer-note" style="margin-top:20px;">
+                এটি একটি কম্পিউটার-জেনারেটেড কিস্তি বিবরণী • প্রিন্ট: ${formatDate(new Date().toISOString())} • TUKNBD
+            </div>
+        </div>
+        `;
+    }
+    
     const instTypeLabel = {
         'weekly': 'সাপ্তাহিক',
         'monthly': 'মাসিক',
@@ -1228,7 +1306,6 @@ function renderLoanPage2(loan, pageNum, total, payments) {
             totalPaid += parseFloat(p.emi_amount) || 0;
             paidCount++;
         } else if (p.status === 'pending') {
-            // তারিখ চেক — overdue কিনা
             const dueDate = p.due_date ? new Date(p.due_date) : null;
             const now = new Date();
             if (dueDate && dueDate < now) {
