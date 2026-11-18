@@ -997,9 +997,6 @@ function renderPrintPages(loans) {
     output.innerHTML = html;
 }
 
-// ═══════════════════════════════════════════════════════════
-// 📄 পেজ ১: লোন সারসংক্ষেপ
-// ═══════════════════════════════════════════════════════════
 function renderLoanPage1(loan, pageNum, total) {
     const member = membersMap[loan.member_id];
     const branch = branchMap[loan.branch_id];
@@ -1033,7 +1030,7 @@ function renderLoanPage1(loan, pageNum, total) {
         'yearly': 'বার্ষিক'
     }[loan.installment_type] || loan.installment_type || '—';
     
-    // ✅ সদস্য পদ — সঠিকভাবে নির্ধারণ
+    // সদস্য পদ
     let memberPosition = '—';
     if (member) {
         if (member.member_type === 'current') {
@@ -1044,6 +1041,18 @@ function renderLoanPage1(loan, pageNum, total) {
             memberPosition = 'মেয়াদী সদস্য';
         }
     }
+    
+    // ✅ সঠিক হিসাব
+    const amount = parseFloat(loan.amount || 0);
+    const profitAmount = parseFloat(loan.profit_amount || 0);
+    const serviceCharge = parseFloat(loan.service_charge || 0);
+    const upfrontAmount = profitAmount + serviceCharge;       // ⚡ প্রথমে দিতে হবে
+    const totalPayable = amount + profitAmount + serviceCharge; // মোট পরিশোধ্য
+    
+    // ⚡ প্রথম পরিশোধের স্ট্যাটাস
+    const isUpfrontPaid = (loan.profit_paid === true && loan.service_charge_paid === true);
+    const upfrontPaidDate = loan.profit_paid_at || loan.service_charge_paid_at;
+    const upfrontStatus = isUpfrontPaid ? '✅ পরিশোধিত' : '❌ বাকি';
     
     // লোন-নির্দিষ্ট তথ্য (loan_specific_data)
     let specificHtml = '';
@@ -1144,19 +1153,37 @@ function renderLoanPage1(loan, pageNum, total) {
         <!-- লোনের বিবরণ -->
         <div class="section-h"><i class="fas fa-money-bill-wave"></i> লোনের বিবরণ</div>
         <div class="info-grid">
-            ${item('মূল লোন', `${formatMoney(loan.amount)} টাকা`)}
+            ${item('মূল লোন', `${formatMoney(amount)} টাকা`, false, true)}
             ${item('মুনাফার হার', `${toBn(loan.profit_rate || 0)}%`)}
-            ${item('মুনাফা', `${formatMoney(loan.profit_amount || 0)} টাকা`)}
-            ${item('সার্ভিস চার্জ', `${formatMoney(loan.service_charge || 0)} টাকা`)}
-            ${item('মোট পরিশোধ্য', `${formatMoney(loan.total_amount || loan.total_payable || 0)} টাকা`, false, true)}
+            ${item('মুনাফা', `${formatMoney(profitAmount)} টাকা`)}
+            ${item('সার্ভিস চার্জ', `${formatMoney(serviceCharge)} টাকা`)}
+            ${item('মোট পরিশোধ্য', `${formatMoney(totalPayable)} টাকা`, false, true)}
             ${item('কিস্তির ধরন', instTypeLabel)}
             ${item('কিস্তির সংখ্যা', `${toBn(loan.installment_count || 0)} টি`)}
-            ${item('প্রতি কিস্তি (EMI)', `${formatMoney(loan.emi_amount || 0)} টাকা`, false, true)}
+            ${item('প্রতি কিস্তি (EMI)', `${formatMoney(loan.emi_amount || 0)} টাকা`)}
             ${item('মেয়াদ', `${toBn(loan.duration_months || 0)} মাস`)}
             ${item('বাকি ব্যালেন্স', `${formatMoney(loan.remaining_balance || 0)} টাকা`)}
             ${item('বিলম্ব ফি', `${toBn(loan.late_fee_percent || 0)}%`)}
             ${item('গ্রেস পিরিয়ড', `${toBn(loan.grace_period_days || 0)} দিন`)}
         </div>
+
+        <!-- ⚡ প্রথম পরিশোধ (লভ্যাংশ + সার্ভিস চার্জ) -->
+        <div class="section-h" style="background: linear-gradient(135deg, #f59e0b, #d97706);">
+            <i class="fas fa-bolt"></i> প্রথম পরিশোধ (লভ্যাংশ + সার্ভিস চার্জ)
+        </div>
+        <div class="info-grid">
+            ${item('প্রথমে দিতে হবে', `${formatMoney(upfrontAmount)} টাকা`, false, true)}
+            ${item('অবস্থা', upfrontStatus, false, true)}
+            ${upfrontPaidDate ? item('পরিশোধের তারিখ', formatDate(upfrontPaidDate)) : ''}
+            ${loan.upfront_transaction_id ? item('ট্রানজেকশন আইডি', loan.upfront_transaction_id) : ''}
+            ${loan.upfront_payment_method ? item('পেমেন্ট মাধ্যম', loan.upfront_payment_method) : ''}
+            ${loan.upfront_verified_by ? item('যাচাই করেছেন', loan.upfront_verified_by) : ''}
+        </div>
+        ${!isUpfrontPaid ? `
+            <div style="background:#fef3c7; border-left:4px solid #f59e0b; padding:6px 10px; margin-top:4px; border-radius:4px; font-size:10px; color:#78350f;">
+                <strong>⚠️ গুরুত্বপূর্ণ:</strong> লভ্যাংশ ও সার্ভিস চার্জ পরিশোধের পর EMI কিস্তির সময়সূচী তৈরি হবে এবং সদস্য কিস্তি পরিশোধ করতে পারবেন।
+            </div>
+        ` : ''}
 
         <!-- গ্যারান্টার তথ্য -->
         ${(loan.guarantor1_name || loan.guarantor2_name) ? `
@@ -1185,8 +1212,6 @@ function renderLoanPage1(loan, pageNum, total) {
         <div class="info-grid">
             ${item('অনুমোদনকারী', loan.approved_by || '—')}
             ${item('অনুমোদনের তারিখ', formatDate(loan.approved_at))}
-            ${item('মুনাফা পরিশোধ', loan.profit_paid ? '✅ সম্পন্ন' : '❌ বাকি')}
-            ${item('সার্ভিস চার্জ', loan.service_charge_paid ? '✅ সম্পন্ন' : '❌ বাকি')}
         </div>
         ` : ''}
 
@@ -1269,7 +1294,7 @@ function renderLoanPage2(loan, pageNum, total, payments) {
                     অ্যাডমিন অনুমোদন ও EMI তৈরি করার পর এই পেজে সম্পূর্ণ সূচি দেখা যাবে।
                 </p>
                 <p style="font-size:11px; color:#92400e; margin-top:10px; padding-top:8px; border-top:1px dashed #f59e0b;">
-                    <strong>মোট পরিশোধ্য:</strong> ৳ ${formatMoney(loan.total_amount || loan.total_payable || 0)} &nbsp;|&nbsp;
+                    <strong>মোট পরিশোধ্য:</strong> ৳ ${formatMoney(     parseFloat(loan.amount || 0)      + parseFloat(loan.profit_amount || 0)      + parseFloat(loan.service_charge || 0) )} &nbsp;|&nbsp;
                     <strong>কিস্তির সংখ্যা:</strong> ${toBn(loan.installment_count || 0)} টি &nbsp;|&nbsp;
                     <strong>প্রতি কিস্তি:</strong> ৳ ${formatMoney(loan.emi_amount || 0)}
                 </p>
@@ -1316,7 +1341,11 @@ function renderLoanPage2(loan, pageNum, total, payments) {
         }
     });
     
-    const totalPayable = parseFloat(loan.total_amount || loan.total_payable) || 0;
+    // ✅ সঠিক total = amount + profit + service
+    const totalPayable = 
+        parseFloat(loan.amount || 0) 
+        + parseFloat(loan.profit_amount || 0) 
+        + parseFloat(loan.service_charge || 0);
     const remaining = totalPayable - totalPaid;
     
     // টেবিল রো
