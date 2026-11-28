@@ -476,6 +476,8 @@
             display: inline-flex; align-items: center; gap: 6px;
         }
         .tb-btn-print { background: #f59e0b; color: #111; }
+        .tb-btn-preview { background: #d1fae5; color: #065f46; }
+        .tb-btn-share { background: #dbeafe; color: #1e40af; }
         .tb-btn-print:hover { background: #d97706; }
         .tb-btn-close { background: rgba(255,255,255,0.2); color: white; }
         .tb-btn-close:hover { background: rgba(255,255,255,0.3); }
@@ -550,6 +552,17 @@
             একজন বা একাধিক সদস্য নির্বাচন করে প্রিন্ট করুন। প্রতিটি সদস্যের তথ্য আলাদা A4 পেজে যাবে।
         </p>
 
+        <div class="flex justify-end gap-2 flex-wrap mb-3">
+            <button onclick="startPrint()" id="previewBtn" disabled class="tb-btn tb-btn-preview disabled:opacity-40">
+                <i class="fas fa-eye"></i> প্রিভিউ দেখুন
+            </button>
+            <button onclick="startPrint()" id="preparePrintBtn" disabled class="tb-btn tb-btn-print disabled:opacity-40">
+                <i class="fas fa-print"></i> প্রিন্ট
+            </button>
+            <button onclick="shareCurrentPage()" class="tb-btn tb-btn-share">
+                <i class="fas fa-share-alt"></i> শেয়ার
+            </button>
+        </div>
         <input type="text" id="searchBox" class="search-box mb-3" placeholder="🔍 নাম, আইডি বা মোবাইল দিয়ে সার্চ করুন...">
         <div class="flex gap-2 mb-4 flex-wrap">
             <button onclick="selectAll(true)" class="tb-btn tb-btn-print">
@@ -565,10 +578,17 @@
 
         <div id="memberListWrap" style="max-height: 60vh; overflow-y: auto;"></div>
 
-        <button onclick="startPrint()" id="printBtn" disabled
-                class="mt-4 w-full py-3 rounded-xl bg-emerald-600 text-white font-bold text-base hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed">
-            <i class="fas fa-print mr-2"></i>নির্বাচিত সদস্যদের প্রিন্ট করুন
-        </button>
+        <p class="mt-4 text-xs text-gray-500 text-center">প্রথমে প্রিভিউ দেখুন; প্রিভিউ পৃষ্ঠা থেকে চূড়ান্ত প্রিন্ট দিতে পারবেন।</p>
+    </div>
+</div>
+
+<!-- 👁️ PREVIEW ACTIONS -->
+<div id="previewToolbar" class="preview-toolbar no-print" style="display:none;">
+    <h1><i class="fas fa-eye mr-2"></i>প্রিন্ট প্রিভিউ</h1>
+    <div class="flex gap-2 flex-wrap">
+        <button class="tb-btn tb-btn-print" onclick="window.print()"><i class="fas fa-print"></i> প্রিন্ট করুন</button>
+        <button class="tb-btn tb-btn-share" onclick="shareCurrentPage()"><i class="fas fa-share-alt"></i> শেয়ার</button>
+        <button class="tb-btn tb-btn-close" onclick="backToSelector()"><i class="fas fa-arrow-left"></i> ফিরে যান</button>
     </div>
 </div>
 
@@ -766,10 +786,13 @@ function selectAll(select) {
 
 function updateSelectedCount() {
     const el = document.getElementById('selectedCount');
-    const btn = document.getElementById('printBtn');
+    const buttons = ['previewBtn', 'preparePrintBtn'];
     const n = selectedIds.size;
     if (el) el.textContent = `${toBn(n)} জন নির্বাচিত`;
-    if (btn) btn.disabled = n === 0;
+    buttons.forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = n === 0;
+    });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -899,7 +922,7 @@ async function loadSelectedMembersTransactions(client, members) {
 
 function renderMemberTransactionsPage(member, transactions) {
     const rows = transactions || [];
-    const rowsPerPage = 16;
+    const rowsPerPage = 25;
     const pageCount = Math.max(1, Math.ceil(rows.length / rowsPerPage));
     const memberName = escapeHtml(member.full_name || '—');
     const memberId = escapeHtml(member.member_id || '—');
@@ -995,37 +1018,60 @@ async function startPrint() {
         renderPrintPages(selected, transactionsByMember);
         showLoading(false);
     } catch (error) {
-        console.error('Member transaction print load error:', error);
+        console.error('Member transaction preview load error:', error);
         showLoading(false);
-        alert('লেনদেনের তথ্য লোড করা যায়নি। প্রিন্ট বন্ধ রাখা হয়েছে। সমস্যা: ' + (error.message || 'অজানা ত্রুটি'));
+        alert('লেনদেনের তথ্য লোড করা যায়নি। প্রিভিউ তৈরি করা হয়নি। সমস্যা: ' + (error.message || 'অজানা ত্রুটি'));
         return;
     }
-    
-    // ✅ QR কোড রেন্ডার করুন
+
+    // প্রিভিউ দেখানোর আগে QR কোড তৈরি
+    document.getElementById('selectorScreen').style.display = 'none';
+    document.getElementById('previewToolbar').style.display = 'flex';
+    window.scrollTo(0, 0);
     setTimeout(() => {
         document.querySelectorAll('.qr-box').forEach(el => {
             const qrData = el.getAttribute('data-qr');
-            if (qrData && el && !el.querySelector('canvas') && !el.querySelector('img')) {
+            if (qrData && !el.querySelector('canvas') && !el.querySelector('img')) {
                 try {
                     new QRCode(el, {
-                        text: qrData,
-                        width: 80,
-                        height: 80,
-                        colorDark: "#000000",
-                        colorLight: "#ffffff",
+                        text: qrData, width: 80, height: 80,
+                        colorDark: "#000000", colorLight: "#ffffff",
                         correctLevel: QRCode.CorrectLevel.H
                     });
-                } catch(e) {
-                    console.warn('QR render error:', e);
-                }
+                } catch(e) { console.warn('QR render error:', e); }
             }
         });
     }, 100);
-    
-    document.getElementById('selectorScreen').style.display = 'none';
-    setTimeout(() => { window.print(); }, 800);
 }
 
+function backToSelector() {
+    document.getElementById('previewToolbar').style.display = 'none';
+    document.getElementById('selectorScreen').style.display = 'block';
+    window.scrollTo(0, 0);
+}
+
+async function shareCurrentPage() {
+    const shareData = {
+        title: 'TUKNBD সদস্য তথ্য ও লেনদেন প্রিন্ট',
+        text: 'TUKNBD সদস্য তথ্য ও লেনদেন প্রিভিউ পৃষ্ঠা',
+        url: window.location.href
+    };
+    try {
+        if (navigator.share) {
+            await navigator.share(shareData);
+        } else if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(shareData.url);
+            alert('এই পৃষ্ঠার লিংক কপি হয়েছে। শেয়ার করতে পেস্ট করুন।');
+        } else {
+            window.prompt('এই পৃষ্ঠার লিংক কপি করুন:', shareData.url);
+        }
+    } catch (error) {
+        if (error.name !== 'AbortError') {
+            console.error('Share failed:', error);
+            alert('শেয়ার করা যায়নি।');
+        }
+    }
+}
 function renderPrintPages(members, transactionsByMember = {}) {
     const output = document.getElementById('printOutput');
     const profilePages = members.map((m, i) => renderMemberPage(m, i + 1, members.length)).join('');
