@@ -613,6 +613,29 @@ let allMembers = [];
 let filteredMembers = [];
 let selectedIds = new Set();
 let branchMap = {};
+let printAuditMeta = { printedBy: 'অনুমোদিত অ্যাডমিন', printedAt: new Date() };
+
+function getBanglaPrintDateTime(value = new Date()) {
+    return new Date(value).toLocaleString('bn-BD', {
+        year: 'numeric', month: 'long', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', hour12: true
+    });
+}
+
+async function loadPrintAuditMeta(client) {
+    try {
+        const { data: { user }, error } = await client.auth.getUser();
+        if (error) throw error;
+        const meta = user?.user_metadata || {};
+        printAuditMeta = {
+            printedBy: meta.full_name || meta.name || meta.display_name || user?.email || 'অনুমোদিত অ্যাডমিন',
+            printedAt: new Date()
+        };
+    } catch (error) {
+        console.warn('Print audit identity unavailable:', error);
+        printAuditMeta = { printedBy: 'পরিচয় পাওয়া যায়নি', printedAt: new Date() };
+    }
+}
 
 function initSupabase() {
     if (!sb && typeof supabase !== 'undefined') {
@@ -672,6 +695,7 @@ async function init() {
     }
 
     try {
+        await loadPrintAuditMeta(client);
         // ব্রাঞ্চ লোড
         const { data: branches } = await client
             .from('branches')
@@ -911,7 +935,8 @@ async function loadSelectedMembersTransactions(client, members) {
     queries[7].forEach(t => add(t.member_id, {
         date: t.date || t.created_at, type: t.type === 'income' ? 'লেজার আয়' : 'লেজার ব্যয়',
         amount: Number(t.amount) || 0, direction: t.type === 'income' ? 'আয়' : 'ব্যয়',
-        details: [t.category, t.note].filter(Boolean).join(' • ') || '-',
+        // লেজার বিবরণে শুধু ক্যাটাগরি দেখানো হবে; note-এ থাকা সদস্যের ব্যক্তিগত তথ্য নয়।
+        details: t.category || '',
         method: t.bank_name || '-', reference: t.voucher || '-',
         status: txStatusLabel(t.approval_status || t.status), source: 'লেজার'
     }));
@@ -988,7 +1013,8 @@ function renderMemberTransactionsPage(member, transactions) {
                     </div>
                     <div style="text-align:right;font-size:9px;">
                         <div><strong>পেজ:</strong> ${toBn(pageIndex + 1)}/${toBn(pageCount)}</div>
-                        <div><strong>প্রিন্ট:</strong> ${formatDate(new Date().toISOString())}</div>
+                        <div><strong>প্রিন্টের সময়:</strong> ${escapeHtml(getBanglaPrintDateTime(printAuditMeta.printedAt))}</div>
+                        <div><strong>প্রিন্ট করেছেন:</strong> ${escapeHtml(printAuditMeta.printedBy)}</div>
                     </div>
                 </div>
                 <div class="tx-member-heading">সদস্যের সকল লেনদেন</div>
@@ -1267,7 +1293,7 @@ function renderMemberPage(m, pageNum, total) {
         </div>
 
         <div class="footer-note">
-            সদস্য আইডি: ${escapeHtml(m.member_id || '—')} • প্রিন্ট: ${formatDate(new Date().toISOString())} • ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ
+            সদস্য আইডি: ${escapeHtml(m.member_id || '—')} • প্রিন্টের সময়: ${escapeHtml(getBanglaPrintDateTime(printAuditMeta.printedAt))} • প্রিন্ট করেছেন: ${escapeHtml(printAuditMeta.printedBy)} • ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ
         </div>
     </div>
     `;
