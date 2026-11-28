@@ -436,6 +436,27 @@
             }
         }
 
+
+        /* 📚 নির্বাচিত সদস্যদের লেনদেন বিবরণী */
+        .tx-print-page { font-size: 10px; }
+        .tx-print-page .tx-member-heading { font-size: 15px; font-weight: 800; text-align: center; margin: 8px 0; }
+        .tx-print-page .tx-member-meta { text-align: center; font-size: 10px; margin-bottom: 8px; }
+        .tx-print-page .tx-summary { display: flex; gap: 8px; justify-content: space-between; margin: 8px 0; }
+        .tx-print-page .tx-summary > div { flex: 1; border: 1px solid #9ca3af; padding: 5px; text-align: center; }
+        .tx-print-page .tx-table { width: 100%; border-collapse: collapse; font-size: 9px; }
+        .tx-print-page .tx-table th, .tx-print-page .tx-table td { border: 1px solid #9ca3af; padding: 4px 5px; text-align: left; vertical-align: top; }
+        .tx-print-page .tx-table th { background: #e5e7eb; font-weight: 700; }
+        .tx-print-page .tx-empty { text-align: center; padding: 24px 8px; border: 1px dashed #9ca3af; }
+        @media print {
+            .tx-print-page { page-break-before: always; page-break-inside: auto !important; font-size: 9px !important; }
+            .tx-print-page .tx-table { font-size: 8px !important; }
+            .tx-print-page .tx-table thead { display: table-header-group; }
+            .tx-print-page .tx-table tr { page-break-inside: avoid; }
+            .tx-print-page .tx-table th, .tx-print-page .tx-table td { border-color: #000 !important; padding: 3px 4px !important; }
+            .tx-print-page .tx-table th { background: #e5e7eb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .tx-print-page .tx-summary > div { border-color: #000 !important; }
+        }
+
         /* ✅ Screen preview toolbar */
         .preview-toolbar {
             position: sticky; top: 0; z-index: 100;
@@ -765,13 +786,177 @@ document.getElementById('searchBox')?.addEventListener('input', function() {
     renderMemberList();
 });
 
+
+/* ═══════════════════════════════════════════════════════════
+   📚 নির্বাচিত সদস্যদের পূর্ণাঙ্গ লেনদেন লোড ও প্রিন্ট
+   কেবল নির্বাচিত সদস্যদের member_id দিয়ে আর্থিক রেকর্ড আনা হয়।
+═══════════════════════════════════════════════════════════ */
+async function fetchAllTransactionPages(makeQuery) {
+    const rows = [];
+    const pageSize = 1000;
+    for (let from = 0; ; from += pageSize) {
+        const { data, error } = await makeQuery().range(from, from + pageSize - 1);
+        if (error) throw error;
+        const page = data || [];
+        rows.push(...page);
+        if (page.length < pageSize) break;
+    }
+    return rows;
+}
+
+function txStatusLabel(status) {
+    const labels = {
+        approved: 'অনুমোদিত', completed: 'সম্পন্ন', active: 'সক্রিয়',
+        pending: 'অপেক্ষমাণ', submitted: 'জমা হয়েছে', rejected: 'বাতিল',
+        cancelled: 'বাতিল', reversed: 'রিভার্স', paid: 'পরিশোধিত'
+    };
+    if (!status) return 'রেকর্ডেড';
+    return labels[String(status).toLowerCase()] || String(status);
+}
+
+async function loadSelectedMembersTransactions(client, members) {
+    const memberIds = [...new Set(members.map(m => m.member_id).filter(Boolean))];
+    const result = Object.fromEntries(memberIds.map(id => [id, []]));
+    if (!memberIds.length) return result;
+
+    const queries = await Promise.all([
+        fetchAllTransactionPages(() => client.from('payments').select('*').in('member_id', memberIds)),
+        fetchAllTransactionPages(() => client.from('loan_applications').select('*').in('member_id', memberIds)),
+        fetchAllTransactionPages(() => client.from('withdrawals').select('*').in('member_id', memberIds)),
+        fetchAllTransactionPages(() => client.from('loan_payments').select('*, loan_applications!inner(member_id, member_name)').in('loan_applications.member_id', memberIds)),
+        fetchAllTransactionPages(() => client.from('referral_bonus_log').select('*').in('member_id', memberIds)),
+        fetchAllTransactionPages(() => client.from('profit_distribution_history').select('*').in('member_id', memberIds)),
+        fetchAllTransactionPages(() => client.from('admin_balance_adjustments').select('*').in('member_id', memberIds)),
+        fetchAllTransactionPages(() => client.from('ledger_transactions').select('*').in('member_id', memberIds))
+    ]);
+
+    const add = (memberId, item) => {
+        if (memberId && result[memberId]) result[memberId].push(item);
+    };
+
+    queries[0].forEach(p => add(p.member_id, {
+        date: p.approved_at || p.submitted_at, type: 'সঞ্চয় জমা',
+        amount: Number(p.amount) || 0, direction: 'জমা',
+        details: [p.month, p.year].filter(Boolean).join(' ') || 'সঞ্চয়',
+        method: p.payment_method || '-', reference: p.transaction_id || p.voucher_slip_no || '-',
+        status: txStatusLabel(p.status), source: 'পেমেন্ট'
+    }));
+    queries[1].forEach(l => add(l.member_id, {
+        date: l.approved_at || l.submitted_at, type: 'লোন প্রদান',
+        amount: Number(l.amount) || 0, direction: 'প্রাপ্তি',
+        details: l.loan_type || 'লোন', method: '-', reference: 'LOAN-' + (l.id ?? '-'),
+        status: txStatusLabel(l.status), source: 'লোন'
+    }));
+    queries[2].forEach(w => add(w.member_id, {
+        date: w.approved_at || w.requested_at, type: w.type || w.fund_type || 'উত্তোলন',
+        amount: Number(w.amount) || 0, direction: 'উত্তোলন',
+        details: w.note || '-', method: w.payment_method || '-',
+        reference: w.voucher_no || w.transaction_id || '-',
+        status: txStatusLabel(w.status), source: 'উত্তোলন'
+    }));
+    queries[3].forEach(lp => {
+        const relation = Array.isArray(lp.loan_applications) ? lp.loan_applications[0] : lp.loan_applications;
+        add(lp.member_id || relation?.member_id, {
+            date: lp.payment_date, type: 'ঋণ কিস্তি পরিশোধ',
+            amount: Number(lp.total_amount || lp.emi_amount) || 0, direction: 'পরিশোধ',
+            details: 'কিস্তি #' + (lp.installment_no || '-'),
+            method: lp.payment_method || '-', reference: lp.voucher_no || lp.transaction_id || '-',
+            status: txStatusLabel(lp.status), source: 'লোন পরিশোধ'
+        });
+    });
+    queries[4].forEach(r => add(r.member_id, {
+        date: r.created_at, type: 'রেফারেল বোনাস',
+        amount: Number(r.amount) || 0, direction: 'প্রাপ্তি',
+        details: 'লেভেল L' + (r.level || 1), method: '-', reference: 'REF-' + (r.id ?? '-'),
+        status: txStatusLabel(r.audit_status || r.status), source: 'রেফারেল'
+    }));
+    queries[5].forEach(p => add(p.member_id, {
+        date: p.distributed_at || p.created_at, type: 'লভ্যাংশ',
+        amount: Number(p.amount) || 0, direction: 'প্রাপ্তি',
+        details: p.profit_type || 'লভ্যাংশ', method: '-', reference: 'PROFIT-' + (p.id ?? '-'),
+        status: txStatusLabel(p.status), source: 'লভ্যাংশ'
+    }));
+    queries[6].forEach(a => add(a.member_id, {
+        date: a.created_at, type: a.adjustment_direction === 'deduct' ? 'সমন্বয় (কমানো)' : 'সমন্বয় (বাড়ানো)',
+        amount: Number(a.amount) || 0, direction: a.adjustment_direction === 'deduct' ? 'কর্তন' : 'জমা',
+        details: [a.adjustment_type, a.reason].filter(Boolean).join(' • ') || '-',
+        method: '-', reference: a.voucher_no || '-', status: txStatusLabel(a.status), source: 'সমন্বয়'
+    }));
+    queries[7].forEach(t => add(t.member_id, {
+        date: t.date || t.created_at, type: t.type === 'income' ? 'লেজার আয়' : 'লেজার ব্যয়',
+        amount: Number(t.amount) || 0, direction: t.type === 'income' ? 'আয়' : 'ব্যয়',
+        details: [t.category, t.note].filter(Boolean).join(' • ') || '-',
+        method: t.bank_name || '-', reference: t.voucher || '-',
+        status: txStatusLabel(t.approval_status || t.status), source: 'লেজার'
+    }));
+
+    Object.values(result).forEach(rows => rows.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)));
+    return result;
+}
+
+function renderMemberTransactionsPage(member, transactions) {
+    const rows = transactions || [];
+    const totalIn = rows.filter(t => ['জমা', 'প্রাপ্তি', 'আয়'].includes(t.direction)).reduce((s, t) => s + t.amount, 0);
+    const totalOut = rows.filter(t => ['উত্তোলন', 'পরিশোধ', 'কর্তন', 'ব্যয়'].includes(t.direction)).reduce((s, t) => s + t.amount, 0);
+    const table = rows.length ? `
+        <table class="tx-table">
+            <thead><tr><th>ক্রম</th><th>তারিখ</th><th>লেনদেনের ধরন</th><th>বিবরণ</th><th>মাধ্যম</th><th>রেফারেন্স</th><th>পরিমাণ (৳)</th><th>অবস্থা</th><th>উৎস</th></tr></thead>
+            <tbody>${rows.map((t, i) => `
+                <tr>
+                    <td>${toBn(i + 1)}</td>
+                    <td>${escapeHtml(t.date ? formatDate(t.date) : '—')}</td>
+                    <td>${escapeHtml(t.type)}</td>
+                    <td>${escapeHtml(t.details || '-')}</td>
+                    <td>${escapeHtml(t.method || '-')}</td>
+                    <td>${escapeHtml(t.reference || '-')}</td>
+                    <td style="text-align:right;white-space:nowrap;">${toBn(Number(t.amount || 0).toFixed(2))}</td>
+                    <td>${escapeHtml(t.status || '-')}</td>
+                    <td>${escapeHtml(t.source || '-')}</td>
+                </tr>`).join('')}</tbody>
+        </table>` : '<div class="tx-empty">এই সদস্যের কোনো লেনদেন রেকর্ড পাওয়া যায়নি।</div>';
+
+    return `
+        <div class="print-page tx-print-page">
+            <div class="doc-header">
+                <img src="images/logo.png" alt="Logo" onerror="this.style.display='none'">
+                <div style="flex:1;">
+                    <div class="org-name">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</div>
+                    <div class="org-sub">সদস্যভিত্তিক পূর্ণাঙ্গ লেনদেন বিবরণী</div>
+                </div>
+                <div style="text-align:right;font-size:9px;">
+                    <div><strong>প্রিন্ট:</strong> ${formatDate(new Date().toISOString())}</div>
+                </div>
+            </div>
+            <div class="tx-member-heading">সদস্যের সকল লেনদেন</div>
+            <div class="tx-member-meta">নাম: ${escapeHtml(member.full_name || '—')} &nbsp; | &nbsp; আইডি: ${escapeHtml(member.member_id || '—')} &nbsp; | &nbsp; মোবাইল: ${escapeHtml(member.mobile || '—')}</div>
+            <div class="tx-summary">
+                <div><strong>মোট রেকর্ড</strong><br>${toBn(rows.length)} টি</div>
+                <div><strong>মোট জমা/প্রাপ্তি</strong><br>${toBn(totalIn.toFixed(2))} টাকা</div>
+                <div><strong>মোট উত্তোলন/পরিশোধ</strong><br>${toBn(totalOut.toFixed(2))} টাকা</div>
+            </div>
+            ${table}
+            <div class="footer-note">সদস্য আইডি: ${escapeHtml(member.member_id || '—')} • ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</div>
+        </div>`;
+}
+
 // ═══════════════════════════════════════════════════════════
 // 🖨️ PRINT GENERATION
 // ═══════════════════════════════════════════════════════════
-function startPrint() {
+async function startPrint() {
     if (selectedIds.size === 0) return;
     const selected = allMembers.filter(m => selectedIds.has(m.member_id));
-    renderPrintPages(selected);
+    const client = initSupabase();
+    try {
+        showLoading(true, 'নির্বাচিত সদস্যদের লেনদেন লোড হচ্ছে...');
+        const transactionsByMember = await loadSelectedMembersTransactions(client, selected);
+        renderPrintPages(selected, transactionsByMember);
+        showLoading(false);
+    } catch (error) {
+        console.error('Member transaction print load error:', error);
+        showLoading(false);
+        alert('লেনদেনের তথ্য লোড করা যায়নি। প্রিন্ট বন্ধ রাখা হয়েছে। সমস্যা: ' + (error.message || 'অজানা ত্রুটি'));
+        return;
+    }
     
     // ✅ QR কোড রেন্ডার করুন
     setTimeout(() => {
@@ -798,9 +983,11 @@ function startPrint() {
     setTimeout(() => { window.print(); }, 800);
 }
 
-function renderPrintPages(members) {
+function renderPrintPages(members, transactionsByMember = {}) {
     const output = document.getElementById('printOutput');
-    output.innerHTML = members.map((m, i) => renderMemberPage(m, i + 1, members.length)).join('');
+    const profilePages = members.map((m, i) => renderMemberPage(m, i + 1, members.length)).join('');
+    const transactionPages = members.map(m => renderMemberTransactionsPage(m, transactionsByMember[m.member_id] || [])).join('');
+    output.innerHTML = profilePages + transactionPages;
 }
 
 function renderMemberPage(m, pageNum, total) {
