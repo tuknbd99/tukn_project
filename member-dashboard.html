@@ -8357,34 +8357,34 @@ async function populateYearAndMonths() {
     yearSelect.value = currentYear;
     
     // ============================================================
-    // ২. Approved মাস একবার লোড করুন
+    // ২. Helper — নির্বাচিত বছরের পেমেন্ট মাস RPC থেকে লোড ও রেন্ডার
     // ============================================================
-    const approvedMonths = await getApprovedMonths();  // ["জানুয়ারি-2026", ...]
-    
-    // ============================================================
-    // ৩. Helper — নির্দিষ্ট বছরের মাসগুলো রেন্ডার
-    // ============================================================
-    const renderMonthsForYear = (selectedYear) => {
+    const renderMonthsForYear = async (selectedYear) => {
+        monthsContainer.innerHTML = '<p class="col-span-2 text-center text-gray-400 text-sm py-3">মাসের তথ্য লোড হচ্ছে...</p>';
+        const monthStatus = await getApprovedMonths(selectedYear);
         monthsContainer.innerHTML = '';
-        
+
         banglaMonths.forEach((month) => {
-            const monthYearKey = `${month}-${selectedYear}`;  // ← নির্দিষ্ট বছর ব্যবহার
-            const isApproved = approvedMonths.includes(monthYearKey);
-            
-            const disabledAttr = isApproved ? 'disabled' : '';
-            const labelStyle = isApproved
+            const isApproved = monthStatus.approved.includes(month);
+            const isPending = monthStatus.pending.includes(month);
+            const isBlocked = isApproved || isPending;
+
+            const disabledAttr = isBlocked ? 'disabled' : '';
+            const labelStyle = isBlocked
                 ? 'opacity:0.6; cursor:not-allowed; background:#f9fafb; border-color:#d1d5db;'
                 : 'background:white;';
-            const textColor = isApproved ? 'color:#6b7280;' : 'color:#1f2937;';
+            const textColor = isBlocked ? 'color:#6b7280;' : 'color:#1f2937;';
             const statusHtml = isApproved
-                ? `<span style="color:#059669; font-size:10px; font-weight:600;"><i class="fas fa-check-circle"></i> জমা আছে</span>`
+                ? '<span style="color:#059669; font-size:10px; font-weight:600;"><i class="fas fa-check-circle"></i> পরিশোধিত</span>'
+                : isPending
+                    ? '<span style="color:#d97706; font-size:10px; font-weight:600;"><i class="fas fa-clock"></i> বিচারাধীন</span>'
+                    : '';
+            const lockIcon = isBlocked
+                ? '<i class="fas fa-lock" style="color:#9ca3af; font-size:12px; margin-left:auto;"></i>'
                 : '';
-            const lockIcon = isApproved
-                ? `<i class="fas fa-lock" style="color:#9ca3af; font-size:12px; margin-left:auto;"></i>`
-                : '';
-            
+
             monthsContainer.innerHTML += `
-                <label style="${labelStyle} display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid ${isApproved ? '#d1d5db' : '#e5e7eb'}; border-radius:10px;">
+                <label style="${labelStyle} display:flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid ${isBlocked ? '#d1d5db' : '#e5e7eb'}; border-radius:10px;">
                     <input type="checkbox" value="${month}" class="month-cb" ${disabledAttr}>
                     <span style="${textColor}">${month} ${selectedYear}</span>
                     ${statusHtml}
@@ -8392,30 +8392,27 @@ async function populateYearAndMonths() {
                 </label>
             `;
         });
-        
-        // ✅ ইভেন্ট লিসেনার
+
         document.querySelectorAll('.month-cb:not(:disabled)').forEach(cb => {
             cb.addEventListener('change', updateTotalAmount);
         });
-        
-        // ✅ টোটাল আপডেট
+
         updateTotalAmount();
-        
-        console.log(`✅ রেন্ডার সম্পূর্ণ: ${selectedYear} (${approvedMonths.filter(m => m.endsWith('-' + selectedYear)).length} মাস লক)`);
+        console.log(`✅ ${selectedYear}: ${monthStatus.approved.length} পরিশোধিত, ${monthStatus.pending.length} বিচারাধীন মাস লক`);
     };
     
     // ============================================================
     // ৪. প্রাথমিক রেন্ডার
     // ============================================================
-    renderMonthsForYear(currentYear);
+    await renderMonthsForYear(currentYear);
     
     // ============================================================
     // ৫. ⚡ সাল পরিবর্তন হলে নতুন করে রেন্ডার — এটিই মূল ফিক্স
     // ============================================================
-    yearSelect.onchange = () => {
+    yearSelect.onchange = async () => {
         const selectedYear = parseInt(yearSelect.value);
         if (selectedYear) {
-            renderMonthsForYear(selectedYear);
+            await renderMonthsForYear(selectedYear);
         } else {
             monthsContainer.innerHTML = '<p class="text-center text-gray-400 text-xs py-4">সাল নির্বাচন করুন</p>';
             const totalEl = document.getElementById('totalAmountDisplay');
@@ -8926,35 +8923,71 @@ async function submitCurrentMemberPayment() {
 }
     
 // ============================================================
-// সদস্যের সব approved পেমেন্টের মাস লিস্ট ফেরত দেয়
+// সদস্যের নির্দিষ্ট বছরের পরিশোধিত/বিচারাধীন মাস RPC থেকে আনে
 // ============================================================
 
-async function getApprovedMonths() {
-    if (!currentUser) return [];
-    
+async function getApprovedMonths(year) {
+    const emptyResult = { approved: [], pending: [] };
+    if (!currentUser || !currentUser.id || !year) return emptyResult;
+
     const client = await initSupabase();
-    if (!client) return [];
-    
+    if (!client) return emptyResult;
+
+    const monthMap = {
+        'জানুয়ারি': 'জানুয়ারি', 'জানুয়ারি': 'জানুয়ারি', 'january': 'জানুয়ারি', 'jan': 'জানুয়ারি', '1': 'জানুয়ারি', '01': 'জানুয়ারি',
+        'ফেব্রুয়ারি': 'ফেব্রুয়ারি', 'ফেব্রুয়ারি': 'ফেব্রুয়ারি', 'february': 'ফেব্রুয়ারি', 'feb': 'ফেব্রুয়ারি', '2': 'ফেব্রুয়ারি', '02': 'ফেব্রুয়ারি',
+        'মার্চ': 'মার্চ', 'march': 'মার্চ', 'mar': 'মার্চ', '3': 'মার্চ', '03': 'মার্চ',
+        'এপ্রিল': 'এপ্রিল', 'april': 'এপ্রিল', 'apr': 'এপ্রিল', '4': 'এপ্রিল', '04': 'এপ্রিল',
+        'মে': 'মে', 'may': 'মে', '5': 'মে', '05': 'মে',
+        'জুন': 'জুন', 'june': 'জুন', 'jun': 'জুন', '6': 'জুন', '06': 'জুন',
+        'জুলাই': 'জুলাই', 'july': 'জুলাই', 'jul': 'জুলাই', '7': 'জুলাই', '07': 'জুলাই',
+        'আগস্ট': 'আগস্ট', 'august': 'আগস্ট', 'aug': 'আগস্ট', '8': 'আগস্ট', '08': 'আগস্ট',
+        'সেপ্টেম্বর': 'সেপ্টেম্বর', 'september': 'সেপ্টেম্বর', 'sep': 'সেপ্টেম্বর', '9': 'সেপ্টেম্বর', '09': 'সেপ্টেম্বর',
+        'অক্টোবর': 'অক্টোবর', 'october': 'অক্টোবর', 'oct': 'অক্টোবর', '10': 'অক্টোবর',
+        'নভেম্বর': 'নভেম্বর', 'november': 'নভেম্বর', 'nov': 'নভেম্বর', '11': 'নভেম্বর',
+        'ডিসেম্বর': 'ডিসেম্বর', 'december': 'ডিসেম্বর', 'dec': 'ডিসেম্বর', '12': 'ডিসেম্বর'
+    };
+
     try {
-        const { data, error } = await client
-            .from('payments')
-            .select('month, year')
-            .eq('member_id', currentUser.id)
-            .eq('status', 'approved');
-        
+        const { data, error } = await client.rpc('get_member_payment_months', {
+            p_member_int: null,
+            p_member_text: String(currentUser.id).trim(),
+            p_year: parseInt(year, 10)
+        });
+
+        console.log('📥 Dashboard payment-month RPC:', data, 'error:', error);
+
         if (error) {
-            console.error('❌ অ্যাপ্রুভড পেমেন্ট লোড error:', error);
-            return [];
+            console.error('❌ পরিশোধিত মাস লোড error:', error);
+            return emptyResult;
         }
-        
-        if (!data || data.length === 0) return [];
-        
-        // মাস-বছর ফরম্যাটে কনভার্ট করুন
-        return data.map(p => `${p.month}-${p.year}`);
-        
+
+        (data || []).forEach(p => {
+            if (String(p.year || '').trim() !== String(year)) return;
+
+            const memberType = String(p.member_type || 'term').toLowerCase().trim();
+            if (memberType !== 'term' && memberType !== 'মেয়াদী' && memberType !== 'মেয়াদী') return;
+
+            const rawMonth = String(p.month || '').trim();
+            const normalized = monthMap[rawMonth] || monthMap[rawMonth.toLowerCase()];
+            if (!normalized) {
+                console.warn('⚠️ অপরিচিত মাসের নাম:', rawMonth);
+                return;
+            }
+
+            const status = String(p.status || '').toLowerCase().trim();
+            if (status === 'approved' && !emptyResult.approved.includes(normalized)) {
+                emptyResult.approved.push(normalized);
+            } else if (status === 'pending' && !emptyResult.pending.includes(normalized)) {
+                emptyResult.pending.push(normalized);
+            }
+        });
+
+        console.log('📊 Dashboard locked months:', emptyResult);
+        return emptyResult;
     } catch(e) {
-        console.error('❌ getApprovedMonths error:', e);
-        return [];
+        console.error('❌ getApprovedMonths exception:', e);
+        return emptyResult;
     }
 }
 
