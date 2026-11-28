@@ -443,7 +443,10 @@
         .tx-print-page .tx-member-meta { text-align: center; font-size: 10px; margin-bottom: 8px; }
         .tx-print-page .tx-summary { display: flex; gap: 8px; justify-content: space-between; margin: 8px 0; }
         .tx-print-page .tx-summary > div { flex: 1; border: 1px solid #9ca3af; padding: 5px; text-align: center; }
-        .tx-print-page .tx-table { width: 100%; border-collapse: collapse; font-size: 9px; }
+        .tx-print-page .tx-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 9px; }
+        .tx-print-page .tx-table th, .tx-print-page .tx-table td { overflow-wrap: anywhere; word-break: break-word; }
+        .tx-print-page .tx-carry-forward { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 6px 8px; margin: 8px 0; border: 1px solid #6b7280; background: #f3f4f6; font-size: 9px; }
+        .tx-print-page .tx-page-total td { background: #e5e7eb; font-weight: 700; border-top: 2px solid #111827; }
         .tx-print-page .tx-table th, .tx-print-page .tx-table td { border: 1px solid #9ca3af; padding: 4px 5px; text-align: left; vertical-align: top; }
         .tx-print-page .tx-table th { background: #e5e7eb; font-weight: 700; }
         .tx-print-page .tx-empty { text-align: center; padding: 24px 8px; border: 1px dashed #9ca3af; }
@@ -896,49 +899,89 @@ async function loadSelectedMembersTransactions(client, members) {
 
 function renderMemberTransactionsPage(member, transactions) {
     const rows = transactions || [];
-    const totalIn = rows.filter(t => ['জমা', 'প্রাপ্তি', 'আয়'].includes(t.direction)).reduce((s, t) => s + t.amount, 0);
-    const totalOut = rows.filter(t => ['উত্তোলন', 'পরিশোধ', 'কর্তন', 'ব্যয়'].includes(t.direction)).reduce((s, t) => s + t.amount, 0);
-    const table = rows.length ? `
-        <table class="tx-table">
-            <thead><tr><th>ক্রম</th><th>তারিখ</th><th>লেনদেনের ধরন</th><th>বিবরণ</th><th>মাধ্যম</th><th>রেফারেন্স</th><th>পরিমাণ (৳)</th><th>অবস্থা</th><th>উৎস</th></tr></thead>
-            <tbody>${rows.map((t, i) => `
-                <tr>
-                    <td>${toBn(i + 1)}</td>
-                    <td>${escapeHtml(t.date ? formatDate(t.date) : '—')}</td>
-                    <td>${escapeHtml(t.type)}</td>
-                    <td>${escapeHtml(t.details || '-')}</td>
-                    <td>${escapeHtml(t.method || '-')}</td>
-                    <td>${escapeHtml(t.reference || '-')}</td>
-                    <td style="text-align:right;white-space:nowrap;">${toBn(Number(t.amount || 0).toFixed(2))}</td>
-                    <td>${escapeHtml(t.status || '-')}</td>
-                    <td>${escapeHtml(t.source || '-')}</td>
-                </tr>`).join('')}</tbody>
-        </table>` : '<div class="tx-empty">এই সদস্যের কোনো লেনদেন রেকর্ড পাওয়া যায়নি।</div>';
+    const rowsPerPage = 16;
+    const pageCount = Math.max(1, Math.ceil(rows.length / rowsPerPage));
+    const memberName = escapeHtml(member.full_name || '—');
+    const memberId = escapeHtml(member.member_id || '—');
+    const memberMobile = escapeHtml(member.mobile || '—');
 
-    return `
-        <div class="print-page tx-print-page">
-            <div class="doc-header">
-                <img src="images/logo.png" alt="Logo" onerror="this.style.display='none'">
-                <div style="flex:1;">
-                    <div class="org-name">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</div>
-                    <div class="org-sub">সদস্যভিত্তিক পূর্ণাঙ্গ লেনদেন বিবরণী</div>
+    const money = value => toBn(Number(value || 0).toFixed(2));
+    const directionIn = ['জমা', 'প্রাপ্তি', 'আয়'];
+    const directionOut = ['উত্তোলন', 'পরিশোধ', 'কর্তন', 'ব্যয়'];
+
+    let cumulativeIn = 0;
+    let cumulativeOut = 0;
+    const pages = [];
+
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+        const pageRows = rows.slice(pageIndex * rowsPerPage, (pageIndex + 1) * rowsPerPage);
+        const broughtIn = cumulativeIn;
+        const broughtOut = cumulativeOut;
+        const pageIn = pageRows.filter(t => directionIn.includes(t.direction)).reduce((s, t) => s + Number(t.amount || 0), 0);
+        const pageOut = pageRows.filter(t => directionOut.includes(t.direction)).reduce((s, t) => s + Number(t.amount || 0), 0);
+        cumulativeIn += pageIn;
+        cumulativeOut += pageOut;
+
+        const carryForward = pageIndex > 0 ? `
+            <div class="tx-carry-forward">
+                <strong>পূর্ববর্তী পৃষ্ঠার মোট (বহন):</strong>
+                <span>জমা/প্রাপ্তি: ${money(broughtIn)} টাকা</span>
+                <span>উত্তোলন/পরিশোধ: ${money(broughtOut)} টাকা</span>
+            </div>` : '';
+
+        const table = pageRows.length ? `
+            <table class="tx-table">
+                <colgroup>
+                    <col style="width:.35in"><col style="width:1.5in"><col style="width:1.5in">
+                    <col style="width:1in"><col><col><col><col><col>
+                </colgroup>
+                <thead><tr><th>ক্রম</th><th>তারিখ</th><th>লেনদেনের ধরন</th><th>বিবরণ</th><th>মাধ্যম</th><th>রেফারেন্স</th><th>পরিমাণ (৳)</th><th>অবস্থা</th><th>উৎস</th></tr></thead>
+                <tbody>${pageRows.map((t, i) => `
+                    <tr>
+                        <td>${toBn(pageIndex * rowsPerPage + i + 1)}</td>
+                        <td>${escapeHtml(t.date ? formatDate(t.date) : '—')}</td>
+                        <td>${escapeHtml(t.type)}</td>
+                        <td>${escapeHtml(t.details || '-')}</td>
+                        <td>${escapeHtml(t.method || '-')}</td>
+                        <td>${escapeHtml(t.reference || '-')}</td>
+                        <td style="text-align:right;white-space:nowrap;">${money(t.amount)}</td>
+                        <td>${escapeHtml(t.status || '-')}</td>
+                        <td>${escapeHtml(t.source || '-')}</td>
+                    </tr>`).join('')}
+                    <tr class="tx-page-total">
+                        <td colspan="6"><strong>এই পৃষ্ঠার মোট</strong></td>
+                        <td colspan="3"><strong>জমা/প্রাপ্তি: ${money(pageIn)} | উত্তোলন/পরিশোধ: ${money(pageOut)}</strong></td>
+                    </tr>
+                </tbody>
+            </table>` : '<div class="tx-empty">এই সদস্যের কোনো লেনদেন রেকর্ড পাওয়া যায়নি।</div>';
+
+        pages.push(`
+            <div class="print-page tx-print-page">
+                <div class="doc-header">
+                    <img src="images/logo.png" alt="Logo" onerror="this.style.display='none'">
+                    <div style="flex:1;">
+                        <div class="org-name">ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</div>
+                        <div class="org-sub">সদস্যভিত্তিক পূর্ণাঙ্গ লেনদেন বিবরণী</div>
+                    </div>
+                    <div style="text-align:right;font-size:9px;">
+                        <div><strong>পেজ:</strong> ${toBn(pageIndex + 1)}/${toBn(pageCount)}</div>
+                        <div><strong>প্রিন্ট:</strong> ${formatDate(new Date().toISOString())}</div>
+                    </div>
                 </div>
-                <div style="text-align:right;font-size:9px;">
-                    <div><strong>প্রিন্ট:</strong> ${formatDate(new Date().toISOString())}</div>
+                <div class="tx-member-heading">সদস্যের সকল লেনদেন</div>
+                <div class="tx-member-meta">নাম: ${memberName} &nbsp; | &nbsp; আইডি: ${memberId} &nbsp; | &nbsp; মোবাইল: ${memberMobile}</div>
+                ${carryForward}
+                <div class="tx-summary">
+                    <div><strong>মোট রেকর্ড</strong><br>${toBn(rows.length)} টি</div>
+                    <div><strong>এই পৃষ্ঠার জমা/প্রাপ্তি</strong><br>${money(pageIn)} টাকা</div>
+                    <div><strong>এই পৃষ্ঠার উত্তোলন/পরিশোধ</strong><br>${money(pageOut)} টাকা</div>
                 </div>
-            </div>
-            <div class="tx-member-heading">সদস্যের সকল লেনদেন</div>
-            <div class="tx-member-meta">নাম: ${escapeHtml(member.full_name || '—')} &nbsp; | &nbsp; আইডি: ${escapeHtml(member.member_id || '—')} &nbsp; | &nbsp; মোবাইল: ${escapeHtml(member.mobile || '—')}</div>
-            <div class="tx-summary">
-                <div><strong>মোট রেকর্ড</strong><br>${toBn(rows.length)} টি</div>
-                <div><strong>মোট জমা/প্রাপ্তি</strong><br>${toBn(totalIn.toFixed(2))} টাকা</div>
-                <div><strong>মোট উত্তোলন/পরিশোধ</strong><br>${toBn(totalOut.toFixed(2))} টাকা</div>
-            </div>
-            ${table}
-            <div class="footer-note">সদস্য আইডি: ${escapeHtml(member.member_id || '—')} • ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</div>
-        </div>`;
+                ${table}
+                <div class="footer-note">সদস্য আইডি: ${memberId} • ত্বলাবা-উলামা কল্যাণ নেটওয়ার্ক বাংলাদেশ</div>
+            </div>`);
+    }
+    return pages.join('');
 }
-
 // ═══════════════════════════════════════════════════════════
 // 🖨️ PRINT GENERATION
 // ═══════════════════════════════════════════════════════════
